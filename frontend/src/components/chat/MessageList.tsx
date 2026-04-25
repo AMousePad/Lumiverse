@@ -449,7 +449,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         const bubbleStyleClass = isImpersonateStream ? bubbleStyles.user : bubbleStyles.character
         const nameStyleClass = isImpersonateStream ? bubbleStyles.nameUser : bubbleStyles.nameChar
         return (
-          <div className={`${bubbleStyles.card} ${bubbleStyleClass} ${impersonateUserLeft ? bubbleStyles.userLeft : ''} ${bubbleStyles.streaming}`}>
+          <div className={`${bubbleStyles.card} ${bubbleStyleClass} ${impersonateUserLeft ? bubbleStyles.userLeft : ''} ${bubbleStyles.streaming}`} data-message-id="__streaming__">
             <div className={bubbleStyles.bubble}>
               <div className={bubbleStyles.header}>
                 <div className={bubbleStyles.headerLeft}>
