@@ -172,6 +172,7 @@ async function applyDisplayRegexOnBackend(
   content: string,
   scripts: RegexScript[],
   context: ApplyDisplayRegexContext,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   try {
     const res = await fetch('/api/v1/regex-scripts/apply', {
@@ -192,6 +193,7 @@ async function applyDisplayRegexOnBackend(
           depth: context.depth,
         },
       }),
+      signal,
     })
     if (!res.ok) return null
     const body = await res.json() as { result?: string }
@@ -293,8 +295,9 @@ export async function applyDisplayRegexAsync(
   scripts: RegexScript[],
   context: ApplyDisplayRegexContext,
   resolveRawTemplates: (templates: Record<string, string>) => Promise<Record<string, string>>,
+  signal?: AbortSignal,
 ): Promise<string> {
-  const backendResult = await applyDisplayRegexOnBackend(content, scripts, context)
+  const backendResult = await applyDisplayRegexOnBackend(content, scripts, context, signal)
   if (backendResult !== null) return backendResult
 
   let result = content

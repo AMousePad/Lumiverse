@@ -50,6 +50,19 @@ const displayPreprocessCache = new Map<string, { value?: string; promise?: Promi
 const DISPLAY_PREPROCESS_CACHE_MAX = 500
 const displayRegexCacheListeners = new Set<() => void>()
 let displayRegexCacheVersion = 0
+
+// Single AbortController scoped to the active cv generation. Aborted +
+// replaced atomically inside invalidateDisplayRegexCache so any in-flight
+// /display-preprocess + /regex-scripts/apply fetches keyed by the prior cv
+// die at the server, freeing worker pools (regex sandbox is 2-wide) and
+// extension MCP handlers from doing work whose result will be thrown away
+// by the FE anyway. Without this, a stream of N CHAT_CHANGED events on a
+// chat with M visible messages stacks O(N×M) doomed fetches that all
+// return into a wiped cache.
+let currentDisplayRegexCacheController = new AbortController()
+function getDisplayRegexCacheSignal(): AbortSignal {
+  return currentDisplayRegexCacheController.signal
+}
 const slowDisplayRegexToastKeys = new Set<string>()
 
 function formatElapsedMs(elapsedMs: number): string {
@@ -89,6 +102,7 @@ function fnv1a(s: string): string {
 async function fetchDisplayPreprocess(
   chatId: string,
   body: { messageId: string; role: string; rawContent: string },
+  signal?: AbortSignal,
 ): Promise<string> {
   try {
     const res = await fetch(`/api/v1/chats/${encodeURIComponent(chatId)}/display-preprocess`, {
@@ -96,6 +110,7 @@ async function fetchDisplayPreprocess(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       credentials: 'include',
+      signal,
     })
     if (!res.ok) return body.rawContent
     const json = (await res.json()) as { content?: unknown }
@@ -149,7 +164,7 @@ export function useDisplayPreprocessed(
         messageId: opts.messageId,
         role: opts.role,
         rawContent: content,
-      })
+      }, getDisplayRegexCacheSignal())
         .then((next) => {
           displayPreprocessCache.set(key, { value: next })
           if (displayPreprocessCache.size > DISPLAY_PREPROCESS_CACHE_MAX) {
@@ -205,6 +220,13 @@ function getDisplayRegexCacheVersion(): number {
 }
 
 export function invalidateDisplayRegexCache(): void {
+  // Abort all in-flight fetches keyed by the prior cv generation BEFORE
+  // bumping cv + clearing caches. Doomed responses still resolve into the
+  // (now-wiped) cache as a no-op via .catch in the effects, and the new
+  // cv generation issues fresh fetches under a new signal. Order matters:
+  // abort first so the listener fan-out below sees a coherent state.
+  currentDisplayRegexCacheController.abort()
+  currentDisplayRegexCacheController = new AbortController()
   displayRegexCacheVersion += 1
   displayRegexResolutionCache.clear()
   displayRegexContentCache.clear()
@@ -523,6 +545,7 @@ export function useDisplayRegex(
           character_id: activeCharacterId ?? undefined,
           persona_id: activePersonaId ?? undefined,
         }),
+        getDisplayRegexCacheSignal(),
       )
         .then((next) => {
           displayRegexContentCache.set(contentCacheKey, { value: next })
