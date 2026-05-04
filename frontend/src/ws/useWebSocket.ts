@@ -45,6 +45,23 @@ function isLocalStreamPlaceholderId(id: string | null | undefined) {
   )
 }
 
+// Top-level chat fields whose change actually affects display-regex output.
+// Updated to match the macro engine's data dependencies — every other field
+// (last_message_id, last_used_at, message_count, last_council_results,
+// alt_field_selections, group settings, deferred WI state, …) bumps cv but
+// resolves identically and just stalls the FE.
+const DISPLAY_REGEX_AFFECTING_FIELDS = new Set([
+  'metadata.macro_variables',
+  'metadata.chat_variables',
+])
+
+function changedFieldsAffectDisplayRegex(changedFields: readonly string[]): boolean {
+  for (const f of changedFields) {
+    if (DISPLAY_REGEX_AFFECTING_FIELDS.has(f)) return true
+  }
+  return false
+}
+
 /**
  * Fetch the latest messages using the tail endpoint (single request).
  * Returns the last N messages from the chat, where N is the user's messagesPerPage setting.
@@ -206,7 +223,21 @@ export function useWebSocket() {
         const state = store.getState()
         const changedChatId = payload.chat?.id ?? payload.chatId
         if (changedChatId === state.activeChatId) {
-          invalidateDisplayRegexCache()
+          // Selective cv-bump. Most CHAT_CHANGED events are administrative
+          // (last_message_id during streaming, last_used_at on every send,
+          // last_council_results on assembly, etc.) and have no bearing on
+          // display-regex resolution. Only bump cv when the diff actually
+          // touches a render-affecting metadata key — currently
+          // `macro_variables` (which the macro engine reads via getvar etc.)
+          // and `chat_variables` (the per-chat var bag). Older servers that
+          // don't emit `changedFields` fall through to the prior wholesale
+          // invalidation, preserving today's behaviour for that path.
+          const changedFields = payload.changedFields
+          if (changedFields === undefined) {
+            invalidateDisplayRegexCache()
+          } else if (changedFieldsAffectDisplayRegex(changedFields)) {
+            invalidateDisplayRegexCache()
+          }
         }
       }),
 

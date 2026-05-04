@@ -298,6 +298,18 @@ export interface ChatChangedPayload {
   chat?: import('./api').Chat
   chatId?: string
   reattributedUserMessages?: number
+  /**
+   * Top-level fields that actually changed between the prior and new chat
+   * row. Items are dot-paths: `name`, `character_id`, or `metadata.<key>`
+   * for any top-level metadata key. Subscribers can use this to skip work
+   * triggered by no-op writes (e.g. `metadata.last_message_id` bumping
+   * during streaming should not invalidate display-regex caches that key
+   * on `metadata.macro_variables`).
+   *
+   * Optional for backward compatibility — older servers omit it; consumers
+   * should fall back to "treat as fully-changed" when absent.
+   */
+  changedFields?: string[]
 }
 
 export interface ChatSwitchedPayload {

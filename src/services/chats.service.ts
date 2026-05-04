@@ -696,6 +696,56 @@ export function deleteChat(userId: string, id: string): boolean {
   return result.changes > 0;
 }
 
+/**
+ * Structural diff of which top-level fields differ between the prior and new
+ * chat row, used to populate `CHAT_CHANGED.changedFields` so subscribers can
+ * coalesce + skip cache wipes on no-op writes (e.g. `last_message_id` bumps
+ * during streaming should not invalidate display-regex caches keyed on
+ * macro variables).
+ *
+ * Top-level metadata keys are diffed via shallow-then-structural compare:
+ * primitives by `===`, objects by `JSON.stringify`. Same string ⇒ unchanged.
+ * Re-stringifying a 1KB metadata object on each chat write is cheap relative
+ * to the SQL roundtrip itself.
+ *
+ * Includes both top-level chat columns (`name`) and `metadata.*` keys with
+ * their full path so consumers can decide per-field which keys are worth
+ * acting on.
+ */
+function diffChatChangedFields(prev: Chat, next: Chat): string[] {
+  const changed: string[] = [];
+
+  if (prev.name !== next.name) changed.push("name");
+  if (prev.character_id !== next.character_id) changed.push("character_id");
+
+  const prevMeta = (prev.metadata ?? {}) as Record<string, unknown>;
+  const nextMeta = (next.metadata ?? {}) as Record<string, unknown>;
+  const allKeys = new Set([...Object.keys(prevMeta), ...Object.keys(nextMeta)]);
+  for (const key of allKeys) {
+    const a = prevMeta[key];
+    const b = nextMeta[key];
+    if (a === b) continue;
+    if (!(key in prevMeta) || !(key in nextMeta)) {
+      changed.push(`metadata.${key}`);
+      continue;
+    }
+    if (typeof a !== "object" && typeof b !== "object") {
+      changed.push(`metadata.${key}`);
+      continue;
+    }
+    // Structural compare via JSON.stringify. Key-order-sensitive (false
+    // positives are safe; consumers will treat over-flag as "play it safe and
+    // invalidate", which is the prior-art behaviour anyway).
+    let aStr: string;
+    let bStr: string;
+    try { aStr = JSON.stringify(a); } catch { aStr = String(a); }
+    try { bStr = JSON.stringify(b); } catch { bStr = String(b); }
+    if (aStr !== bStr) changed.push(`metadata.${key}`);
+  }
+
+  return changed;
+}
+
 export function updateChat(userId: string, id: string, input: UpdateChatInput): Chat | null {
   const existing = getChat(userId, id);
   if (!existing) return null;
@@ -716,7 +766,15 @@ export function updateChat(userId: string, id: string, input: UpdateChatInput): 
 
   getDb().query(`UPDATE chats SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
   const updated = getChat(userId, id)!;
-  eventBus.emit(EventType.CHAT_CHANGED, { chat: updated }, userId);
+  // changedFields: structural diff of which top-level fields actually differ
+  // between the prior and new chat row. Subscribers (notably the FE display-
+  // regex cache) use this to decide whether to invalidate caches: a `metadata.
+  // last_message_id` bump does not need to wipe display-regex resolution
+  // caches, but a `metadata.macro_variables` change does. Emitted in the
+  // payload as an additive field — older subscribers ignore it and fall back
+  // to today's "any CHAT_CHANGED invalidates everything" behaviour.
+  const changedFields = diffChatChangedFields(existing, updated);
+  eventBus.emit(EventType.CHAT_CHANGED, { chat: updated, changedFields }, userId);
 
   // Detect avatar switch and emit specific event for theme resampling / extensions
   const oldAvatarId = existing.metadata?.active_avatar_id as string | undefined;
