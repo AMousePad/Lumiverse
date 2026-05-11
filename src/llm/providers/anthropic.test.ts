@@ -137,6 +137,7 @@ describe("AnthropicProvider caching config", () => {
     });
     expect(body.tools).toEqual([
       {
+        type: "custom",
         name: "lookup",
         description: "Lookup data",
         input_schema: { type: "object", properties: {} },

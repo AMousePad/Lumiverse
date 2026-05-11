@@ -677,6 +677,7 @@ export class AnthropicProvider implements LlmProvider {
     // Inline council tools: pass as Anthropic tool_use format
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools.map((t) => ({
+        type: "custom",
         name: t.name,
         description: t.description,
         input_schema: t.parameters,
