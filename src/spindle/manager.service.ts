@@ -530,9 +530,41 @@ function isEmptyFunctionProbe(source: ScannableSource, matchIndex: number): bool
   return false;
 }
 
+const DYNAMIC_EXEC_CONSTRUCTOR_CHECKS: RegExp[] = [
+  /\bAsyncFunction\b/,
+  /\bGeneratorFunction\b/,
+  /\.\s*constructor\s*\(\s*["'`][\s\S]{0,400}?["'`]\s*\)/,
+];
+
+const STRICT_DYNAMIC_EXEC_CHECKS: RegExp[] = [
+  /\[\s*["'`]constructor["'`]\s*\]/,
+  /\.\s*constructor\s*\.\s*constructor\b/,
+  /\.\s*constructor\s*\[/,
+  /\bprocess\s*\.\s*(?:binding|mainModule|getBuiltinModule|dlopen)\b/,
+  /(?<![.\w$])createRequire\b/,
+  /\bModule\s*\.\s*_load\b/,
+  /\b(?:module|require\s*\.\s*main)\s*\.\s*require\s*\(/,
+];
+
+const STRICT_DANGEROUS_MODULE_RE =
+  /(?:from\s*["'`]|require\s*\(\s*["'`]|import\s*\(\s*["'`])(?:node:)?(?:vm|module|inspector|v8|repl|trace_events|perf_hooks)["'`]/;
+
+function hasComputedConstructorKey(source: ScannableSource): boolean {
+  for (const m of matchOutsideIgnored(source, /\[([^\]]{1,300})\]/)) {
+    const key = decodeSimpleStringExpression(m[1]);
+    if (key === "constructor" || key === "prototype") return true;
+  }
+  return false;
+}
+
+export interface BackendScanOptions {
+  strict?: boolean;
+}
+
 export function detectDangerousBackendCapabilities(
   content: string,
   declared: ReadonlySet<SpindleCapability> = new Set(),
+  options: BackendScanOptions = {},
 ): string[] {
   const hits = new Set<string>();
   for (const source of createScannableSources(content)) {
@@ -562,6 +594,28 @@ export function detectDangerousBackendCapabilities(
       break;
     }
 
+    for (const re of DYNAMIC_EXEC_CONSTRUCTOR_CHECKS) {
+      if (matchOutsideIgnored(source, re).length > 0) {
+        hits.add("dynamic code execution");
+        break;
+      }
+    }
+
+    if (options.strict) {
+      for (const re of STRICT_DYNAMIC_EXEC_CHECKS) {
+        if (matchOutsideIgnored(source, re).length > 0) {
+          hits.add("dynamic code execution");
+          break;
+        }
+      }
+      if (!hits.has("dynamic code execution") && hasComputedConstructorKey(source)) {
+        hits.add("dynamic code execution");
+      }
+      if (matchOutsideIgnored(source, STRICT_DANGEROUS_MODULE_RE).length > 0) {
+        hits.add("dynamic module access");
+      }
+    }
+
     // Base64 decoding — `Buffer.from(..., "base64")`. Split from
     // dynamic-execution so it carries its own capability and can be
     // declared independently.
@@ -570,7 +624,7 @@ export function detectDangerousBackendCapabilities(
     }
   }
 
-  if (declared.size === 0) return [...hits];
+  if (options.strict || declared.size === 0) return [...hits];
   return [...hits].filter((label) => {
     const cap = LABEL_TO_CAPABILITY.get(label);
     return cap === undefined || !declared.has(cap);
@@ -595,11 +649,24 @@ export function declaredCapabilitiesFromManifest(
   return declared;
 }
 
+export function assertCapabilityCompatibility(
+  declared: ReadonlySet<SpindleCapability>,
+  identifier = "extension",
+): void {
+  if (declared.has("dynamic_module") && declared.has("dynamic_code_execution")) {
+    throw new Error(
+      `Extension "${identifier}" declares mutually exclusive capabilities: ` +
+        `dynamic_module cannot be combined with dynamic_code_execution`
+    );
+  }
+}
+
 async function assertSafeBackendBundle(
   identifier: string,
   backendPath: string,
   declared: ReadonlySet<SpindleCapability> = new Set(),
 ): Promise<void> {
+  assertCapabilityCompatibility(declared, identifier);
   if (!(await Bun.file(backendPath).exists())) return;
 
   const blocked = detectDangerousBackendCapabilities(
@@ -610,6 +677,24 @@ async function assertSafeBackendBundle(
 
   throw new Error(
     `Extension "${identifier}" uses blocked backend capabilities: ${blocked.join(", ")}`
+  );
+}
+
+export async function assertSafeProviderBundle(
+  identifier: string,
+  providerPath: string,
+): Promise<void> {
+  if (!(await Bun.file(providerPath).exists())) {
+    throw new Error(`Extension "${identifier}" host_module not found at ${providerPath}`);
+  }
+  const blocked = detectDangerousBackendCapabilities(
+    await Bun.file(providerPath).text(),
+    new Set(),
+    { strict: true },
+  );
+  if (blocked.length === 0) return;
+  throw new Error(
+    `Extension "${identifier}" host_module failed strict scan: ${blocked.join(", ")}`
   );
 }
 
@@ -1575,6 +1660,12 @@ export async function getBackendEntryPath(identifier: string): Promise<string | 
   if (!(await Bun.file(entryPath).exists())) return null;
   await assertSafeBackendBundle(identifier, entryPath, declaredCapabilitiesFromManifest(manifest));
   return entryPath;
+}
+
+export function getHostModuleEntryPath(identifier: string, manifest: SpindleManifest): string | null {
+  if (!manifest.host_module) return null;
+  const repo = repoDir(identifier);
+  return resolveWithin(repo, manifest.host_module, "host_module");
 }
 
 export function getStoragePath(identifier: string): string {

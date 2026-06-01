@@ -6,7 +6,7 @@ import { env } from "../env";
 import { shouldUseBunWorkers, warnBunWorkerFallback } from "../utils/bun-worker-guard";
 import { bunCmd } from "./manager.service";
 
-export type RuntimeTransportMode = "worker" | "process" | "sandbox";
+export type RuntimeTransportMode = "worker" | "process" | "sandbox" | "in-host";
 
 export interface RuntimeTransport {
   readonly mode: RuntimeTransportMode;
@@ -87,7 +87,9 @@ function writeSandboxProfile(identifier: string, repoPath: string, storagePath: 
   return profilePath;
 }
 
-function resolveRuntimeMode(modeOverride?: RuntimeTransportMode): RuntimeTransportMode {
+function resolveRuntimeMode(
+  modeOverride?: Exclude<RuntimeTransportMode, "in-host">,
+): Exclude<RuntimeTransportMode, "in-host"> {
   if (modeOverride) return modeOverride;
   const raw = process.env.LUMIVERSE_SPINDLE_RUNTIME_MODE?.trim().toLowerCase();
   if (raw === "worker") return "worker";
@@ -190,7 +192,49 @@ function createSubprocessTransport(
   };
 }
 
+function createInHostTransport(opts: CreateRuntimeTransportOptions): RuntimeTransport {
+  (globalThis as Record<string, unknown>).__LUMIVERSE_IN_HOST__ = true;
+  let deliver: ((message: unknown) => void) | null = null;
+  let disposed = false;
+  const queue: unknown[] = [];
+
+  void (async () => {
+    const mod = (await import("./worker-runtime")) as {
+      __setInHostPostSink: (sink: ((message: unknown) => void) | null) => void;
+      __deliverInHostMessage: (message: unknown) => void;
+    };
+    if (disposed) return;
+    mod.__setInHostPostSink((message) => {
+      if (!disposed) opts.onMessage(message);
+    });
+    deliver = (message) => mod.__deliverInHostMessage(message);
+    for (const message of queue) deliver(message);
+    queue.length = 0;
+  })().catch((err) => {
+    opts.onError(`in-host runtime import failed: ${(err as Error).message}`);
+  });
+
+  return {
+    mode: "in-host",
+    pid: null,
+    postMessage(message: unknown): void {
+      if (disposed) return;
+      if (deliver) deliver(message);
+      else queue.push(message);
+    },
+    terminate(): void {
+      disposed = true;
+      void import("./worker-runtime")
+        .then((mod) => (mod as { __setInHostPostSink: (s: null) => void }).__setInHostPostSink(null))
+        .catch(() => {});
+    },
+  };
+}
+
 export function createRuntimeTransport(opts: CreateRuntimeTransportOptions): RuntimeTransport {
+  if (opts.mode === "in-host") {
+    return createInHostTransport(opts);
+  }
   const mode = resolveRuntimeMode(opts.mode);
   if (mode === "worker" && shouldUseBunWorkers()) {
     return createWorkerTransport(opts);

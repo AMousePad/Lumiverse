@@ -100,7 +100,8 @@ import { spawnAsync } from "./spawn-async";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import "../image-gen/index";
 import { getEphemeralPoolConfig } from "./ephemeral-pool.service";
-import { createRuntimeTransport, type RuntimeTransport } from "./runtime-transport";
+import { createRuntimeTransport, type RuntimeTransport, type RuntimeTransportMode } from "./runtime-transport";
+import { inHostProviderEligible } from "./in-host-provider";
 import {
   readSharedRpcEndpoint,
   registerSharedRpcRequestEndpoint,
@@ -1527,11 +1528,16 @@ export class WorkerHost {
     });
     const startTime = performance.now();
 
+    const inHostEntry = await this.resolveInHostEntry();
+    const transportMode: RuntimeTransportMode | undefined = inHostEntry ? "in-host" : undefined;
+    const initEntryPath = inHostEntry ?? entryPath;
+
     this.runtime = createRuntimeTransport({
       runtimePath,
       extensionIdentifier: this.manifest.identifier,
       repoPath,
       storagePath,
+      ...(transportMode ? { mode: transportMode } : {}),
       onMessage: (message) => {
         this.handleMessage(message as RuntimeWorkerToHost);
       },
@@ -1596,13 +1602,38 @@ export class WorkerHost {
     // Send init message with the extension's backend entry path
     this.postToWorker({
       type: "init",
-      manifest: { ...this.manifest, entry_backend: entryPath },
+      manifest: { ...this.manifest, entry_backend: initEntryPath },
       storagePath,
     });
 
     await readyPromise;
     await this.emitRuntimeStats("startup", performance.now() - startTime);
     this.startRuntimeStatsSampling();
+  }
+
+  private async resolveInHostEntry(): Promise<string | null> {
+    try {
+      if (!inHostProviderEligible(this.manifest)) return null;
+      if (!this.hasPermission("macro_interceptor")) {
+        console.log(
+          `[Spindle:${this.manifest.identifier}] in-host eligible but macro_interceptor permission not granted — using worker path`
+        );
+        return null;
+      }
+      const providerPath = managerSvc.getHostModuleEntryPath(this.manifest.identifier, this.manifest);
+      if (!providerPath) return null;
+      await managerSvc.assertSafeProviderBundle(this.manifest.identifier, providerPath);
+      console.log(
+        `[Spindle:${this.manifest.identifier}] in-host runtime active — eval surface runs in-process (Option A)`
+      );
+      return providerPath;
+    } catch (err: any) {
+      console.error(
+        `[Spindle:${this.manifest.identifier}] in-host eligibility/strict-scan failed; using worker path:`,
+        err?.message ?? err
+      );
+      return null;
+    }
   }
 
   async stop(): Promise<void> {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  assertCapabilityCompatibility,
   bunInstallCmd,
   declaredCapabilitiesFromManifest,
   detectDangerousBackendCapabilities,
@@ -357,5 +358,128 @@ describe("bunInstallCmd", () => {
         ]);
       }
     );
+  });
+});
+
+describe("dynamic_module + .constructor scanner hardening", () => {
+  const normalExecSamples = [
+    `const A = AsyncFunction;`,
+    `const G = GeneratorFunction;`,
+    `obj.constructor("return process.env");`,
+  ];
+
+  const strictOnlyExecSamples = [
+    `const C = f["constructor"]; C("return 1")();`,
+    `const C = [].constructor.constructor; C("return 1")();`,
+    `const C = f["constru" + "ctor"]; C("x")();`,
+    `const C = f[String.fromCharCode(99,111,110,115,116,114,117,99,116,111,114)];`,
+    `import vm from "node:vm"; vm.runInThisContext(payload);`,
+    `import { createRequire } from "node:module";`,
+    `const cp = process.binding("spawn_sync");`,
+    `const r = process.mainModule.require("child_process");`,
+  ];
+
+  test("flags eval/Function/AsyncFunction/.constructor-call dynamic-exec in normal mode", () => {
+    for (const code of normalExecSamples) {
+      expect(detectDangerousBackendCapabilities(code)).toContain("dynamic code execution");
+    }
+  });
+
+  test("dynamic_code_execution suppresses the dynamic-exec hit in normal mode", () => {
+    const code = `obj.constructor("return process.env");`;
+    expect(
+      detectDangerousBackendCapabilities(code, new Set<SpindleCapability>(["dynamic_code_execution"]))
+    ).toEqual([]);
+  });
+
+  test("strict mode catches constructor/module/reflection bypasses missed by the normal scan", () => {
+    for (const code of strictOnlyExecSamples) {
+      const hits = detectDangerousBackendCapabilities(code, new Set(), { strict: true });
+      expect(hits.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("strict mode does NOT honor capability opt-outs", () => {
+    const code = `const C = f["constructor"]; C("return 1")();`;
+    expect(
+      detectDangerousBackendCapabilities(
+        code,
+        new Set<SpindleCapability>(["dynamic_code_execution"]),
+        { strict: true }
+      )
+    ).toContain("dynamic code execution");
+  });
+
+  test("strict mode rejects eval/Function even with dynamic_code_execution declared", () => {
+    const code = `eval("1+1"); const f = Function("return 2");`;
+    expect(
+      detectDangerousBackendCapabilities(
+        code,
+        new Set<SpindleCapability>(["dynamic_code_execution"]),
+        { strict: true }
+      )
+    ).toContain("dynamic code execution");
+  });
+
+  test("dynamic module access stays hard-blocked: dynamic_module does NOT suppress it", () => {
+    const code = `const m = await import(buildSpecifier());`;
+    expect(detectDangerousBackendCapabilities(code)).toContain("dynamic module access");
+    expect(
+      detectDangerousBackendCapabilities(code, new Set<SpindleCapability>(["dynamic_module"]))
+    ).toContain("dynamic module access");
+    expect(
+      detectDangerousBackendCapabilities(code, new Set<SpindleCapability>(["dynamic_module"]), { strict: true })
+    ).toContain("dynamic module access");
+  });
+
+  test("a clean provider with benign .constructor reads passes the strict scan", () => {
+    const code = `
+      export function resolve(template, vars) {
+        let out = template;
+        for (const [k, v] of Object.entries(vars)) out = out.split("{{" + k + "}}").join(v);
+        return out;
+      }
+      const x = {}.constructor;
+      const klass = class Foo {}; const c = new klass().constructor;
+    `;
+    expect(detectDangerousBackendCapabilities(code, new Set(), { strict: true })).toEqual([]);
+  });
+
+  test("does not flag a plain .constructor read in normal mode", () => {
+    const code = `const ctor = someValue.constructor; const n = (3).constructor;`;
+    expect(detectDangerousBackendCapabilities(code)).toEqual([]);
+  });
+
+  test("does not flag dynamic-exec patterns inside strings/comments", () => {
+    const code = [
+      `const doc = "bracket constructor access and AsyncFunction";`,
+      `// process.binding spawn_sync`,
+    ].join("\n");
+    expect(detectDangerousBackendCapabilities(code, new Set(), { strict: true })).toEqual([]);
+  });
+
+  test("assertCapabilityCompatibility rejects dynamic_module + dynamic_code_execution", () => {
+    expect(() =>
+      assertCapabilityCompatibility(
+        new Set<SpindleCapability>(["dynamic_module", "dynamic_code_execution"]),
+        "demo"
+      )
+    ).toThrow(/mutually exclusive/);
+  });
+
+  test("assertCapabilityCompatibility allows either capability alone", () => {
+    expect(() =>
+      assertCapabilityCompatibility(new Set<SpindleCapability>(["dynamic_module"]))
+    ).not.toThrow();
+    expect(() =>
+      assertCapabilityCompatibility(new Set<SpindleCapability>(["dynamic_code_execution", "base64_decode"]))
+    ).not.toThrow();
+  });
+
+  test("declaredCapabilitiesFromManifest accepts dynamic_module", () => {
+    const manifest = {
+      requested_capabilities: ["dynamic_module"],
+    } as unknown as SpindleManifest;
+    expect([...declaredCapabilitiesFromManifest(manifest)]).toEqual(["dynamic_module"]);
   });
 });

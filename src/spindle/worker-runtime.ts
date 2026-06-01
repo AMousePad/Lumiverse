@@ -747,10 +747,28 @@ const sharedRpcPermissionScope = new AsyncLocalStorage<SharedRpcPermissionScope 
 
 // ─── Messaging ───────────────────────────────────────────────────────────
 
+let inHostPostSink: ((msg: RuntimeWorkerToHost) => void) | null = null;
+
+function isInHostRuntime(): boolean {
+  return (globalThis as { __LUMIVERSE_IN_HOST__?: boolean }).__LUMIVERSE_IN_HOST__ === true;
+}
+
+export function __setInHostPostSink(sink: ((msg: RuntimeWorkerToHost) => void) | null): void {
+  inHostPostSink = sink;
+}
+
+export function __deliverInHostMessage(message: RuntimeHostToWorker): void {
+  void handleHostMessage(message);
+}
+
 function post(msg: RuntimeWorkerToHost): void {
   const scope = sharedRpcPermissionScope.getStore();
   if (scope) {
     (msg as any).rpcPermissionScopeId = scope.id;
+  }
+  if (inHostPostSink) {
+    inHostPostSink(msg);
+    return;
   }
   if (typeof process.send === "function") {
     process.send(msg);
@@ -3505,7 +3523,9 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       // the static scan (detectDangerousBackendCapabilities, run before this
       // entry is loaded) and, when enabled, by the OS-level sandbox (sandbox
       // mode). The sandbox here is a cooperative speed bump, not the boundary.
-      initializeSandbox();
+      if (!isInHostRuntime()) {
+        initializeSandbox();
+      }
 
       // Dynamically import the extension's backend entry
       try {
@@ -4044,18 +4064,22 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         // If posting fails, the host's 5s fallback terminates us anyway.
       }
       // Allow extension to clean up
-      nativeProcessExit(0);
+      if (!isInHostRuntime()) {
+        nativeProcessExit(0);
+      }
       break;
     }
   }
 }
 
-if (typeof process.send === "function") {
-  process.on("message", (message) => {
-    void handleHostMessage(message as RuntimeHostToWorker);
-  });
-} else {
-  self.onmessage = (event: MessageEvent<RuntimeHostToWorker>) => {
-    void handleHostMessage(event.data);
-  };
+if (!isInHostRuntime()) {
+  if (typeof process.send === "function") {
+    process.on("message", (message) => {
+      void handleHostMessage(message as RuntimeHostToWorker);
+    });
+  } else {
+    self.onmessage = (event: MessageEvent<RuntimeHostToWorker>) => {
+      void handleHostMessage(event.data);
+    };
+  }
 }
