@@ -19,7 +19,13 @@ import { runRegexRequest } from "./regex-sandbox-core";
  */
 
 const DEFAULT_TIMEOUT_MS = 500;
-const DEFAULT_POOL_SIZE = 2;
+const __regexCpu = (globalThis as { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency ?? 4;
+const __regexPoolEnv = Number(
+  (globalThis as { Bun?: { env?: Record<string, string | undefined> } }).Bun?.env?.LUMIVERSE_REGEX_POOL_SIZE,
+);
+const DEFAULT_POOL_SIZE = Number.isFinite(__regexPoolEnv) && __regexPoolEnv >= 1
+  ? Math.min(32, Math.floor(__regexPoolEnv))
+  : Math.max(4, Math.min(16, __regexCpu));
 
 export class RegexTimeoutError extends Error {
   constructor(public readonly timeoutMs: number) {
@@ -65,6 +71,12 @@ class RegexWorkerPool {
   private queue: QueueItem[] = [];
 
   constructor(private readonly maxSize: number) {}
+
+  prewarm(): void {
+    while (this.workers.size < this.maxSize) {
+      this.idle.push(this.spawn());
+    }
+  }
 
   run<T>(op: QueueItem["op"], payload: Record<string, unknown>, timeoutMs: number): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -196,7 +208,10 @@ class RegexWorkerPool {
 let _pool: RegexWorkerPool | null = null;
 
 function getPool(): RegexWorkerPool {
-  if (!_pool) _pool = new RegexWorkerPool(DEFAULT_POOL_SIZE);
+  if (!_pool) {
+    _pool = new RegexWorkerPool(DEFAULT_POOL_SIZE);
+    _pool.prewarm();
+  }
   return _pool;
 }
 

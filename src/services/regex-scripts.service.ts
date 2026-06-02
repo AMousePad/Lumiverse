@@ -1044,7 +1044,19 @@ export async function applyRegexScripts(
         findRegex = await resolveFindMacros(findRegex, script.substitute_macros, macroEnv, options?.outFingerprint);
       }
 
-      if (macroEnv && script.substitute_macros === "raw") {
+      const regexCannotMatch = (() => {
+        if (/[.*+?()[\]{}^$|\\]/.test(findRegex)) return false;
+        const ci = script.flags.includes("i");
+        const hay = ci ? result.toLowerCase() : result;
+        return !hay.includes(ci ? findRegex.toLowerCase() : findRegex);
+      })();
+      if (regexCannotMatch) {
+        if (macroEnv && script.substitute_macros === "after") {
+          const evalResult = await evaluate(result, macroEnv, registry);
+          foldFingerprint(options?.outFingerprint, evalResult);
+          result = evalResult.text;
+        }
+      } else if (macroEnv && script.substitute_macros === "raw") {
         // "raw" mode: substitute capture groups into the replacement template
         // BEFORE macro resolution so $1, $2, etc. are available inside macros.
         // Match collection runs in the regex sandbox so a pathological
