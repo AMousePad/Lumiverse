@@ -21,6 +21,7 @@ nav = [
     { "Permissions" = "getting-started/permissions.md" },
     { "Backend Capabilities" = "getting-started/capabilities.md" },
     { "Runtime Modes" = "getting-started/runtime.md" },
+    { "In-Host Runtime" = "getting-started/in-host-runtime.md" },
     { "TypeScript Setup" = "getting-started/typescript-setup.md" },
   ] },
   { "Backend API" = [

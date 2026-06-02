@@ -20,8 +20,9 @@ import {
   statSync,
   copyFileSync,
   cpSync,
+  realpathSync,
 } from "fs";
-import { join, resolve, dirname, sep } from "path";
+import { join, resolve, dirname, basename, sep } from "path";
 import { getUserExtensionPath } from "../auth/provision";
 import { spawnAsync } from "./spawn-async";
 import { normalizeSpindleHttpsUrl } from "./url-safety";
@@ -1022,12 +1023,28 @@ export async function syncManifestToDb(identifier: string): Promise<void> {
   syncPermissionGrants(identifier, manifestPermissions, dbPermissions);
 }
 
+function realpathWithin(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    const parent = dirname(p);
+    if (parent === p) return p;
+    return join(realpathWithin(parent), basename(p));
+  }
+}
+
 function resolveWithin(base: string, requestedPath: string, label: string): string {
   const baseAbs = resolve(base);
   const resolved = resolve(baseAbs, requestedPath);
   const inside = resolved === baseAbs || resolved.startsWith(`${baseAbs}${sep}`);
   if (!inside) {
     throw new Error(`Path traversal detected in ${label}: ${requestedPath}`);
+  }
+  const realBase = realpathWithin(baseAbs);
+  const realResolved = realpathWithin(resolved);
+  const realInside = realResolved === realBase || realResolved.startsWith(`${realBase}${sep}`);
+  if (!realInside) {
+    throw new Error(`Path traversal (symlink) detected in ${label}: ${requestedPath}`);
   }
   return resolved;
 }

@@ -1612,28 +1612,20 @@ export class WorkerHost {
   }
 
   private async resolveInHostEntry(): Promise<string | null> {
-    try {
-      if (!inHostProviderEligible(this.manifest)) return null;
-      if (!this.hasPermission("macro_interceptor")) {
-        console.log(
-          `[Spindle:${this.manifest.identifier}] in-host eligible but macro_interceptor permission not granted — using worker path`
-        );
-        return null;
-      }
-      const providerPath = managerSvc.getHostModuleEntryPath(this.manifest.identifier, this.manifest);
-      if (!providerPath) return null;
-      await managerSvc.assertSafeProviderBundle(this.manifest.identifier, providerPath);
+    if (!inHostProviderEligible(this.manifest)) return null;
+    if (!this.hasPermission("macro_interceptor")) {
       console.log(
-        `[Spindle:${this.manifest.identifier}] in-host runtime active — eval surface runs in-process (Option A)`
-      );
-      return providerPath;
-    } catch (err: any) {
-      console.error(
-        `[Spindle:${this.manifest.identifier}] in-host eligibility/strict-scan failed; using worker path:`,
-        err?.message ?? err
+        `[Spindle:${this.manifest.identifier}] in-host eligible but macro_interceptor permission not granted — using worker path`
       );
       return null;
     }
+    const providerPath = managerSvc.getHostModuleEntryPath(this.manifest.identifier, this.manifest);
+    if (!providerPath) return null;
+    await managerSvc.assertSafeProviderBundle(this.manifest.identifier, providerPath);
+    console.log(
+      `[Spindle:${this.manifest.identifier}] in-host runtime active — eval surface runs in-process (Option A)`
+    );
+    return providerPath;
   }
 
   async stop(): Promise<void> {
