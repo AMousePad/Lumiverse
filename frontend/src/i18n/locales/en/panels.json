@@ -1204,6 +1204,7 @@
     "byCreator": "by {{name}}",
     "saving": "Saving...",
     "tokenReportTitle": "Character prompt counts",
+    "moreActions": "More character actions",
     "tokenReportCounting": "Counting prompt text…",
     "tokenReportTotal": "{{count}} tokens across all listed text",
     "tokenReportNote": "Prompt variants and greetings are listed individually because only one of each is used at a time.",

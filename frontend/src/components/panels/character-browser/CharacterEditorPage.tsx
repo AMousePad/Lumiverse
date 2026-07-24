@@ -4,7 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { X, Upload, Trash2, Copy, MessageSquare, User, UserPlus, Plus, ImagePlus, Download, Code2, GripVertical, ExternalLink, Hash } from 'lucide-react'
+import { X, Upload, Trash2, Copy, MessageSquare, User, UserPlus, Plus, ImagePlus, Download, Code2, GripVertical, ExternalLink, Hash, MoreHorizontal } from 'lucide-react'
 import {
   DndContext,
   closestCenter,
@@ -1448,6 +1448,7 @@ export default function CharacterEditorPage() {
 
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [headerActionMenuPosition, setHeaderActionMenuPosition] = useState<ContextMenuPos | null>(null)
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const activeCharxExportRef = useRef<{
     exportId: string
@@ -1532,6 +1533,89 @@ export default function CharacterEditorPage() {
       setExporting(false)
     }
   }, [editingCharacterId, character, t])
+
+  const headerActionMenuItems: ContextMenuEntry[] = [
+    {
+      key: 'token-report',
+      label: t('characterEditor.tokenReportTitle'),
+      icon: <Hash size={14} />,
+      onClick: () => {
+        setHeaderActionMenuPosition(null)
+        setShowTokenReport(true)
+      },
+    },
+    {
+      key: 'create-persona',
+      label: t('characterEditor.createPersona'),
+      icon: creatingPersona ? <Spinner size={14} fast /> : <UserPlus size={14} />,
+      disabled: creatingPersona,
+      onClick: () => {
+        setHeaderActionMenuPosition(null)
+        void handleCreatePersonaFromCharacter()
+      },
+    },
+    {
+      key: 'replace-card',
+      label: t('characterEditor.replaceCard'),
+      icon: replacingCard ? <Spinner size={14} fast /> : <Upload size={14} />,
+      disabled: replacingCard,
+      onClick: () => {
+        setHeaderActionMenuPosition(null)
+        cardReplaceFileRef.current?.click()
+      },
+    },
+    { key: 'export-divider', type: 'divider' },
+    {
+      key: 'export-json',
+      label: t('characterEditor.exportJson'),
+      icon: <Download size={14} />,
+      disabled: exporting,
+      onClick: () => {
+        setHeaderActionMenuPosition(null)
+        void handleExport('json')
+      },
+    },
+    {
+      key: 'export-png',
+      label: t('characterEditor.exportPng'),
+      icon: <Download size={14} />,
+      disabled: exporting,
+      onClick: () => {
+        setHeaderActionMenuPosition(null)
+        void handleExport('png')
+      },
+    },
+    {
+      key: 'export-charx',
+      label: t('characterEditor.exportCharx'),
+      icon: <Download size={14} />,
+      disabled: exporting,
+      onClick: () => {
+        setHeaderActionMenuPosition(null)
+        void handleExport('charx')
+      },
+    },
+    { key: 'duplicate-divider', type: 'divider' },
+    {
+      key: 'duplicate',
+      label: t('characterEditor.duplicate'),
+      icon: <Copy size={14} />,
+      onClick: () => {
+        setHeaderActionMenuPosition(null)
+        void handleDuplicate()
+      },
+    },
+    {
+      key: 'delete',
+      label: tc('actions.delete'),
+      icon: <Trash2 size={14} />,
+      danger: true,
+      onClick: () => {
+        setHeaderActionMenuPosition(null)
+        setShowDeleteConfirm(true)
+      },
+    },
+  ]
 
   // Close export menu on outside click
   useEffect(() => {
@@ -1646,6 +1730,7 @@ export default function CharacterEditorPage() {
 
                   <div className={styles.headerActions}>
                     <Button
+                      className={styles.desktopHeaderAction}
                       size="icon"
                       variant="ghost"
                       onClick={() => setShowTokenReport(true)}
@@ -1657,6 +1742,7 @@ export default function CharacterEditorPage() {
                       <MessageSquare size={14} />
                     </Button>
                     <Button
+                      className={styles.desktopHeaderAction}
                       size="icon"
                       variant="ghost"
                       onClick={handleCreatePersonaFromCharacter}
@@ -1668,6 +1754,7 @@ export default function CharacterEditorPage() {
                         : <UserPlus size={14} />}
                     </Button>
                     <Button
+                      className={styles.desktopHeaderAction}
                       size="icon"
                       variant="ghost"
                       onClick={() => cardReplaceFileRef.current?.click()}
@@ -1676,7 +1763,7 @@ export default function CharacterEditorPage() {
                     >
                       {replacingCard ? <Spinner size={14} fast /> : <Upload size={14} />}
                     </Button>
-                    <div className={styles.exportWrapper} ref={exportMenuRef}>
+                    <div className={clsx(styles.exportWrapper, styles.desktopHeaderAction)} ref={exportMenuRef}>
                       <Button
                         size="icon"
                         variant="ghost"
@@ -1696,16 +1783,31 @@ export default function CharacterEditorPage() {
                         </div>
                       )}
                     </div>
-                    <Button size="icon" variant="ghost" onClick={handleDuplicate} title={t('characterEditor.duplicate')}>
+                    <Button className={styles.desktopHeaderAction} size="icon" variant="ghost" onClick={handleDuplicate} title={t('characterEditor.duplicate')}>
                       <Copy size={14} />
                     </Button>
                     <Button
+                      className={styles.desktopHeaderAction}
                       size="icon"
                       variant="danger-ghost"
                       onClick={() => setShowDeleteConfirm(true)}
                       title={tc('actions.delete')}
                     >
                       <Trash2 size={14} />
+                    </Button>
+                    <Button
+                      className={styles.mobileActionMenu}
+                      size="icon"
+                      variant="ghost"
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        setHeaderActionMenuPosition((position) => position ? null : { x: rect.right, y: rect.bottom + 4 })
+                      }}
+                      title={t('characterEditor.moreActions')}
+                      aria-label={t('characterEditor.moreActions')}
+                      aria-expanded={headerActionMenuPosition !== null}
+                    >
+                      <MoreHorizontal size={16} />
                     </Button>
                   </div>
 
@@ -2342,6 +2444,11 @@ export default function CharacterEditorPage() {
         onCancel={() => setShowDeleteConfirm(false)}
       />
     )}
+    <ContextMenu
+      position={headerActionMenuPosition}
+      items={headerActionMenuItems}
+      onClose={() => setHeaderActionMenuPosition(null)}
+    />
     </>,
     document.body
   )

@@ -145,6 +145,10 @@
   flex-shrink: 0;
 }
 
+.mobileActionMenu {
+  display: none;
+}
+
 
 .exportWrapper {
   position: relative;
@@ -1164,6 +1168,14 @@
 
   .headerActions {
     gap: 2px;
+  }
+
+  .desktopHeaderAction {
+    display: none;
+  }
+
+  .mobileActionMenu {
+    display: inline-flex;
   }
 
   .tabBar {
