@@ -63,6 +63,7 @@ import type {
   WorldBookEntryDeletedPayload,
 } from '@/types/ws-events'
 import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
+import WorldBookTokenReportModal from '@/components/panels/world-book/WorldBookTokenReportModal'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { ModalPresentation } from '@/components/shared/ModalPresentation'
@@ -449,6 +450,7 @@ export default function WorldBookEntriesSection({
   const [positionState, setPositionState] = useState<{ entryIds: string[] } | null>(null)
   const [bulkPosition, setBulkPosition] = useState(0)
   const [bulkDepth, setBulkDepth] = useState('4')
+  const [showTokenReport, setShowTokenReport] = useState(false)
   const [pendingAction, setPendingAction] = useState(false)
   const entryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const sectionRef = useRef<HTMLDivElement>(null)
@@ -679,6 +681,7 @@ export default function WorldBookEntriesSection({
     setEntrySearchFilter('')
     setMobileListOptionsOpen(false)
     setSelectedEntryId(null)
+    setShowTokenReport(false)
     setSelectMode(false)
     setSelectedIds([])
     setContextMenu(null)
@@ -1144,6 +1147,15 @@ export default function WorldBookEntriesSection({
             {selectMode ? <CheckSquare size={13} /> : <Square size={13} />}
             <span>{te('select')}</span>
           </button>
+          <button
+            type="button"
+            className={styles.toolbarBtn}
+            onClick={() => setShowTokenReport(true)}
+            title={t('tokenReportOpen')}
+          >
+            <Hash size={13} />
+            <span>{t('tokenReportOpen')}</span>
+          </button>
           <button type="button" className={styles.newEntryBtn} onClick={() => void handleCreateEntry()}>
             <Plus size={12} />
             <span>{te('newEntry')}</span>
@@ -1428,6 +1440,15 @@ export default function WorldBookEntriesSection({
         items={positionMenuItems}
         onClose={() => setPositionMenu(null)}
       />
+
+      {selectedBook && (
+        <WorldBookTokenReportModal
+          isOpen={showTokenReport}
+          onClose={() => setShowTokenReport(false)}
+          bookId={selectedBook.id}
+          bookName={selectedBook.name}
+        />
+      )}
 
       {deleteState && (
         <ConfirmationModal
