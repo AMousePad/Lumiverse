@@ -53,6 +53,7 @@ export class WebSocketClient {
   private fallbackPongWatchdog: ReturnType<typeof setTimeout> | null = null
   private url: string
   private shouldReconnect = true
+  private spindleInfoLoggingEnabled = true
   private visibilityCleanup: Array<() => void> = []
   private focusedChatId: string | null = null
   /** Previous visibility state — used to detect hidden→visible transitions. */
@@ -110,7 +111,12 @@ export class WebSocketClient {
           return
         }
         const eventName = data.event || data.type
-        if (eventName !== 'CONNECTED' && eventName !== 'STREAM_TOKEN_RECEIVED') {
+        const isRoutineSpindleEvent = typeof eventName === 'string' && eventName.startsWith('SPINDLE_')
+        if (
+          eventName !== 'CONNECTED'
+          && eventName !== 'STREAM_TOKEN_RECEIVED'
+          && (!isRoutineSpindleEvent || this.spindleInfoLoggingEnabled)
+        ) {
           console.debug('[WS] ←', eventName, data.payload)
         }
         this.emit(eventName, data.payload)
@@ -133,6 +139,11 @@ export class WebSocketClient {
     this.ws.onerror = (e) => {
       console.error('[WS] Error:', e)
     }
+  }
+
+  /** Controls browser-console output for routine Spindle WebSocket events. */
+  setSpindleInfoLogging(enabled: boolean): void {
+    this.spindleInfoLoggingEnabled = enabled
   }
 
   disconnect() {

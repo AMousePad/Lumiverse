@@ -33,12 +33,15 @@ const windowMock = {
 class MockWebSocket {
   static readonly CONNECTING = 0
   static readonly OPEN = 1
+  static instances: MockWebSocket[] = []
 
   readyState = MockWebSocket.OPEN
   sent: string[] = []
   closeCalls = 0
 
-  constructor(_url: string) {}
+  constructor(_url: string) {
+    MockWebSocket.instances.push(this)
+  }
 
   send(payload: string) {
     this.sent.push(payload)
@@ -180,5 +183,28 @@ describe('WebSocketClient resume watchdog guard', () => {
     expect(socket.closeCalls).toBe(0)
     expect(client.ws).toBe(socket)
     client.disconnect()
+  })
+})
+
+describe('WebSocketClient Spindle console logging', () => {
+  test('can suppress routine Spindle events without suppressing other WebSocket diagnostics', () => {
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    const originalDebug = console.debug
+    const logged: unknown[][] = []
+    console.debug = (...args: unknown[]) => { logged.push(args) }
+
+    try {
+      client.setSpindleInfoLogging(false)
+      client.connect()
+      const socket = MockWebSocket.instances.at(-1)!
+
+      ;(socket as any).onmessage({ data: JSON.stringify({ event: 'SPINDLE_RUNTIME_STATS', payload: {} }) })
+      ;(socket as any).onmessage({ data: JSON.stringify({ event: 'MESSAGE_SENT', payload: {} }) })
+
+      expect(logged).toEqual([['[WS] ←', 'MESSAGE_SENT', {}]])
+    } finally {
+      console.debug = originalDebug
+      client.disconnect()
+    }
   })
 })

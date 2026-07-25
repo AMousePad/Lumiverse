@@ -54,7 +54,7 @@ export default function SpindlePanel() {
   const setOperationStatus = useStore((s) => s.setExtensionOperationStatus)
   const bulkUpdateStatus = useStore((s) => s.bulkUpdateStatus)
   const updateAllExtensions = useStore((s) => s.updateAllExtensions)
-  const extensionMountPointsVersion = useSyncExternalStore(
+  useSyncExternalStore(
     subscribeExtensionMountPoints,
     getExtensionMountPointsVersion,
     getExtensionMountPointsVersion,
@@ -62,17 +62,14 @@ export default function SpindlePanel() {
 
   const isPrivileged = spindlePrivileged || user?.role === 'owner' || user?.role === 'admin'
 
-  const extensionsWithRegisteredSettings = useMemo(
-    () => new Set(
-      extensions
-        .filter((ext) => hasExtensionMountPoint(ext.id, 'settings_extensions'))
-        .map((ext) => ext.id)
-    ),
-    // `mount()` registration happens asynchronously while frontend
-    // extensions hydrate. Recompute when that registration changes so the
-    // settings action appears regardless of whether the panel or extension
-    // loaded first.
-    [extensions, extensionMountPointsVersion]
+  // `mount()` registration happens asynchronously while frontend extensions
+  // hydrate. `useSyncExternalStore` re-renders this component when it changes,
+  // so derive the set during rendering rather than using a memo solely as a
+  // version-change trigger.
+  const extensionsWithRegisteredSettings = new Set(
+    extensions
+      .filter((ext) => hasExtensionMountPoint(ext.id, 'settings_extensions'))
+      .map((ext) => ext.id)
   )
 
   const [togglingPerm, setTogglingPerm] = useState<string | null>(null)

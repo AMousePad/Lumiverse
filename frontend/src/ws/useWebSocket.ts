@@ -398,12 +398,17 @@ export function useWebSocket() {
   const isAuthenticated = useStore((s) => s.isAuthenticated)
   const userRole = useStore((s) => s.user?.role)
   const activeChatId = useStore((s) => s.activeChatId)
+  const spindleInfoLoggingEnabled = useStore((s) => s.spindleSettings.infoLoggingEnabled)
   const lastExtensionSyncAtRef = useRef(0)
   const lastOperatorUpdateToastKeyRef = useRef<string | null>(null)
   // Set only after a confirmed healthy session drops. The following verified
   // reconnect then gets one prompt service-worker update check, which catches
   // bundles rebuilt while the server was unavailable.
   const pendingReconnectBundleCheckRef = useRef(false)
+
+  useEffect(() => {
+    wsClient.setSpindleInfoLogging(spindleInfoLoggingEnabled)
+  }, [spindleInfoLoggingEnabled])
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -1394,7 +1399,9 @@ export function useWebSocket() {
         rssKb: number | null
         startupMs?: number
       }) => {
-        console.info('[Spindle] Runtime stats:', payload)
+        if (store.getState().spindleSettings.infoLoggingEnabled) {
+          console.info('[Spindle] Runtime stats:', payload)
+        }
       }),
 
       wsClient.on(EventType.SPINDLE_BULK_UPDATE_COMPLETE, (payload: { total: number; updated: number; failed: number; errors: Array<{ id: string; name: string; error: string }> }) => {

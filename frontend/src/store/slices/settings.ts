@@ -549,6 +549,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   spindleSettings: {
     interceptorTimeoutMs: 10_000,
     dockPanelDesktopSide: 'right',
+    infoLoggingEnabled: true,
   },
   voiceSettings: {
     sttProvider: 'webspeech' as const,

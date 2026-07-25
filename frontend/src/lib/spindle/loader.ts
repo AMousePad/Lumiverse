@@ -421,9 +421,11 @@ function markExtensionReady(
   }
   clearReadyTimeout(loaded)
   const replayed = flushPendingStartupItems(loaded)
-  console.debug(
-    `[Spindle] Frontend ready (${source}): ${loaded.identifier}${replayed > 0 ? ` [replayed ${replayed}]` : ''}`
-  )
+  if (useStore.getState().spindleSettings.infoLoggingEnabled) {
+    console.debug(
+      `[Spindle] Frontend ready (${source}): ${loaded.identifier}${replayed > 0 ? ` [replayed ${replayed}]` : ''}`
+    )
+  }
 }
 
 function getManifestSignature(manifest: SpindleManifest): string {
@@ -1842,7 +1844,9 @@ async function doLoadFrontendExtension(
     }
 
 
-    console.debug(`[Spindle] Loaded frontend: ${manifest.identifier}`)
+    if (useStore.getState().spindleSettings.infoLoggingEnabled) {
+      console.debug(`[Spindle] Loaded frontend: ${manifest.identifier}`)
+    }
     if (!loaded.isReady) {
       if (loaded.holdReady) {
         armReadyTimeout(loaded)
@@ -1930,7 +1934,9 @@ export async function unloadFrontendExtension(
 
   loaded.cleanup(true)
 
-  console.debug(`[Spindle] Unloaded frontend: ${loaded.identifier}`)
+  if (useStore.getState().spindleSettings.infoLoggingEnabled) {
+    console.debug(`[Spindle] Unloaded frontend: ${loaded.identifier}`)
+  }
 }
 
 export function routeBackendMessage(extensionId: string, payload: unknown): void {

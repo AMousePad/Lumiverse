@@ -25,6 +25,9 @@ export default function DesktopFloatingWidgetHost() {
   const widgets = useStore((state) => state.floatWidgets)
   const updateFloatWidget = useStore((state) => state.updateFloatWidget)
   const widget = widgets.filter((entry) => entry.extensionId === target.extensionId && entry.visible)[target.index]
+  const widgetId = widget?.id
+  const widgetWidth = widget?.width
+  const widgetHeight = widget?.height
   const hostRef = useRef<HTMLDivElement>(null)
   const widgetRef = useRef<typeof widget>(undefined)
   const seededWidgetId = useRef<string | undefined>(undefined)
@@ -52,25 +55,25 @@ export default function DesktopFloatingWidgetHost() {
   // change. Mirror that state to the native host so a SpotifyControls layout
   // update (or any other extension resize) changes the actual window bounds.
   useEffect(() => {
-    if (!widget) return
+    if (!widgetId || widgetWidth === undefined || widgetHeight === undefined) return
 
     // A pop-out is a second frontend instance. Seed it from the live primary
     // placement dimensions before it can apply that instance's default size.
-    if (seededWidgetId.current !== widget.id) {
-      seededWidgetId.current = widget.id
-      if (widget.width !== target.width || widget.height !== target.height) {
-        updateFloatWidget(widget.id, { width: target.width, height: target.height })
+    if (seededWidgetId.current !== widgetId) {
+      seededWidgetId.current = widgetId
+      if (widgetWidth !== target.width || widgetHeight !== target.height) {
+        updateFloatWidget(widgetId, { width: target.width, height: target.height })
         return
       }
     }
 
-    const size = { width: widget.width, height: widget.height + hostChromeHeight }
+    const size = { width: widgetWidth, height: widgetHeight + hostChromeHeight }
     requestedNativeSize.current = size
     void nativeWindow.setSize(new LogicalSize(size.width, size.height))
-    void syncDesktopFloatingWidgetSize(widget.id, widget.width, widget.height).catch(() => {
+    void syncDesktopFloatingWidgetSize(widgetId, widgetWidth, widgetHeight).catch(() => {
       // Browser/PWA clients and a window that is closing have no native peer.
     })
-  }, [hostChromeHeight, nativeWindow, target.height, target.width, updateFloatWidget, widget?.height, widget?.id, widget?.width])
+  }, [hostChromeHeight, nativeWindow, target.height, target.width, updateFloatWidget, widgetHeight, widgetId, widgetWidth])
 
   // Native resizing happens outside React, so retain it in the placement
   // store. Without this, the next extension layout change restores the stale
@@ -121,12 +124,12 @@ export default function DesktopFloatingWidgetHost() {
   // frontend. Apply their explicit setSize request immediately here instead
   // of relying on the primary-window catalog round trip.
   useEffect(() => {
-    if (!widget) return
+    if (!widgetId) return
     const handleSizeRequest = (event: Event) => {
       const detail = (event as CustomEvent<{ widgetId?: unknown; width?: unknown; height?: unknown }>).detail
       if (
         !detail ||
-        detail.widgetId !== widget.id ||
+        detail.widgetId !== widgetId ||
         typeof detail.width !== 'number' ||
         typeof detail.height !== 'number' ||
         !Number.isInteger(detail.width) ||
@@ -138,22 +141,22 @@ export default function DesktopFloatingWidgetHost() {
       const nativeSize = { width, height: height + hostChromeHeight }
       requestedNativeSize.current = nativeSize
       console.info('[desktop-widget] pop-out received size request', {
-        widgetId: widget.id,
+        widgetId,
         width,
         height,
         nativeSize,
       })
       void nativeWindow.setSize(new LogicalSize(nativeSize.width, nativeSize.height))
-        .then(() => console.info('[desktop-widget] pop-out applied size request', { widgetId: widget.id, nativeSize }))
-        .catch((error) => console.warn('[desktop-widget] pop-out failed to apply size request', { widgetId: widget.id, nativeSize }, error))
-      void syncDesktopFloatingWidgetSize(widget.id, width, height)
-        .then(() => console.info('[desktop-widget] pop-out synchronized size request', { widgetId: widget.id, width, height }))
-        .catch((error) => console.warn('[desktop-widget] pop-out failed to synchronize size request', { widgetId: widget.id, width, height }, error))
+        .then(() => console.info('[desktop-widget] pop-out applied size request', { widgetId, nativeSize }))
+        .catch((error) => console.warn('[desktop-widget] pop-out failed to apply size request', { widgetId, nativeSize }, error))
+      void syncDesktopFloatingWidgetSize(widgetId, width, height)
+        .then(() => console.info('[desktop-widget] pop-out synchronized size request', { widgetId, width, height }))
+        .catch((error) => console.warn('[desktop-widget] pop-out failed to synchronize size request', { widgetId, width, height }, error))
     }
 
     window.addEventListener('spindle:float-size-request', handleSizeRequest)
     return () => window.removeEventListener('spindle:float-size-request', handleSizeRequest)
-  }, [hostChromeHeight, nativeWindow, widget?.id])
+  }, [hostChromeHeight, nativeWindow, widgetId])
 
   return (
     <div

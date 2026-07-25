@@ -2930,6 +2930,8 @@ function ImageOptimizationSettings() {
 
 function AdvancedSettings() {
   const { t } = useTranslation('settings')
+  const spindleSettings = useStore((s) => s.spindleSettings)
+  const setSetting = useStore((s) => s.setSetting)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -3002,6 +3004,18 @@ function AdvancedSettings() {
       {/* Image Optimization accordion */}
       <CollapsibleSection title={t('advanced.imageOptimization')} defaultExpanded={false}>
         <ImageOptimizationSettings />
+      </CollapsibleSection>
+
+      <CollapsibleSection title={t('advanced.spindleLogging')} defaultExpanded={false}>
+        <Toggle.Checkbox
+          checked={spindleSettings.infoLoggingEnabled}
+          onChange={(infoLoggingEnabled) => setSetting('spindleSettings', {
+            ...spindleSettings,
+            infoLoggingEnabled,
+          })}
+          label={t('advanced.spindleInfoLogging')}
+          hint={t('advanced.spindleInfoLoggingHint')}
+        />
       </CollapsibleSection>
 
       {/* Long-Term Memory accordion */}

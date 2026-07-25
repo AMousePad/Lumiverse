@@ -659,7 +659,9 @@ export function createFloatWidgetHandle(
       window.dispatchEvent(new CustomEvent('spindle:float-size-request', {
         detail: { widgetId, width, height },
       }))
-      console.info('[spindle:float-size-request]', { widgetId, width, height })
+      if (useStore.getState().spindleSettings.infoLoggingEnabled) {
+        console.info('[spindle:float-size-request]', { widgetId, width, height })
+      }
     },
     setVisible(visible: boolean) {
       assertPlacementUsable(destroyed)

@@ -573,6 +573,8 @@ export interface DrawerSettings {
 export interface SpindleSettings {
   interceptorTimeoutMs: number
   dockPanelDesktopSide: 'left' | 'right'
+  /** Show routine Spindle lifecycle and WebSocket events in the browser console. */
+  infoLoggingEnabled: boolean
 }
 
 // ---- Loom Registry Entry ----
