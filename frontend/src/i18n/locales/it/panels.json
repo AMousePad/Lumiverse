@@ -1495,6 +1495,9 @@
       "move": "Sposta",
       "renumber": "Rinumera",
       "addKeyword": "Aggiungi parola chiave",
+      "moreActions": "Altre azioni",
+      "setPosition": "Imposta posizione",
+      "setActivation": "Imposta attivazione",
       "contextCollapseEditor": "Comprimi editor",
       "contextExpandEditor": "Espandi editor",
       "duplicateHere": "Duplica qui",
@@ -1520,7 +1523,10 @@
       "keywordSecondary": "Secondaria",
       "setPositionTitle": "Imposta posizione",
       "position": "Posizione",
-      "depth": "Profondità"
+      "depth": "Profondità",
+      "setActivationTitle": "Imposta attivazione",
+      "setActivationHint": "Modifica il metodo di attivazione per {{count}} voci selezionate.",
+      "activationMethod": "Metodo di attivazione"
     },
     "entryEditor": {
       "sections": {

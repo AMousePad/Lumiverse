@@ -1494,6 +1494,9 @@
       "move": "移动",
       "renumber": "重新编号",
       "addKeyword": "添加关键词",
+      "moreActions": "更多操作",
+      "setPosition": "设置位置",
+      "setActivation": "设置激活方式",
       "contextCollapseEditor": "折叠编辑器",
       "contextExpandEditor": "展开编辑器",
       "duplicateHere": "在此复制",
@@ -1519,7 +1522,10 @@
       "keywordSecondary": "次关键词",
       "setPositionTitle": "设置位置",
       "position": "位置",
-      "depth": "深度"
+      "depth": "深度",
+      "setActivationTitle": "设置激活方式",
+      "setActivationHint": "更改 {{count}} 个已选条目的激活方式。",
+      "activationMethod": "激活方式"
     },
     "entryEditor": {
       "sections": {

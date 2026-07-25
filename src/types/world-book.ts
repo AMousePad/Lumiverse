@@ -332,12 +332,19 @@ export interface WorldBookEntryBulkSetPositionInput {
   depth?: number;
 }
 
+export interface WorldBookEntryBulkSetActivationInput {
+  action: "set_activation";
+  entry_ids: string[];
+  activation: "trigger" | "constant" | "vector";
+}
+
 export type WorldBookEntryBulkActionInput =
   | WorldBookEntryBulkDeleteInput
   | WorldBookEntryBulkMoveInput
   | WorldBookEntryBulkRenumberInput
   | WorldBookEntryBulkAddKeywordInput
-  | WorldBookEntryBulkSetPositionInput;
+  | WorldBookEntryBulkSetPositionInput
+  | WorldBookEntryBulkSetActivationInput;
 
 export interface WorldBookEntryBulkActionResult {
   action: WorldBookEntryBulkActionInput["action"];

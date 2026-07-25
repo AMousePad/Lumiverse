@@ -1494,6 +1494,9 @@
       "move": "移動",
       "renumber": "重新編號",
       "addKeyword": "添加關鍵詞",
+      "moreActions": "更多操作",
+      "setPosition": "設定位置",
+      "setActivation": "設定啟用方式",
       "contextCollapseEditor": "摺疊編輯器",
       "contextExpandEditor": "展開編輯器",
       "duplicateHere": "在此複製",
@@ -1519,7 +1522,10 @@
       "keywordSecondary": "次關鍵詞",
       "setPositionTitle": "設定位置",
       "position": "位置",
-      "depth": "深度"
+      "depth": "深度",
+      "setActivationTitle": "設定啟用方式",
+      "setActivationHint": "變更 {{count}} 個已選條目的啟用方式。",
+      "activationMethod": "啟用方式"
     },
     "entryEditor": {
       "sections": {

@@ -90,6 +90,7 @@ beforeEach(() => {
     keysecondary TEXT NOT NULL,
     content TEXT NOT NULL,
     comment TEXT NOT NULL,
+    constant INTEGER NOT NULL DEFAULT 0,
     vectorized INTEGER NOT NULL,
     disabled INTEGER NOT NULL,
     vector_index_status TEXT NOT NULL,
@@ -209,6 +210,27 @@ describe("world-book cleanup-first deletion", () => {
     expect(rowExists("world_book_entries", "entry-1")).toBe(false);
     expect(rowExists("world_book_entries", "entry-2")).toBe(false);
     expect(vectors).toEqual([{ userId: "user", ownerId: "book-2", sourceId: "foreign-entry" }]);
+  });
+
+  test("bulk activation switches selected entries to a single activation method", async () => {
+    insertBook("book-1", "user");
+    insertEntry("entry-1", "book-1");
+
+    expect(await worldBooksSvc.bulkOperateEntries("user", "book-1", {
+      action: "set_activation",
+      entry_ids: ["entry-1"],
+      activation: "constant",
+    })).toEqual({ action: "set_activation", affected: 1 });
+
+    expect(getDb().query(
+      "SELECT constant, vectorized, vector_index_status, vector_indexed_at, vector_index_error FROM world_book_entries WHERE id = ?",
+    ).get("entry-1")).toEqual({
+      constant: 1,
+      vectorized: 0,
+      vector_index_status: "not_enabled",
+      vector_indexed_at: null,
+      vector_index_error: null,
+    });
   });
 
   test("auto-managed character cleanup awaits vector deletion", async () => {

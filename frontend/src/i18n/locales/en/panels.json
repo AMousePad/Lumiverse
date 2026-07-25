@@ -1641,6 +1641,9 @@
       "move": "Move",
       "renumber": "Renumber",
       "addKeyword": "Add Keyword",
+      "moreActions": "More actions",
+      "setPosition": "Set Position",
+      "setActivation": "Set Activation",
       "contextCollapseEditor": "Collapse editor",
       "contextExpandEditor": "Expand editor",
       "duplicateHere": "Duplicate here",
@@ -1666,7 +1669,10 @@
       "keywordSecondary": "Secondary",
       "setPositionTitle": "Set Position",
       "position": "Position",
-      "depth": "Depth"
+      "depth": "Depth",
+      "setActivationTitle": "Set Activation",
+      "setActivationHint": "Change the activation method for {{count}} selected entries.",
+      "activationMethod": "Activation Method"
     },
     "entryEditor": {
       "sections": {

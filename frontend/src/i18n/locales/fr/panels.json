@@ -1494,6 +1494,9 @@
       "move": "Déplacer",
       "renumber": "Renuméroter",
       "addKeyword": "Ajouter un mot clé",
+      "moreActions": "Plus d’actions",
+      "setPosition": "Définir la position",
+      "setActivation": "Définir l’activation",
       "contextCollapseEditor": "Réduire l'éditeur",
       "contextExpandEditor": "Agrandir l'éditeur",
       "duplicateHere": "Dupliquer ici",
@@ -1519,7 +1522,10 @@
       "keywordSecondary": "Secondaire",
       "setPositionTitle": "Définir la position",
       "position": "Position",
-      "depth": "Profondeur"
+      "depth": "Profondeur",
+      "setActivationTitle": "Définir l’activation",
+      "setActivationHint": "Modifier la méthode d’activation de {{count}} entrées sélectionnées.",
+      "activationMethod": "Méthode d’activation"
     },
     "entryEditor": {
       "sections": {

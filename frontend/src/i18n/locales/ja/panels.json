@@ -1494,6 +1494,9 @@
       "move": "移動",
       "renumber": "再番号付け",
       "addKeyword": "キーワードを追加",
+      "moreActions": "その他の操作",
+      "setPosition": "位置を設定",
+      "setActivation": "アクティベーションを設定",
       "contextCollapseEditor": "エディタを折りたたむ",
       "contextExpandEditor": "エディタを展開",
       "duplicateHere": "ここに複製",
@@ -1519,7 +1522,10 @@
       "keywordSecondary": "二次",
       "setPositionTitle": "位置を設定",
       "position": "位置",
-      "depth": "奥行き"
+      "depth": "奥行き",
+      "setActivationTitle": "アクティベーションを設定",
+      "setActivationHint": "選択した {{count}} 件のエントリのアクティベーション方式を変更します。",
+      "activationMethod": "アクティベーション方式"
     },
     "entryEditor": {
       "sections": {

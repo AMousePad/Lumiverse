@@ -1531,6 +1531,60 @@ export async function bulkOperateEntries(
     return { action: input.action, affected: uniqueIds.length };
   }
 
+  if (input.action === "set_activation") {
+    if (input.activation !== "trigger" && input.activation !== "constant" && input.activation !== "vector") {
+      throw new Error("activation must be trigger, constant, or vector");
+    }
+
+    const nextConstant = input.activation === "constant";
+    const nextVectorized = input.activation === "vector";
+    const entriesChangingVectorization = orderedEntries.filter((entry) => entry.vectorized !== nextVectorized);
+
+    db.transaction(() => {
+      const stmt = db.query(
+        `UPDATE world_book_entries
+         SET constant = ?, vectorized = ?, vector_index_status = ?, vector_indexed_at = ?, vector_index_error = ?, updated_at = ?
+         WHERE id = ? AND world_book_id = ?`,
+      );
+      orderedEntries.forEach((entry) => {
+        const vectorIndexState = entry.vectorized === nextVectorized
+          ? {
+              vector_index_status: entry.vector_index_status,
+              vector_indexed_at: entry.vector_indexed_at,
+              vector_index_error: entry.vector_index_error,
+            }
+          : getPendingVectorIndexState({
+              vectorized: nextVectorized,
+              disabled: entry.disabled,
+              content: entry.content,
+            });
+        stmt.run(
+          nextConstant ? 1 : 0,
+          nextVectorized ? 1 : 0,
+          vectorIndexState.vector_index_status,
+          vectorIndexState.vector_indexed_at,
+          vectorIndexState.vector_index_error,
+          now,
+          entry.id,
+          worldBookId,
+        );
+      });
+      touchWorldBook(worldBookId, now);
+    })();
+
+    for (const entry of entriesChangingVectorization) {
+      const updatedEntry = { ...entry, constant: nextConstant, vectorized: nextVectorized };
+      if (nextVectorized && isWorldBookEntryVectorEligible(updatedEntry)) {
+        vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
+      } else if (!nextVectorized) {
+        deleteWorldBookVectorsAndMaybeRequeue(userId, updatedEntry, false);
+      }
+    }
+
+    emitWorldBookChanged(userId, worldBookId);
+    return { action: input.action, affected: uniqueIds.length };
+  }
+
   throw new Error("Unsupported bulk action");
 }
 
