@@ -5,17 +5,9 @@
 import * as charactersSvc from "../services/characters.service";
 import * as worldBooksSvc from "../services/world-books.service";
 import * as presetsSvc from "../services/presets.service";
+import type { ManifestEntry } from "./manifest-policy";
 
-export interface ManifestEntry {
-  slug: string;
-  type: "character" | "worldbook" | "preset";
-  name: string;
-  creator: string;
-  source: "local" | "chub" | "lumihub";
-  /** Installed version label (presets), so the hub can flag outdated installs. */
-  version?: string;
-  installed_at: number;
-}
+export { selectLumiHubManifestEntries, type ManifestEntry } from "./manifest-policy";
 
 /**
  * Slugify a string: lowercase, replace whitespace/special chars with hyphens,
@@ -65,8 +57,8 @@ export function resolvePresetSlug(metadata: Record<string, any> | undefined, nam
 }
 
 /**
- * Build the full install manifest for a user.
- * Returns a lightweight array suitable for syncing to LumiHub.
+ * Build the user's full local install inventory. Callers syncing to LumiHub
+ * must apply selectLumiHubManifestEntries() before sending it upstream.
  */
 export function buildInstallManifest(userId: string): ManifestEntry[] {
   const entries: ManifestEntry[] = [];
