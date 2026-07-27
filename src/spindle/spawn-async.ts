@@ -116,7 +116,7 @@ export async function spawnAsync(
     );
     const exitCode = await proc.exited;
 
-    if (hasTimeout && proc.killed) {
+    if (hasTimeout && proc.killed && exitCode !== 0) {
       // Killing the direct child does not guarantee that its descendants have
       // released inherited output pipes. Close our read ends and return now,
       // so a dead or private remote cannot stall the next bulk update.

@@ -6,6 +6,7 @@ import { getDb } from "../db/connection";
 import * as managerSvc from "../spindle/manager.service";
 import { PRIVILEGED_PERMISSIONS } from "../spindle/manager.service";
 import * as bulkUpdateSvc from "../spindle/bulk-update.service";
+import * as updateCheckSvc from "../spindle/update-check.service";
 import type { ExtensionInfo } from "lumiverse-spindle-types";
 import * as lifecycle from "../spindle/lifecycle";
 import { toolRegistry } from "../spindle/tool-registry";
@@ -52,6 +53,22 @@ app.get("/", async (c) => {
   }));
   const isPrivileged = viewer.role === "owner" || viewer.role === "admin";
   return c.json({ extensions, isPrivileged });
+});
+
+// GET /api/v1/spindle/updates — Return the cached update set filtered to
+// extensions the current viewer is allowed to manage.
+app.get("/updates", async (c) => {
+  const viewer = getViewer(c);
+  const manageableIds = new Set(
+    managerSvc.getManageableExtensionIdsForUser(viewer.userId, viewer.role)
+  );
+  const snapshot = updateCheckSvc.getExtensionUpdateSnapshot();
+  return c.json({
+    ...snapshot,
+    updates: snapshot.updates.filter((update) =>
+      manageableIds.has(update.extensionId)
+    ),
+  });
 });
 
 // GET /api/v1/spindle/ephemeral/overview — Admin overview with reservations
@@ -194,6 +211,7 @@ app.post("/install", requireOwner, async (c) => {
       installedByUserId,
       branch,
     });
+    updateCheckSvc.clearCachedExtensionUpdate(ext.id);
 
     eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
       extensionId: ext.id,
@@ -217,7 +235,7 @@ app.post("/import-local", requireOwner, async (c) => {
   }
 });
 
-// POST /api/v1/spindle/update-all — Git pull + rebuild every extension the
+// POST /api/v1/spindle/update-all — Remote reset + rebuild every extension the
 // caller can manage, sequentially, in a background task. Returns immediately
 // (HTTP 202). Progress streams via SPINDLE_BULK_UPDATE_PROGRESS / _COMPLETE
 // WS events; per-extension status streams via SPINDLE_EXTENSION_STATUS.
@@ -240,7 +258,7 @@ app.post("/update-all", async (c) => {
   }
 });
 
-// POST /api/v1/spindle/:id/update — Git pull + rebuild
+// POST /api/v1/spindle/:id/update — Remote reset + rebuild
 app.post("/:id/update", async (c) => {
   try {
     const ext = await getVisibleExtension(c, c.req.param("id"));
@@ -260,6 +278,7 @@ app.post("/:id/update", async (c) => {
     }
 
     await managerSvc.update(ext.identifier);
+    updateCheckSvc.clearCachedExtensionUpdate(ext.id);
     await lifecycle.settleRuntimeBoundary();
 
     // Restart if was enabled
@@ -302,6 +321,7 @@ app.delete("/:id", async (c) => {
     }
 
     managerSvc.remove(ext.identifier);
+    updateCheckSvc.clearCachedExtensionUpdate(ext.id);
 
     eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
       extensionId: ext.id,
@@ -329,6 +349,7 @@ app.post("/:id/enable", requireOwner, async (c) => {
     });
 
     managerSvc.enable(ext.identifier);
+    void updateCheckSvc.refreshExtensionUpdate(ext.id);
     await lifecycle.startExtension(ext.id);
 
     eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
@@ -360,6 +381,7 @@ app.post("/:id/disable", async (c) => {
       await lifecycle.stopExtension(ext.id);
     }
     managerSvc.disable(ext.identifier);
+    updateCheckSvc.clearCachedExtensionUpdate(ext.id);
 
     eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
       extensionId: ext.id,
@@ -513,6 +535,7 @@ app.post("/:id/switch-branch", async (c) => {
     }
 
     await managerSvc.switchBranch(ext.identifier, body.branch);
+    updateCheckSvc.clearCachedExtensionUpdate(ext.id);
     await lifecycle.settleRuntimeBoundary();
 
     // Restart if was enabled

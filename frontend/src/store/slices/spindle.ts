@@ -41,6 +41,7 @@ function saveMutedThemes(muted: Record<string, boolean>) {
 
 export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   extensions: [],
+  extensionUpdates: [],
   extensionThemeOverrides: {},
   mutedExtensionThemes: loadMutedThemes(),
   chatStyleModes: {},
@@ -126,6 +127,10 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     }
   },
 
+  setExtensionUpdates: (extensionUpdates) => {
+    set({ extensionUpdates })
+  },
+
   installExtension: async (githubUrl: string, branch?: string | null) => {
     const ext = await spindleApi.install(githubUrl, branch)
     set((state) => ({ extensions: [ext, ...state.extensions] }))
@@ -136,6 +141,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     spindleApi.clearManifestCache(id)
     set((state) => ({
       extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
+      extensionUpdates: state.extensionUpdates.filter((update) => update.extensionId !== id),
     }))
     if (updated.enabled && updated.has_frontend) {
       const manifest = await spindleApi.getManifest(id, { force: true })
@@ -148,6 +154,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     spindleApi.clearManifestCache(id)
     set((state) => ({
       extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
+      extensionUpdates: state.extensionUpdates.filter((update) => update.extensionId !== id),
     }))
     if (updated.enabled && updated.has_frontend) {
       const manifest = await spindleApi.getManifest(id, { force: true })
@@ -166,6 +173,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
       if (id in state.mutedExtensionThemes) saveMutedThemes(mutedRest)
       return {
         extensions: state.extensions.filter((e) => e.id !== id),
+        extensionUpdates: state.extensionUpdates.filter((update) => update.extensionId !== id),
         extensionThemeOverrides: overridesRest,
         mutedExtensionThemes: mutedRest,
       }
@@ -198,6 +206,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
       extensions: state.extensions.map((e) =>
         e.id === id ? { ...e, enabled: false, status: 'stopped' as const } : e
       ),
+      extensionUpdates: state.extensionUpdates.filter((update) => update.extensionId !== id),
       extensionThemeOverrides: Object.fromEntries(
         Object.entries(state.extensionThemeOverrides).filter(([extensionId]) => extensionId !== id)
       ),

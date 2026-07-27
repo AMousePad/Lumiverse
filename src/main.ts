@@ -11,6 +11,10 @@ import { initVapidKeys } from "./crypto/vapid";
 import { eventBus } from "./ws/bus";
 import { isTermuxLikeEnvironment } from "./utils/termux";
 import { ensureDataDirectory } from "./utils/data-directory";
+import {
+  startExtensionUpdateMonitor,
+  stopExtensionUpdateMonitor,
+} from "./spindle/update-check.service";
 
 // Validate data directory is accessible and writable before any file operations.
 // This catches permission issues early (common on Termux/Android) instead of
@@ -193,6 +197,7 @@ const { registerIdentityServerAttestation } = await import("./multiplayer/attest
 registerIdentityServerAttestation();
 
 console.log(`Lumiverse Backend listening on ${server.hostname}:${server.port}`);
+startExtensionUpdateMonitor();
 
 // Notify runner (if present) that the server is ready
 if (process.env.LUMIVERSE_RUNNER_IPC === "1" && typeof process.send === "function") {
@@ -276,6 +281,7 @@ async function gracefulShutdown(signal: string) {
 
   // 4. Stop all Spindle extension workers
   const { stopAllExtensions } = await import("./spindle/lifecycle");
+  stopExtensionUpdateMonitor();
   await stopAllExtensions().catch((err) =>
     console.error("[Shutdown] Extension stop error:", err)
   );

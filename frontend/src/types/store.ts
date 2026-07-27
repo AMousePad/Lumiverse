@@ -121,6 +121,7 @@ export interface StartupSettings {
   landingPageLayoutMode?: 'cards' | 'compact'
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
+  spindleSettings?: Partial<SpindleSettings>
   connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
 }
 
@@ -575,6 +576,8 @@ export interface SpindleSettings {
   dockPanelDesktopSide: 'left' | 'right'
   /** Show routine Spindle lifecycle and WebSocket events in the browser console. */
   infoLoggingEnabled: boolean
+  /** Sparse identifier map. Missing/false means toast + badge; true means badge only. */
+  extensionUpdateToastDisabled: Record<string, boolean>
 }
 
 // ---- Loom Registry Entry ----
@@ -921,6 +924,8 @@ export interface BulkUpdateStatus {
 
 export interface SpindleSlice {
   extensions: ExtensionInfo[]
+  /** Manageable extensions whose tracked remote branch has a different HEAD. */
+  extensionUpdates: import('./spindle-updates').ExtensionUpdateInfo[]
   /** Active theme overrides from Spindle extensions, keyed by extensionId */
   extensionThemeOverrides: Record<string, ExtensionThemeOverride>
   /** Extension IDs whose theme overrides are suppressed by the user */
@@ -940,6 +945,7 @@ export interface SpindleSlice {
   pendingInputPrompt: PendingInputPromptRequest | null
   pendingContextMenu: PendingContextMenuRequest | null
   loadExtensions: () => Promise<void>
+  setExtensionUpdates: (updates: import('./spindle-updates').ExtensionUpdateInfo[]) => void
   installExtension: (githubUrl: string, branch?: string | null) => Promise<void>
   updateExtension: (id: string) => Promise<void>
   switchBranch: (id: string, branch: string) => Promise<void>

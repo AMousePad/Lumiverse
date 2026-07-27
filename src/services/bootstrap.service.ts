@@ -103,6 +103,7 @@ interface StartupSettings {
   landingPageLayoutMode?: "cards" | "compact";
   wallpaper?: unknown;
   drawerSettings?: unknown;
+  spindleSettings?: unknown;
   connectionsOrder?: Partial<Record<"llm" | "imageGen" | "stt" | "tts", string[]>>;
 }
 
@@ -124,6 +125,7 @@ const STARTUP_SETTINGS_KEYS = [
   "landingPageLayoutMode",
   "wallpaper",
   "drawerSettings",
+  "spindleSettings",
   "connectionsOrder",
 ] as const;
 
@@ -246,6 +248,15 @@ function getStartupSettings(userId: string): StartupSettings {
 
   if (rows.has("drawerSettings")) {
     startupSettings.drawerSettings = rows.get("drawerSettings");
+  }
+
+  const spindleSettings = rows.get("spindleSettings");
+  if (
+    spindleSettings
+    && typeof spindleSettings === "object"
+    && !Array.isArray(spindleSettings)
+  ) {
+    startupSettings.spindleSettings = spindleSettings;
   }
 
   const connectionsOrder = sanitizeConnectionsOrder(rows.get("connectionsOrder"));
