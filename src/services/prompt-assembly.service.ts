@@ -4009,6 +4009,7 @@ export function selectMergedWorldInfoEntries(
   vectorEntries: VectorActivatedEntry[],
   settingsInput?: Partial<WorldInfoSettings>,
   bookSourceMap?: Map<string, BookSource>,
+  random?: () => number,
 ): WorldInfoMergeSelection {
   const settings = normalizeWorldInfoSettings(settingsInput);
   const mergedEntries: WorldBookEntryModel[] = [];
@@ -4057,7 +4058,10 @@ export function selectMergedWorldInfoEntries(
 
   // Group selection uses configured priorities and weights. Retrieval-score
   // boosts are intentionally introduced only after this step.
-  const groupSelected = applyWorldInfoGroupLogic(dedupResult.entries);
+  const groupSelected = applyWorldInfoGroupLogic(
+    dedupResult.entries,
+    random,
+  );
   const groupSelectedIds = new Set(groupSelected.map((entry) => entry.id));
   for (const item of vectorEntries) {
     if (dispositions.has(item.entry.id) || groupSelectedIds.has(item.entry.id)) continue;
@@ -4128,6 +4132,7 @@ export function mergeActivatedWorldInfoEntries(
   settingsInput?: Partial<WorldInfoSettings>,
   bookSourceMap?: Map<string, BookSource>,
   bookNameMap?: Map<string, string>,
+  random?: () => number,
 ): MergedWorldInfoEntriesResult {
   const mergeStartedAt = performance.now();
   const selection = selectMergedWorldInfoEntries(
@@ -4135,6 +4140,7 @@ export function mergeActivatedWorldInfoEntries(
     vectorEntries,
     settingsInput,
     bookSourceMap,
+    random,
   );
   const { finalized, sources, dedupResult, dispositions } = selection;
 

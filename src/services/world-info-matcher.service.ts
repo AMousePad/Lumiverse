@@ -91,21 +91,6 @@ function verifyWordBoundary(text: string, start: number, end: number): boolean {
   return true;
 }
 
-function* runAutomaton(ac: Automaton, text: string): Generator<{ id: number; end: number }> {
-  if (ac.empty) return;
-  const nodes = ac.nodes;
-  let state = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    while (state !== 0 && !nodes[state].next.has(c)) state = nodes[state].fail;
-    const nxt = nodes[state].next.get(c);
-    state = nxt !== undefined ? nxt : 0;
-    if (nodes[state].out.length) {
-      for (const id of nodes[state].out) yield { id, end: i };
-    }
-  }
-}
-
 /** Accumulated hit state across recursion passes. Hits are keyed by entry uid. */
 export interface ScanState {
   primaryHits: Map<string, Set<number>>;    // uid -> primary key indices that matched
@@ -179,14 +164,58 @@ export class WorldInfoMatcher {
     if (!chunk) return;
 
     const runAC = (ac: Automaton, text: string) => {
-      for (const { id, end } of runAutomaton(ac, text)) {
-        const m = ac.meta[id];
-        if (scope && !scope.has(m.entryUid)) continue;
-        if (m.wholeWord) {
-          const start = end - m.patternLen + 1;
-          if (!verifyWordBoundary(text, start, end)) continue;
+      if (ac.empty) return;
+      const active = new Uint8Array(ac.meta.length);
+      let remaining = 0;
+      for (let id = 0; id < ac.meta.length; id++) {
+        const meta = ac.meta[id];
+        if (scope && !scope.has(meta.entryUid)) continue;
+        const bucket =
+          meta.role === "primary" ? state.primaryHits : state.secondaryHits;
+        if (bucket.get(meta.entryUid)?.has(meta.keyIndex)) continue;
+        active[id] = 1;
+        remaining++;
+      }
+      if (remaining === 0) return;
+
+      const nodes = ac.nodes;
+      const activeOutputs: Array<number[] | undefined> = new Array(nodes.length);
+      let nodeIndex = 0;
+      for (let end = 0; end < text.length; end++) {
+        const code = text.charCodeAt(end);
+        while (
+          nodeIndex !== 0 &&
+          !nodes[nodeIndex].next.has(code)
+        ) {
+          nodeIndex = nodes[nodeIndex].fail;
         }
-        this.recordHit(state, m);
+        const next = nodes[nodeIndex].next.get(code);
+        nodeIndex = next !== undefined ? next : 0;
+
+        let outputs = activeOutputs[nodeIndex];
+        if (outputs === undefined) {
+          outputs = nodes[nodeIndex].out.filter((id) => active[id] === 1);
+          activeOutputs[nodeIndex] = outputs;
+        }
+        if (outputs.length === 0) continue;
+
+        let pending = 0;
+        for (const id of outputs) {
+          if (active[id] === 0) continue;
+          const meta = ac.meta[id];
+          if (meta.wholeWord) {
+            const start = end - meta.patternLen + 1;
+            if (!verifyWordBoundary(text, start, end)) {
+              outputs[pending++] = id;
+              continue;
+            }
+          }
+          this.recordHit(state, meta);
+          active[id] = 0;
+          remaining--;
+        }
+        outputs.length = pending;
+        if (remaining === 0) return;
       }
     };
 
