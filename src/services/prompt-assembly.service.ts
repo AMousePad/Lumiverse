@@ -56,7 +56,10 @@ import {
 import { worldInfoInterceptorChain } from "../spindle/world-info-interceptor";
 import * as chatsSvc from "./chats.service";
 import { stripReasoningTags, buildMacroEnvForChat } from "./chats.service";
-import { resolveAndSanitizeForVectorization } from "./vectorization-content.service";
+import {
+  contentHasMacroHints,
+  resolveAndSanitizeForVectorization,
+} from "./vectorization-content.service";
 import {
   stripDetailsBlocks as _stripDetailsBlocks,
   stripLoomTags as _stripLoomTags,
@@ -4213,25 +4216,228 @@ function truncateToContextSize(text: string, maxTokens: number): string {
 
 const WORLD_INFO_VECTOR_QUERY_MAX_TOKENS = 8000;
 
+interface PreparedWorldInfoVectorQuery {
+  queryPreview: string;
+  queryScope: WorldInfoVectorQueryScope;
+}
+
+function selectWorldInfoVectorQueryMessages(
+  messages: Message[],
+  globalScanDepth: number | null,
+): { visibleMessages: Message[]; queryMessages: Message[] } {
+  const visibleMessages = messages.filter(
+    (m) => !m.extra?.hidden && m.content.trim().length > 0,
+  );
+  return {
+    visibleMessages,
+    queryMessages: globalScanDepth === null
+      ? visibleMessages
+      : visibleMessages.slice(-globalScanDepth),
+  };
+}
+
+async function formatWorldInfoVectorQueryMessage(
+  message: Message,
+  env: MacroEnv | null,
+  reasoningStrip?: SanitizeOptions,
+): Promise<string> {
+  const sanitized = await resolveAndSanitizeForVectorization(
+    stripReasoningTags(message.content),
+    env,
+    reasoningStrip,
+  );
+  return `[${message.is_user ? "USER" : "CHARACTER"} | ${message.name}]: ${sanitized}`;
+}
+
+async function buildWorldInfoVectorQueryTextReference(
+  queryMessages: Message[],
+  env: MacroEnv | null,
+  reasoningStrip?: SanitizeOptions,
+): Promise<{ text: string; truncated: boolean }> {
+  const parts = await Promise.all(
+    queryMessages.map((message) =>
+      formatWorldInfoVectorQueryMessage(message, env, reasoningStrip)
+    ),
+  );
+  return truncateToContextSizeWithStatus(
+    parts.join("\n").trim(),
+    WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+  );
+}
+
+const DEFAULT_REASONING_OPEN_TAG_RE = /<(?:think|thinking|reasoning)>/i;
+const HTML_LIKE_VECTOR_HINT_RE = /<\s*\/?\s*[a-zA-Z]/;
+
+function worldInfoVectorMessageHasMacroHints(message: Message): boolean {
+  if (contentHasMacroHints(message.content)) return true;
+  return (
+    DEFAULT_REASONING_OPEN_TAG_RE.test(message.content) &&
+    contentHasMacroHints(stripReasoningTags(message.content))
+  );
+}
+
+function hasPlainVectorSuffix(
+  content: string,
+  reasoningStrip?: SanitizeOptions,
+): boolean {
+  if (HTML_LIKE_VECTOR_HINT_RE.test(content)) return false;
+  const prefix = reasoningStrip?.reasoningPrefix?.replace(/^\n+|\n+$/g, "");
+  const suffix = reasoningStrip?.reasoningSuffix?.replace(/^\n+|\n+$/g, "");
+  return !(prefix && suffix && content.includes(prefix));
+}
+
+function isPlainVectorHorizontalWhitespace(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0c || code === 0x0b;
+}
+
+function normalizePlainVectorQuerySuffix(
+  content: string,
+  maxChars: number,
+): { text: string; fillsLimit: boolean } {
+  const trimmed = content.trim();
+  const reversed: string[] = [];
+  let index = trimmed.length - 1;
+
+  while (index >= 0 && reversed.length < maxChars) {
+    const code = trimmed.charCodeAt(index);
+    if (code === 0x0a || isPlainVectorHorizontalWhitespace(code)) {
+      let newlineCount = 0;
+      while (index >= 0) {
+        const runCode = trimmed.charCodeAt(index);
+        if (
+          runCode !== 0x0a &&
+          !isPlainVectorHorizontalWhitespace(runCode)
+        ) {
+          break;
+        }
+        if (runCode === 0x0a) newlineCount++;
+        index--;
+      }
+      const outputCount = newlineCount > 0
+        ? Math.min(newlineCount, 2)
+        : 1;
+      const output = newlineCount > 0 ? "\n" : " ";
+      for (
+        let count = 0;
+        count < outputCount && reversed.length < maxChars;
+        count++
+      ) {
+        reversed.push(output);
+      }
+      continue;
+    }
+    reversed.push(trimmed[index]);
+    index--;
+  }
+
+  return {
+    text: reversed.reverse().join(""),
+    fillsLimit: reversed.length === maxChars,
+  };
+}
+
+function buildPlainVectorQueryMessageSuffix(
+  message: Message,
+  maxChars: number,
+  reasoningStrip?: SanitizeOptions,
+): { part: string; truncated: boolean } | null {
+  if (
+    message.content.length <= maxChars ||
+    !hasPlainVectorSuffix(message.content, reasoningStrip)
+  ) {
+    return null;
+  }
+
+  const normalized = normalizePlainVectorQuerySuffix(
+    message.content,
+    maxChars,
+  );
+  if (normalized.fillsLimit) {
+    return {
+      part: normalized.text,
+      truncated: true,
+    };
+  }
+  return {
+    part: `[${message.is_user ? "USER" : "CHARACTER"} | ${message.name}]: ${normalized.text}`,
+    truncated: false,
+  };
+}
+
+async function buildWorldInfoVectorQueryTextBounded(
+  queryMessages: Message[],
+  env: MacroEnv | null,
+  reasoningStrip?: SanitizeOptions,
+): Promise<{ text: string; truncated: boolean }> {
+  if (
+    env &&
+    queryMessages.some(worldInfoVectorMessageHasMacroHints)
+  ) {
+    return buildWorldInfoVectorQueryTextReference(
+      queryMessages,
+      env,
+      reasoningStrip,
+    );
+  }
+
+  const maxChars = WORLD_INFO_VECTOR_QUERY_MAX_TOKENS * 3;
+  const reverseParts: string[] = [];
+  let suffix = "";
+  let firstIncludedIndex = queryMessages.length;
+
+  for (let index = queryMessages.length - 1; index >= 0; index--) {
+    const remainingChars =
+      maxChars - suffix.length - (suffix ? 1 : 0);
+    if (remainingChars <= 0) {
+      return {
+        text: `\n${suffix}`.slice(-maxChars),
+        truncated: true,
+      };
+    }
+    const messageSuffix = buildPlainVectorQueryMessageSuffix(
+      queryMessages[index],
+      remainingChars,
+      reasoningStrip,
+    );
+    if (messageSuffix?.truncated) {
+      const text = suffix
+        ? `${messageSuffix.part}\n${suffix}`
+        : messageSuffix.part;
+      return { text: text.slice(-maxChars), truncated: true };
+    }
+    const part =
+      messageSuffix?.part ??
+      await formatWorldInfoVectorQueryMessage(
+        queryMessages[index],
+        env,
+        reasoningStrip,
+      );
+    reverseParts.push(part);
+    firstIncludedIndex = index;
+    suffix = suffix ? `${part}\n${suffix}` : part;
+    if (suffix.trim().length >= maxChars) break;
+  }
+
+  const text = reverseParts.reverse().join("\n").trim();
+  const omittedOlderMessages = firstIncludedIndex > 0;
+  return {
+    text: text.length <= maxChars ? text : text.slice(-maxChars),
+    truncated: omittedOlderMessages || text.length > maxChars,
+  };
+}
+
 export async function buildWorldInfoVectorQuery(
   messages: Message[],
   globalScanDepth: number | null,
   env: MacroEnv | null,
   reasoningStrip?: SanitizeOptions,
 ): Promise<{ queryPreview: string; queryScope: WorldInfoVectorQueryScope }> {
-  const visibleMessages = messages.filter(
-    (m) => !m.extra?.hidden && m.content.trim().length > 0,
-  );
-  const queryMessages = globalScanDepth === null
-    ? visibleMessages
-    : visibleMessages.slice(-globalScanDepth);
-  const parts = await Promise.all(queryMessages.map(async (m) => {
-    const sanitized = await resolveAndSanitizeForVectorization(stripReasoningTags(m.content), env, reasoningStrip);
-    return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
-  }));
-  const truncated = truncateToContextSizeWithStatus(
-    parts.join("\n").trim(),
-    WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+  const { visibleMessages, queryMessages } =
+    selectWorldInfoVectorQueryMessages(messages, globalScanDepth);
+  const truncated = await buildWorldInfoVectorQueryTextBounded(
+    queryMessages,
+    env,
+    reasoningStrip,
   );
   return {
     queryPreview: truncated.text,
@@ -4244,6 +4450,10 @@ export async function buildWorldInfoVectorQuery(
     },
   };
 }
+
+export const __worldInfoVectorQueryTest = {
+  buildReference: buildWorldInfoVectorQueryTextReference,
+};
 
 function resolveWorldInfoVectorSettings(
   userId: string,
@@ -4433,6 +4643,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
   messages: Message[],
   signal?: AbortSignal,
   settingsInput?: Partial<WorldInfoSettings>,
+  preparedQuery?: PreparedWorldInfoVectorQuery,
 ): Promise<VectorWorldInfoRetrievalResult> {
   const startedAt = performance.now();
   const emptyResult: VectorWorldInfoRetrievalResult = {
@@ -4472,27 +4683,88 @@ export async function collectVectorActivatedWorldInfoDetailed(
     };
   }
 
+  const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
+  const searchableWorldBookIds = getVectorSearchableWorldBookIds(
+    worldBookIds,
+    entries,
+  );
+  const worldInfoSettings = resolveWorldInfoVectorSettings(userId, settingsInput);
+  if (
+    eligibleEntries.length === 0 ||
+    searchableWorldBookIds.length === 0
+  ) {
+    return {
+      ...emptyResult,
+      queryScope: {
+        ...emptyResult.queryScope,
+        configuredScanDepth: worldInfoSettings.globalScanDepth,
+      },
+      eligibleCount: eligibleEntries.length,
+      blockerMessages: [
+        eligibleEntries.length === 0
+          ? "This chat has no indexed, vector-enabled, non-disabled, non-empty lorebook entries to search."
+          : "No attached world book has a search-ready vector entry.",
+      ],
+      timingsMs: {
+        ...emptyResult.timingsMs!,
+        totalMs: performance.now() - startedAt,
+      },
+    };
+  }
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
   const worldBookVectorSettings = loadWorldBookVectorSettings(userId, {
     retrievalTopK: cfg.retrieval_top_k,
   });
   const blockerMessages: string[] = [];
   const topK = Math.max(1, worldBookVectorSettings.retrievalTopK || cfg.retrieval_top_k || 4);
+  if (!cfg.enabled)
+    blockerMessages.push(
+      "Embeddings are disabled, so lorebooks will use keyword matching only.",
+    );
+  if (!cfg.has_api_key)
+    blockerMessages.push("No embedding API key is configured.");
+  if (!cfg.dimensions)
+    blockerMessages.push(
+      "Embeddings have not been tested yet, so dimensions are still unknown.",
+    );
+  if (!cfg.vectorize_world_books)
+    blockerMessages.push(
+      "World-book vectorization is disabled in embeddings settings.",
+    );
+  if (blockerMessages.length > 0) {
+    return {
+      ...emptyResult,
+      queryScope: {
+        ...emptyResult.queryScope,
+        configuredScanDepth: worldInfoSettings.globalScanDepth,
+      },
+      eligibleCount: eligibleEntries.length,
+      topK,
+      cap: topK,
+      blockerMessages,
+      timingsMs: {
+        queryBuildMs: 0,
+        queryEmbedMs: 0,
+        searchMs: 0,
+        rankingMs: 0,
+        totalMs: performance.now() - startedAt,
+      },
+    };
+  }
+
   const queryBuildStartedAt = performance.now();
-  const env = buildMacroEnvForChat(userId, chatId);
-  const worldInfoSettings = resolveWorldInfoVectorSettings(userId, settingsInput);
-  const { queryPreview: queryText, queryScope } = await buildWorldInfoVectorQuery(
-    messages,
-    worldInfoSettings.globalScanDepth,
-    env,
-    getReasoningStripOptions(userId),
-  );
-  const queryBuildMs = performance.now() - queryBuildStartedAt;
-  const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
-  const searchableWorldBookIds = getVectorSearchableWorldBookIds(
-    worldBookIds,
-    entries,
-  );
+  const query =
+    preparedQuery ??
+    (await buildWorldInfoVectorQuery(
+      messages,
+      worldInfoSettings.globalScanDepth,
+      buildMacroEnvForChat(userId, chatId),
+      getReasoningStripOptions(userId),
+  ));
+  const { queryPreview: queryText, queryScope } = query;
+  const queryBuildMs = preparedQuery
+    ? 0
+    : performance.now() - queryBuildStartedAt;
   const lexicalQueryPreviews = buildWorldInfoLexicalQueryBatches(
     queryText,
     eligibleEntries,
@@ -4518,27 +4790,9 @@ export async function collectVectorActivatedWorldInfoDetailed(
     return cached;
   }
 
-  if (!cfg.enabled)
-    blockerMessages.push(
-      "Embeddings are disabled, so lorebooks will use keyword matching only.",
-    );
-  if (!cfg.has_api_key)
-    blockerMessages.push("No embedding API key is configured.");
-  if (!cfg.dimensions)
-    blockerMessages.push(
-      "Embeddings have not been tested yet, so dimensions are still unknown.",
-    );
-  if (!cfg.vectorize_world_books)
-    blockerMessages.push(
-      "World-book vectorization is disabled in embeddings settings.",
-    );
   if (!queryText)
     blockerMessages.push(
       "The current chat does not have enough visible recent text to build a vector query.",
-    );
-  if (eligibleEntries.length === 0)
-    blockerMessages.push(
-      "This chat has no indexed, vector-enabled, non-disabled, non-empty lorebook entries to search.",
     );
 
   if (blockerMessages.length > 0) {
