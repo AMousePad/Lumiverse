@@ -26,8 +26,20 @@ import { getUserExtensionPath } from "../auth/provision";
 import { spawnAsync, type SpawnAsyncResult } from "./spawn-async";
 import { normalizeSpindleHttpsUrl } from "./url-safety";
 import { bunCmd } from "../utils/bun-cmd";
+import {
+  assertOwnGitRepositoryPath,
+  resetGitRepositoryToRemoteHead,
+} from "./git-repository";
 
 export type InstallScope = "operator" | "user";
+export interface ExtensionUpdateCandidate {
+  id: string;
+  identifier: string;
+  name: string;
+  version: string;
+  branch: string | null;
+}
+
 function isManagedPermission(permission: string): permission is SpindlePermission {
   return isValidPermission(permission);
 }
@@ -1325,7 +1337,6 @@ export async function install(
 // ─── Update ──────────────────────────────────────────────────────────────
 
 const LOCAL_GIT_COMMAND_TIMEOUT_MS = 15_000;
-const GIT_PULL_TIMEOUT_MS = 60_000;
 const GIT_FETCH_TIMEOUT_MS = 30_000;
 
 function spawnFailureReason(
@@ -1364,28 +1375,21 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
 
   // Read manifest up-front so we can honor `dev_mode` before touching the
   // working tree. Extensions with `dev_mode: true` keep their local repo
-  // contents intact — we skip the git checkout/clean/pull and just rebuild
+  // contents intact — we skip the remote reset and just rebuild
   // + relaunch from whatever the developer has on disk.
   const initialManifest = await readManifest(identifier);
   const devMode = (initialManifest as { dev_mode?: boolean }).dev_mode === true;
 
   if (!devMode) {
-    // Clean build artifacts and installed dependencies so git pull succeeds.
-    // We don't read stdout for these — ignore it to reduce pipe overhead.
-    await runGitStep(repo, ["git", "checkout", "."], "git checkout .", {
-      timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
-      ignoreStdout: true,
-    });
-    await runGitStep(repo, ["git", "clean", "-fd"], "git clean -fd", {
-      timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
-      ignoreStdout: true,
-    });
-    await runGitStep(repo, ["git", "pull"], "git pull", {
-      timeoutMs: GIT_PULL_TIMEOUT_MS,
-    });
+    // Fetch the checked-out branch first so a remote failure leaves the local
+    // checkout untouched.
+    await resetGitRepositoryToRemoteHead(
+      repo,
+      `Extension "${identifier}"`
+    );
   }
 
-  // Re-read manifest — in non-dev mode the pull may have modified it; in
+  // Re-read manifest — in non-dev mode the remote reset may have modified it; in
   // dev mode we already have the current version.
   const manifest = devMode ? initialManifest : await readManifest(identifier);
 
@@ -1558,6 +1562,26 @@ export async function list(): Promise<ExtensionInfo[]> {
   return Promise.all(rows.map(rowToExtensionInfo));
 }
 
+/** Lightweight rows for the periodic remote-HEAD monitor. */
+export function listExtensionUpdateCandidates(): ExtensionUpdateCandidate[] {
+  const db = getDb();
+  const rows = db
+    .query(
+      `SELECT id, identifier, name, version, branch
+       FROM extensions
+       WHERE enabled = 1
+       ORDER BY installed_at DESC`
+    )
+    .all() as Array<{
+      id: string;
+      identifier: string;
+      name: string;
+      version: string;
+      branch: string | null;
+    }>;
+  return rows.map((row) => ({ ...row, branch: row.branch || null }));
+}
+
 export async function listForUser(userId: string, role: string | null | undefined): Promise<ExtensionInfo[]> {
   if (role === "owner" || role === "admin") {
     return list();
@@ -1613,6 +1637,27 @@ export function canManageExtension(
     typeof metadata.installed_by_user_id === "string" &&
     metadata.installed_by_user_id === userId
   );
+}
+
+/** Lightweight ID-only variant used by frequent cached-status polling. */
+export function getManageableExtensionIdsForUser(
+  userId: string,
+  role: string | null | undefined
+): string[] {
+  const db = getDb();
+  if (role === "owner" || role === "admin") {
+    return (db.query("SELECT id FROM extensions").all() as Array<{ id: string }>)
+      .map((row) => row.id);
+  }
+
+  return (
+    db
+      .query(
+        `SELECT id FROM extensions
+         WHERE install_scope = 'user' AND installed_by_user_id = ?`
+      )
+      .all(userId) as Array<{ id: string }>
+  ).map((row) => row.id);
 }
 
 export async function getExtensionByIdentifier(
@@ -1823,6 +1868,7 @@ export function getBranches(identifier: string): { current: string | null; branc
   if (!existsSync(repo)) {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
+  assertOwnGitRepositoryPath(repo, `Extension "${identifier}"`);
 
   // Get current branch
   const headProc = Bun.spawnSync({
@@ -1860,6 +1906,7 @@ export async function switchBranch(
   if (!existsSync(repo)) {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
+  assertOwnGitRepositoryPath(repo, `Extension "${identifier}"`);
 
   // Clean working tree
   await runGitStep(repo, ["git", "checkout", "."], "git checkout .", {
