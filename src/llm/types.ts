@@ -454,6 +454,7 @@ export interface AssemblyResult {
   assistantPrefill?: string;
   /** Summary of all world info entries activated during this assembly. */
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
+  spindleWorldInfoCaptures?: Record<string, ActivatedWorldInfoEntry[]>;
   /** Statistics from the World Info activation pipeline (budget enforcement, etc.). */
   worldInfoStats?: {
     totalCandidates: number;

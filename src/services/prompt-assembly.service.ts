@@ -47,13 +47,16 @@ import type { MacroEnv } from "../macros";
 import {
   activateWorldInfo,
   applyWorldInfoGroupLogic,
+  createWorldInfoActivationScanCache,
   finalizeActivatedWorldInfoEntries,
+  primeWorldInfoActivationScanCache,
   type WiState,
   type WorldInfoSettings,
   type FinalizedWorldInfoEntries,
   normalizeWorldInfoSettings,
 } from "./world-info-activation.service";
 import { worldInfoInterceptorChain } from "../spindle/world-info-interceptor";
+import { buildWorldInfoCaptureMap } from "../spindle/world-info-capture";
 import * as chatsSvc from "./chats.service";
 import { stripReasoningTags, buildMacroEnvForChat } from "./chats.service";
 import {
@@ -1768,7 +1771,7 @@ export async function assemblePrompt(
       | Partial<WorldInfoSettings>
       | undefined) ??
     {};
-  const intercepted = await worldInfoInterceptorChain.run(
+  const interception = await worldInfoInterceptorChain.run(
     wiEntries,
     {
       chatId: ctx.chatId,
@@ -1798,13 +1801,33 @@ export async function assemblePrompt(
     ctx.userId,
     wiSources.bookSourceMap
   );
-  const wiResult = activateWorldInfo({
-    entries: intercepted,
-    messages,
-    chatTurn: messages.length,
-    wiState,
-    settings: worldInfoSettings,
-  });
+  const intercepted = interception.entries;
+  const hasCaptureRequests = interception.captureRequests.size > 0;
+  const hasCapturedIds = [...interception.captureRequests.values()].some(
+    (ids) => ids.size > 0,
+  );
+  const captureWiState =
+    hasCapturedIds ? structuredClone(wiState) : null;
+  const activationScanCache =
+    captureWiState ? createWorldInfoActivationScanCache() : undefined;
+  if (activationScanCache) {
+    primeWorldInfoActivationScanCache(
+      activationScanCache,
+      [intercepted, wiEntries],
+      worldInfoSettings,
+    );
+  }
+  const wiResult = profiler.measureSync(
+    "world-info-keyword",
+    () => activateWorldInfo({
+      entries: intercepted,
+      messages,
+      chatTurn: messages.length,
+      wiState,
+      settings: worldInfoSettings,
+      scanCache: activationScanCache,
+    }),
+  );
 
   // Yield after world-info activation — the keyword scanning loop above is
   // synchronous and can block for 50-200ms on large setups (hundreds of
@@ -1818,32 +1841,59 @@ export async function assemblePrompt(
   // These entries are merged with keyword-activated entries when enabled.
   // When pre-computed results are available (from the generation pipeline's
   // council enrichment phase), reuse them to avoid redundant embedding queries.
-  const vectorQueryPreview = await getWorldInfoVectorQueryPreview(
-    ctx.userId,
-    messages,
-    ctx.chatId,
-    worldInfoSettings,
-  );
-  const currentWorldInfoEntryIds = new Set(wiEntries.map((entry) => entry.id));
-  let vectorActivated = ctx.precomputedVectorEntries
-    ? ctx.precomputedVectorEntries.filter((item) =>
-        currentWorldInfoEntryIds.has(item.entry.id),
-      )
-    : null;
+  let vectorQueryPreview = "";
   let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null = null;
+  let captureVectorQuery: PreparedWorldInfoVectorQuery | undefined;
+  const vectorViewsEquivalent = areWorldInfoVectorViewsEquivalent(
+    wiEntries,
+    intercepted,
+  );
+  const captureVectorViewCanShareNative =
+    captureWiState !== null && vectorViewsEquivalent;
+  const nativeWorldInfoEntryIds = new Set(
+    intercepted.map((entry) => entry.id),
+  );
+  let vectorActivated =
+    ctx.precomputedVectorEntries &&
+      !hasCaptureRequests &&
+      vectorViewsEquivalent
+      ? projectVectorActivatedEntries(
+          ctx.precomputedVectorEntries.filter((item) =>
+            nativeWorldInfoEntryIds.has(item.entry.id),
+          ),
+          intercepted,
+        )
+      : null;
+  let rawVectorActivated: VectorActivatedEntry[] | null = null;
   if (!vectorActivated) {
     try {
-      const detailed = await collectVectorActivatedWorldInfoDetailed(
-        ctx.userId,
-        ctx.chatId,
-        wiSources.worldBookIds,
-        wiEntries,
-        messages,
-        ctx.signal,
-        worldInfoSettings,
+      const detailed = await profiler.measure(
+        "world-info-vector",
+        () => collectVectorActivatedWorldInfoDetailed(
+          ctx.userId,
+          ctx.chatId,
+          wiSources.worldBookIds,
+          intercepted,
+          messages,
+          ctx.signal,
+          worldInfoSettings,
+        ),
       );
       vectorActivated = detailed.entries;
       vectorRetrievalDetails = detailed;
+      vectorQueryPreview = detailed.queryPreview;
+      if (detailed.queryPreview.length > 0) {
+        captureVectorQuery = {
+          queryPreview: detailed.queryPreview,
+          queryScope: detailed.queryScope,
+        };
+      }
+      if (captureVectorViewCanShareNative) {
+        rawVectorActivated = projectVectorActivatedEntries(
+          detailed.entries,
+          wiEntries,
+        );
+      }
 
       if (detailed.blockerMessages.length > 0 && detailed.eligibleCount > 0) {
         console.log(
@@ -1877,18 +1927,88 @@ export async function assemblePrompt(
         err,
       );
       vectorActivated = [];
+      if (captureVectorViewCanShareNative) rawVectorActivated = [];
     }
   }
-  const mergedWorldInfo = mergeActivatedWorldInfoEntries(
-    wiResult.activatedEntries,
-    vectorActivated,
-    worldInfoSettings,
-    wiSources.bookSourceMap,
-    wiSources.bookNameMap,
+  const mergedWorldInfo = profiler.measureSync(
+    "world-info-merge",
+    () => mergeActivatedWorldInfoEntries(
+      wiResult.activatedEntries,
+      vectorActivated ?? [],
+      worldInfoSettings,
+      wiSources.bookSourceMap,
+      wiSources.bookNameMap,
+    ),
   );
   const wiCache = mergedWorldInfo.cache;
   wiResult.activatedEntries = mergedWorldInfo.activatedEntries;
   const activatedWorldInfo = mergedWorldInfo.activatedWorldInfo;
+  let spindleWorldInfoCaptures:
+    | Record<string, ActivatedWorldInfoEntry[]>
+    | undefined;
+  if (hasCaptureRequests && !captureWiState) {
+    spindleWorldInfoCaptures = buildWorldInfoCaptureMap(
+      interception.captureRequests,
+      [],
+    );
+  } else if (captureWiState) {
+    const captureRandom = createWorldInfoCaptureRandom();
+    const captureKeywordResult = profiler.measureSync(
+      "world-info-capture-keyword",
+      () => activateWorldInfo({
+        entries: wiEntries,
+        messages,
+        chatTurn: messages.length,
+        wiState: captureWiState,
+        settings: worldInfoSettings,
+        scanCache: activationScanCache,
+        random: captureRandom,
+      }),
+    );
+    if (!rawVectorActivated) {
+      try {
+        rawVectorActivated = (
+          await profiler.measure(
+            "world-info-capture-vector",
+            () => collectVectorActivatedWorldInfoDetailed(
+              ctx.userId,
+              ctx.chatId,
+              wiSources.worldBookIds,
+              wiEntries,
+              messages,
+              ctx.signal,
+              worldInfoSettings,
+              captureVectorQuery,
+            ),
+          )
+        ).entries;
+      } catch (err) {
+        if (ctx.signal?.aborted || (err as any)?.name === "AbortError") {
+          throw err;
+        }
+        console.warn(
+          "[prompt-assembly] Raw capture vector activation failed, continuing with keyword-only:",
+          err,
+        );
+        rawVectorActivated = [];
+      }
+    }
+    const capturedMergedWorldInfo = profiler.measureSync(
+      "world-info-capture-merge",
+      () => mergeActivatedWorldInfoEntries(
+        captureKeywordResult.activatedEntries,
+        rawVectorActivated ?? [],
+        worldInfoSettings,
+        wiSources.bookSourceMap,
+        wiSources.bookNameMap,
+        captureRandom,
+      ),
+    );
+    spindleWorldInfoCaptures = buildWorldInfoCaptureMap(
+      interception.captureRequests,
+      capturedMergedWorldInfo.activatedWorldInfo,
+    );
+  }
 
   const worldInfoStats = {
     ...wiResult.stats,
@@ -3603,6 +3723,7 @@ export async function assemblePrompt(
     assistantPrefill,
     activatedWorldInfo:
       activatedWorldInfo.length > 0 ? activatedWorldInfo : undefined,
+    spindleWorldInfoCaptures,
     worldInfoStats,
     memoryStats,
     databankStats,
@@ -4501,6 +4622,45 @@ function isVectorEligibleWorldInfoEntry(
   return isWorldBookEntryVectorSearchReady(entry);
 }
 
+function areWorldInfoVectorViewsEquivalent(
+  source: readonly WorldBookEntryModel[],
+  effective: readonly WorldBookEntryModel[],
+): boolean {
+  const sourceEligible = source.filter(isVectorEligibleWorldInfoEntry);
+  const effectiveEligible = effective.filter(isVectorEligibleWorldInfoEntry);
+  if (sourceEligible.length !== effectiveEligible.length) return false;
+  return sourceEligible.every(
+    (entry, index) => effectiveEligible[index] === entry,
+  );
+}
+
+function createWorldInfoCaptureRandom(): () => number {
+  const seed = new Uint32Array(1);
+  crypto.getRandomValues(seed);
+  let state = seed[0] || 0x9e3779b9;
+  return () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x1_0000_0000;
+  };
+}
+
+function projectVectorActivatedEntries(
+  activated: readonly VectorActivatedEntry[],
+  entries: readonly WorldBookEntryModel[],
+): VectorActivatedEntry[] {
+  const byId = new Map(
+    entries
+      .filter(isVectorEligibleWorldInfoEntry)
+      .map((entry) => [entry.id, entry] as const),
+  );
+  return activated.flatMap((item) => {
+    const entry = byId.get(item.entry.id);
+    return entry ? [{ ...item, entry }] : [];
+  });
+}
+
 function getVectorSearchableWorldBookIds(
   worldBookIds: string[],
   entries: WorldBookEntryModel[],
@@ -4633,6 +4793,7 @@ export const __vectorWiCacheTest = {
 
 export const __vectorWiRetrievalTest = {
   getSearchableWorldBookIds: getVectorSearchableWorldBookIds,
+  viewsEquivalent: areWorldInfoVectorViewsEquivalent,
 };
 
 export async function collectVectorActivatedWorldInfoDetailed(

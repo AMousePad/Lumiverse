@@ -582,6 +582,7 @@ interface SpindleContext {
   userId?: string;
   cancelGeneration?: boolean;
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
+  __spindleWorldInfoCaptures?: Record<string, ActivatedWorldInfoEntry[]>;
   [key: string]: unknown;
 }
 
@@ -1316,6 +1317,9 @@ async function runPromptPipeline(opts: {
   let interceptorBreakdown: InterceptorBreakdownEntry[] | undefined;
   let assistantPrefill: string | undefined;
   let activatedWorldInfo: ActivatedWorldInfoEntry[] | undefined;
+  let spindleWorldInfoCaptures:
+    | Record<string, ActivatedWorldInfoEntry[]>
+    | undefined;
   let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
   let memoryStats: import("../llm/types").MemoryStats | undefined;
   let databankStats: import("../llm/types").DatabankStats | undefined;
@@ -1390,6 +1394,7 @@ async function runPromptPipeline(opts: {
     breakdown = assemblyResult.breakdown;
     assistantPrefill = assemblyResult.assistantPrefill;
     activatedWorldInfo = assemblyResult.activatedWorldInfo;
+    spindleWorldInfoCaptures = assemblyResult.spindleWorldInfoCaptures;
     worldInfoStats = assemblyResult.worldInfoStats;
     memoryStats = assemblyResult.memoryStats;
     databankStats = assemblyResult.databankStats;
@@ -1416,6 +1421,10 @@ async function runPromptPipeline(opts: {
   // Expose activated world info to spindle context
   if (activatedWorldInfo) {
     spindleContext.activatedWorldInfo = activatedWorldInfo;
+  }
+  delete spindleContext.__spindleWorldInfoCaptures;
+  if (spindleWorldInfoCaptures) {
+    spindleContext.__spindleWorldInfoCaptures = spindleWorldInfoCaptures;
   }
 
   // Run Spindle interceptor pipeline on assembled messages
