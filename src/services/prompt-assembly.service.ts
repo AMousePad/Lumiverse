@@ -57,6 +57,10 @@ import {
 } from "./world-info-activation.service";
 import { worldInfoInterceptorChain } from "../spindle/world-info-interceptor";
 import { buildWorldInfoCaptureMap } from "../spindle/world-info-capture";
+import {
+  getSourceMessageMetadata,
+  stampSourceMessageMetadata,
+} from "../spindle/source-message-metadata";
 import * as chatsSvc from "./chats.service";
 import { stripReasoningTags, buildMacroEnvForChat } from "./chats.service";
 import {
@@ -173,7 +177,7 @@ const CONTINUE_NUDGE_KEY = "__continueNudge";
 
 function markAsChatHistory(
   msg: LlmMessage,
-  source?: { id: string; index_in_chat: number },
+  source?: { id: string; index_in_chat: number; metadata?: unknown },
   contextAnchorProtected = false,
 ): LlmMessage {
   (msg as any)[CHAT_HISTORY_KEY] = true;
@@ -183,6 +187,7 @@ function markAsChatHistory(
   if (source) {
     (msg as any)[SOURCE_ID_KEY] = source.id;
     (msg as any)[SOURCE_INDEX_KEY] = source.index_in_chat;
+    stampSourceMessageMetadata(msg, source.metadata);
   }
   return msg;
 }
@@ -213,6 +218,8 @@ export function getSourceIndexInChat(msg: LlmMessage): number | undefined {
   const v = (msg as any)[SOURCE_INDEX_KEY];
   return typeof v === "number" ? v : undefined;
 }
+
+export { getSourceMessageMetadata };
 
 function markPreserveDisplayReasoningDelimiters(msg: LlmMessage): LlmMessage {
   (msg as any)[PRESERVE_DISPLAY_REASONING_DELIMS_KEY] = true;
@@ -2831,7 +2838,11 @@ export async function assemblePrompt(
               });
             }
           }
-          const source = { id: msg.id, index_in_chat: msg.index_in_chat };
+          const source = {
+            id: msg.id,
+            index_in_chat: msg.index_in_chat,
+            metadata: msg.extra?.spindle_metadata,
+          };
           const contextAnchorProtected =
             contextAnchorIndex != null &&
             msg.index_in_chat >= contextAnchorIndex;
@@ -2856,7 +2867,11 @@ export async function assemblePrompt(
           result.push(
             markAsChatHistory(
               { role, content: contentForPrompt },
-              { id: msg.id, index_in_chat: msg.index_in_chat },
+              {
+                id: msg.id,
+                index_in_chat: msg.index_in_chat,
+                metadata: msg.extra?.spindle_metadata,
+              },
               contextAnchorIndex != null &&
                 msg.index_in_chat >= contextAnchorIndex,
             ),
@@ -5810,10 +5825,19 @@ function mergeConsecutiveUserMessages(
       const wasContextAnchorProtected =
         isContextAnchorProtected(result[i]) ||
         isContextAnchorProtected(result[i + 1]);
-      const mergedSourceId =
-        getSourceMessageId(result[i]) ?? getSourceMessageId(result[i + 1]);
-      const mergedSourceIndex =
-        getSourceIndexInChat(result[i]) ?? getSourceIndexInChat(result[i + 1]);
+      const mergedSource = [result[i], result[i + 1]]
+        .map((message) => {
+          const id = getSourceMessageId(message);
+          const index_in_chat = getSourceIndexInChat(message);
+          return id !== undefined && index_in_chat !== undefined
+            ? {
+                id,
+                index_in_chat,
+                metadata: getSourceMessageMetadata(message),
+              }
+            : undefined;
+        })
+        .find((source) => source !== undefined);
       if (allParts.length > 0) {
         result[i] = {
           role: "user",
@@ -5825,9 +5849,7 @@ function mergeConsecutiveUserMessages(
       if (wasChatHistory) {
         markAsChatHistory(
           result[i],
-          typeof mergedSourceId === "string" && typeof mergedSourceIndex === "number"
-            ? { id: mergedSourceId, index_in_chat: mergedSourceIndex }
-            : undefined,
+          mergedSource,
           wasContextAnchorProtected,
         );
       }
@@ -5841,6 +5863,10 @@ function mergeConsecutiveUserMessages(
   }
   return remaining;
 }
+
+export const __sourceMessageMetadataTest = {
+  mergeConsecutiveUserMessages,
+};
 
 /**
  * Strip reasoning tags (and surrounding whitespace) from older assistant messages
@@ -7435,15 +7461,33 @@ async function legacyAssembly(
           parts.push({ type: "audio", data: b64, mime_type: att.mime_type });
         }
       }
-      llmMessages.push({
-        role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
-        content: parts.length > 0 ? parts : resolved,
-      });
+      llmMessages.push(
+        markAsChatHistory(
+          {
+            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            content: parts.length > 0 ? parts : resolved,
+          },
+          {
+            id: m.id,
+            index_in_chat: m.index_in_chat,
+            metadata: m.extra?.spindle_metadata,
+          },
+        ),
+      );
     } else {
-      llmMessages.push({
-        role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
-        content: resolved,
-      });
+      llmMessages.push(
+        markAsChatHistory(
+          {
+            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            content: resolved,
+          },
+          {
+            id: m.id,
+            index_in_chat: m.index_in_chat,
+            metadata: m.extra?.spindle_metadata,
+          },
+        ),
+      );
     }
     legacyHistoryCount++;
   }
