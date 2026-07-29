@@ -1812,6 +1812,7 @@ export async function assemblePrompt(
       chatTurn: messages.length,
       chatMetadata: chat.metadata ?? {},
       activationSettings: {
+        globalScanDepth: normalizedWorldInfoSettings.globalScanDepth,
         maxRecursionPasses: normalizedWorldInfoSettings.maxRecursionPasses,
       },
     },

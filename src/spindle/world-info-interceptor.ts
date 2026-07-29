@@ -43,6 +43,8 @@ export interface WorldInfoInterceptorMessageDTO {
 }
 
 export interface WorldInfoActivationSettingsDTO {
+  /** Default entry scan depth, or null to scan all available messages. */
+  readonly globalScanDepth: number | null;
   readonly maxRecursionPasses: number;
 }
 
@@ -195,6 +197,7 @@ export class WorldInfoInterceptorChain {
           ...ctx,
           entries: buildDto(working),
           activationSettings: {
+            globalScanDepth: ctx.activationSettings.globalScanDepth,
             maxRecursionPasses: disableRecursion
               ? 0
               : ctx.activationSettings.maxRecursionPasses,
