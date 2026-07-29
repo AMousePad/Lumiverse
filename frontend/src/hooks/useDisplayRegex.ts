@@ -31,6 +31,9 @@ interface DisplayRegexContentCacheEntry {
 export interface DisplayPreprocessOpts {
   messageId: string
   role: 'user' | 'assistant' | 'system'
+  depth?: number
+  messageIndex?: number
+  dynamicMacros?: Record<string, string>
 }
 
 interface ResolvedTemplatesState {
@@ -54,6 +57,9 @@ interface DisplayPreprocessBody {
   messageId: string
   role: string
   rawContent: string
+  depth?: number
+  messageIndex?: number
+  dynamicMacros?: Record<string, string>
 }
 
 interface DisplayPreprocessOutcome {
@@ -223,9 +229,11 @@ function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Pr
           context: {
             chatId,
             isUser: body.role === 'user',
-            depth: 0,
+            depth: body.depth ?? 0,
             messageId: body.messageId,
             role: body.role,
+            ...(typeof body.messageIndex === 'number' ? { messageIndex: body.messageIndex } : {}),
+            ...(body.dynamicMacros ? { dynamicMacros: body.dynamicMacros } : {}),
           },
         })
         .then((local) => {
@@ -267,8 +275,8 @@ function useDisplayPreprocessedState(
 
   const key = useMemo(() => {
     if (!opts?.messageId || !chatId) return null
-    return `${chatId}|${opts.messageId}|${opts.role}|${content.length}|${fnv1a(content)}`
-  }, [content, opts?.messageId, opts?.role, chatId])
+    return `${chatId}|${opts.messageId}|${opts.role}|${opts.depth ?? 0}|${opts.messageIndex ?? -1}|${JSON.stringify(opts.dynamicMacros ?? {})}|${content.length}|${fnv1a(content)}`
+  }, [content, opts?.messageId, opts?.role, opts?.depth, opts?.messageIndex, opts?.dynamicMacros, chatId])
 
   const cached = key ? displayPreprocessCache.get(key)?.value : undefined
   const [state, setState] = useState<{ key: string; value: string; ok: boolean } | null>(() =>
@@ -300,6 +308,9 @@ function useDisplayPreprocessedState(
         messageId: opts.messageId,
         role: opts.role,
         rawContent: content,
+        ...(typeof opts.depth === 'number' ? { depth: opts.depth } : {}),
+        ...(typeof opts.messageIndex === 'number' ? { messageIndex: opts.messageIndex } : {}),
+        ...(opts.dynamicMacros ? { dynamicMacros: opts.dynamicMacros } : {}),
       })
         .then((next) => {
           if (displayPreprocessCache.get(key)?.promise === assignedPromise) {
@@ -330,7 +341,17 @@ function useDisplayPreprocessedState(
     }
     displayPreprocessCache.get(key)?.promise?.then(apply)
     return () => { cancelled = true }
-  }, [key, opts?.messageId, opts?.role, chatId, content, cvSnapshot])
+  }, [
+    key,
+    opts?.messageId,
+    opts?.role,
+    opts?.depth,
+    opts?.messageIndex,
+    opts?.dynamicMacros,
+    chatId,
+    content,
+    cvSnapshot,
+  ])
 
   if (!key) return { value: content, ready: true }
   if (cached !== undefined) return { value: cached, ready: true }
@@ -509,7 +530,22 @@ export function useDisplayRegex(
   }, [messageIndex])
   const macroCharacterId = activeGroupCharacterId ?? activeCharacterId
 
-  const { value: content, ready: preprocessReady } = useDisplayPreprocessedState(rawContent, activeChatId, preprocessOpts)
+  const displayPreprocessOpts = useMemo(
+    () => preprocessOpts
+      ? {
+          ...preprocessOpts,
+          depth,
+          ...(messageIndex >= 0 ? { messageIndex } : {}),
+          ...(dynamicMacros ? { dynamicMacros } : {}),
+        }
+      : undefined,
+    [preprocessOpts, depth, messageIndex, dynamicMacros],
+  )
+  const { value: content, ready: preprocessReady } = useDisplayPreprocessedState(
+    rawContent,
+    activeChatId,
+    displayPreprocessOpts,
+  )
   const pendingSlowReportsRef = useRef<SlowRegexReport[]>([])
 
   // When an extension owns display, regex runs on preprocessed content only.
