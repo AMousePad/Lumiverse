@@ -30,6 +30,7 @@ interface MessageContentProcessorCtx {
   chatId: string
   messageId?: string                              // undefined for "create"
   content: string
+  isUser: boolean                                 // true for a user-authored row
   extra?: Record<string, unknown>                 // populated with { role, is_user } for "render"
   origin: "create" | "update" | "swipe_add" | "swipe_update" | "render"
   swipeIndex?: number                             // set for "swipe_update"

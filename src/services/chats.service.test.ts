@@ -3,6 +3,7 @@ import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import {
   addSwipe,
   convertSoloChatToGroup,
+  createChat,
   deleteChats,
   getChat,
   cycleSwipe,
@@ -153,6 +154,28 @@ beforeEach(() => {
 
 afterEach(() => {
   closeDatabase();
+});
+
+describe("chat greeting selection", () => {
+  test("persists the selected greeting index on the chat and greeting message", () => {
+    getDb()
+      .query("UPDATE characters SET first_mes = ?, alternate_greetings = ? WHERE id = ?")
+      .run(
+        "Default greeting",
+        JSON.stringify(["Alternate one", "Alternate two"]),
+        "c1",
+      );
+
+    const chat = createChat("u1", {
+      character_id: "c1",
+      greeting_index: 2,
+    });
+    const greeting = getMessages("u1", chat.id)[0];
+
+    expect(chat.metadata.activeGreetingIndex).toBe(2);
+    expect(greeting?.content).toBe("Alternate two");
+    expect(greeting?.extra.greeting_index).toBe(2);
+  });
 });
 
 describe("chat message search", () => {

@@ -36,6 +36,10 @@ interface WorldInfoInterceptorCtx {
   messages: WorldInfoInterceptorMessage[]
   chatTurn: number
   chatMetadata: Record<string, unknown>
+  activationSettings: {
+    globalScanDepth: number | null
+    maxRecursionPasses: number
+  }
 }
 
 interface WorldInfoInterceptorEntry {
@@ -63,6 +67,7 @@ interface WorldInfoInterceptorEntry {
   prevent_recursion: boolean
   exclude_recursion: boolean
   delay_until_recursion: boolean
+  exclude_greeting: boolean
   scan_depth: number | null
   order_value: number
   // Which attachment scope contributed the entry's book to this chat.
@@ -86,6 +91,8 @@ interface WorldInfoInterceptorMessage {
 
 `chatMetadata` is the chat-level metadata blob. Persist cross-turn state here via `spindle.chats.update`; the snapshot is read-only.
 
+`activationSettings` contains the host scan depth and recursion limit for this prompt. A null scan depth uses all available messages. A recursion limit of `0` disables recursion.
+
 ## Return Value
 
 ```ts
@@ -93,18 +100,27 @@ interface WorldInfoInterceptorResult {
   disabled?: string[]
   enabled?: string[]
   forced?: string[]
-  mutated?: { id: string; content?: string }[]
+  mutated?: {
+    id: string
+    content?: string
+    selectionContent?: string
+  }[]
+  activationOverrides?: {
+    disableRecursion?: true
+  }
 }
 ```
 
-Return `void` (or omit all arrays) for a no-op pass-through. The four axes are independent:
+Return `void` or omit all fields for a no-op pass-through. The fields are independent:
 
 | Field | Effect |
 | --- | --- |
 | `disabled` | Forces `disabled: true`. Wins against any `enabled`/`forced` vote anywhere in the chain. |
 | `enabled` | Un-flips a stored `disabled: true`. No effect on entries already enabled or on entries any handler voted to disable. |
 | `forced` | Sets `constant: true` for this turn (activates regardless of key match). No effect if any handler voted to disable. Independent of `enabled`. To force a stored-disabled entry, vote both `enabled` and `forced`. |
-| `mutated` | Replaces `content` for this turn only; the stored entry is unchanged. Applies regardless of activation state. |
+| `mutated.content` | Replaces the content inserted for this prompt. The stored entry is unchanged. |
+| `mutated.selectionContent` | Replaces content only for selection, duplicate checks, and token limits. |
+| `activationOverrides.disableRecursion` | Disables recursive activation for this prompt. |
 
 Mutating an entry that another interceptor disabled is allowed but inert.
 
@@ -114,7 +130,9 @@ Multiple interceptors run in priority order (lower first), with registration ord
 
 Vote-off precedence is the chain's invariant: once any handler votes `disabled` for an entry, no later handler's `enabled` or `forced` can revive it. This makes per-handler reasoning order-independent on the disable axis.
 
-Content overrides accumulate last-write-wins: if two handlers set `content` for the same entry, the higher-priority handler (later in the chain) wins.
+Content and selection overrides use the last value returned for each entry.
+
+After one interceptor disables recursion, later interceptors receive `maxRecursionPasses: 0`.
 
 ## Permission Scope
 

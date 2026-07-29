@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { WorldBookEntry } from "../types/world-book";
-import { WorldInfoInterceptorChain } from "./world-info-interceptor";
+import {
+  WorldInfoInterceptorChain,
+  worldInfoInterceptorChain,
+  type WorldInfoInterceptor,
+} from "./world-info-interceptor";
 
 function makeEntry(id: string): WorldBookEntry {
   return {
@@ -26,6 +30,7 @@ function makeEntry(id: string): WorldBookEntry {
     group_weight: 100,
     probability: 100,
     scan_depth: null,
+    exclude_greeting: false,
     case_sensitive: false,
     match_whole_words: false,
     automation_id: null,
@@ -55,6 +60,10 @@ const context = {
   messages: [],
   chatTurn: 1,
   chatMetadata: {},
+  activationSettings: {
+    globalScanDepth: null,
+    maxRecursionPasses: 3,
+  },
 };
 
 describe("WorldInfoInterceptorChain activation capture", () => {
@@ -102,5 +111,54 @@ describe("WorldInfoInterceptorChain activation capture", () => {
     expect(result.captureRequests.has("empty")).toBe(true);
     expect([...result.captureRequests.get("empty")!]).toEqual([]);
     expect(result.entries[0].disabled).toBe(false);
+  });
+});
+
+describe("world info interceptor activation settings", () => {
+  test("passes the normalized global scan depth to each handler", async () => {
+    const seen: Array<number | null> = [];
+    const interceptor: WorldInfoInterceptor = {
+      extensionId: "world-info-settings-test",
+      priority: 0,
+      handler: async (ctx) => {
+        seen.push(ctx.activationSettings.globalScanDepth);
+      },
+    };
+    const unregister = worldInfoInterceptorChain.register(interceptor);
+
+    try {
+      await worldInfoInterceptorChain.run(
+        [],
+        {
+          chatId: "chat-1",
+          characterId: "character-1",
+          messages: [],
+          chatTurn: 0,
+          chatMetadata: {},
+          activationSettings: {
+            globalScanDepth: null,
+            maxRecursionPasses: 3,
+          },
+        },
+      );
+      await worldInfoInterceptorChain.run(
+        [],
+        {
+          chatId: "chat-1",
+          characterId: "character-1",
+          messages: [],
+          chatTurn: 0,
+          chatMetadata: {},
+          activationSettings: {
+            globalScanDepth: 7,
+            maxRecursionPasses: 3,
+          },
+        },
+      );
+    } finally {
+      unregister();
+    }
+
+    expect(seen).toEqual([null, 7]);
   });
 });

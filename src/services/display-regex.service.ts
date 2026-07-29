@@ -237,6 +237,7 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
         {
           chatId: input.context.chat_id,
           content,
+          isUser: input.context.is_user,
           origin: "render",
           userId: input.userId,
           ...(input.context.message_id ? { messageId: input.context.message_id } : {}),

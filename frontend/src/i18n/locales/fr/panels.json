@@ -1577,6 +1577,7 @@
         "disabled": "Désactivé",
         "caseSensitive": "Sensible aux majuscules et minuscules",
         "matchWholeWords": "Faire correspondre des mots entiers",
+        "excludeGreeting": "Exclure le message d'accueil",
         "useRegex": "Utiliser Regex",
         "useProbability": "Utiliser Probabilité",
         "vectorized": "Vectorisé",

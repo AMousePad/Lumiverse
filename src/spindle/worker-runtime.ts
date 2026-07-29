@@ -585,6 +585,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen"> & {
       chatId: string;
       messageId?: string;
       content: string;
+      isUser: boolean;
       extra?: Record<string, unknown>;
       origin: "create" | "update" | "swipe_add" | "swipe_update" | "render";
       swipeIndex?: number;

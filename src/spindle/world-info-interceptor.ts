@@ -25,6 +25,7 @@ export interface WorldInfoInterceptorEntryDTO {
   readonly prevent_recursion: boolean;
   readonly exclude_recursion: boolean;
   readonly delay_until_recursion: boolean;
+  readonly exclude_greeting: boolean;
   readonly scan_depth: number | null;
   readonly order_value: number;
   readonly book_source?: BookSource;
@@ -41,6 +42,16 @@ export interface WorldInfoInterceptorMessageDTO {
   readonly index_in_chat: number;
 }
 
+export interface WorldInfoActivationSettingsDTO {
+  /** Default entry scan depth, or null to scan all available messages. */
+  readonly globalScanDepth: number | null;
+  readonly maxRecursionPasses: number;
+}
+
+export interface WorldInfoActivationOverridesDTO {
+  readonly disableRecursion?: true;
+}
+
 export interface WorldInfoInterceptorCtxDTO {
   readonly chatId: string;
   readonly characterId: string;
@@ -49,11 +60,15 @@ export interface WorldInfoInterceptorCtxDTO {
   readonly messages: readonly WorldInfoInterceptorMessageDTO[];
   readonly chatTurn: number;
   readonly chatMetadata: Readonly<Record<string, unknown>>;
+  readonly activationSettings: WorldInfoActivationSettingsDTO;
 }
 
 export interface WorldInfoInterceptorMutationDTO {
   readonly id: string;
+  /** Prompt-local replacement used for final insertion. */
   readonly content?: string;
+  /** Prompt-local alternate used only by host selection and token accounting. */
+  readonly selectionContent?: string;
 }
 
 export interface WorldInfoInterceptorResultDTO {
@@ -62,11 +77,14 @@ export interface WorldInfoInterceptorResultDTO {
   readonly forced?: readonly string[];
   readonly mutated?: readonly WorldInfoInterceptorMutationDTO[];
   readonly captured?: readonly string[];
+  readonly activationOverrides?: WorldInfoActivationOverridesDTO;
 }
 
 export interface WorldInfoInterceptorChainResult {
-  entries: WorldBookEntry[];
-  captureRequests: Map<string, Set<string>>;
+  readonly entries: WorldBookEntry[];
+  readonly captureRequests: Map<string, Set<string>>;
+  readonly activationOverrides: WorldInfoActivationOverridesDTO;
+  readonly selectionContentByEntryId: ReadonlyMap<string, string>;
 }
 
 export interface WorldInfoInterceptor {
@@ -102,7 +120,12 @@ export class WorldInfoInterceptorChain {
     bookSourceMap?: ReadonlyMap<string, BookSource>
   ): Promise<WorldInfoInterceptorChainResult> {
     if (this.handlers.length === 0) {
-      return { entries: [...entries], captureRequests: new Map() };
+      return {
+        entries: [...entries],
+        captureRequests: new Map(),
+        activationOverrides: {},
+        selectionContentByEntryId: new Map(),
+      };
     }
 
     const buildDto = (
@@ -132,6 +155,7 @@ export class WorldInfoInterceptorChain {
         prevent_recursion: e.prevent_recursion,
         exclude_recursion: e.exclude_recursion,
         delay_until_recursion: e.delay_until_recursion,
+        exclude_greeting: e.exclude_greeting,
         scan_depth: e.scan_depth,
         order_value: e.order_value,
         book_source: bookSourceMap?.get(e.world_book_id),
@@ -143,6 +167,8 @@ export class WorldInfoInterceptorChain {
     const contentOverrides = new Map<string, string>();
     const captureRequests = new Map<string, Set<string>>();
     const candidateIds = new Set(entries.map((entry) => entry.id));
+    const selectionContentByEntryId = new Map<string, string>();
+    let disableRecursion = false;
 
     let working: WorldBookEntry[] = [...entries];
 
@@ -167,7 +193,16 @@ export class WorldInfoInterceptorChain {
     for (const handler of this.handlers) {
       if (handler.userId && handler.userId !== userId) continue;
       try {
-        const result = await handler.handler({ ...ctx, entries: buildDto(working) });
+        const result = await handler.handler({
+          ...ctx,
+          entries: buildDto(working),
+          activationSettings: {
+            globalScanDepth: ctx.activationSettings.globalScanDepth,
+            maxRecursionPasses: disableRecursion
+              ? 0
+              : ctx.activationSettings.maxRecursionPasses,
+          },
+        });
         const disabledList = result?.disabled ?? [];
         const enabledList = result?.enabled ?? [];
         const forcedList = result?.forced ?? [];
@@ -180,11 +215,14 @@ export class WorldInfoInterceptorChain {
           }
           captureRequests.set(handler.extensionId, requested);
         }
+        const activationOverrides = result?.activationOverrides;
+        const disablesRecursion = activationOverrides?.disableRecursion === true;
         if (
           disabledList.length === 0 &&
           enabledList.length === 0 &&
           forcedList.length === 0 &&
-          mutatedList.length === 0
+          mutatedList.length === 0 &&
+          !disablesRecursion
         ) {
           continue;
         }
@@ -194,9 +232,20 @@ export class WorldInfoInterceptorChain {
         for (const id of forcedList) forcedByChain.add(id);
         for (const m of mutatedList) {
           if (m.content !== undefined) contentOverrides.set(m.id, m.content);
+          if (m.selectionContent !== undefined) {
+            selectionContentByEntryId.set(m.id, m.selectionContent);
+          }
         }
+        disableRecursion ||= disablesRecursion;
 
-        working = rebuildWorking();
+        if (
+          disabledList.length > 0 ||
+          enabledList.length > 0 ||
+          forcedList.length > 0 ||
+          mutatedList.length > 0
+        ) {
+          working = rebuildWorking();
+        }
       } catch (err) {
         console.error(
           `[Spindle] World-info interceptor error from ${handler.extensionId}: ${err instanceof Error ? err.message : String(err)}`
@@ -207,7 +256,14 @@ export class WorldInfoInterceptorChain {
       }
     }
 
-    return { entries: working, captureRequests };
+    return {
+      entries: working,
+      captureRequests,
+      activationOverrides: {
+        ...(disableRecursion ? { disableRecursion: true as const } : {}),
+      },
+      selectionContentByEntryId,
+    };
   }
 
   get count(): number {

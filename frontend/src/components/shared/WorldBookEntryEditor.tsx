@@ -313,6 +313,11 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
             label={t('toggles.matchWholeWords')}
           />
           <Toggle.Checkbox
+            checked={entry.exclude_greeting}
+            onChange={() => onImmediateUpdate(entry.id, { exclude_greeting: !entry.exclude_greeting })}
+            label={t('toggles.excludeGreeting')}
+          />
+          <Toggle.Checkbox
             checked={entry.use_regex}
             onChange={() => onImmediateUpdate(entry.id, { use_regex: !entry.use_regex })}
             label={t('toggles.useRegex')}

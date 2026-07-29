@@ -1776,12 +1776,15 @@ export async function assemblePrompt(
     for (const bookId of mpWorldInfo.bookIds) wiSources.bookSourceMap.set(bookId, "peer");
   }
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
-  const worldInfoSettings =
+  const configuredWorldInfoSettings =
     pf?.allSettings.get("worldInfoSettings") ??
     (settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as
       | Partial<WorldInfoSettings>
       | undefined) ??
     {};
+  const normalizedWorldInfoSettings = normalizeWorldInfoSettings(
+    configuredWorldInfoSettings,
+  );
   const interception = await worldInfoInterceptorChain.run(
     wiEntries,
     {
@@ -1808,10 +1811,21 @@ export async function assemblePrompt(
       }),
       chatTurn: messages.length,
       chatMetadata: chat.metadata ?? {},
+      activationSettings: {
+        globalScanDepth: normalizedWorldInfoSettings.globalScanDepth,
+        maxRecursionPasses: normalizedWorldInfoSettings.maxRecursionPasses,
+      },
     },
     ctx.userId,
     wiSources.bookSourceMap
   );
+  const worldInfoSettings: WorldInfoSettings = {
+    ...normalizedWorldInfoSettings,
+    maxRecursionPasses:
+      interception.activationOverrides.disableRecursion === true
+        ? 0
+        : normalizedWorldInfoSettings.maxRecursionPasses,
+  };
   const intercepted = interception.entries;
   const hasCaptureRequests = interception.captureRequests.size > 0;
   const hasCapturedIds = [...interception.captureRequests.values()].some(
@@ -1837,6 +1851,7 @@ export async function assemblePrompt(
       wiState,
       settings: worldInfoSettings,
       scanCache: activationScanCache,
+      selectionContentByEntryId: interception.selectionContentByEntryId,
     }),
   );
 
@@ -1949,6 +1964,8 @@ export async function assemblePrompt(
       worldInfoSettings,
       wiSources.bookSourceMap,
       wiSources.bookNameMap,
+      undefined,
+      interception.selectionContentByEntryId,
     ),
   );
   const wiCache = mergedWorldInfo.cache;
@@ -4188,6 +4205,7 @@ export function selectMergedWorldInfoEntries(
   settingsInput?: Partial<WorldInfoSettings>,
   bookSourceMap?: Map<string, BookSource>,
   random?: () => number,
+  selectionContentByEntryId?: ReadonlyMap<string, string>,
 ): WorldInfoMergeSelection {
   const settings = normalizeWorldInfoSettings(settingsInput);
   const mergedEntries: WorldBookEntryModel[] = [];
@@ -4223,7 +4241,24 @@ export function selectMergedWorldInfoEntries(
     sources.set(item.entry.id, { source: "vector", score: item.finalScore });
   }
 
-  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources, bookSourceMap);
+  const entriesForDedup = selectionContentByEntryId?.size
+    ? mergedEntries.map((entry) => {
+        const content = selectionContentByEntryId.get(entry.id);
+        return content === undefined ? entry : { ...entry, content };
+      })
+    : mergedEntries;
+  const selectedDedupResult = deduplicateWorldInfoEntries(
+    entriesForDedup,
+    sources,
+    bookSourceMap,
+  );
+  const mergedEntryById = new Map(mergedEntries.map((entry) => [entry.id, entry]));
+  const dedupResult = {
+    ...selectedDedupResult,
+    entries: selectedDedupResult.entries.map(
+      (entry) => mergedEntryById.get(entry.id) ?? entry,
+    ),
+  };
   for (const removed of dedupResult.removed) {
     sources.delete(removed.removedEntryId);
     if (vectorEntryIds.has(removed.removedEntryId)) {
@@ -4288,6 +4323,7 @@ export function selectMergedWorldInfoEntries(
     skipGroupLogic: true,
     preserveOrder: !hasBudget,
     budgetPriorityById,
+    selectionContentByEntryId,
   });
   const activatedIds = new Set(finalized.activatedEntries.map((entry) => entry.id));
   for (const item of vectorEntries) {
@@ -4311,6 +4347,7 @@ export function mergeActivatedWorldInfoEntries(
   bookSourceMap?: Map<string, BookSource>,
   bookNameMap?: Map<string, string>,
   random?: () => number,
+  selectionContentByEntryId?: ReadonlyMap<string, string>,
 ): MergedWorldInfoEntriesResult {
   const mergeStartedAt = performance.now();
   const selection = selectMergedWorldInfoEntries(
@@ -4319,6 +4356,7 @@ export function mergeActivatedWorldInfoEntries(
     settingsInput,
     bookSourceMap,
     random,
+    selectionContentByEntryId,
   );
   const { finalized, sources, dedupResult, dispositions } = selection;
 

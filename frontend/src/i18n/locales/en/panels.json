@@ -1724,6 +1724,7 @@
         "disabled": "Disabled",
         "caseSensitive": "Case Sensitive",
         "matchWholeWords": "Match Whole Words",
+        "excludeGreeting": "Exclude Greeting",
         "useRegex": "Use Regex",
         "useProbability": "Use Probability",
         "vectorized": "Vectorized",

@@ -855,6 +855,7 @@ export interface WorldBookEntry {
   group_weight: number;
   probability: number;
   scan_depth: number | null;
+  exclude_greeting: boolean;
   case_sensitive: boolean;
   match_whole_words: boolean;
   automation_id: string | null;
@@ -1082,6 +1083,7 @@ export interface CreateWorldBookEntryInput {
   group_weight?: number;
   probability?: number;
   scan_depth?: number;
+  exclude_greeting?: boolean;
   case_sensitive?: boolean;
   match_whole_words?: boolean;
   automation_id?: string;

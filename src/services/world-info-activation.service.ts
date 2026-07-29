@@ -96,6 +96,7 @@ export interface ActivationInput {
   settings?: Partial<WorldInfoSettings>;
   scanCache?: WorldInfoActivationScanCache;
   random?: () => number;
+  selectionContentByEntryId?: ReadonlyMap<string, string>;
 }
 
 export interface WorldInfoActivationScanCache {
@@ -185,6 +186,8 @@ export interface FinalizeWorldInfoOptions {
   random?: () => number;
   /** Internal competition priorities used only for budget ordering. */
   budgetPriorityById?: ReadonlyMap<string, number>;
+  /** Prompt-local content used only for selection and token accounting. */
+  selectionContentByEntryId?: ReadonlyMap<string, string>;
 }
 
 // ─── Activation cache (short-TTL for rapid dry-run optimization) ───
@@ -229,7 +232,11 @@ function computeMessageSignature(messages: readonly Message[]): string {
   const hasher = new Bun.CryptoHasher("sha256");
   for (const message of messages) {
     hasher.update(
-      JSON.stringify({ id: message.id, content: message.content }),
+      JSON.stringify({
+        id: message.id,
+        content: message.content,
+        greeting: message.extra?.greeting === true,
+      }),
     );
     hasher.update("\0");
   }
@@ -238,9 +245,9 @@ function computeMessageSignature(messages: readonly Message[]): string {
 
 function computeWiActivationCacheKey(input: ActivationInput): string {
   const entries = input.entries;
-  const messages = input.messages;
   const wiState = input.wiState;
   const settings = normalizeWorldInfoSettings(input.settings);
+  const messages = input.messages;
   const hasher = new Bun.CryptoHasher("sha256");
   for (const e of entries) {
     hasher.update(JSON.stringify({
@@ -262,6 +269,7 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
       group_weight: e.group_weight,
       probability: e.probability,
       scan_depth: e.scan_depth,
+      exclude_greeting: e.exclude_greeting,
       case_sensitive: e.case_sensitive,
       match_whole_words: e.match_whole_words,
       use_regex: e.use_regex,
@@ -277,6 +285,13 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
       vectorized: e.vectorized,
     }));
     hasher.update("\0");
+  }
+  for (const entry of entries) {
+    const content = input.selectionContentByEntryId?.get(entry.id);
+    if (content !== undefined && content !== entry.content) {
+      hasher.update(JSON.stringify([entry.id, content]));
+      hasher.update("\0");
+    }
   }
   const readsMessages = entries.some(
     (entry) =>
@@ -444,6 +459,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
 
   const finalized = finalizeActivatedWorldInfoEntries(activated, settings, {
     random: input.random,
+    selectionContentByEntryId: input.selectionContentByEntryId,
   });
 
   const stats: ActivationStats = {
@@ -476,7 +492,11 @@ export function finalizeActivatedWorldInfoEntries(
   const afterGroups = options.skipGroupLogic
     ? [...entries]
     : applyWorldInfoGroupLogic([...entries], options.random);
-  const insertableEntries = afterGroups.filter(hasMeaningfulWorldInfoContent);
+  const insertableEntries = afterGroups.filter((entry) =>
+    hasMeaningfulWorldInfoContent({
+      content: selectionContentFor(entry, options.selectionContentByEntryId),
+    }),
+  );
 
   if (!options.preserveOrder) {
     insertableEntries.sort((a, b) => {
@@ -488,7 +508,11 @@ export function finalizeActivatedWorldInfoEntries(
   }
 
   const activatedBeforeBudget = insertableEntries.length;
-  const activatedEntries = enforceBudget(insertableEntries, settings);
+  const activatedEntries = enforceBudget(
+    insertableEntries,
+    settings,
+    options.selectionContentByEntryId,
+  );
   const evictedByBudget = activatedBeforeBudget - activatedEntries.length;
 
   return {
@@ -497,7 +521,10 @@ export function finalizeActivatedWorldInfoEntries(
     activatedBeforeBudget,
     activatedAfterBudget: activatedEntries.length,
     evictedByBudget,
-    estimatedTokens: estimateTokens(activatedEntries),
+    estimatedTokens: estimateTokens(
+      activatedEntries,
+      options.selectionContentByEntryId,
+    ),
   };
 }
 
@@ -510,10 +537,21 @@ function estimateEntryTokens(content: string): number {
   return Math.ceil(content.length / 4);
 }
 
-function estimateTokens(entries: WorldBookEntry[]): number {
+function selectionContentFor(
+  entry: Pick<WorldBookEntry, "id" | "content">,
+  selectionContentByEntryId?: ReadonlyMap<string, string>,
+): string {
+  return selectionContentByEntryId?.get(entry.id) ?? entry.content;
+}
+
+function estimateTokens(
+  entries: WorldBookEntry[],
+  selectionContentByEntryId?: ReadonlyMap<string, string>,
+): number {
   let total = 0;
   for (const e of entries) {
-    if (e.content) total += estimateEntryTokens(e.content);
+    const content = selectionContentFor(e, selectionContentByEntryId);
+    if (content) total += estimateEntryTokens(content);
   }
   return total;
 }
@@ -523,7 +561,11 @@ function estimateTokens(entries: WorldBookEntry[]): number {
  * Entries are already sorted by priority desc, order_value asc.
  * Constants are never evicted — they take priority over conditional entries.
  */
-function enforceBudget(entries: WorldBookEntry[], settings: WorldInfoSettings): WorldBookEntry[] {
+function enforceBudget(
+  entries: WorldBookEntry[],
+  settings: WorldInfoSettings,
+  selectionContentByEntryId?: ReadonlyMap<string, string>,
+): WorldBookEntry[] {
   let result = entries;
 
   // Max activated entries cap
@@ -547,7 +589,8 @@ function enforceBudget(entries: WorldBookEntry[], settings: WorldInfoSettings): 
     // Constants first (never evicted)
     for (const e of result) {
       if (e.constant) {
-        totalTokens += e.content ? estimateEntryTokens(e.content) : 0;
+        const content = selectionContentFor(e, selectionContentByEntryId);
+        totalTokens += content ? estimateEntryTokens(content) : 0;
         kept.push(e);
       }
     }
@@ -555,7 +598,8 @@ function enforceBudget(entries: WorldBookEntry[], settings: WorldInfoSettings): 
     // Non-constants in priority order until budget exhausted
     for (const e of result) {
       if (e.constant) continue;
-      const tokens = e.content ? estimateEntryTokens(e.content) : 0;
+      const content = selectionContentFor(e, selectionContentByEntryId);
+      const tokens = content ? estimateEntryTokens(content) : 0;
       if (totalTokens + tokens > settings.maxTokenBudget) continue;
       totalTokens += tokens;
       kept.push(e);
@@ -622,6 +666,7 @@ function scanEntryCacheValue(entry: WorldBookEntry): object {
     key: entry.key,
     keysecondary: entry.keysecondary,
     scan_depth: entry.scan_depth,
+    exclude_greeting: entry.exclude_greeting,
     case_sensitive: entry.case_sensitive,
     match_whole_words: entry.match_whole_words,
     use_regex: entry.use_regex,
@@ -639,28 +684,40 @@ function scanBaseState(
   settings: WorldInfoSettings,
 ): ScanState {
   const state = makeScanState();
-  const depthBuckets = new Map<string, Set<string>>();
-  const depthKey = (d: number | null) => (d === null ? "all" : String(d));
+  // Pass 0 base: scan messages once per unique effective scan_depth.
+  // Pre-compute scan text per depth key and memoize so entries sharing the
+  // same effective depth don't rebuild the same concatenated string.
+  const depthBuckets = new Map<string, { scope: Set<string>; excludeGreeting: boolean; depth: number | null }>();
+  const depthKey = (d: number | null, excludeGreeting: boolean) =>
+    `${excludeGreeting ? "without-greeting" : "all-messages"}:${d === null ? "all" : String(d)}`;
+  let needsGreetingExcludedScan = false;
   for (const e of conditional) {
     if (e.key.length === 0) continue;
     const d = e.scan_depth ?? settings.globalScanDepth;
-    const k = depthKey(d);
-    let set = depthBuckets.get(k);
-    if (!set) {
-      set = new Set();
-      depthBuckets.set(k, set);
+    needsGreetingExcludedScan ||= e.exclude_greeting;
+    const k = depthKey(d, e.exclude_greeting);
+    let bucket = depthBuckets.get(k);
+    if (!bucket) {
+      bucket = { scope: new Set(), excludeGreeting: e.exclude_greeting, depth: d };
+      depthBuckets.set(k, bucket);
     }
-    set.add(e.uid);
+    bucket.scope.add(e.uid);
   }
+  const messagesWithoutGreeting = needsGreetingExcludedScan
+    ? messages.filter((message) => message.extra?.greeting !== true)
+    : messages;
   const scanTextCache = new Map<string, string>();
-  for (const [k, scope] of depthBuckets) {
-    const d = k === "all" ? null : Number(k);
+  for (const [k, bucket] of depthBuckets) {
     let text = scanTextCache.get(k);
     if (text === undefined) {
-      text = buildScanText(messages, d, "");
+      text = buildScanText(
+        bucket.excludeGreeting ? messagesWithoutGreeting : messages,
+        bucket.depth,
+        "",
+      );
       scanTextCache.set(k, text);
     }
-    matcher.scanChunk(text, state, scope);
+    matcher.scanChunk(text, state, bucket.scope);
   }
   return state;
 }

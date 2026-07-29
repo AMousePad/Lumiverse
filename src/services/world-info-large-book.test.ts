@@ -1,23 +1,9 @@
 /**
- * Regression suite for the "9000+ entry lorebook fires no entries" bug.
- *
- * Production log that motivated this suite:
- *   [embeddings] WI vector search: 0 rows from LanceDB for book=17c52a6c (limit=30)
- *   [prompt-assembly] Vector WI retrieval: eligible=9251, hits=57,
- *                     afterThreshold=57, afterRerank=57, shortlisted=15 (topK=15)
- *   [WI merge] vector candidates=15 → accepted=0,
- *              skipped: dedup=0, minPriority=0, group=0, budgetCap=15, budgetSim=0
- *
- * The merge/activation pipeline is deterministic and pure, so we exercise it
- * directly with entries shaped like the user's import. The vector-search half
- * of the pipeline (LanceDB) is stubbed — we feed the merge function synthetic
- * `VectorActivatedEntry[]` that mirror what `collectVectorActivatedWorldInfoDetailed`
- * would have produced.
+ * Portable regression coverage for world-info activation and merge behavior.
+ * Vector retrieval is represented with synthetic candidates so the suite has
+ * no external data dependency.
  */
 import { describe, test, expect } from "bun:test";
-import { readFileSync, existsSync } from "node:fs";
-import path from "node:path";
-import os from "node:os";
 
 import type { WorldBookEntry } from "../types/world-book";
 import type { Message } from "../types/message";
@@ -35,8 +21,6 @@ import {
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-
-const LOREBOOK_PATH = path.join(os.homedir(), "Downloads", "memories_lorebook.json");
 
 let __counter = 0;
 function makeEntry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
@@ -68,6 +52,7 @@ function makeEntry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
     group_weight: 100,
     probability: 100,
     scan_depth: null,
+    exclude_greeting: false,
     case_sensitive: false,
     match_whole_words: false,
     automation_id: null,
@@ -111,12 +96,12 @@ function makeMessage(content: string): Message {
   };
 }
 
-/** Wrap a WorldBookEntry as a VectorActivatedEntry with realistic scoring. */
+/** Wrap a WorldBookEntry as a VectorActivatedEntry with representative scoring. */
 function asVectorCandidate(entry: WorldBookEntry, finalScore = 0.8): VectorActivatedEntry {
   return {
     entry,
     score: finalScore,
-    distance: Number.POSITIVE_INFINITY, // FTS-only, mirroring the production log
+    distance: Number.POSITIVE_INFINITY,
     finalScore,
     lexicalCandidateScore: 10,
     matchedPrimaryKeys: [],
@@ -547,13 +532,10 @@ describe("global keyword matching overrides", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Scenario 1: the "as-imported" shape — keys=[], vectorized=true, no constants.
-// This is the exact profile of memories_lorebook.json. With default settings
-// (maxActivatedEntries=0=unlimited, maxTokenBudget=0=unlimited) ALL 15 vector
-// candidates MUST be accepted.
+// Vector and keyword competition with default and configured limits.
 // ---------------------------------------------------------------------------
 
-describe("mergeActivatedWorldInfoEntries — user-shape (9000+ entries, keys=[], vectorized)", () => {
+describe("mergeActivatedWorldInfoEntries — vector and keyword competition", () => {
   test("includes the source book name in activated entry summaries", () => {
     const entry = makeEntry({ world_book_id: "book-lore" });
 
@@ -599,10 +581,8 @@ describe("mergeActivatedWorldInfoEntries — user-shape (9000+ entries, keys=[],
   });
 
   test("FIXED: score-boosted vectors can now displace equal-priority keyword entries at a full cap", () => {
-    // This is the production bug reproducer. Before the fix: all 15 vector
-    // candidates were rejected with `budgetCap=15`. After the fix: vectors
-    // with meaningful finalScore receive a bounded priority uplift and beat
-    // equal-priority keyword entries on the order_value tiebreaker.
+    // Meaningful vector scores can beat equal-priority keyword entries while
+    // the configured entry cap remains in force.
     const keywordEntries = Array.from({ length: 15 }, (_, i) =>
       makeEntry({ world_book_id: "other-book", key: ["x"], order_value: i + 1, comment: `kw-${i}` }),
     );
@@ -616,10 +596,10 @@ describe("mergeActivatedWorldInfoEntries — user-shape (9000+ entries, keys=[],
       { maxActivatedEntries: 15 },
     );
 
-    // At least some vectors must now fire — that is the bug fix.
+    // At least some vectors must activate.
     expect(result.vectorActivated).toBeGreaterThan(0);
     expect(result.totalActivated).toBe(15);
-    // The output must still respect the user's cap.
+    // The output must still respect the configured cap.
     expect(result.activatedEntries.length).toBe(15);
   });
 
@@ -677,9 +657,73 @@ describe("mergeActivatedWorldInfoEntries — user-shape (9000+ entries, keys=[],
       maxTokenBudget: 100,
     });
 
-    // This is a SEPARATE failure mode from the user's log. Verifies the
-    // budgetCap vs budgetSim counters discriminate correctly.
+    // Token limits and entry-count limits report separate outcomes.
     expect(result.vectorActivated).toBe(0);
+  });
+});
+
+describe("prompt-local world-info selection content", () => {
+  test("filters a raw constant whose selection view is empty without caching the empty result", () => {
+    const entry = makeEntry({
+      id: crypto.randomUUID(),
+      uid: crypto.randomUUID(),
+      constant: true,
+      content: "{{runtime condition}}large hidden payload{{/runtime condition}}",
+      vectorized: false,
+    });
+
+    const hidden = activateWorldInfo({
+      entries: [entry],
+      messages: [],
+      chatTurn: 0,
+      wiState: {},
+      settings: {},
+      selectionContentByEntryId: new Map([[entry.id, ""]]),
+    });
+    const visible = activateWorldInfo({
+      entries: [entry],
+      messages: [],
+      chatTurn: 0,
+      wiState: {},
+      settings: {},
+      selectionContentByEntryId: new Map([[entry.id, "visible"]]),
+    });
+
+    expect(hidden.activatedEntries).toEqual([]);
+    expect(visible.activatedEntries).toEqual([entry]);
+  });
+
+  test("uses selection content for budget and dedup while returning raw content", () => {
+    const first = makeEntry({
+      content: "A".repeat(4_000),
+      priority: 20,
+      vectorized: false,
+    });
+    const duplicate = makeEntry({
+      content: "B".repeat(4_000),
+      priority: 10,
+      vectorized: false,
+    });
+    const selectionContentByEntryId = new Map([
+      [first.id, "same"],
+      [duplicate.id, "same"],
+    ]);
+
+    const result = mergeActivatedWorldInfoEntries(
+      [first, duplicate],
+      [],
+      { maxTokenBudget: 1 },
+      undefined,
+      undefined,
+      undefined,
+      selectionContentByEntryId,
+    );
+
+    expect(result.activatedEntries).toEqual([first]);
+    expect(result.activatedEntries[0]?.content).toBe(first.content);
+    expect(result.cache.before[0]?.content).toBe(first.content);
+    expect(result.estimatedTokens).toBe(1);
+    expect(result.deduplicated).toBe(1);
   });
 });
 
@@ -785,160 +829,5 @@ describe("mergeActivatedWorldInfoEntries — unified finalization", () => {
     } finally {
       Math.random = originalRandom;
     }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Scenario 3: replay against the real 9239-entry user file
-// ---------------------------------------------------------------------------
-
-describe("mergeActivatedWorldInfoEntries — real 9239-entry user lorebook", () => {
-  const available = existsSync(LOREBOOK_PATH);
-  const skip = available ? test : test.skip;
-
-  // Load once, reuse across tests. Maps each ST-style raw entry to our
-  // WorldBookEntry model using the same defaults createEntry/importWorldBook
-  // would apply (priority=10 when unset, order_value from displayIndex/order).
-  function loadRealEntries(): WorldBookEntry[] {
-    const raw = JSON.parse(readFileSync(LOREBOOK_PATH, "utf8"));
-    const rawEntries: any[] = Array.isArray(raw.entries)
-      ? raw.entries
-      : Object.values(raw.entries);
-    return rawEntries.map((e: any, i: number) =>
-      makeEntry({
-        id: `real-${i}`,
-        uid: `real-uid-${i}`,
-        world_book_id: "memories-book",
-        content: String(e.content || ""),
-        comment: String(e.comment || ""),
-        key: Array.isArray(e.key) ? e.key : [],
-        keysecondary: Array.isArray(e.keysecondary) ? e.keysecondary : [],
-        order_value: e.displayIndex ?? e.order ?? i + 1,
-        priority: e.priority ?? 10,
-        position: e.position ?? 0,
-        depth: e.depth ?? 4,
-        selective: e.selective ?? true,
-        constant: e.constant ?? false,
-        disabled: !!e.disable,
-        probability: e.probability ?? 100,
-        use_probability: e.useProbability ?? true,
-        vectorized: e.vectorized ?? true,
-      }),
-    );
-  }
-
-  skip("invariants: >9000 entries, all empty keys, all vectorized, no constants, none disabled", () => {
-    const entries = loadRealEntries();
-    expect(entries.length).toBeGreaterThan(9000);
-    expect(entries.every((e) => e.key.length === 0)).toBe(true);
-    expect(entries.every((e) => e.vectorized === true)).toBe(true);
-    expect(entries.every((e) => !e.constant)).toBe(true);
-    expect(entries.every((e) => !e.disabled)).toBe(true);
-  });
-
-  skip("end-to-end: only this book + default settings + any subset as vector hits → every hit wins", () => {
-    const entries = loadRealEntries();
-    // Simulate LanceDB returning 30 arbitrary entries as candidates.
-    const hitIndexes = [3, 47, 120, 500, 987, 1234, 2200, 3500, 4815, 5000, 6666, 7777, 8000, 8500, 9000, 100, 250, 450, 700, 900, 1100, 1300, 1500, 1700, 1900, 2100, 2300, 2500, 2700, 2900];
-    const vectorCandidates = hitIndexes.map((idx, rank) =>
-      asVectorCandidate(entries[idx], 1.0 - rank * 0.02),
-    );
-
-    const result = mergeActivatedWorldInfoEntries([], vectorCandidates, {});
-    expect(result.vectorActivated).toBe(vectorCandidates.length);
-    expect(result.keywordActivated).toBe(0);
-  });
-
-  skip("full-scale merge: 9239 entries + 15 vector hits + maxActivatedEntries=15 + zero keyword competition → all 15 vectors accepted", () => {
-    const entries = loadRealEntries();
-    const vectorCandidates = entries.slice(0, 15).map((e, i) =>
-      asVectorCandidate(e, 1.2 - i * 0.05),
-    );
-
-    const result = mergeActivatedWorldInfoEntries([], vectorCandidates, { maxActivatedEntries: 15 });
-    expect(result.vectorActivated).toBe(15);
-  });
-
-  skip("post-fix production-log replay: 15 keyword competitors + cap=15 + real book content → vectors now fire", () => {
-    const entries = loadRealEntries();
-    // Another source contributes 15 keyword matches at default priority.
-    const keywordCompetitors = Array.from({ length: 15 }, (_, i) =>
-      makeEntry({ world_book_id: "other-book", key: ["trigger"], order_value: i + 1, priority: 10 }),
-    );
-    const vectorHits = entries.slice(0, 15).map((e, i) =>
-      asVectorCandidate(e, 0.9 - i * 0.03),
-    );
-
-    const result = mergeActivatedWorldInfoEntries(
-      keywordCompetitors,
-      vectorHits,
-      { maxActivatedEntries: 15 },
-    );
-
-    // Before the fix: vectorActivated=0, budgetCap=15.
-    // After the fix: vectorActivated > 0 and the total still respects cap.
-    expect(result.vectorActivated).toBeGreaterThan(0);
-    expect(result.totalActivated).toBe(15);
-  });
-
-  skip("realistic pipeline: varying maxActivatedEntries × retrieval_top_k combinations", () => {
-    const entries = loadRealEntries();
-
-    for (const topK of [4, 15, 30, 50]) {
-      for (const cap of [0, 15, 30, 100]) {
-        const vectorCandidates = entries.slice(0, topK).map((e, i) =>
-          asVectorCandidate(e, 1.0 - i * (0.8 / topK)),
-        );
-        const result = mergeActivatedWorldInfoEntries([], vectorCandidates, {
-          maxActivatedEntries: cap,
-        });
-        const expected = cap === 0 ? topK : Math.min(topK, cap);
-        // Content-level dedup may trim a few near-duplicates; allow wiggle.
-        expect(result.vectorActivated).toBeGreaterThanOrEqual(
-          Math.max(0, expected - 3),
-        );
-        expect(result.vectorActivated).toBeLessThanOrEqual(expected);
-      }
-    }
-  });
-
-  skip("stress test: 9239 entries through full pipeline completes in under 2 seconds", () => {
-    const entries = loadRealEntries();
-    const vectorCandidates = entries.slice(0, 30).map((e, i) =>
-      asVectorCandidate(e, 1.0 - i * 0.02),
-    );
-
-    const t0 = performance.now();
-    const result = mergeActivatedWorldInfoEntries([], vectorCandidates, {
-      maxActivatedEntries: 30,
-    });
-    const elapsed = performance.now() - t0;
-
-    expect(result.vectorActivated).toBeGreaterThan(0);
-    expect(elapsed).toBeLessThan(2000);
-  });
-
-  skip("dedup sanity: real-content duplicates across books are collapsed but don't zero out vectors", () => {
-    const entries = loadRealEntries();
-    // Duplicate the first entry into a separate book (simulates two books
-    // with overlapping content, which is what triggers dedup).
-    const duplicate = makeEntry({
-      id: "dupe-1",
-      world_book_id: "other-book",
-      content: entries[0].content,
-      comment: entries[0].comment,
-      priority: 10,
-    });
-
-    const vector = [
-      asVectorCandidate(entries[0], 0.9),
-      asVectorCandidate(duplicate, 0.9),
-      ...entries.slice(1, 15).map((e, i) => asVectorCandidate(e, 0.85 - i * 0.01)),
-    ];
-
-    const result = mergeActivatedWorldInfoEntries([], vector, {});
-    // One dedup hit expected (the intentional duplicate).
-    expect(result.deduplicated).toBeGreaterThanOrEqual(1);
-    expect(result.vectorActivated).toBeGreaterThan(10);
   });
 });

@@ -29,6 +29,7 @@ function makeEntry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
     group_weight: 100,
     probability: 100,
     scan_depth: null,
+    exclude_greeting: false,
     case_sensitive: false,
     match_whole_words: false,
     automation_id: null,

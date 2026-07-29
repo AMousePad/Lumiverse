@@ -33,6 +33,8 @@ export interface WorldBookEntry {
   group_weight: number;
   probability: number;
   scan_depth: number | null;
+  /** Exclude the synthetic character greeting from this entry's lexical activation scan. */
+  exclude_greeting: boolean;
   case_sensitive: boolean;
   match_whole_words: boolean;
   automation_id: string | null;
@@ -272,6 +274,8 @@ export interface CreateWorldBookEntryInput {
   group_weight?: number;
   probability?: number;
   scan_depth?: number;
+  /** Exclude the synthetic character greeting from this entry's lexical activation scan. */
+  exclude_greeting?: boolean;
   case_sensitive?: boolean;
   match_whole_words?: boolean;
   automation_id?: string;

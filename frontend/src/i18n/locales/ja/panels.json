@@ -1577,6 +1577,7 @@
         "disabled": "無効",
         "caseSensitive": "大文字と小文字を区別",
         "matchWholeWords": "単語全体と一致",
+        "excludeGreeting": "挨拶メッセージを除外",
         "useRegex": "正規表現を使用する",
         "useProbability": "確率を使用",
         "vectorized": "ベクトル化",

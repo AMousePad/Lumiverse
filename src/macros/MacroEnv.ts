@@ -121,6 +121,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       version: (character.extensions?.version as string) || "",
       creator: character.creator || "",
       firstMessage: resolveChatGreeting(character, chat, messages),
+      alternateGreetings: [...(character.alternate_greetings || [])],
     },
     chat: {
       id: chat.id,
@@ -134,6 +135,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       lastSwipeId: lastMsg?.swipes ? lastMsg.swipes.length - 1 : 0,
       currentSwipeId: lastMsg?.swipe_id ?? 0,
       rejectedSwipe: ctx.rejectedSwipe ?? "",
+      greetingIndex: resolveChatGreetingIndex(character, chat, messages),
     },
     system: {
       model: connection?.model || "",
@@ -254,6 +256,29 @@ function resolveChatGreeting(character: Character, chat: Chat, messages: Message
   if (openingMessage && !openingMessage.is_user) return openingMessage.content;
 
   return character.first_mes || "";
+}
+
+function resolveChatGreetingIndex(
+  character: Character,
+  chat: Chat,
+  messages: Message[],
+): number {
+  const metadataIndex = chat.metadata?.activeGreetingIndex;
+  if (Number.isInteger(metadataIndex) && metadataIndex >= 0) {
+    return metadataIndex;
+  }
+
+  const taggedGreeting = chat.metadata?.group
+    ? messages.find((message) =>
+        !message.is_user
+        && message.extra?.greeting === true
+        && message.extra?.greeting_character_id === character.id,
+      )
+    : messages.find((message) =>
+        !message.is_user && message.extra?.greeting === true,
+      );
+  const storedIndex = taggedGreeting?.extra?.greeting_index;
+  return Number.isInteger(storedIndex) && storedIndex >= 0 ? storedIndex : 0;
 }
 
 export function mergeDynamicMacros(
