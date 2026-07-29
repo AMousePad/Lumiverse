@@ -7,6 +7,7 @@ import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/compo
 import { useLongPress } from '@/hooks/useLongPress'
 import { getLiveRootRecordExact } from '@/lib/spindle/live-root-registry'
 import { scheduleSpindleDomTask } from '@/lib/spindle/browser-scheduler'
+import { resolveFloatWidgetStyle } from './spindle-float-widget-layout'
 import styles from './SpindleFloatWidget.module.css'
 
 interface Props {
@@ -162,9 +163,7 @@ export default function SpindleFloatWidget({ widget }: Props) {
 
   if (!widget.visible) return null
 
-  const widgetStyle = isFullscreen
-    ? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }
-    : { left: pos.x, top: pos.y, width: size.width, height: size.height }
+  const widgetStyle = resolveFloatWidgetStyle(isFullscreen, pos, size)
 
   return (
     <>
