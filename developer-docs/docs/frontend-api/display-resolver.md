@@ -108,4 +108,13 @@ ctx.display.invalidate(['*'])
 
 `invalidate` takes a list of `scope:name` strings, or `['*']` to clear everything. Use the wholesale form after a change you cannot express as a small set of variables, such as switching the chat your extension owns.
 
+Use `setExpression` when display resolution selects an expression image:
+
+```ts
+ctx.display.setExpression({ chatId, characterId, label, imageId })
+```
+
+The update is transient and frontend only. It is ignored when `chatId` is not
+the active chat.
+
 The hook is frontend only and requires no permission.

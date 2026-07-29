@@ -1624,6 +1624,15 @@ async function doLoadFrontendExtension(
           if (touchedVars.includes('*')) invalidateDisplayRegexCache()
           else invalidateDisplayRegexCacheForVars(new Set(touchedVars))
         },
+        setExpression({ chatId, characterId, label, imageId }) {
+          assertFrontendActive()
+          const state = useStore.getState()
+          if (state.activeChatId !== chatId) return
+          state.setActiveExpression(label, imageId, characterId)
+          if (state.isGroupChat) {
+            state.setGroupExpression(characterId, label, imageId)
+          }
+        },
       },
       containers: {
         registerContainer: (opts: { id: string; side: 'left' | 'right' | 'top' | 'bottom'; element: HTMLElement }) => {

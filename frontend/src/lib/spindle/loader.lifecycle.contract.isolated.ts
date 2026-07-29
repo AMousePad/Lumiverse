@@ -240,6 +240,7 @@ function resetStore(): void {
     drawerTab: null,
     settingsModalOpen: false,
     settingsActiveView: 'general',
+    spindleSettings: { infoLoggingEnabled: false },
   } as never)
 }
 // The loader is intentionally loaded after boundary mocks so this test exercises
@@ -1159,6 +1160,7 @@ describe('retained non-UI context lifecycle', () => {
         ['messages.listMessageIds', () => firstContext.messages.listMessageIds()],
         ['display.registerResolver', () => firstContext.display.registerResolver({ resolveTemplates: async () => null, applyScripts: async () => null })],
         ['display.invalidate', () => firstContext.display.invalidate(['stale'])],
+        ['display.setExpression', () => firstContext.display.setExpression({ chatId: 'stale', characterId: 'stale', label: 'stale', imageId: 'stale' })],
         ['containers.registerContainer', () => firstContext.containers.registerContainer({ id: 'stale', side: 'left', element: document.createElement('div') })],
         ['containers.unregisterContainer', () => firstContext.containers.unregisterContainer('stale')],
         ['getActiveChat', () => firstContext.getActiveChat()],
