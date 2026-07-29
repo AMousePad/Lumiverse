@@ -6,6 +6,13 @@ import { Check, ChevronRight, History, Pencil, Trash2, X } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { triggerBlobDownload } from '@/lib/downloads'
 import { worldBooksApi } from '@/api/world-books'
+import { personasApi } from '@/api/personas'
+import {
+  parsePersonaExportPayload,
+  PersonaImportFormatError,
+  PERSONA_EXPORT_TYPE,
+  PERSONA_EXPORT_VERSION,
+} from '@/lib/personaImport'
 import PersonaToolbar from './persona-browser/PersonaToolbar'
 import PersonaCardGrid from './persona-browser/PersonaCardGrid'
 import PersonaCardList from './persona-browser/PersonaCardList'
@@ -184,15 +191,83 @@ export default function PersonaManager() {
     setBatchSelectedIds(new Set())
   }, [bulkBusy])
 
-  const handleBulkAction = useCallback(async (action: PersonaBulkAction, value?: string) => {
+  const handleBulkAction = useCallback(async (action: PersonaBulkAction, value?: string, file?: File) => {
+    if (action === 'import') {
+      if (!file) return false
+
+      setBulkBusy(true)
+      try {
+        let payload: unknown
+        try {
+          payload = JSON.parse(await file.text())
+        } catch {
+          toast.error(t('personaManager.bulk.invalidJson'))
+          return false
+        }
+
+        let personas: unknown[]
+        try {
+          personas = parsePersonaExportPayload(payload)
+        } catch (error) {
+          const key = error instanceof PersonaImportFormatError
+            ? error.code === 'unsupported_version'
+              ? 'unsupportedVersion'
+              : error.code === 'empty_export'
+                ? 'emptyExport'
+                : 'invalidExport'
+            : 'invalidExport'
+          toast.error(t(`personaManager.bulk.${key}`))
+          return false
+        }
+
+        const result = await personasApi.bulkImport(personas)
+        await browser.refresh()
+
+        if (result.errors.length > 0) {
+          console.warn('[PersonaManager] Persona import failures:', result.errors)
+        }
+        if (result.count === 0) {
+          toast.error(t('personaManager.bulk.importNone', {
+            failed: result.failed,
+            reason: result.errors[0]?.error || t('personaManager.bulk.importFailed'),
+          }))
+          return false
+        }
+
+        const hasReferenceWarnings = result.warnings.detached_world_books > 0
+          || result.warnings.skipped_asset_references > 0
+        if (hasReferenceWarnings) {
+          toast.warning(t('personaManager.bulk.importedWithWarnings', {
+            count: result.count,
+            failed: result.failed,
+            detached: result.warnings.detached_world_books,
+            assets: result.warnings.skipped_asset_references,
+          }))
+        } else if (result.failed > 0) {
+          toast.warning(t('personaManager.bulk.importedPartial', {
+            count: result.count,
+            failed: result.failed,
+          }))
+        } else {
+          toast.success(t('personaManager.bulk.imported', { count: result.count }))
+        }
+        return true
+      } catch (err: any) {
+        toast.error(err.body?.error || err.message || t('personaManager.bulk.importFailed'))
+        return false
+      } finally {
+        setBulkBusy(false)
+      }
+    }
+
     const ids = [...batchSelectedIds]
     if (ids.length === 0) return false
 
     if (action === 'export') {
       const selected = browser.allPersonas.filter((persona) => batchSelectedIds.has(persona.id))
       const payload = {
-        type: 'lumiverse_personas',
-        version: 1,
+        type: PERSONA_EXPORT_TYPE,
+        version: PERSONA_EXPORT_VERSION,
         exported_at: new Date().toISOString(),
         personas: selected,
       }

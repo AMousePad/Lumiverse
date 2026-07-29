@@ -1,5 +1,13 @@
 import { get, post, put, del, upload, BASE_URL } from './client'
-import type { Persona, CreatePersonaInput, UpdatePersonaInput, PaginatedResult, RenamePersonaFolderResponse, DeletePersonaFolderResponse } from '@/types/api'
+import type {
+  Persona,
+  CreatePersonaInput,
+  UpdatePersonaInput,
+  PaginatedResult,
+  RenamePersonaFolderResponse,
+  DeletePersonaFolderResponse,
+  BulkPersonaImportResult,
+} from '@/types/api'
 
 export const personasApi = {
   list(params?: { limit?: number; offset?: number }) {
@@ -60,6 +68,10 @@ export const personasApi = {
 
   bulkDelete(ids: string[]) {
     return post<{ deleted: string[]; count: number }>('/personas/bulk-delete', { ids })
+  },
+
+  bulkImport(personas: unknown[]) {
+    return post<BulkPersonaImportResult>('/personas/bulk-import', { personas }, { timeout: 120_000 })
   },
 
   duplicate(id: string) {

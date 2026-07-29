@@ -7,6 +7,8 @@ import { createAvatarResolverResponse } from "../utils/avatar-cache";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import * as chats from "../services/chats.service";
+import * as worldBooks from "../services/world-books.service";
+import type { CreatePersonaInput } from "../types/persona";
 import {
   getChatPersonaAddonStates,
   getChatPersonaAddonToggleOrder,
@@ -38,6 +40,46 @@ function collectPersonaImageIds(persona: { image_id?: string | null; metadata?: 
   }
 
   return [...ids];
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function sanitizeImportedPersonaMetadata(
+  userId: string,
+  value: unknown,
+): { metadata: Record<string, any>; skippedAssetReferences: number } {
+  const metadata = isRecord(value)
+    ? JSON.parse(JSON.stringify(value)) as Record<string, any>
+    : {};
+  let skippedAssetReferences = 0;
+
+  const keepOwnedImageReference = (record: Record<string, any>, key: string) => {
+    const imageId = record[key];
+    if (typeof imageId !== "string" || !imageId) return;
+    if (images.getImage(userId, imageId)) return;
+    delete record[key];
+    skippedAssetReferences++;
+  };
+
+  keepOwnedImageReference(metadata, "avatar_crop_image_id");
+  keepOwnedImageReference(metadata, "original_image_id");
+  for (const key of ["addons", "attached_global_addons"]) {
+    const addons = metadata[key];
+    if (!Array.isArray(addons)) continue;
+    for (const addon of addons) {
+      if (!isRecord(addon)) continue;
+      keepOwnedImageReference(addon, "avatar_image_id");
+      keepOwnedImageReference(addon, "avatar_crop_image_id");
+    }
+  }
+
+  return { metadata, skippedAssetReferences };
 }
 
 app.get("/", (c) => {
@@ -101,6 +143,107 @@ app.post("/bulk-update", async (c) => {
 
   const updated = svc.bulkUpdatePersonas(userId, ids, input);
   return c.json({ updated, count: updated.length });
+});
+
+app.post("/bulk-import", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ personas?: unknown }>();
+  if (!Array.isArray(body.personas) || body.personas.length === 0 || body.personas.length > 5000) {
+    return c.json({ error: "personas must be a non-empty array with at most 5000 items" }, 400);
+  }
+
+  const importedIds: string[] = [];
+  const errors: Array<{ index: number; name: string; error: string }> = [];
+  let detachedWorldBooks = 0;
+  let skippedAssetReferences = 0;
+
+  for (let index = 0; index < body.personas.length; index++) {
+    const raw = body.personas[index];
+    if (!isRecord(raw)) {
+      errors.push({ index, name: "(invalid persona)", error: "Persona must be an object" });
+      continue;
+    }
+
+    const name = typeof raw.name === "string" ? raw.name.trim() : "";
+    if (!name) {
+      errors.push({ index, name: "(unnamed)", error: "name is required" });
+      continue;
+    }
+
+    let attachedWorldBookId: string | null = null;
+    if (typeof raw.attached_world_book_id === "string" && raw.attached_world_book_id) {
+      if (worldBooks.getWorldBook(userId, raw.attached_world_book_id)) {
+        attachedWorldBookId = raw.attached_world_book_id;
+      } else {
+        detachedWorldBooks++;
+      }
+    }
+
+    const sanitizedMetadata = sanitizeImportedPersonaMetadata(userId, raw.metadata);
+    skippedAssetReferences += sanitizedMetadata.skippedAssetReferences;
+
+    let baseImageId: string | null = null;
+    if (typeof raw.image_id === "string" && raw.image_id) {
+      if (images.getImage(userId, raw.image_id)) {
+        baseImageId = raw.image_id;
+      } else {
+        skippedAssetReferences++;
+      }
+    } else if (typeof raw.avatar_path === "string" && raw.avatar_path) {
+      // Legacy avatar paths are installation-local and cannot be safely
+      // resolved from a portable JSON export.
+      skippedAssetReferences++;
+    }
+
+    const input: CreatePersonaInput = {
+      name,
+      title: optionalString(raw.title),
+      description: optionalString(raw.description),
+      subjective_pronoun: optionalString(raw.subjective_pronoun),
+      objective_pronoun: optionalString(raw.objective_pronoun),
+      possessive_pronoun: optionalString(raw.possessive_pronoun),
+      reflexive_pronoun: optionalString(raw.reflexive_pronoun),
+      possessive_pronoun_standalone: optionalString(raw.possessive_pronoun_standalone),
+      folder: optionalString(raw.folder),
+      is_default: raw.is_default === true,
+      is_narrator: raw.is_narrator === true,
+      attached_world_book_id: attachedWorldBookId,
+      metadata: sanitizedMetadata.metadata,
+    };
+
+    try {
+      const persona = svc.createPersona(userId, input);
+      if (baseImageId) {
+        svc.setPersonaImage(userId, persona.id, baseImageId);
+        const updated = svc.getPersona(userId, persona.id);
+        if (updated) eventBus.emit(EventType.PERSONA_CHANGED, { id: persona.id, persona: updated }, userId);
+      }
+      importedIds.push(persona.id);
+    } catch (error: any) {
+      errors.push({
+        index,
+        name,
+        error: error?.message || String(error),
+      });
+    }
+  }
+
+  // Re-read after the full batch so only the final imported default persona is
+  // reported as default, matching the database state.
+  const imported = importedIds
+    .map((id) => svc.getPersona(userId, id))
+    .filter((persona): persona is NonNullable<typeof persona> => !!persona);
+
+  return c.json({
+    imported,
+    count: imported.length,
+    failed: errors.length,
+    errors,
+    warnings: {
+      detached_world_books: detachedWorldBooks,
+      skipped_asset_references: skippedAssetReferences,
+    },
+  }, 201);
 });
 
 app.post("/bulk-delete", async (c) => {
