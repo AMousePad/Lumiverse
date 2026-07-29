@@ -41,6 +41,14 @@ export interface WorldInfoInterceptorMessageDTO {
   readonly index_in_chat: number;
 }
 
+export interface WorldInfoActivationSettingsDTO {
+  readonly maxRecursionPasses: number;
+}
+
+export interface WorldInfoActivationOverridesDTO {
+  readonly disableRecursion?: true;
+}
+
 export interface WorldInfoInterceptorCtxDTO {
   readonly chatId: string;
   readonly characterId: string;
@@ -49,6 +57,7 @@ export interface WorldInfoInterceptorCtxDTO {
   readonly messages: readonly WorldInfoInterceptorMessageDTO[];
   readonly chatTurn: number;
   readonly chatMetadata: Readonly<Record<string, unknown>>;
+  readonly activationSettings: WorldInfoActivationSettingsDTO;
 }
 
 export interface WorldInfoInterceptorMutationDTO {
@@ -62,11 +71,13 @@ export interface WorldInfoInterceptorResultDTO {
   readonly forced?: readonly string[];
   readonly mutated?: readonly WorldInfoInterceptorMutationDTO[];
   readonly captured?: readonly string[];
+  readonly activationOverrides?: WorldInfoActivationOverridesDTO;
 }
 
 export interface WorldInfoInterceptorChainResult {
-  entries: WorldBookEntry[];
-  captureRequests: Map<string, Set<string>>;
+  readonly entries: WorldBookEntry[];
+  readonly captureRequests: Map<string, Set<string>>;
+  readonly activationOverrides: WorldInfoActivationOverridesDTO;
 }
 
 export interface WorldInfoInterceptor {
@@ -102,7 +113,11 @@ export class WorldInfoInterceptorChain {
     bookSourceMap?: ReadonlyMap<string, BookSource>
   ): Promise<WorldInfoInterceptorChainResult> {
     if (this.handlers.length === 0) {
-      return { entries: [...entries], captureRequests: new Map() };
+      return {
+        entries: [...entries],
+        captureRequests: new Map(),
+        activationOverrides: {},
+      };
     }
 
     const buildDto = (
@@ -143,6 +158,7 @@ export class WorldInfoInterceptorChain {
     const contentOverrides = new Map<string, string>();
     const captureRequests = new Map<string, Set<string>>();
     const candidateIds = new Set(entries.map((entry) => entry.id));
+    let disableRecursion = false;
 
     let working: WorldBookEntry[] = [...entries];
 
@@ -167,7 +183,15 @@ export class WorldInfoInterceptorChain {
     for (const handler of this.handlers) {
       if (handler.userId && handler.userId !== userId) continue;
       try {
-        const result = await handler.handler({ ...ctx, entries: buildDto(working) });
+        const result = await handler.handler({
+          ...ctx,
+          entries: buildDto(working),
+          activationSettings: {
+            maxRecursionPasses: disableRecursion
+              ? 0
+              : ctx.activationSettings.maxRecursionPasses,
+          },
+        });
         const disabledList = result?.disabled ?? [];
         const enabledList = result?.enabled ?? [];
         const forcedList = result?.forced ?? [];
@@ -180,11 +204,14 @@ export class WorldInfoInterceptorChain {
           }
           captureRequests.set(handler.extensionId, requested);
         }
+        const activationOverrides = result?.activationOverrides;
+        const disablesRecursion = activationOverrides?.disableRecursion === true;
         if (
           disabledList.length === 0 &&
           enabledList.length === 0 &&
           forcedList.length === 0 &&
-          mutatedList.length === 0
+          mutatedList.length === 0 &&
+          !disablesRecursion
         ) {
           continue;
         }
@@ -195,8 +222,16 @@ export class WorldInfoInterceptorChain {
         for (const m of mutatedList) {
           if (m.content !== undefined) contentOverrides.set(m.id, m.content);
         }
+        disableRecursion ||= disablesRecursion;
 
-        working = rebuildWorking();
+        if (
+          disabledList.length > 0 ||
+          enabledList.length > 0 ||
+          forcedList.length > 0 ||
+          mutatedList.length > 0
+        ) {
+          working = rebuildWorking();
+        }
       } catch (err) {
         console.error(
           `[Spindle] World-info interceptor error from ${handler.extensionId}: ${err instanceof Error ? err.message : String(err)}`
@@ -207,7 +242,13 @@ export class WorldInfoInterceptorChain {
       }
     }
 
-    return { entries: working, captureRequests };
+    return {
+      entries: working,
+      captureRequests,
+      activationOverrides: {
+        ...(disableRecursion ? { disableRecursion: true as const } : {}),
+      },
+    };
   }
 
   get count(): number {

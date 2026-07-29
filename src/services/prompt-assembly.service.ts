@@ -1776,12 +1776,15 @@ export async function assemblePrompt(
     for (const bookId of mpWorldInfo.bookIds) wiSources.bookSourceMap.set(bookId, "peer");
   }
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
-  const worldInfoSettings =
+  const configuredWorldInfoSettings =
     pf?.allSettings.get("worldInfoSettings") ??
     (settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as
       | Partial<WorldInfoSettings>
       | undefined) ??
     {};
+  const normalizedWorldInfoSettings = normalizeWorldInfoSettings(
+    configuredWorldInfoSettings,
+  );
   const interception = await worldInfoInterceptorChain.run(
     wiEntries,
     {
@@ -1808,10 +1811,20 @@ export async function assemblePrompt(
       }),
       chatTurn: messages.length,
       chatMetadata: chat.metadata ?? {},
+      activationSettings: {
+        maxRecursionPasses: normalizedWorldInfoSettings.maxRecursionPasses,
+      },
     },
     ctx.userId,
     wiSources.bookSourceMap
   );
+  const worldInfoSettings: WorldInfoSettings = {
+    ...normalizedWorldInfoSettings,
+    maxRecursionPasses:
+      interception.activationOverrides.disableRecursion === true
+        ? 0
+        : normalizedWorldInfoSettings.maxRecursionPasses,
+  };
   const intercepted = interception.entries;
   const hasCaptureRequests = interception.captureRequests.size > 0;
   const hasCapturedIds = [...interception.captureRequests.values()].some(
