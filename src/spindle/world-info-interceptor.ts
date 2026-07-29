@@ -1,5 +1,8 @@
 import type { WorldBookEntry } from "../types/world-book";
 import type { BookSource } from "../services/world-info-sources.service";
+import type { WorldInfoInterceptorPlacementDTO } from "lumiverse-spindle-types";
+
+export type { WorldInfoInterceptorPlacementDTO } from "lumiverse-spindle-types";
 
 export interface WorldInfoInterceptorEntryDTO {
   readonly id: string;
@@ -12,6 +15,7 @@ export interface WorldInfoInterceptorEntryDTO {
   readonly keysecondary: readonly string[];
   readonly position: number;
   readonly depth: number;
+  readonly role: string | null;
   readonly priority: number;
   readonly probability: number;
   readonly use_probability: boolean;
@@ -19,6 +23,9 @@ export interface WorldInfoInterceptorEntryDTO {
   readonly automation_id: string | null;
   readonly selective: boolean;
   readonly selective_logic: number;
+  readonly group_name: string;
+  readonly group_override: boolean;
+  readonly group_weight: number;
   readonly match_whole_words: boolean;
   readonly case_sensitive: boolean;
   readonly use_regex: boolean;
@@ -28,6 +35,10 @@ export interface WorldInfoInterceptorEntryDTO {
   readonly exclude_greeting: boolean;
   readonly scan_depth: number | null;
   readonly order_value: number;
+  readonly sticky: number;
+  readonly cooldown: number;
+  readonly delay: number;
+  readonly placement?: WorldInfoInterceptorPlacementDTO;
   readonly book_source?: BookSource;
 }
 
@@ -69,6 +80,8 @@ export interface WorldInfoInterceptorMutationDTO {
   readonly content?: string;
   /** Prompt-local alternate used only by host selection and token accounting. */
   readonly selectionContent?: string;
+  /** Prompt-local placement relative to the selected chat history. */
+  readonly placement?: WorldInfoInterceptorPlacementDTO;
 }
 
 export interface WorldInfoInterceptorResultDTO {
@@ -85,6 +98,37 @@ export interface WorldInfoInterceptorChainResult {
   readonly captureRequests: Map<string, Set<string>>;
   readonly activationOverrides: WorldInfoActivationOverridesDTO;
   readonly selectionContentByEntryId: ReadonlyMap<string, string>;
+  readonly placementByEntryId: ReadonlyMap<
+    string,
+    WorldInfoInterceptorPlacementDTO
+  >;
+}
+
+function normalizePlacement(
+  value: unknown,
+): WorldInfoInterceptorPlacementDTO | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.type !== "chat_depth" ||
+    (candidate.role !== "system" &&
+      candidate.role !== "user" &&
+      candidate.role !== "assistant") ||
+    (candidate.direction !== "from_start" &&
+      candidate.direction !== "from_end") ||
+    typeof candidate.depth !== "number" ||
+    !Number.isFinite(candidate.depth) ||
+    !Number.isInteger(candidate.depth) ||
+    candidate.depth < 0
+  ) {
+    return null;
+  }
+  return {
+    type: "chat_depth",
+    role: candidate.role,
+    depth: candidate.depth,
+    direction: candidate.direction,
+  };
 }
 
 export interface WorldInfoInterceptor {
@@ -125,9 +169,14 @@ export class WorldInfoInterceptorChain {
         captureRequests: new Map(),
         activationOverrides: {},
         selectionContentByEntryId: new Map(),
+        placementByEntryId: new Map(),
       };
     }
 
+    const placementByEntryId = new Map<
+      string,
+      WorldInfoInterceptorPlacementDTO
+    >();
     const buildDto = (
       src: readonly WorldBookEntry[]
     ): WorldInfoInterceptorEntryDTO[] =>
@@ -142,6 +191,7 @@ export class WorldInfoInterceptorChain {
         keysecondary: e.keysecondary,
         position: e.position,
         depth: e.depth,
+        role: e.role,
         priority: e.priority,
         probability: e.probability,
         use_probability: e.use_probability,
@@ -149,6 +199,9 @@ export class WorldInfoInterceptorChain {
         automation_id: e.automation_id,
         selective: e.selective,
         selective_logic: e.selective_logic,
+        group_name: e.group_name,
+        group_override: e.group_override,
+        group_weight: e.group_weight,
         match_whole_words: e.match_whole_words,
         case_sensitive: e.case_sensitive,
         use_regex: e.use_regex,
@@ -158,6 +211,12 @@ export class WorldInfoInterceptorChain {
         exclude_greeting: e.exclude_greeting,
         scan_depth: e.scan_depth,
         order_value: e.order_value,
+        sticky: e.sticky,
+        cooldown: e.cooldown,
+        delay: e.delay,
+        ...(placementByEntryId.has(e.id)
+          ? { placement: placementByEntryId.get(e.id)! }
+          : {}),
         book_source: bookSourceMap?.get(e.world_book_id),
       }));
 
@@ -231,10 +290,13 @@ export class WorldInfoInterceptorChain {
         for (const id of enabledList) enabledByChain.add(id);
         for (const id of forcedList) forcedByChain.add(id);
         for (const m of mutatedList) {
+          if (!candidateIds.has(m.id)) continue;
           if (m.content !== undefined) contentOverrides.set(m.id, m.content);
           if (m.selectionContent !== undefined) {
             selectionContentByEntryId.set(m.id, m.selectionContent);
           }
+          const placement = normalizePlacement(m.placement);
+          if (placement) placementByEntryId.set(m.id, placement);
         }
         disableRecursion ||= disablesRecursion;
 
@@ -263,6 +325,7 @@ export class WorldInfoInterceptorChain {
         ...(disableRecursion ? { disableRecursion: true as const } : {}),
       },
       selectionContentByEntryId,
+      placementByEntryId,
     };
   }
 

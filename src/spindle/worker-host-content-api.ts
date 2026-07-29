@@ -1020,6 +1020,7 @@ export class WorkerHostContentApi {
       prevent_recursion: !!e.prevent_recursion,
       exclude_recursion: !!e.exclude_recursion,
       delay_until_recursion: !!e.delay_until_recursion,
+      exclude_greeting: !!e.exclude_greeting,
       priority: e.priority ?? 10,
       sticky: e.sticky ?? 0,
       cooldown: e.cooldown ?? 0,

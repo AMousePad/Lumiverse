@@ -516,7 +516,7 @@ export function finalizeActivatedWorldInfoEntries(
   const evictedByBudget = activatedBeforeBudget - activatedEntries.length;
 
   return {
-    cache: bucketByPosition(activatedEntries),
+    cache: materializeWorldInfoCache(activatedEntries),
     activatedEntries,
     activatedBeforeBudget,
     activatedAfterBudget: activatedEntries.length,
@@ -939,7 +939,9 @@ export function applyWorldInfoGroupLogic(
  *  4 = depth-based, 5 = EM before, 6 = EM after, 7 = at-marker,
  *  8 = outlet-only (excluded from all position buckets; surfaces only via {{outlet::name}})
  */
-function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
+export function materializeWorldInfoCache(
+  entries: WorldBookEntry[],
+): WorldInfoCache {
   const cache: WorldInfoCache = {
     before: [],
     after: [],
