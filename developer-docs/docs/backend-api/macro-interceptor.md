@@ -37,6 +37,12 @@ interface MacroInterceptorCtx {
 
 `env` is a structured-clone snapshot. Persist state via `spindle.variables.*`, not the snapshot.
 
+`env.character.firstMessage` is the selected greeting stored in the chat, including edits.
+
+`env.character.alternateGreetings` contains the card's alternate greetings.
+
+`env.chat.greetingIndex` is `0` for the default greeting, `1` for the first alternate, and so on.
+
 `env.dynamicMacros` carries per-call macro overrides supplied by the caller (`Record<string, string>`). The display-regex pipeline (`phase: "display"`) sets `chat_index` to the rendered message's index in the chat, which lets handlers compute per-message context that registered macros cannot reach on their own. Other callers may set additional fields.
 
 ## Composition Order
