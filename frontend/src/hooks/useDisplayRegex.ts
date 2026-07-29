@@ -548,8 +548,9 @@ export function useDisplayRegex(
   )
   const pendingSlowReportsRef = useRef<SlowRegexReport[]>([])
 
+  const displayOwned = !!activeChatId && isDisplayChatOwned(activeChatId)
   // When an extension owns display, regex runs on preprocessed content only.
-  const regexGated = !!activeChatId && isDisplayChatOwned(activeChatId) && !preprocessReady
+  const regexGated = displayOwned && !preprocessReady
 
   const displayScripts = useMemo(
     () =>
@@ -723,10 +724,10 @@ export function useDisplayRegex(
   }, [fallbackContent])
 
   const hasAsyncMacroScripts = useMemo(
-    () => displayScripts.some(
+    () => displayOwned || displayScripts.some(
       (s) => s.substitute_macros === 'raw' || s.substitute_macros === 'after',
     ),
-    [displayScripts],
+    [displayOwned, displayScripts],
   )
 
   const resolvedTemplateKey = useMemo(
