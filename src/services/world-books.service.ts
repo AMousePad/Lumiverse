@@ -188,6 +188,7 @@ function rowToEntry(row: any): WorldBookEntry {
     prevent_recursion: !!row.prevent_recursion,
     exclude_recursion: !!row.exclude_recursion,
     delay_until_recursion: !!row.delay_until_recursion,
+    exclude_greeting: !!row.exclude_greeting,
     use_probability: !!row.use_probability,
     vectorized: !!row.vectorized,
     vector_index_status: vectorIndexStatus,
@@ -345,6 +346,7 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
     "constant", "case_sensitive", "caseSensitive", "match_whole_words", "matchWholeWords",
     "group", "group_name", "group_override", "groupOverride",
     "group_weight", "groupWeight", "probability", "scan_depth", "scanDepth",
+    "exclude_greeting", "excludeGreeting",
     "automation_id", "automationId", "selectiveLogic", "selective_logic",
     "useProbability", "use_probability", "use_regex", "useRegex",
     "prevent_recursion", "preventRecursion", "exclude_recursion", "excludeRecursion",
@@ -380,6 +382,7 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
     group_weight: importValue(raw, ext, "group_weight", "groupWeight") ?? 100,
     probability: importValue(raw, ext, "probability") ?? 100,
     scan_depth: importValue(raw, ext, "scan_depth", "scanDepth") ?? undefined,
+    exclude_greeting: importValue(raw, ext, "exclude_greeting", "excludeGreeting") ?? false,
     automation_id: importValue(raw, ext, "automation_id", "automationId") || undefined,
     selective_logic: importValue(raw, ext, "selectiveLogic", "selective_logic") ?? 0,
     use_probability: importValue(raw, ext, "useProbability", "use_probability") ?? true,
@@ -429,6 +432,7 @@ export function materializeCharacterBookEntriesForRuntime(
       group_weight: input.group_weight ?? 100,
       probability: input.probability ?? 100,
       scan_depth: input.scan_depth ?? null,
+      exclude_greeting: !!input.exclude_greeting,
       case_sensitive: !!input.case_sensitive,
       match_whole_words: !!input.match_whole_words,
       automation_id: input.automation_id ?? null,
@@ -1165,12 +1169,13 @@ export function createEntry(
         id, world_book_id, uid, key, keysecondary, content, comment,
         position, depth, role, order_value, selective, constant, disabled,
         group_name, group_override, group_weight, probability, scan_depth,
+        exclude_greeting,
         case_sensitive, match_whole_words, automation_id,
         use_regex, prevent_recursion, exclude_recursion, delay_until_recursion,
         priority, sticky, cooldown, delay, selective_logic, use_probability,
         vectorized, vector_index_status, vector_indexed_at, vector_index_error,
         extensions, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id, worldBookId, uid,
@@ -1190,6 +1195,7 @@ export function createEntry(
       input.group_weight ?? 100,
       input.probability ?? 100,
       input.scan_depth ?? null,
+      input.exclude_greeting ? 1 : 0,
       input.case_sensitive ? 1 : 0,
       input.match_whole_words ? 1 : 0,
       input.automation_id || null,
@@ -1242,7 +1248,7 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
     if (input[f] !== undefined) { fields.push(`${f} = ?`); values.push(input[f]); }
   }
 
-  const boolFields = ["selective", "constant", "disabled", "group_override", "case_sensitive", "match_whole_words", "use_regex", "prevent_recursion", "exclude_recursion", "delay_until_recursion", "use_probability", "vectorized"] as const;
+  const boolFields = ["selective", "constant", "disabled", "group_override", "case_sensitive", "match_whole_words", "use_regex", "prevent_recursion", "exclude_recursion", "delay_until_recursion", "exclude_greeting", "use_probability", "vectorized"] as const;
   for (const f of boolFields) {
     if (input[f] !== undefined) { fields.push(`${f} = ?`); values.push(input[f] ? 1 : 0); }
   }
@@ -1348,6 +1354,7 @@ export function duplicateEntry(userId: string, entryId: string, input?: Duplicat
     group_weight: existing.group_weight,
     probability: existing.probability,
     scan_depth: existing.scan_depth ?? undefined,
+    exclude_greeting: existing.exclude_greeting,
     case_sensitive: existing.case_sensitive,
     match_whole_words: existing.match_whole_words,
     automation_id: existing.automation_id || undefined,
@@ -1668,12 +1675,13 @@ function bulkInsertEntries(
       id, world_book_id, uid, key, keysecondary, content, comment,
       position, depth, role, order_value, selective, constant, disabled,
       group_name, group_override, group_weight, probability, scan_depth,
+      exclude_greeting,
       case_sensitive, match_whole_words, automation_id,
       use_regex, prevent_recursion, exclude_recursion, delay_until_recursion,
       priority, sticky, cooldown, delay, selective_logic, use_probability,
       vectorized, vector_index_status, vector_indexed_at, vector_index_error,
       extensions, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
   let aborted = false;
@@ -1721,6 +1729,7 @@ function bulkInsertEntries(
           input.group_weight ?? 100,
           input.probability ?? 100,
           input.scan_depth ?? null,
+          input.exclude_greeting ? 1 : 0,
           input.case_sensitive ? 1 : 0,
           input.match_whole_words ? 1 : 0,
           input.automation_id || null,
@@ -1949,6 +1958,7 @@ function entryToCharacterBookSpec(entry: WorldBookEntry, index: number): Record<
     group_weight: entry.group_weight,
     probability: entry.probability,
     scan_depth: entry.scan_depth,
+    exclude_greeting: entry.exclude_greeting,
     automation_id: entry.automation_id,
     vectorized: entry.vectorized,
     uid: entry.uid,
@@ -2012,6 +2022,7 @@ function exportSillyTavern(book: WorldBook, entries: WorldBookEntry[]): Record<s
           group_weight: entry.group_weight,
           probability: entry.probability,
           scan_depth: entry.scan_depth,
+          exclude_greeting: entry.exclude_greeting,
           automation_id: entry.automation_id,
           selectiveLogic: entry.selective_logic,
           useProbability: entry.use_probability,

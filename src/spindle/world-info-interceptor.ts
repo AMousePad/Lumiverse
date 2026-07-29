@@ -25,6 +25,7 @@ export interface WorldInfoInterceptorEntryDTO {
   readonly prevent_recursion: boolean;
   readonly exclude_recursion: boolean;
   readonly delay_until_recursion: boolean;
+  readonly exclude_greeting: boolean;
   readonly scan_depth: number | null;
   readonly order_value: number;
   readonly book_source?: BookSource;
@@ -147,6 +148,7 @@ export class WorldInfoInterceptorChain {
         prevent_recursion: e.prevent_recursion,
         exclude_recursion: e.exclude_recursion,
         delay_until_recursion: e.delay_until_recursion,
+        exclude_greeting: e.exclude_greeting,
         scan_depth: e.scan_depth,
         order_value: e.order_value,
         book_source: bookSourceMap?.get(e.world_book_id),

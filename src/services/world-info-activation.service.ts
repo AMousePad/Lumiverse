@@ -229,7 +229,11 @@ function computeMessageSignature(messages: readonly Message[]): string {
   const hasher = new Bun.CryptoHasher("sha256");
   for (const message of messages) {
     hasher.update(
-      JSON.stringify({ id: message.id, content: message.content }),
+      JSON.stringify({
+        id: message.id,
+        content: message.content,
+        greeting: message.extra?.greeting === true,
+      }),
     );
     hasher.update("\0");
   }
@@ -238,9 +242,9 @@ function computeMessageSignature(messages: readonly Message[]): string {
 
 function computeWiActivationCacheKey(input: ActivationInput): string {
   const entries = input.entries;
-  const messages = input.messages;
   const wiState = input.wiState;
   const settings = normalizeWorldInfoSettings(input.settings);
+  const messages = input.messages;
   const hasher = new Bun.CryptoHasher("sha256");
   for (const e of entries) {
     hasher.update(JSON.stringify({
@@ -262,6 +266,7 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
       group_weight: e.group_weight,
       probability: e.probability,
       scan_depth: e.scan_depth,
+      exclude_greeting: e.exclude_greeting,
       case_sensitive: e.case_sensitive,
       match_whole_words: e.match_whole_words,
       use_regex: e.use_regex,
@@ -622,6 +627,7 @@ function scanEntryCacheValue(entry: WorldBookEntry): object {
     key: entry.key,
     keysecondary: entry.keysecondary,
     scan_depth: entry.scan_depth,
+    exclude_greeting: entry.exclude_greeting,
     case_sensitive: entry.case_sensitive,
     match_whole_words: entry.match_whole_words,
     use_regex: entry.use_regex,
@@ -639,28 +645,40 @@ function scanBaseState(
   settings: WorldInfoSettings,
 ): ScanState {
   const state = makeScanState();
-  const depthBuckets = new Map<string, Set<string>>();
-  const depthKey = (d: number | null) => (d === null ? "all" : String(d));
+  // Pass 0 base: scan messages once per unique effective scan_depth.
+  // Pre-compute scan text per depth key and memoize so entries sharing the
+  // same effective depth don't rebuild the same concatenated string.
+  const depthBuckets = new Map<string, { scope: Set<string>; excludeGreeting: boolean; depth: number | null }>();
+  const depthKey = (d: number | null, excludeGreeting: boolean) =>
+    `${excludeGreeting ? "without-greeting" : "all-messages"}:${d === null ? "all" : String(d)}`;
+  let needsGreetingExcludedScan = false;
   for (const e of conditional) {
     if (e.key.length === 0) continue;
     const d = e.scan_depth ?? settings.globalScanDepth;
-    const k = depthKey(d);
-    let set = depthBuckets.get(k);
-    if (!set) {
-      set = new Set();
-      depthBuckets.set(k, set);
+    needsGreetingExcludedScan ||= e.exclude_greeting;
+    const k = depthKey(d, e.exclude_greeting);
+    let bucket = depthBuckets.get(k);
+    if (!bucket) {
+      bucket = { scope: new Set(), excludeGreeting: e.exclude_greeting, depth: d };
+      depthBuckets.set(k, bucket);
     }
-    set.add(e.uid);
+    bucket.scope.add(e.uid);
   }
+  const messagesWithoutGreeting = needsGreetingExcludedScan
+    ? messages.filter((message) => message.extra?.greeting !== true)
+    : messages;
   const scanTextCache = new Map<string, string>();
-  for (const [k, scope] of depthBuckets) {
-    const d = k === "all" ? null : Number(k);
+  for (const [k, bucket] of depthBuckets) {
     let text = scanTextCache.get(k);
     if (text === undefined) {
-      text = buildScanText(messages, d, "");
+      text = buildScanText(
+        bucket.excludeGreeting ? messagesWithoutGreeting : messages,
+        bucket.depth,
+        "",
+      );
       scanTextCache.set(k, text);
     }
-    matcher.scanChunk(text, state, scope);
+    matcher.scanChunk(text, state, bucket.scope);
   }
   return state;
 }

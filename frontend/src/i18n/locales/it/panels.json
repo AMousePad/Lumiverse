@@ -1578,6 +1578,7 @@
         "disabled": "Disabilitato",
         "caseSensitive": "Sensitive case",
         "matchWholeWords": "Corrispondenza parole intere",
+        "excludeGreeting": "Escludi il messaggio di saluto",
         "useRegex": "Usa Regex",
         "useProbability": "Usa probabilità",
         "vectorized": "Vettorizzato",

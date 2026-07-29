@@ -1577,6 +1577,7 @@
         "disabled": "已禁用",
         "caseSensitive": "區分大小寫",
         "matchWholeWords": "整詞匹配",
+        "excludeGreeting": "排除問候訊息",
         "useRegex": "使用正則",
         "useProbability": "使用概率",
         "vectorized": "向量化",
