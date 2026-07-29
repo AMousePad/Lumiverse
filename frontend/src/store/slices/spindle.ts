@@ -294,6 +294,13 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     })
   },
 
+  dismissTextEditor: (requestId: string) => {
+    set((state) => {
+      if (state.pendingTextEditor?.requestId !== requestId) return state
+      return { ...state, pendingTextEditor: null }
+    })
+  },
+
   openSpindleModal: (request) => {
     set({ pendingModal: request })
   },

@@ -398,12 +398,15 @@ export class WorkerHostPresentationApi {
     value?: string,
     placeholder?: string,
     userId?: string,
+    callerEditorRequestId?: string,
   ): void {
     try {
       const resolvedUserId = this.resolveEffectiveUserId(userId);
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
 
-      const editorRequestId = `spindle-editor:${this.extensionId}:${requestId}`;
+      const editorRequestId = callerEditorRequestId
+        ? `spindle-editor:${this.extensionId}:${callerEditorRequestId}`
+        : `spindle-editor:${this.extensionId}:${requestId}`;
 
       // Listen for the result from the frontend
       const unsub = eventBus.on(EventType.SPINDLE_TEXT_EDITOR_RESULT, (msg) => {
@@ -431,6 +434,30 @@ export class WorkerHostPresentationApi {
         },
         resolvedUserId,
       );
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  handleTextEditorClose(
+    requestId: string,
+    editorRequestId: string,
+    userId?: string,
+  ): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+
+      eventBus.emit(
+        EventType.SPINDLE_TEXT_EDITOR_RESULT,
+        {
+          requestId: `spindle-editor:${this.extensionId}:${editorRequestId}`,
+          cancelled: true,
+        },
+        resolvedUserId,
+      );
+
+      this.postToWorker({ type: "response", requestId, result: undefined });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }

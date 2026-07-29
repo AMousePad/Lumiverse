@@ -2284,7 +2284,10 @@ export class WorkerHost {
         break;
       // ─── Text Editor (free tier — no permission needed) ─────────────────
       case "text_editor_open":
-        this.presentationApi.handleTextEditorOpen(msg.requestId, msg.title, msg.value, msg.placeholder, msg.userId);
+        this.presentationApi.handleTextEditorOpen(msg.requestId, msg.title, msg.value, msg.placeholder, msg.userId, msg.editorRequestId);
+        break;
+      case "text_editor_close":
+        this.presentationApi.handleTextEditorClose(msg.requestId, msg.editorRequestId, msg.userId);
         break;
       // ─── Modal (free tier — no permission needed) ─────────────────────
       case "modal_open":

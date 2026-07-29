@@ -3444,18 +3444,29 @@ const spindleApi: RuntimeSpindleAPI = {
       title?: string;
       value?: string;
       placeholder?: string;
+      editorRequestId?: string;
       userId?: string;
     }): Promise<{ text: string; cancelled: boolean }> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "text_editor_open",
         requestId,
+        editorRequestId: options?.editorRequestId,
         title: options?.title,
         value: options?.value,
         placeholder: options?.placeholder,
         userId: options?.userId,
       } as any);
       return result as { text: string; cancelled: boolean };
+    },
+    async close(editorRequestId: string, userId?: string): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "text_editor_close",
+        requestId,
+        editorRequestId,
+        userId,
+      } as any);
     },
   },
 

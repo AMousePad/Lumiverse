@@ -1588,6 +1588,10 @@ export function useWebSocket() {
         store.getState().openTextEditor(payload)
       }),
 
+      wsClient.on(EventType.SPINDLE_TEXT_EDITOR_RESULT, (payload: { requestId: string }) => {
+        store.getState().dismissTextEditor(payload.requestId)
+      }),
+
       wsClient.on(EventType.SPINDLE_MODAL_OPEN, (payload: any) => {
         store.getState().openSpindleModal(payload)
       }),
