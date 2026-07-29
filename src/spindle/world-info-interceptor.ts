@@ -61,6 +61,12 @@ export interface WorldInfoInterceptorResultDTO {
   readonly enabled?: readonly string[];
   readonly forced?: readonly string[];
   readonly mutated?: readonly WorldInfoInterceptorMutationDTO[];
+  readonly captured?: readonly string[];
+}
+
+export interface WorldInfoInterceptorChainResult {
+  entries: WorldBookEntry[];
+  captureRequests: Map<string, Set<string>>;
 }
 
 export interface WorldInfoInterceptor {
@@ -72,7 +78,7 @@ export interface WorldInfoInterceptor {
   ) => Promise<WorldInfoInterceptorResultDTO | void>;
 }
 
-class WorldInfoInterceptorChain {
+export class WorldInfoInterceptorChain {
   private handlers: WorldInfoInterceptor[] = [];
 
   register(handler: WorldInfoInterceptor): () => void {
@@ -94,8 +100,10 @@ class WorldInfoInterceptorChain {
     ctx: Omit<WorldInfoInterceptorCtxDTO, "entries">,
     userId?: string | null,
     bookSourceMap?: ReadonlyMap<string, BookSource>
-  ): Promise<WorldBookEntry[]> {
-    if (this.handlers.length === 0) return [...entries];
+  ): Promise<WorldInfoInterceptorChainResult> {
+    if (this.handlers.length === 0) {
+      return { entries: [...entries], captureRequests: new Map() };
+    }
 
     const buildDto = (
       src: readonly WorldBookEntry[]
@@ -133,6 +141,8 @@ class WorldInfoInterceptorChain {
     const enabledByChain = new Set<string>();
     const forcedByChain = new Set<string>();
     const contentOverrides = new Map<string, string>();
+    const captureRequests = new Map<string, Set<string>>();
+    const candidateIds = new Set(entries.map((entry) => entry.id));
 
     let working: WorldBookEntry[] = [...entries];
 
@@ -162,6 +172,14 @@ class WorldInfoInterceptorChain {
         const enabledList = result?.enabled ?? [];
         const forcedList = result?.forced ?? [];
         const mutatedList = result?.mutated ?? [];
+        const capturedList = result?.captured;
+        if (capturedList !== undefined) {
+          const requested = captureRequests.get(handler.extensionId) ?? new Set<string>();
+          for (const id of capturedList) {
+            if (candidateIds.has(id)) requested.add(id);
+          }
+          captureRequests.set(handler.extensionId, requested);
+        }
         if (
           disabledList.length === 0 &&
           enabledList.length === 0 &&
@@ -189,7 +207,7 @@ class WorldInfoInterceptorChain {
       }
     }
 
-    return working;
+    return { entries: working, captureRequests };
   }
 
   get count(): number {

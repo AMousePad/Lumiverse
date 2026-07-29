@@ -1,6 +1,10 @@
 import type { InterceptorMatchDTO, LlmMessageDTO } from "lumiverse-spindle-types";
 import { DEFAULT_INTERCEPTOR_TIMEOUT_MS } from "../services/spindle-settings.service";
 import { emitSpindlePreGenerationActivity } from "./pre-generation-activity";
+import {
+  collectSourceMessageMetadata,
+  restoreSourceMessageMetadata,
+} from "./source-message-metadata";
 
 export interface InterceptorBreakdownEntry {
   messageIndex: number;
@@ -98,6 +102,7 @@ class InterceptorPipeline {
     signal?: AbortSignal,
   ): Promise<InterceptorResult> {
     let result = messages;
+    const sourceMessageMetadata = collectSourceMessageMetadata(messages);
     let mergedParameters: Record<string, unknown> | undefined;
     const mergedBreakdown: InterceptorBreakdownEntry[] = [];
     const chatId = getChatId(context);
@@ -135,6 +140,7 @@ class InterceptorPipeline {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let abortHandler: (() => void) | undefined;
       try {
+        restoreSourceMessageMetadata(result, sourceMessageMetadata);
         const output = await Promise.race([
           interceptor.handler(result, context),
           new Promise<never>((_, reject) => {

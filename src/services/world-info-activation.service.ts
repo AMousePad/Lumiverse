@@ -94,6 +94,57 @@ export interface ActivationInput {
   chatTurn: number;           // current turn number (messages.length)
   wiState: WiState;           // mutable — updated in place
   settings?: Partial<WorldInfoSettings>;
+  scanCache?: WorldInfoActivationScanCache;
+  random?: () => number;
+}
+
+export interface WorldInfoActivationScanCache {
+  messages?: readonly Message[];
+  messageSignature?: string;
+  baseStates: Map<string, ScanState>;
+  plan?: WorldInfoActivationScanPlan;
+}
+
+interface WorldInfoActivationScanPlan {
+  views: WorldBookEntry[][];
+  unionEntries: WorldBookEntry[];
+  settings: WorldInfoSettings;
+}
+
+export function createWorldInfoActivationScanCache(): WorldInfoActivationScanCache {
+  return { baseStates: new Map() };
+}
+
+export function primeWorldInfoActivationScanCache(
+  cache: WorldInfoActivationScanCache,
+  entryViews: readonly WorldBookEntry[][],
+  settingsInput?: Partial<WorldInfoSettings>,
+): void {
+  cache.messages = undefined;
+  cache.messageSignature = undefined;
+  cache.baseStates.clear();
+  const settings = normalizeWorldInfoSettings(settingsInput);
+  const views = entryViews.map((entries) =>
+    conditionalEntriesForScan(entries, settings)
+  );
+  const union = new Map<string, WorldBookEntry>();
+  const unionSignatures = new Map<string, string>();
+  for (const entries of views) {
+    for (const entry of entries) {
+      const signature = scanEntrySignature(entry);
+      const existingSignature = unionSignatures.get(entry.uid);
+      if (
+        existingSignature !== undefined &&
+        existingSignature !== signature
+      ) {
+        cache.plan = undefined;
+        return;
+      }
+      unionSignatures.set(entry.uid, signature);
+      if (!union.has(entry.uid)) union.set(entry.uid, entry);
+    }
+  }
+  cache.plan = { views, unionEntries: [...union.values()], settings };
 }
 
 /** Statistics about the activation run, useful for dry-run / debugging. */
@@ -131,6 +182,7 @@ export interface FinalizedWorldInfoEntries {
 export interface FinalizeWorldInfoOptions {
   skipGroupLogic?: boolean;
   preserveOrder?: boolean;
+  random?: () => number;
   /** Internal competition priorities used only for budget ordering. */
   budgetPriorityById?: ReadonlyMap<string, number>;
 }
@@ -161,13 +213,37 @@ function pruneWiActivationCache(now = Date.now()): void {
   }
 }
 
+function conditionalEntriesForScan(
+  entries: readonly WorldBookEntry[],
+  settings: WorldInfoSettings,
+): WorldBookEntry[] {
+  return entries.filter(
+    (entry) =>
+      !entry.disabled &&
+      !entry.constant &&
+      (settings.minPriority === 0 || entry.priority >= settings.minPriority),
+  );
+}
+
+function computeMessageSignature(messages: readonly Message[]): string {
+  const hasher = new Bun.CryptoHasher("sha256");
+  for (const message of messages) {
+    hasher.update(
+      JSON.stringify({ id: message.id, content: message.content }),
+    );
+    hasher.update("\0");
+  }
+  return hasher.digest("hex");
+}
+
 function computeWiActivationCacheKey(input: ActivationInput): string {
   const entries = input.entries;
   const messages = input.messages;
   const wiState = input.wiState;
   const settings = normalizeWorldInfoSettings(input.settings);
-  const entrySig = entries
-    .map((e) => JSON.stringify({
+  const hasher = new Bun.CryptoHasher("sha256");
+  for (const e of entries) {
+    hasher.update(JSON.stringify({
       id: e.id,
       uid: e.uid,
       world_book_id: e.world_book_id,
@@ -199,12 +275,43 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
       selective_logic: e.selective_logic,
       use_probability: e.use_probability,
       vectorized: e.vectorized,
-    }))
-    .join("|");
-  const msgSig = messages.map((m) => JSON.stringify({ id: m.id, content: m.content })).join("|");
-  const stateSig = JSON.stringify(wiState);
-  const settingsSig = JSON.stringify(settings);
-  return `${entrySig}::${msgSig}::${stateSig}::${settingsSig}`;
+    }));
+    hasher.update("\0");
+  }
+  const readsMessages = entries.some(
+    (entry) =>
+      !entry.disabled &&
+      !entry.constant &&
+      entry.key.length > 0 &&
+      (settings.minPriority === 0 || entry.priority >= settings.minPriority),
+  );
+  let msgSig = "";
+  if (readsMessages) {
+    msgSig = input.scanCache?.messageSignature ?? "";
+    if (!msgSig) {
+      msgSig = computeMessageSignature(messages);
+      if (input.scanCache) input.scanCache.messageSignature = msgSig;
+    }
+  }
+  hasher.update(msgSig);
+  hasher.update("\0");
+  hasher.update(JSON.stringify(wiState));
+  hasher.update("\0");
+  hasher.update(JSON.stringify(settings));
+  return hasher.digest("hex");
+}
+
+function bindWorldInfoActivationScanCache(
+  cache: WorldInfoActivationScanCache,
+  messages: readonly Message[],
+): void {
+  if (cache.messages === messages) return;
+  if (cache.messages !== undefined) {
+    cache.messageSignature = undefined;
+    cache.baseStates.clear();
+    cache.plan = undefined;
+  }
+  cache.messages = messages;
 }
 
 function deepCloneWiState(state: WiState): WiState {
@@ -244,8 +351,11 @@ function setCachedActivationResult(cacheKey: string, result: ActivationResult): 
  * budget enforcement → bucket by position.
  */
 export function activateWorldInfo(input: ActivationInput): ActivationResult {
-  const cacheKey = computeWiActivationCacheKey(input);
-  const cached = getCachedActivationResult(cacheKey);
+  if (input.scanCache) {
+    bindWorldInfoActivationScanCache(input.scanCache, input.messages);
+  }
+  const cacheKey = input.random ? null : computeWiActivationCacheKey(input);
+  const cached = cacheKey ? getCachedActivationResult(cacheKey) : null;
   if (cached) return cached;
 
   const { entries, messages, wiState } = input;
@@ -305,7 +415,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
   const recursionPassesUsed = runAhoCorasickPasses({
     conditional, constants, messages, settings, wiState,
     activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
-    maxPasses,
+    maxPasses, scanCache: input.scanCache, random: input.random ?? Math.random,
   });
 
   for (const entry of conditional) {
@@ -332,7 +442,9 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     }
   }
 
-  const finalized = finalizeActivatedWorldInfoEntries(activated, settings);
+  const finalized = finalizeActivatedWorldInfoEntries(activated, settings, {
+    random: input.random,
+  });
 
   const stats: ActivationStats = {
     totalCandidates: candidates.length,
@@ -350,7 +462,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
   };
 
   const result: ActivationResult = { cache: finalized.cache, activatedEntries: finalized.activatedEntries, wiState, stats };
-  setCachedActivationResult(cacheKey, result);
+  if (cacheKey) setCachedActivationResult(cacheKey, result);
   return result;
 }
 
@@ -363,7 +475,7 @@ export function finalizeActivatedWorldInfoEntries(
 
   const afterGroups = options.skipGroupLogic
     ? [...entries]
-    : applyWorldInfoGroupLogic([...entries]);
+    : applyWorldInfoGroupLogic([...entries], options.random);
   const insertableEntries = afterGroups.filter(hasMeaningfulWorldInfoContent);
 
   if (!options.preserveOrder) {
@@ -471,22 +583,62 @@ interface AhoCorasickPassArgs {
   matchedThisTurn: Set<string>;
   delayIncremented: Set<string>;
   maxPasses: number;
+  scanCache?: WorldInfoActivationScanCache;
+  random: () => number;
 }
 
-function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
-  const { conditional, constants, messages, settings, wiState,
-    activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
-    maxPasses } = args;
+function cloneScanState(
+  state: ScanState,
+  include?: ReadonlySet<string>,
+): ScanState {
+  const selected = <T>(entries: Iterable<[string, T]>): Array<[string, T]> =>
+    [...entries].filter(([uid]) => !include || include.has(uid));
+  return {
+    primaryHits: new Map(
+      selected(state.primaryHits).map(([uid, hits]) => [uid, new Set(hits)]),
+    ),
+    secondaryHits: new Map(
+      selected(state.secondaryHits).map(([uid, hits]) => [uid, new Set(hits)]),
+    ),
+    regexCache: new Map(),
+  };
+}
 
-  const matcher = new WorldInfoMatcher(conditional, {
+function baseScanCacheKey(
+  conditional: readonly WorldBookEntry[],
+  settings: WorldInfoSettings,
+): string {
+  return JSON.stringify({
     forceCaseSensitive: settings.forceCaseSensitive,
     forceMatchWholeWords: settings.forceMatchWholeWords,
+    globalScanDepth: settings.globalScanDepth,
+    entries: conditional.map(scanEntryCacheValue),
   });
-  const state: ScanState = makeScanState();
+}
 
-  // Pass 0 base: scan messages once per unique effective scan_depth.
-  // Pre-compute scan text per depth key and memoize so entries sharing the
-  // same effective depth don't rebuild the same concatenated string.
+function scanEntryCacheValue(entry: WorldBookEntry): object {
+  return {
+    uid: entry.uid,
+    key: entry.key,
+    keysecondary: entry.keysecondary,
+    scan_depth: entry.scan_depth,
+    case_sensitive: entry.case_sensitive,
+    match_whole_words: entry.match_whole_words,
+    use_regex: entry.use_regex,
+  };
+}
+
+function scanEntrySignature(entry: WorldBookEntry): string {
+  return JSON.stringify(scanEntryCacheValue(entry));
+}
+
+function scanBaseState(
+  matcher: WorldInfoMatcher,
+  conditional: readonly WorldBookEntry[],
+  messages: Message[],
+  settings: WorldInfoSettings,
+): ScanState {
+  const state = makeScanState();
   const depthBuckets = new Map<string, Set<string>>();
   const depthKey = (d: number | null) => (d === null ? "all" : String(d));
   for (const e of conditional) {
@@ -494,7 +646,10 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
     const d = e.scan_depth ?? settings.globalScanDepth;
     const k = depthKey(d);
     let set = depthBuckets.get(k);
-    if (!set) { set = new Set(); depthBuckets.set(k, set); }
+    if (!set) {
+      set = new Set();
+      depthBuckets.set(k, set);
+    }
     set.add(e.uid);
   }
   const scanTextCache = new Map<string, string>();
@@ -506,6 +661,56 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
       scanTextCache.set(k, text);
     }
     matcher.scanChunk(text, state, scope);
+  }
+  return state;
+}
+
+function materializeScanPlan(
+  cache: WorldInfoActivationScanCache,
+  messages: Message[],
+): void {
+  const plan = cache.plan;
+  if (!plan) return;
+  cache.plan = undefined;
+  const matcher = new WorldInfoMatcher(plan.unionEntries, {
+    forceCaseSensitive: plan.settings.forceCaseSensitive,
+    forceMatchWholeWords: plan.settings.forceMatchWholeWords,
+  });
+  const unionState = scanBaseState(
+    matcher,
+    plan.unionEntries,
+    messages,
+    plan.settings,
+  );
+  for (const entries of plan.views) {
+    cache.baseStates.set(
+      baseScanCacheKey(entries, plan.settings),
+      cloneScanState(unionState, new Set(entries.map((entry) => entry.uid))),
+    );
+  }
+}
+
+function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
+  const { conditional, constants, messages, settings, wiState,
+    activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
+    maxPasses, scanCache, random } = args;
+
+  const matcher = new WorldInfoMatcher(conditional, {
+    forceCaseSensitive: settings.forceCaseSensitive,
+    forceMatchWholeWords: settings.forceMatchWholeWords,
+  });
+  if (scanCache?.plan) materializeScanPlan(scanCache, messages);
+  const scanKey = scanCache ? baseScanCacheKey(conditional, settings) : null;
+  const cachedBaseState =
+    scanKey === null ? undefined : scanCache?.baseStates.get(scanKey);
+  let state: ScanState;
+  if (cachedBaseState) {
+    state = cloneScanState(cachedBaseState);
+  } else {
+    state = scanBaseState(matcher, conditional, messages, settings);
+    if (scanKey !== null) {
+      scanCache?.baseStates.set(scanKey, cloneScanState(state));
+    }
   }
 
   let recursionPassesUsed = 0;
@@ -545,7 +750,7 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
       if (entry.delay > 0 && entryState.delayCount < entry.delay) continue;
 
       if (entry.use_probability && entry.probability < 100) {
-        if (Math.random() * 100 >= entry.probability) continue;
+        if (random() * 100 >= entry.probability) continue;
       }
 
       entryState.active = true;
@@ -617,7 +822,10 @@ function joinMessageContents(messages: Message[]): string {
  * - group_override: highest priority entry wins
  * - Otherwise: weighted random selection by group_weight
  */
-export function applyWorldInfoGroupLogic(entries: WorldBookEntry[]): WorldBookEntry[] {
+export function applyWorldInfoGroupLogic(
+  entries: WorldBookEntry[],
+  random: () => number = Math.random,
+): WorldBookEntry[] {
   const grouped = new Map<string, WorldBookEntry[]>();
   const ungrouped: WorldBookEntry[] = [];
 
@@ -655,7 +863,7 @@ export function applyWorldInfoGroupLogic(entries: WorldBookEntry[]): WorldBookEn
       continue;
     }
 
-    let roll = Math.random() * totalWeight;
+    let roll = random() * totalWeight;
     for (const entry of group) {
       roll -= entry.group_weight || 1;
       if (roll <= 0) {

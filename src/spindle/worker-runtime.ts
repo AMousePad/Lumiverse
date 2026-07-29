@@ -663,6 +663,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen"> & {
       enabled?: readonly string[];
       forced?: readonly string[];
       mutated?: ReadonlyArray<{ id: string; content?: string }>;
+      captured?: readonly string[];
     } | void>,
     priority?: number
   ): void;
@@ -3529,7 +3530,10 @@ const spindleApi: RuntimeSpindleAPI = {
     });
   },
 
-  contracts: Object.freeze({ preAssemblyGenerationContext: 1 }),
+  contracts: Object.freeze({
+    preAssemblyGenerationContext: 1,
+    worldInfoActivationCapture: 1,
+  }),
 
   registerContextHandler(
     handler: (context: unknown) => Promise<unknown>,

@@ -47,16 +47,26 @@ import type { MacroEnv } from "../macros";
 import {
   activateWorldInfo,
   applyWorldInfoGroupLogic,
+  createWorldInfoActivationScanCache,
   finalizeActivatedWorldInfoEntries,
+  primeWorldInfoActivationScanCache,
   type WiState,
   type WorldInfoSettings,
   type FinalizedWorldInfoEntries,
   normalizeWorldInfoSettings,
 } from "./world-info-activation.service";
 import { worldInfoInterceptorChain } from "../spindle/world-info-interceptor";
+import { buildWorldInfoCaptureMap } from "../spindle/world-info-capture";
+import {
+  getSourceMessageMetadata,
+  stampSourceMessageMetadata,
+} from "../spindle/source-message-metadata";
 import * as chatsSvc from "./chats.service";
 import { stripReasoningTags, buildMacroEnvForChat } from "./chats.service";
-import { resolveAndSanitizeForVectorization } from "./vectorization-content.service";
+import {
+  contentHasMacroHints,
+  resolveAndSanitizeForVectorization,
+} from "./vectorization-content.service";
 import {
   stripDetailsBlocks as _stripDetailsBlocks,
   stripLoomTags as _stripLoomTags,
@@ -167,7 +177,7 @@ const CONTINUE_NUDGE_KEY = "__continueNudge";
 
 function markAsChatHistory(
   msg: LlmMessage,
-  source?: { id: string; index_in_chat: number },
+  source?: { id: string; index_in_chat: number; metadata?: unknown },
   contextAnchorProtected = false,
 ): LlmMessage {
   (msg as any)[CHAT_HISTORY_KEY] = true;
@@ -177,6 +187,7 @@ function markAsChatHistory(
   if (source) {
     (msg as any)[SOURCE_ID_KEY] = source.id;
     (msg as any)[SOURCE_INDEX_KEY] = source.index_in_chat;
+    stampSourceMessageMetadata(msg, source.metadata);
   }
   return msg;
 }
@@ -207,6 +218,8 @@ export function getSourceIndexInChat(msg: LlmMessage): number | undefined {
   const v = (msg as any)[SOURCE_INDEX_KEY];
   return typeof v === "number" ? v : undefined;
 }
+
+export { getSourceMessageMetadata };
 
 function markPreserveDisplayReasoningDelimiters(msg: LlmMessage): LlmMessage {
   (msg as any)[PRESERVE_DISPLAY_REASONING_DELIMS_KEY] = true;
@@ -1769,7 +1782,7 @@ export async function assemblePrompt(
       | Partial<WorldInfoSettings>
       | undefined) ??
     {};
-  const intercepted = await worldInfoInterceptorChain.run(
+  const interception = await worldInfoInterceptorChain.run(
     wiEntries,
     {
       chatId: ctx.chatId,
@@ -1799,13 +1812,33 @@ export async function assemblePrompt(
     ctx.userId,
     wiSources.bookSourceMap
   );
-  const wiResult = activateWorldInfo({
-    entries: intercepted,
-    messages,
-    chatTurn: messages.length,
-    wiState,
-    settings: worldInfoSettings,
-  });
+  const intercepted = interception.entries;
+  const hasCaptureRequests = interception.captureRequests.size > 0;
+  const hasCapturedIds = [...interception.captureRequests.values()].some(
+    (ids) => ids.size > 0,
+  );
+  const captureWiState =
+    hasCapturedIds ? structuredClone(wiState) : null;
+  const activationScanCache =
+    captureWiState ? createWorldInfoActivationScanCache() : undefined;
+  if (activationScanCache) {
+    primeWorldInfoActivationScanCache(
+      activationScanCache,
+      [intercepted, wiEntries],
+      worldInfoSettings,
+    );
+  }
+  const wiResult = profiler.measureSync(
+    "world-info-keyword",
+    () => activateWorldInfo({
+      entries: intercepted,
+      messages,
+      chatTurn: messages.length,
+      wiState,
+      settings: worldInfoSettings,
+      scanCache: activationScanCache,
+    }),
+  );
 
   // Yield after world-info activation — the keyword scanning loop above is
   // synchronous and can block for 50-200ms on large setups (hundreds of
@@ -1819,32 +1852,59 @@ export async function assemblePrompt(
   // These entries are merged with keyword-activated entries when enabled.
   // When pre-computed results are available (from the generation pipeline's
   // council enrichment phase), reuse them to avoid redundant embedding queries.
-  const vectorQueryPreview = await getWorldInfoVectorQueryPreview(
-    ctx.userId,
-    messages,
-    ctx.chatId,
-    worldInfoSettings,
-  );
-  const currentWorldInfoEntryIds = new Set(wiEntries.map((entry) => entry.id));
-  let vectorActivated = ctx.precomputedVectorEntries
-    ? ctx.precomputedVectorEntries.filter((item) =>
-        currentWorldInfoEntryIds.has(item.entry.id),
-      )
-    : null;
+  let vectorQueryPreview = "";
   let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null = null;
+  let captureVectorQuery: PreparedWorldInfoVectorQuery | undefined;
+  const vectorViewsEquivalent = areWorldInfoVectorViewsEquivalent(
+    wiEntries,
+    intercepted,
+  );
+  const captureVectorViewCanShareNative =
+    captureWiState !== null && vectorViewsEquivalent;
+  const nativeWorldInfoEntryIds = new Set(
+    intercepted.map((entry) => entry.id),
+  );
+  let vectorActivated =
+    ctx.precomputedVectorEntries &&
+      !hasCaptureRequests &&
+      vectorViewsEquivalent
+      ? projectVectorActivatedEntries(
+          ctx.precomputedVectorEntries.filter((item) =>
+            nativeWorldInfoEntryIds.has(item.entry.id),
+          ),
+          intercepted,
+        )
+      : null;
+  let rawVectorActivated: VectorActivatedEntry[] | null = null;
   if (!vectorActivated) {
     try {
-      const detailed = await collectVectorActivatedWorldInfoDetailed(
-        ctx.userId,
-        ctx.chatId,
-        wiSources.worldBookIds,
-        wiEntries,
-        messages,
-        ctx.signal,
-        worldInfoSettings,
+      const detailed = await profiler.measure(
+        "world-info-vector",
+        () => collectVectorActivatedWorldInfoDetailed(
+          ctx.userId,
+          ctx.chatId,
+          wiSources.worldBookIds,
+          intercepted,
+          messages,
+          ctx.signal,
+          worldInfoSettings,
+        ),
       );
       vectorActivated = detailed.entries;
       vectorRetrievalDetails = detailed;
+      vectorQueryPreview = detailed.queryPreview;
+      if (detailed.queryPreview.length > 0) {
+        captureVectorQuery = {
+          queryPreview: detailed.queryPreview,
+          queryScope: detailed.queryScope,
+        };
+      }
+      if (captureVectorViewCanShareNative) {
+        rawVectorActivated = projectVectorActivatedEntries(
+          detailed.entries,
+          wiEntries,
+        );
+      }
 
       if (detailed.blockerMessages.length > 0 && detailed.eligibleCount > 0) {
         console.log(
@@ -1878,18 +1938,88 @@ export async function assemblePrompt(
         err,
       );
       vectorActivated = [];
+      if (captureVectorViewCanShareNative) rawVectorActivated = [];
     }
   }
-  const mergedWorldInfo = mergeActivatedWorldInfoEntries(
-    wiResult.activatedEntries,
-    vectorActivated,
-    worldInfoSettings,
-    wiSources.bookSourceMap,
-    wiSources.bookNameMap,
+  const mergedWorldInfo = profiler.measureSync(
+    "world-info-merge",
+    () => mergeActivatedWorldInfoEntries(
+      wiResult.activatedEntries,
+      vectorActivated ?? [],
+      worldInfoSettings,
+      wiSources.bookSourceMap,
+      wiSources.bookNameMap,
+    ),
   );
   const wiCache = mergedWorldInfo.cache;
   wiResult.activatedEntries = mergedWorldInfo.activatedEntries;
   const activatedWorldInfo = mergedWorldInfo.activatedWorldInfo;
+  let spindleWorldInfoCaptures:
+    | Record<string, ActivatedWorldInfoEntry[]>
+    | undefined;
+  if (hasCaptureRequests && !captureWiState) {
+    spindleWorldInfoCaptures = buildWorldInfoCaptureMap(
+      interception.captureRequests,
+      [],
+    );
+  } else if (captureWiState) {
+    const captureRandom = createWorldInfoCaptureRandom();
+    const captureKeywordResult = profiler.measureSync(
+      "world-info-capture-keyword",
+      () => activateWorldInfo({
+        entries: wiEntries,
+        messages,
+        chatTurn: messages.length,
+        wiState: captureWiState,
+        settings: worldInfoSettings,
+        scanCache: activationScanCache,
+        random: captureRandom,
+      }),
+    );
+    if (!rawVectorActivated) {
+      try {
+        rawVectorActivated = (
+          await profiler.measure(
+            "world-info-capture-vector",
+            () => collectVectorActivatedWorldInfoDetailed(
+              ctx.userId,
+              ctx.chatId,
+              wiSources.worldBookIds,
+              wiEntries,
+              messages,
+              ctx.signal,
+              worldInfoSettings,
+              captureVectorQuery,
+            ),
+          )
+        ).entries;
+      } catch (err) {
+        if (ctx.signal?.aborted || (err as any)?.name === "AbortError") {
+          throw err;
+        }
+        console.warn(
+          "[prompt-assembly] Raw capture vector activation failed, continuing with keyword-only:",
+          err,
+        );
+        rawVectorActivated = [];
+      }
+    }
+    const capturedMergedWorldInfo = profiler.measureSync(
+      "world-info-capture-merge",
+      () => mergeActivatedWorldInfoEntries(
+        captureKeywordResult.activatedEntries,
+        rawVectorActivated ?? [],
+        worldInfoSettings,
+        wiSources.bookSourceMap,
+        wiSources.bookNameMap,
+        captureRandom,
+      ),
+    );
+    spindleWorldInfoCaptures = buildWorldInfoCaptureMap(
+      interception.captureRequests,
+      capturedMergedWorldInfo.activatedWorldInfo,
+    );
+  }
 
   const worldInfoStats = {
     ...wiResult.stats,
@@ -2712,7 +2842,11 @@ export async function assemblePrompt(
               });
             }
           }
-          const source = { id: msg.id, index_in_chat: msg.index_in_chat };
+          const source = {
+            id: msg.id,
+            index_in_chat: msg.index_in_chat,
+            metadata: msg.extra?.spindle_metadata,
+          };
           const contextAnchorProtected =
             contextAnchorIndex != null &&
             msg.index_in_chat >= contextAnchorIndex;
@@ -2737,7 +2871,11 @@ export async function assemblePrompt(
           result.push(
             markAsChatHistory(
               { role, content: contentForPrompt },
-              { id: msg.id, index_in_chat: msg.index_in_chat },
+              {
+                id: msg.id,
+                index_in_chat: msg.index_in_chat,
+                metadata: msg.extra?.spindle_metadata,
+              },
               contextAnchorIndex != null &&
                 msg.index_in_chat >= contextAnchorIndex,
             ),
@@ -3639,6 +3777,7 @@ export async function assemblePrompt(
     assistantReasoningPrefill,
     activatedWorldInfo:
       activatedWorldInfo.length > 0 ? activatedWorldInfo : undefined,
+    spindleWorldInfoCaptures,
     worldInfoStats,
     memoryStats,
     databankStats,
@@ -4048,6 +4187,7 @@ export function selectMergedWorldInfoEntries(
   vectorEntries: VectorActivatedEntry[],
   settingsInput?: Partial<WorldInfoSettings>,
   bookSourceMap?: Map<string, BookSource>,
+  random?: () => number,
 ): WorldInfoMergeSelection {
   const settings = normalizeWorldInfoSettings(settingsInput);
   const mergedEntries: WorldBookEntryModel[] = [];
@@ -4096,7 +4236,10 @@ export function selectMergedWorldInfoEntries(
 
   // Group selection uses configured priorities and weights. Retrieval-score
   // boosts are intentionally introduced only after this step.
-  const groupSelected = applyWorldInfoGroupLogic(dedupResult.entries);
+  const groupSelected = applyWorldInfoGroupLogic(
+    dedupResult.entries,
+    random,
+  );
   const groupSelectedIds = new Set(groupSelected.map((entry) => entry.id));
   for (const item of vectorEntries) {
     if (dispositions.has(item.entry.id) || groupSelectedIds.has(item.entry.id)) continue;
@@ -4167,6 +4310,7 @@ export function mergeActivatedWorldInfoEntries(
   settingsInput?: Partial<WorldInfoSettings>,
   bookSourceMap?: Map<string, BookSource>,
   bookNameMap?: Map<string, string>,
+  random?: () => number,
 ): MergedWorldInfoEntriesResult {
   const mergeStartedAt = performance.now();
   const selection = selectMergedWorldInfoEntries(
@@ -4174,6 +4318,7 @@ export function mergeActivatedWorldInfoEntries(
     vectorEntries,
     settingsInput,
     bookSourceMap,
+    random,
   );
   const { finalized, sources, dedupResult, dispositions } = selection;
 
@@ -4246,25 +4391,228 @@ function truncateToContextSize(text: string, maxTokens: number): string {
 
 const WORLD_INFO_VECTOR_QUERY_MAX_TOKENS = 8000;
 
+interface PreparedWorldInfoVectorQuery {
+  queryPreview: string;
+  queryScope: WorldInfoVectorQueryScope;
+}
+
+function selectWorldInfoVectorQueryMessages(
+  messages: Message[],
+  globalScanDepth: number | null,
+): { visibleMessages: Message[]; queryMessages: Message[] } {
+  const visibleMessages = messages.filter(
+    (m) => !m.extra?.hidden && m.content.trim().length > 0,
+  );
+  return {
+    visibleMessages,
+    queryMessages: globalScanDepth === null
+      ? visibleMessages
+      : visibleMessages.slice(-globalScanDepth),
+  };
+}
+
+async function formatWorldInfoVectorQueryMessage(
+  message: Message,
+  env: MacroEnv | null,
+  reasoningStrip?: SanitizeOptions,
+): Promise<string> {
+  const sanitized = await resolveAndSanitizeForVectorization(
+    stripReasoningTags(message.content),
+    env,
+    reasoningStrip,
+  );
+  return `[${message.is_user ? "USER" : "CHARACTER"} | ${message.name}]: ${sanitized}`;
+}
+
+async function buildWorldInfoVectorQueryTextReference(
+  queryMessages: Message[],
+  env: MacroEnv | null,
+  reasoningStrip?: SanitizeOptions,
+): Promise<{ text: string; truncated: boolean }> {
+  const parts = await Promise.all(
+    queryMessages.map((message) =>
+      formatWorldInfoVectorQueryMessage(message, env, reasoningStrip)
+    ),
+  );
+  return truncateToContextSizeWithStatus(
+    parts.join("\n").trim(),
+    WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+  );
+}
+
+const DEFAULT_REASONING_OPEN_TAG_RE = /<(?:think|thinking|reasoning)>/i;
+const HTML_LIKE_VECTOR_HINT_RE = /<\s*\/?\s*[a-zA-Z]/;
+
+function worldInfoVectorMessageHasMacroHints(message: Message): boolean {
+  if (contentHasMacroHints(message.content)) return true;
+  return (
+    DEFAULT_REASONING_OPEN_TAG_RE.test(message.content) &&
+    contentHasMacroHints(stripReasoningTags(message.content))
+  );
+}
+
+function hasPlainVectorSuffix(
+  content: string,
+  reasoningStrip?: SanitizeOptions,
+): boolean {
+  if (HTML_LIKE_VECTOR_HINT_RE.test(content)) return false;
+  const prefix = reasoningStrip?.reasoningPrefix?.replace(/^\n+|\n+$/g, "");
+  const suffix = reasoningStrip?.reasoningSuffix?.replace(/^\n+|\n+$/g, "");
+  return !(prefix && suffix && content.includes(prefix));
+}
+
+function isPlainVectorHorizontalWhitespace(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0c || code === 0x0b;
+}
+
+function normalizePlainVectorQuerySuffix(
+  content: string,
+  maxChars: number,
+): { text: string; fillsLimit: boolean } {
+  const trimmed = content.trim();
+  const reversed: string[] = [];
+  let index = trimmed.length - 1;
+
+  while (index >= 0 && reversed.length < maxChars) {
+    const code = trimmed.charCodeAt(index);
+    if (code === 0x0a || isPlainVectorHorizontalWhitespace(code)) {
+      let newlineCount = 0;
+      while (index >= 0) {
+        const runCode = trimmed.charCodeAt(index);
+        if (
+          runCode !== 0x0a &&
+          !isPlainVectorHorizontalWhitespace(runCode)
+        ) {
+          break;
+        }
+        if (runCode === 0x0a) newlineCount++;
+        index--;
+      }
+      const outputCount = newlineCount > 0
+        ? Math.min(newlineCount, 2)
+        : 1;
+      const output = newlineCount > 0 ? "\n" : " ";
+      for (
+        let count = 0;
+        count < outputCount && reversed.length < maxChars;
+        count++
+      ) {
+        reversed.push(output);
+      }
+      continue;
+    }
+    reversed.push(trimmed[index]);
+    index--;
+  }
+
+  return {
+    text: reversed.reverse().join(""),
+    fillsLimit: reversed.length === maxChars,
+  };
+}
+
+function buildPlainVectorQueryMessageSuffix(
+  message: Message,
+  maxChars: number,
+  reasoningStrip?: SanitizeOptions,
+): { part: string; truncated: boolean } | null {
+  if (
+    message.content.length <= maxChars ||
+    !hasPlainVectorSuffix(message.content, reasoningStrip)
+  ) {
+    return null;
+  }
+
+  const normalized = normalizePlainVectorQuerySuffix(
+    message.content,
+    maxChars,
+  );
+  if (normalized.fillsLimit) {
+    return {
+      part: normalized.text,
+      truncated: true,
+    };
+  }
+  return {
+    part: `[${message.is_user ? "USER" : "CHARACTER"} | ${message.name}]: ${normalized.text}`,
+    truncated: false,
+  };
+}
+
+async function buildWorldInfoVectorQueryTextBounded(
+  queryMessages: Message[],
+  env: MacroEnv | null,
+  reasoningStrip?: SanitizeOptions,
+): Promise<{ text: string; truncated: boolean }> {
+  if (
+    env &&
+    queryMessages.some(worldInfoVectorMessageHasMacroHints)
+  ) {
+    return buildWorldInfoVectorQueryTextReference(
+      queryMessages,
+      env,
+      reasoningStrip,
+    );
+  }
+
+  const maxChars = WORLD_INFO_VECTOR_QUERY_MAX_TOKENS * 3;
+  const reverseParts: string[] = [];
+  let suffix = "";
+  let firstIncludedIndex = queryMessages.length;
+
+  for (let index = queryMessages.length - 1; index >= 0; index--) {
+    const remainingChars =
+      maxChars - suffix.length - (suffix ? 1 : 0);
+    if (remainingChars <= 0) {
+      return {
+        text: `\n${suffix}`.slice(-maxChars),
+        truncated: true,
+      };
+    }
+    const messageSuffix = buildPlainVectorQueryMessageSuffix(
+      queryMessages[index],
+      remainingChars,
+      reasoningStrip,
+    );
+    if (messageSuffix?.truncated) {
+      const text = suffix
+        ? `${messageSuffix.part}\n${suffix}`
+        : messageSuffix.part;
+      return { text: text.slice(-maxChars), truncated: true };
+    }
+    const part =
+      messageSuffix?.part ??
+      await formatWorldInfoVectorQueryMessage(
+        queryMessages[index],
+        env,
+        reasoningStrip,
+      );
+    reverseParts.push(part);
+    firstIncludedIndex = index;
+    suffix = suffix ? `${part}\n${suffix}` : part;
+    if (suffix.trim().length >= maxChars) break;
+  }
+
+  const text = reverseParts.reverse().join("\n").trim();
+  const omittedOlderMessages = firstIncludedIndex > 0;
+  return {
+    text: text.length <= maxChars ? text : text.slice(-maxChars),
+    truncated: omittedOlderMessages || text.length > maxChars,
+  };
+}
+
 export async function buildWorldInfoVectorQuery(
   messages: Message[],
   globalScanDepth: number | null,
   env: MacroEnv | null,
   reasoningStrip?: SanitizeOptions,
 ): Promise<{ queryPreview: string; queryScope: WorldInfoVectorQueryScope }> {
-  const visibleMessages = messages.filter(
-    (m) => !m.extra?.hidden && m.content.trim().length > 0,
-  );
-  const queryMessages = globalScanDepth === null
-    ? visibleMessages
-    : visibleMessages.slice(-globalScanDepth);
-  const parts = await Promise.all(queryMessages.map(async (m) => {
-    const sanitized = await resolveAndSanitizeForVectorization(stripReasoningTags(m.content), env, reasoningStrip);
-    return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
-  }));
-  const truncated = truncateToContextSizeWithStatus(
-    parts.join("\n").trim(),
-    WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+  const { visibleMessages, queryMessages } =
+    selectWorldInfoVectorQueryMessages(messages, globalScanDepth);
+  const truncated = await buildWorldInfoVectorQueryTextBounded(
+    queryMessages,
+    env,
+    reasoningStrip,
   );
   return {
     queryPreview: truncated.text,
@@ -4277,6 +4625,10 @@ export async function buildWorldInfoVectorQuery(
     },
   };
 }
+
+export const __worldInfoVectorQueryTest = {
+  buildReference: buildWorldInfoVectorQueryTextReference,
+};
 
 function resolveWorldInfoVectorSettings(
   userId: string,
@@ -4322,6 +4674,45 @@ function isVectorEligibleWorldInfoEntry(
   entry: import("../types/world-book").WorldBookEntry,
 ): boolean {
   return isWorldBookEntryVectorSearchReady(entry);
+}
+
+function areWorldInfoVectorViewsEquivalent(
+  source: readonly WorldBookEntryModel[],
+  effective: readonly WorldBookEntryModel[],
+): boolean {
+  const sourceEligible = source.filter(isVectorEligibleWorldInfoEntry);
+  const effectiveEligible = effective.filter(isVectorEligibleWorldInfoEntry);
+  if (sourceEligible.length !== effectiveEligible.length) return false;
+  return sourceEligible.every(
+    (entry, index) => effectiveEligible[index] === entry,
+  );
+}
+
+function createWorldInfoCaptureRandom(): () => number {
+  const seed = new Uint32Array(1);
+  crypto.getRandomValues(seed);
+  let state = seed[0] || 0x9e3779b9;
+  return () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x1_0000_0000;
+  };
+}
+
+function projectVectorActivatedEntries(
+  activated: readonly VectorActivatedEntry[],
+  entries: readonly WorldBookEntryModel[],
+): VectorActivatedEntry[] {
+  const byId = new Map(
+    entries
+      .filter(isVectorEligibleWorldInfoEntry)
+      .map((entry) => [entry.id, entry] as const),
+  );
+  return activated.flatMap((item) => {
+    const entry = byId.get(item.entry.id);
+    return entry ? [{ ...item, entry }] : [];
+  });
 }
 
 function getVectorSearchableWorldBookIds(
@@ -4456,6 +4847,7 @@ export const __vectorWiCacheTest = {
 
 export const __vectorWiRetrievalTest = {
   getSearchableWorldBookIds: getVectorSearchableWorldBookIds,
+  viewsEquivalent: areWorldInfoVectorViewsEquivalent,
 };
 
 export async function collectVectorActivatedWorldInfoDetailed(
@@ -4466,6 +4858,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
   messages: Message[],
   signal?: AbortSignal,
   settingsInput?: Partial<WorldInfoSettings>,
+  preparedQuery?: PreparedWorldInfoVectorQuery,
 ): Promise<VectorWorldInfoRetrievalResult> {
   const startedAt = performance.now();
   const emptyResult: VectorWorldInfoRetrievalResult = {
@@ -4505,27 +4898,88 @@ export async function collectVectorActivatedWorldInfoDetailed(
     };
   }
 
+  const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
+  const searchableWorldBookIds = getVectorSearchableWorldBookIds(
+    worldBookIds,
+    entries,
+  );
+  const worldInfoSettings = resolveWorldInfoVectorSettings(userId, settingsInput);
+  if (
+    eligibleEntries.length === 0 ||
+    searchableWorldBookIds.length === 0
+  ) {
+    return {
+      ...emptyResult,
+      queryScope: {
+        ...emptyResult.queryScope,
+        configuredScanDepth: worldInfoSettings.globalScanDepth,
+      },
+      eligibleCount: eligibleEntries.length,
+      blockerMessages: [
+        eligibleEntries.length === 0
+          ? "This chat has no indexed, vector-enabled, non-disabled, non-empty lorebook entries to search."
+          : "No attached world book has a search-ready vector entry.",
+      ],
+      timingsMs: {
+        ...emptyResult.timingsMs!,
+        totalMs: performance.now() - startedAt,
+      },
+    };
+  }
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
   const worldBookVectorSettings = loadWorldBookVectorSettings(userId, {
     retrievalTopK: cfg.retrieval_top_k,
   });
   const blockerMessages: string[] = [];
   const topK = Math.max(1, worldBookVectorSettings.retrievalTopK || cfg.retrieval_top_k || 4);
+  if (!cfg.enabled)
+    blockerMessages.push(
+      "Embeddings are disabled, so lorebooks will use keyword matching only.",
+    );
+  if (!cfg.has_api_key)
+    blockerMessages.push("No embedding API key is configured.");
+  if (!cfg.dimensions)
+    blockerMessages.push(
+      "Embeddings have not been tested yet, so dimensions are still unknown.",
+    );
+  if (!cfg.vectorize_world_books)
+    blockerMessages.push(
+      "World-book vectorization is disabled in embeddings settings.",
+    );
+  if (blockerMessages.length > 0) {
+    return {
+      ...emptyResult,
+      queryScope: {
+        ...emptyResult.queryScope,
+        configuredScanDepth: worldInfoSettings.globalScanDepth,
+      },
+      eligibleCount: eligibleEntries.length,
+      topK,
+      cap: topK,
+      blockerMessages,
+      timingsMs: {
+        queryBuildMs: 0,
+        queryEmbedMs: 0,
+        searchMs: 0,
+        rankingMs: 0,
+        totalMs: performance.now() - startedAt,
+      },
+    };
+  }
+
   const queryBuildStartedAt = performance.now();
-  const env = buildMacroEnvForChat(userId, chatId);
-  const worldInfoSettings = resolveWorldInfoVectorSettings(userId, settingsInput);
-  const { queryPreview: queryText, queryScope } = await buildWorldInfoVectorQuery(
-    messages,
-    worldInfoSettings.globalScanDepth,
-    env,
-    getReasoningStripOptions(userId),
-  );
-  const queryBuildMs = performance.now() - queryBuildStartedAt;
-  const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
-  const searchableWorldBookIds = getVectorSearchableWorldBookIds(
-    worldBookIds,
-    entries,
-  );
+  const query =
+    preparedQuery ??
+    (await buildWorldInfoVectorQuery(
+      messages,
+      worldInfoSettings.globalScanDepth,
+      buildMacroEnvForChat(userId, chatId),
+      getReasoningStripOptions(userId),
+  ));
+  const { queryPreview: queryText, queryScope } = query;
+  const queryBuildMs = preparedQuery
+    ? 0
+    : performance.now() - queryBuildStartedAt;
   const lexicalQueryPreviews = buildWorldInfoLexicalQueryBatches(
     queryText,
     eligibleEntries,
@@ -4551,27 +5005,9 @@ export async function collectVectorActivatedWorldInfoDetailed(
     return cached;
   }
 
-  if (!cfg.enabled)
-    blockerMessages.push(
-      "Embeddings are disabled, so lorebooks will use keyword matching only.",
-    );
-  if (!cfg.has_api_key)
-    blockerMessages.push("No embedding API key is configured.");
-  if (!cfg.dimensions)
-    blockerMessages.push(
-      "Embeddings have not been tested yet, so dimensions are still unknown.",
-    );
-  if (!cfg.vectorize_world_books)
-    blockerMessages.push(
-      "World-book vectorization is disabled in embeddings settings.",
-    );
   if (!queryText)
     blockerMessages.push(
       "The current chat does not have enough visible recent text to build a vector query.",
-    );
-  if (eligibleEntries.length === 0)
-    blockerMessages.push(
-      "This chat has no indexed, vector-enabled, non-disabled, non-empty lorebook entries to search.",
     );
 
   if (blockerMessages.length > 0) {
@@ -5428,10 +5864,19 @@ function mergeConsecutiveUserMessages(
       const wasContextAnchorProtected =
         isContextAnchorProtected(result[i]) ||
         isContextAnchorProtected(result[i + 1]);
-      const mergedSourceId =
-        getSourceMessageId(result[i]) ?? getSourceMessageId(result[i + 1]);
-      const mergedSourceIndex =
-        getSourceIndexInChat(result[i]) ?? getSourceIndexInChat(result[i + 1]);
+      const mergedSource = [result[i], result[i + 1]]
+        .map((message) => {
+          const id = getSourceMessageId(message);
+          const index_in_chat = getSourceIndexInChat(message);
+          return id !== undefined && index_in_chat !== undefined
+            ? {
+                id,
+                index_in_chat,
+                metadata: getSourceMessageMetadata(message),
+              }
+            : undefined;
+        })
+        .find((source) => source !== undefined);
       if (allParts.length > 0) {
         result[i] = {
           role: "user",
@@ -5443,9 +5888,7 @@ function mergeConsecutiveUserMessages(
       if (wasChatHistory) {
         markAsChatHistory(
           result[i],
-          typeof mergedSourceId === "string" && typeof mergedSourceIndex === "number"
-            ? { id: mergedSourceId, index_in_chat: mergedSourceIndex }
-            : undefined,
+          mergedSource,
           wasContextAnchorProtected,
         );
       }
@@ -5459,6 +5902,10 @@ function mergeConsecutiveUserMessages(
   }
   return remaining;
 }
+
+export const __sourceMessageMetadataTest = {
+  mergeConsecutiveUserMessages,
+};
 
 /**
  * Strip reasoning tags (and surrounding whitespace) from older assistant messages
@@ -7083,15 +7530,33 @@ async function legacyAssembly(
           parts.push({ type: "audio", data: b64, mime_type: att.mime_type });
         }
       }
-      llmMessages.push({
-        role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
-        content: parts.length > 0 ? parts : resolved,
-      });
+      llmMessages.push(
+        markAsChatHistory(
+          {
+            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            content: parts.length > 0 ? parts : resolved,
+          },
+          {
+            id: m.id,
+            index_in_chat: m.index_in_chat,
+            metadata: m.extra?.spindle_metadata,
+          },
+        ),
+      );
     } else {
-      llmMessages.push({
-        role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
-        content: resolved,
-      });
+      llmMessages.push(
+        markAsChatHistory(
+          {
+            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            content: resolved,
+          },
+          {
+            id: m.id,
+            index_in_chat: m.index_in_chat,
+            metadata: m.extra?.spindle_metadata,
+          },
+        ),
+      );
     }
     legacyHistoryCount++;
   }

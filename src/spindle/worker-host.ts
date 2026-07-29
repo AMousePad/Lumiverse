@@ -47,6 +47,8 @@ import {
   type WorldInfoInterceptorCtxDTO,
   type WorldInfoInterceptorResultDTO,
 } from "./world-info-interceptor";
+import { projectWorldInfoCaptureContext } from "./world-info-capture";
+import { projectSourceMessageMetadata } from "./source-message-metadata";
 import { toolRegistry } from "./tool-registry";
 import {
   setPromptRegexOwnedChats,
@@ -2669,15 +2671,21 @@ export class WorkerHost {
         // can distinguish real chat turns and standalone World Info blocks
         // from other prompt material. Shallow-copy so the synthetic flags never
         // leak onto the outbound LLM payload.
+        const canReadSourceMetadata = this.hasPermission("chat_mutation");
         const messagesWithSourceFlags = messages.map((m) => {
           const llm = m as unknown as LlmMessage;
           const isChatHistory = promptAssemblySvc.isChatHistoryMessage(llm);
           const isWorldInfoEntry = promptAssemblySvc.isWorldInfoEntryMessage(llm);
-          if (!isChatHistory && !isWorldInfoEntry) return m;
+          const projected = projectSourceMessageMetadata(
+            m,
+            isChatHistory,
+            canReadSourceMetadata,
+          );
+          if (!isChatHistory && !isWorldInfoEntry) return projected;
           const sourceMessageId = promptAssemblySvc.getSourceMessageId(llm);
           const sourceIndexInChat = promptAssemblySvc.getSourceIndexInChat(llm);
           return {
-            ...m,
+            ...projected,
             ...(isChatHistory ? { __isChatHistory: true } : {}),
             ...(isWorldInfoEntry ? { __isWorldInfoEntry: true } : {}),
             ...(sourceMessageId !== undefined ? { sourceMessageId } : {}),
@@ -2685,7 +2693,11 @@ export class WorkerHost {
           };
         });
 
-        const interceptorContext = context as Omit<InterceptorContextDTO, "signal">;
+        const interceptorContext =
+          projectWorldInfoCaptureContext(
+            context,
+            this.extensionId,
+          ) as unknown as Omit<InterceptorContextDTO, "signal">;
         this.activeInterceptorContexts.set(registrationId, interceptorContext);
         this.postToWorker({
           type: "intercept_request",

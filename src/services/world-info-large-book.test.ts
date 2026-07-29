@@ -141,6 +141,168 @@ function asVectorCandidate(entry: WorldBookEntry, finalScore = 0.8): VectorActiv
   };
 }
 
+describe("world info RNG injection", () => {
+  test("probability rolls use the injected random source", () => {
+    const prefix = crypto.randomUUID();
+    const accepted = makeEntry({
+      id: `${prefix}-accepted`,
+      uid: `${prefix}-accepted`,
+      key: ["needle"],
+      content: "accepted",
+      selective: false,
+      vectorized: false,
+      probability: 50,
+    });
+    const rejected = makeEntry({
+      id: `${prefix}-rejected`,
+      uid: `${prefix}-rejected`,
+      key: ["needle"],
+      content: "rejected",
+      selective: false,
+      vectorized: false,
+      probability: 50,
+    });
+    const rolls = [0.25, 0.75];
+    let rollIndex = 0;
+
+    const result = activateWorldInfo({
+      entries: [accepted, rejected],
+      messages: [makeMessage("needle")],
+      chatTurn: 1,
+      wiState: {},
+      random: () => rolls[rollIndex++],
+    });
+
+    expect(rollIndex).toBe(2);
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual([
+      accepted.id,
+    ]);
+  });
+
+  test("injected activation neither advances global RNG nor pollutes its result cache", () => {
+    const prefix = crypto.randomUUID();
+    const probabilistic = makeEntry({
+      id: `${prefix}-entry`,
+      uid: `${prefix}-entry`,
+      key: ["needle"],
+      content: "cache isolation",
+      selective: false,
+      vectorized: false,
+      probability: 50,
+    });
+    const activationMessages = [makeMessage("needle")];
+    const originalRandom = Math.random;
+    let globalRolls = 0;
+
+    Math.random = () => {
+      globalRolls++;
+      return 0.75;
+    };
+    try {
+      const injected = activateWorldInfo({
+        entries: [probabilistic],
+        messages: activationMessages,
+        chatTurn: 1,
+        wiState: {},
+        random: () => 0.25,
+      });
+      expect(injected.activatedEntries.map((entry) => entry.id)).toEqual([
+        probabilistic.id,
+      ]);
+      expect(globalRolls).toBe(0);
+
+      const ordinary = activateWorldInfo({
+        entries: [probabilistic],
+        messages: activationMessages,
+        chatTurn: 1,
+        wiState: {},
+      });
+      expect(ordinary.activatedEntries).toEqual([]);
+      expect(globalRolls).toBe(1);
+
+      const cachedOrdinary = activateWorldInfo({
+        entries: [probabilistic],
+        messages: activationMessages,
+        chatTurn: 1,
+        wiState: {},
+      });
+      expect(cachedOrdinary.activatedEntries).toEqual([]);
+      expect(globalRolls).toBe(1);
+    } finally {
+      Math.random = originalRandom;
+    }
+  });
+
+  test("raw activation and merge do not advance global RNG when given an isolated source", () => {
+    const prefix = crypto.randomUUID();
+    const keyword = makeEntry({
+      id: `${prefix}-keyword`,
+      uid: `${prefix}-keyword`,
+      key: ["needle"],
+      content: "amber",
+      selective: false,
+      vectorized: false,
+      probability: 50,
+      group_name: `${prefix}-group`,
+      group_weight: 1,
+    });
+    const vector = makeEntry({
+      id: `${prefix}-vector`,
+      uid: `${prefix}-vector`,
+      content: "zephyr",
+      group_name: `${prefix}-group`,
+      group_weight: 1,
+    });
+    const activationMessages = [makeMessage("needle")];
+    const originalRandom = Math.random;
+    const globalValues = [0.25, 0.75, 0.42];
+    let globalRolls = 0;
+
+    Math.random = () => globalValues[globalRolls++];
+    try {
+      const nativeActivation = activateWorldInfo({
+        entries: [keyword],
+        messages: activationMessages,
+        chatTurn: 1,
+        wiState: {},
+      });
+      const nativeMerge = mergeActivatedWorldInfoEntries(
+        nativeActivation.activatedEntries,
+        [asVectorCandidate(vector)],
+      );
+      expect(globalRolls).toBe(2);
+
+      const isolatedValues = [0.25, 0.75];
+      let isolatedRolls = 0;
+      const isolatedRandom = () => isolatedValues[isolatedRolls++];
+      const rawActivation = activateWorldInfo({
+        entries: [keyword],
+        messages: activationMessages,
+        chatTurn: 1,
+        wiState: {},
+        random: isolatedRandom,
+      });
+      const rawMerge = mergeActivatedWorldInfoEntries(
+        rawActivation.activatedEntries,
+        [asVectorCandidate(vector)],
+        undefined,
+        undefined,
+        undefined,
+        isolatedRandom,
+      );
+
+      expect(isolatedRolls).toBe(2);
+      expect(globalRolls).toBe(2);
+      expect(rawMerge.activatedEntries.map((entry) => entry.id)).toEqual(
+        nativeMerge.activatedEntries.map((entry) => entry.id),
+      );
+      expect(Math.random()).toBe(0.42);
+    } finally {
+      Math.random = originalRandom;
+    }
+  });
+});
+
 describe("finalizeActivatedWorldInfoEntries", () => {
   test("drops whitespace-only world info entries from activation and cache", () => {
     const result = finalizeActivatedWorldInfoEntries([
