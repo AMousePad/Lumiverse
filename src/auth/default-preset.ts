@@ -309,6 +309,7 @@ export const DEFAULT_PRESET_PROMPTS = {
   promptBehavior: { ...DEFAULT_PROMPT_BEHAVIOR },
   completionSettings: {
     assistantPrefill: "",
+    reasoningPrefill: "",
     assistantImpersonation: "",
     continuePrefill: false,
     continuePostfix: " ",

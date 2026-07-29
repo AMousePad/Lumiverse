@@ -1541,6 +1541,11 @@ function CompletionSettingsPanel({ completionSettings, onSave }: { completionSet
             <span className={s.settingsHint}>{t('settings.assistantPrefillHint')}</span>
           </div>
           <div className={s.settingsField}>
+            <span className={clsx(s.settingsFieldLabel, s.settingsFieldLabelDefault)}>{t('settings.reasoningPrefill')}</span>
+            <textarea className={s.settingsTextarea} style={{ minHeight: '40px' }} value={settings.reasoningPrefill ?? defaults.reasoningPrefill} onChange={e => handleChange('reasoningPrefill', e.target.value)} placeholder={t('settings.reasoningPrefillPlaceholder')} spellCheck={false} />
+            <span className={s.settingsHint}>{t('settings.reasoningPrefillHint')}</span>
+          </div>
+          <div className={s.settingsField}>
             <span className={clsx(s.settingsFieldLabel, s.settingsFieldLabelDefault)}>{t('settings.impersonationPrefill')}</span>
             <textarea className={s.settingsTextarea} style={{ minHeight: '40px' }} value={settings.assistantImpersonation ?? defaults.assistantImpersonation} onChange={e => handleChange('assistantImpersonation', e.target.value)} placeholder={t('settings.impersonationPrefillPlaceholder')} spellCheck={false} />
             <span className={s.settingsHint}>{t('settings.impersonationPrefillHint')}</span>

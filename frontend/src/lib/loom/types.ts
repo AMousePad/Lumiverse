@@ -148,6 +148,7 @@ export interface PromptBehavior {
 
 export interface CompletionSettings {
   assistantPrefill: string
+  reasoningPrefill?: string
   assistantImpersonation: string
   continuePrefill: boolean
   continuePostfix: string

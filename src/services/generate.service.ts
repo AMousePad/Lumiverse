@@ -603,6 +603,8 @@ interface PromptPipelineResult {
   /** The resolved assistant prefill text. When set, the generate service prepends
    *  this to the LLM response since the model continues after the prefill. */
   assistantPrefill?: string;
+  /** The resolved Kimi reasoning prefix, surfaced before streamed reasoning. */
+  assistantReasoningPrefill?: string;
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   worldInfoStats?: DryRunResult["worldInfoStats"];
   memoryStats?: import("../llm/types").MemoryStats;
@@ -1315,6 +1317,7 @@ async function runPromptPipeline(opts: {
   let breakdown: AssemblyBreakdownEntry[] | undefined;
   let interceptorBreakdown: InterceptorBreakdownEntry[] | undefined;
   let assistantPrefill: string | undefined;
+  let assistantReasoningPrefill: string | undefined;
   let activatedWorldInfo: ActivatedWorldInfoEntry[] | undefined;
   let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
   let memoryStats: import("../llm/types").MemoryStats | undefined;
@@ -1389,6 +1392,7 @@ async function runPromptPipeline(opts: {
     assembledParams = assemblyResult.parameters;
     breakdown = assemblyResult.breakdown;
     assistantPrefill = assemblyResult.assistantPrefill;
+    assistantReasoningPrefill = assemblyResult.assistantReasoningPrefill;
     activatedWorldInfo = assemblyResult.activatedWorldInfo;
     worldInfoStats = assemblyResult.worldInfoStats;
     memoryStats = assemblyResult.memoryStats;
@@ -1572,7 +1576,9 @@ async function runPromptPipeline(opts: {
   // Filter out any messages that became entirely empty after interceptors/regex scripts.
   // Many providers and LLM proxies drop requests entirely or hang if they encounter empty messages.
   const hasNonEmptyContent = (msg: LlmMessage) => {
-    if (typeof msg.content === "string") return msg.content.trim().length > 0;
+    if (typeof msg.content === "string") {
+      return msg.content.trim().length > 0 || (msg.role === "assistant" && msg.partial === true);
+    }
     if (Array.isArray(msg.content)) return msg.content.length > 0;
     return true;
   };
@@ -1612,6 +1618,7 @@ async function runPromptPipeline(opts: {
     breakdown,
     chatHistoryMessages,
     assistantPrefill,
+    assistantReasoningPrefill,
     activatedWorldInfo,
     worldInfoStats,
     memoryStats,
@@ -2860,6 +2867,7 @@ export async function startGeneration(
           inlineMembersByPrefix,
           councilSettings.toolsSettings.timeoutMs,
           pipeline.assistantPrefill,
+          pipeline.assistantReasoningPrefill,
           pipeline.macroEnv,
           pipeline.macroEnvSeed,
         );
@@ -3150,6 +3158,7 @@ async function runGeneration(
   inlineMembersByPrefix?: Map<string, CouncilMember>,
   inlineToolTimeoutMs?: number,
   assistantPrefill?: string,
+  assistantReasoningPrefill?: string,
   macroEnv?: import("../macros/types").MacroEnv,
   macroEnvSeed?: import("../macros/types").MacroEnv,
 ): Promise<void> {
@@ -3459,6 +3468,9 @@ async function runGeneration(
   // the prefill is (or starts with) the configured reasoning prefix, it's
   // classified as reasoning from the first token instead of leaking into the
   // content bubble and then being re-extracted by the post-parse safety net.
+  if (assistantReasoningPrefill) {
+    emitReasoningToken(assistantReasoningPrefill);
+  }
   if (assistantPrefill) {
     processContentToken(assistantPrefill);
   }

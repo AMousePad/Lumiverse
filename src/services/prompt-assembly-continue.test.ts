@@ -80,4 +80,18 @@ describe("continue prompt finalization", () => {
     });
     expect(isChatHistoryMessage(messages[1])).toBe(false);
   });
+
+  test("marks a native continue prefill as partial", () => {
+    const messages: LlmMessage[] = [
+      historyMessage("user", "Write a cliffhanger.", "user-1"),
+      historyMessage("assistant", "The lights went out", "target"),
+    ];
+
+    expect(finalizeContinuePrompt(messages, "target", "\n", true)).toBe(true);
+    expect(messages[1]).toMatchObject({
+      role: "assistant",
+      content: "The lights went out\n",
+      partial: true,
+    });
+  });
 });

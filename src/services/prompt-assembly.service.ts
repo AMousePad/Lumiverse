@@ -450,6 +450,7 @@ export function finalizeContinuePrompt(
   result: LlmMessage[],
   continueMessageId: string | undefined,
   continuePostfix: string,
+  useNativePrefill = false,
 ): boolean {
   let targetIndex = -1;
   for (let i = result.length - 1; i >= 0; i--) {
@@ -462,7 +463,10 @@ export function finalizeContinuePrompt(
   if (targetIndex < 0) return false;
 
   const [target] = result.splice(targetIndex, 1);
-  const continued = appendTextToMessage(target, continuePostfix);
+  const continued = {
+    ...appendTextToMessage(target, continuePostfix),
+    ...(useNativePrefill ? { partial: true } : {}),
+  };
   // It is now fixed prompt overhead rather than chat history, so it survives
   // history clipping and is not trimmed after we deliberately add a postfix.
   delete (continued as any)[CHAT_HISTORY_KEY];
@@ -3347,6 +3351,7 @@ export async function assemblePrompt(
   // assistant prefill would make the provider continue that text instead, while
   // the response still gets appended to the original chat message.
   const prefillParts: string[] = [];
+  let assistantReasoningPrefill: string | undefined;
 
   // A connection profile can bind its own Start Reply With value alongside its
   // reasoning settings (metadata.reasoningBindings.promptBias). When present,
@@ -3379,15 +3384,47 @@ export async function assemblePrompt(
     if (resolvedPrefill) prefillParts.push(resolvedPrefill);
   }
 
-  if (prefillParts.length > 0) {
-    assistantPrefill = prefillParts.join("");
-    result.push({ role: "assistant", content: assistantPrefill });
+  // Moonshot/Kimi Partial Mode can continue an explicitly supplied reasoning
+  // prefix via the assistant message's `reasoning_content`. Keep it separate
+  // from the visible assistant prefix: Kimi does not include this text in
+  // `content`, and the generation service displays it in the reasoning pane.
+  if (
+    ctx.generationType !== "continue" &&
+    connection?.provider === "moonshot" &&
+    completionSettings.reasoningPrefill
+  ) {
+    const resolvedReasoningPrefill = (
+      await evaluate(completionSettings.reasoningPrefill, macroEnv, registry)
+    ).text;
+    if (resolvedReasoningPrefill) {
+      assistantReasoningPrefill = resolvedReasoningPrefill;
+    }
+  }
+
+  if (prefillParts.length > 0 || assistantReasoningPrefill) {
+    assistantPrefill = prefillParts.length > 0 ? prefillParts.join("") : undefined;
+    result.push({
+      role: "assistant",
+      content: assistantPrefill ?? "",
+      partial: true,
+      ...(assistantReasoningPrefill
+        ? { reasoning_content: assistantReasoningPrefill }
+        : {}),
+    });
     breakdown.push({
       type: "utility",
       name: "Assistant Prefill",
       role: "assistant",
-      content: assistantPrefill,
+      content: assistantPrefill ?? "",
     });
+    if (assistantReasoningPrefill) {
+      breakdown.push({
+        type: "utility",
+        name: "Reasoning Prefill",
+        role: "assistant",
+        content: assistantReasoningPrefill,
+      });
+    }
   }
 
   // ---- Apply CompletionSettings post-processing ----
@@ -3472,6 +3509,7 @@ export async function assemblePrompt(
       result,
       ctx.continueMessageId,
       ctx.continuePostfix ?? "",
+      completionSettings.continuePrefill === true,
     );
     if (finalized) {
       const continued = [...result].reverse().find(
@@ -3598,6 +3636,7 @@ export async function assemblePrompt(
     parameters,
     trimIncompleteWords: prompts.advancedSettings?.trimIncompleteWords === true,
     assistantPrefill,
+    assistantReasoningPrefill,
     activatedWorldInfo:
       activatedWorldInfo.length > 0 ? activatedWorldInfo : undefined,
     worldInfoStats,
@@ -6740,6 +6779,7 @@ async function onelinerImpersonation(
 
   // assistantImpersonation prefill — sent as actual assistant message
   let assistantPrefill: string | undefined;
+  let assistantReasoningPrefill: string | undefined;
   const csPrefill =
     completionSettings.assistantImpersonation ||
     completionSettings.assistantPrefill;
@@ -6748,12 +6788,40 @@ async function onelinerImpersonation(
       .text;
     if (resolvedPrefill) {
       assistantPrefill = resolvedPrefill;
-      result.push({ role: "assistant", content: assistantPrefill });
+      result.push({ role: "assistant", content: assistantPrefill, partial: true });
       breakdown.push({
         type: "utility",
         name: "Assistant Prefill",
         role: "assistant",
         content: assistantPrefill,
+      });
+    }
+  }
+
+  if (connection?.provider === "moonshot" && completionSettings.reasoningPrefill) {
+    const resolvedReasoningPrefill = (
+      await evaluate(completionSettings.reasoningPrefill, macroEnv, registry)
+    ).text;
+    if (resolvedReasoningPrefill) {
+      assistantReasoningPrefill = resolvedReasoningPrefill;
+      const prefillMessage = result.findLast(
+        (message) => message.role === "assistant" && message.partial,
+      );
+      if (prefillMessage) {
+        prefillMessage.reasoning_content = assistantReasoningPrefill;
+      } else {
+        result.push({
+          role: "assistant",
+          content: "",
+          partial: true,
+          reasoning_content: assistantReasoningPrefill,
+        });
+      }
+      breakdown.push({
+        type: "utility",
+        name: "Reasoning Prefill",
+        role: "assistant",
+        content: assistantReasoningPrefill,
       });
     }
   }
@@ -6773,6 +6841,7 @@ async function onelinerImpersonation(
     parameters,
     trimIncompleteWords: preset?.prompts?.advancedSettings?.trimIncompleteWords === true,
     assistantPrefill,
+    assistantReasoningPrefill,
     macroEnv,
   };
 }
