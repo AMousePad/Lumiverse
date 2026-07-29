@@ -162,3 +162,65 @@ describe("world info interceptor activation settings", () => {
     expect(seen).toEqual([null, 7]);
   });
 });
+
+describe("world info interceptor runtime placement", () => {
+  test("chains validated prompt-local placement without changing stored rows", async () => {
+    const chain = new WorldInfoInterceptorChain();
+    let placementSeenBySecondHandler: unknown;
+    chain.register({
+      extensionId: "first",
+      priority: 0,
+      handler: async () => ({
+        mutated: [{
+          id: "a",
+          placement: {
+            type: "chat_depth",
+            role: "assistant",
+            depth: 3,
+            direction: "from_start",
+          },
+        }],
+      }),
+    });
+    chain.register({
+      extensionId: "second",
+      priority: 1,
+      handler: async (ctx) => {
+        placementSeenBySecondHandler = ctx.entries[0]?.placement;
+        return {
+          mutated: [{
+            id: "b",
+            placement: {
+              type: "chat_depth",
+              role: "system",
+              depth: -1,
+              direction: "from_end",
+            },
+          }],
+        };
+      },
+    });
+
+    const result = await chain.run(
+      [makeEntry("a"), makeEntry("b")],
+      context,
+    );
+
+    expect(placementSeenBySecondHandler).toEqual({
+      type: "chat_depth",
+      role: "assistant",
+      depth: 3,
+      direction: "from_start",
+    });
+    expect([...result.placementByEntryId]).toEqual([[
+      "a",
+      {
+        type: "chat_depth",
+        role: "assistant",
+        depth: 3,
+        direction: "from_start",
+      },
+    ]]);
+    expect(result.entries[0]?.position).toBe(0);
+  });
+});

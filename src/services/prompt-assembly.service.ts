@@ -25,7 +25,7 @@ import type {
   PromptVariableDef,
   PromptVariableValue,
 } from "../types/preset";
-import type { WorldInfoCache } from "../types/world-book";
+import type { WorldInfoCache, WorldBookEntry } from "../types/world-book";
 import type { Character } from "../types/character";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Persona } from "../types/persona";
@@ -49,13 +49,17 @@ import {
   applyWorldInfoGroupLogic,
   createWorldInfoActivationScanCache,
   finalizeActivatedWorldInfoEntries,
+  materializeWorldInfoCache,
   primeWorldInfoActivationScanCache,
   type WiState,
   type WorldInfoSettings,
   type FinalizedWorldInfoEntries,
   normalizeWorldInfoSettings,
 } from "./world-info-activation.service";
-import { worldInfoInterceptorChain } from "../spindle/world-info-interceptor";
+import {
+  worldInfoInterceptorChain,
+  type WorldInfoInterceptorPlacementDTO,
+} from "../spindle/world-info-interceptor";
 import { buildWorldInfoCaptureMap } from "../spindle/world-info-capture";
 import {
   getSourceMessageMetadata,
@@ -168,6 +172,7 @@ export type {
 
 const CHAT_HISTORY_KEY = "__chatHistorySource";
 const WORLD_INFO_KEY = "__worldInfoSource";
+const RUNTIME_WORLD_INFO_PLACEMENT_KEY = "__runtimeWorldInfoPlacementId";
 const SOURCE_ID_KEY = "__sourceMessageId";
 const SOURCE_INDEX_KEY = "__sourceIndexInChat";
 const CONTEXT_ANCHOR_PROTECTED_KEY = "__contextAnchorProtected";
@@ -203,6 +208,22 @@ function isContextAnchorProtected(msg: LlmMessage): boolean {
 function markAsWorldInfoEntry(msg: LlmMessage): LlmMessage {
   (msg as any)[WORLD_INFO_KEY] = true;
   return msg;
+}
+
+function markRuntimeWorldInfoPlacement(
+  msg: LlmMessage,
+  entryId: string,
+): LlmMessage {
+  markAsWorldInfoEntry(msg);
+  (msg as any)[RUNTIME_WORLD_INFO_PLACEMENT_KEY] = entryId;
+  return msg;
+}
+
+function getRuntimeWorldInfoPlacementId(
+  msg: LlmMessage,
+): string | undefined {
+  const value = (msg as any)[RUNTIME_WORLD_INFO_PLACEMENT_KEY];
+  return typeof value === "string" ? value : undefined;
 }
 
 export function isWorldInfoEntryMessage(msg: LlmMessage): boolean {
@@ -267,6 +288,153 @@ export function insertBlocksIntoTaggedHistory(
       content: block.content,
     });
   }
+}
+
+export interface RuntimeWorldInfoChatPlacementEntry {
+  readonly id: string;
+  content: string;
+  readonly entryLabel: string;
+  readonly orderValue: number;
+  readonly placement: WorldInfoInterceptorPlacementDTO;
+}
+
+export function buildRuntimeWorldInfoChatPlacements(
+  entries: readonly WorldBookEntry[],
+  placementByEntryId: ReadonlyMap<
+    string,
+    WorldInfoInterceptorPlacementDTO
+  >,
+): RuntimeWorldInfoChatPlacementEntry[] {
+  const placed: RuntimeWorldInfoChatPlacementEntry[] = [];
+  for (const entry of entries) {
+    const placement = placementByEntryId.get(entry.id);
+    if (!placement) continue;
+    placed.push({
+      id: entry.id,
+      content: entry.content,
+      entryLabel: getRuntimeWorldInfoEntryLabel(entry),
+      orderValue: entry.order_value,
+      placement,
+    });
+  }
+  // Selection is priority ordered. Restore semantic insertion order with the
+  // final reversal also applying to rows that share an order value.
+  placed.sort((a, b) => b.orderValue - a.orderValue).reverse();
+  return placed;
+}
+
+function placeRuntimeWorldInfoIntoTaggedHistory(
+  messages: LlmMessage[],
+  entries: readonly RuntimeWorldInfoChatPlacementEntry[],
+  messageByEntryId: ReadonlyMap<string, LlmMessage>,
+  fallbackIndex = messages.length,
+): void {
+  const historySequence = new Set<LlmMessage>(
+    messages.filter(isChatHistoryMessage),
+  );
+  const emptyHistoryFallback = Math.max(
+    0,
+    Math.min(Math.trunc(fallbackIndex), messages.length),
+  );
+
+  for (const entry of entries) {
+    const sequenceIndices: number[] = [];
+    for (let index = 0; index < messages.length; index++) {
+      if (historySequence.has(messages[index])) sequenceIndices.push(index);
+    }
+
+    const sequenceLength = sequenceIndices.length;
+    // Preserve sequential Array.splice semantics. Entries inserted earlier in
+    // this loop become part of the sequence used to place later entries.
+    const spliceStart =
+      entry.placement.direction === "from_start"
+        ? entry.placement.depth
+        : sequenceLength - entry.placement.depth;
+    // Array.splice treats a negative start as an offset from the current end.
+    const boundary =
+      spliceStart < 0
+        ? Math.max(sequenceLength + spliceStart, 0)
+        : Math.min(spliceStart, sequenceLength);
+    const insertAt =
+      sequenceLength === 0
+        ? emptyHistoryFallback
+        : boundary === sequenceLength
+          ? sequenceIndices[sequenceLength - 1] + 1
+          : sequenceIndices[boundary];
+    const message = messageByEntryId.get(entry.id);
+    if (!message) continue;
+    markRuntimeWorldInfoPlacement(message, entry.id);
+    messages.splice(insertAt, 0, message);
+    historySequence.add(message);
+  }
+}
+
+/**
+ * Apply prompt-local placement relative to tagged chat history.
+ */
+export function insertRuntimeWorldInfoIntoTaggedHistory(
+  messages: LlmMessage[],
+  entries: readonly RuntimeWorldInfoChatPlacementEntry[],
+  fallbackIndex = messages.length,
+): void {
+  const messageByEntryId = new Map<string, LlmMessage>();
+  for (const entry of entries) {
+    messageByEntryId.set(entry.id, {
+      role: entry.placement.role,
+      content: entry.content,
+    });
+  }
+  placeRuntimeWorldInfoIntoTaggedHistory(
+    messages,
+    entries,
+    messageByEntryId,
+    fallbackIndex,
+  );
+}
+
+/**
+ * Reapply placement after context clipping changes the selected history.
+ */
+export function repositionRuntimeWorldInfoInTaggedHistory(
+  messages: LlmMessage[],
+  entries: readonly RuntimeWorldInfoChatPlacementEntry[],
+): void {
+  if (entries.length === 0) return;
+  const entryIds = new Set(entries.map((entry) => entry.id));
+  const messageByEntryId = new Map<string, LlmMessage>();
+  let fallbackIndex = messages.length;
+  let write = 0;
+  for (let read = 0; read < messages.length; read++) {
+    const message = messages[read];
+    const entryId = getRuntimeWorldInfoPlacementId(message);
+    if (entryId && entryIds.has(entryId)) {
+      if (messageByEntryId.size === 0) fallbackIndex = write;
+      messageByEntryId.set(entryId, message);
+      continue;
+    }
+    messages[write++] = message;
+  }
+  if (messageByEntryId.size === 0) return;
+  messages.length = write;
+  placeRuntimeWorldInfoIntoTaggedHistory(
+    messages,
+    entries,
+    messageByEntryId,
+    fallbackIndex,
+  );
+}
+
+function getRuntimeWorldInfoEntryLabel(
+  entry: Pick<WorldBookEntry, "id" | "comment" | "key" | "keysecondary">,
+): string {
+  const comment = entry.comment?.trim();
+  if (comment) return comment;
+  const keys = [...(entry.key ?? []), ...(entry.keysecondary ?? [])]
+    .map((key) => key.trim())
+    .filter(Boolean);
+  return keys.length > 0
+    ? keys.join(", ")
+    : `(unnamed entry ${entry.id.slice(0, 8)})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1968,7 +2136,21 @@ export async function assemblePrompt(
       interception.selectionContentByEntryId,
     ),
   );
-  const wiCache = mergedWorldInfo.cache;
+  const runtimeWorldInfoPlacements = buildRuntimeWorldInfoChatPlacements(
+    mergedWorldInfo.activatedEntries,
+    interception.placementByEntryId,
+  );
+  const runtimePlacementIds = new Set(
+    runtimeWorldInfoPlacements.map((entry) => entry.id),
+  );
+  const wiCache =
+    runtimePlacementIds.size === 0
+      ? mergedWorldInfo.cache
+      : materializeWorldInfoCache(
+          mergedWorldInfo.activatedEntries.filter(
+            (entry) => !runtimePlacementIds.has(entry.id),
+          ),
+        );
   wiResult.activatedEntries = mergedWorldInfo.activatedEntries;
   const activatedWorldInfo = mergedWorldInfo.activatedWorldInfo;
   let spindleWorldInfoCaptures:
@@ -2532,6 +2714,7 @@ export async function assemblePrompt(
       wiCache.depth,
       wiCache.atMarker,
       wiCache.pinnedMarkers,
+      runtimeWorldInfoPlacements,
     ];
     let wiEvalCounter = 0;
     for (const bucket of allWiEntries) {
@@ -2548,6 +2731,11 @@ export async function assemblePrompt(
     }
   }
   pruneEmptyWorldInfoCacheEntries(wiCache);
+  for (let index = runtimeWorldInfoPlacements.length - 1; index >= 0; index--) {
+    if (runtimeWorldInfoPlacements[index].content.trim().length === 0) {
+      runtimeWorldInfoPlacements.splice(index, 1);
+    }
+  }
 
   // Populate {{wi_marker}} — all position-7 entries joined by double newlines
   if (wiCache.atMarker.length > 0) {
@@ -3255,6 +3443,23 @@ export async function assemblePrompt(
     });
   }
 
+  insertRuntimeWorldInfoIntoTaggedHistory(
+    result,
+    runtimeWorldInfoPlacements,
+    firstChatIdx >= 0 ? firstChatIdx : result.length,
+  );
+  for (const entry of runtimeWorldInfoPlacements) {
+    breakdown.push({
+      type: "world_info",
+      name: formatWorldInfoBreakdownName(
+        `WI Chat Depth ${entry.placement.direction} ${entry.placement.depth}`,
+        entry.entryLabel,
+      ),
+      role: entry.placement.role,
+      content: entry.content,
+    });
+  }
+
   // Position 7 (at marker): injected via {{wi_marker}} macro, add breakdown only
   for (const markerEntry of wiCache.atMarker) {
     breakdown.push({
@@ -3703,6 +3908,10 @@ export async function assemblePrompt(
       parameters.max_tokens as number | null | undefined,
       ctx.signal,
     )
+  );
+  repositionRuntimeWorldInfoInTaggedHistory(
+    result,
+    runtimeWorldInfoPlacements,
   );
 
   // Build memory stats for dry-run diagnostics

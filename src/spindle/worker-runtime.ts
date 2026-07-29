@@ -3545,6 +3545,7 @@ const spindleApi: RuntimeSpindleAPI = {
   contracts: Object.freeze({
     preAssemblyGenerationContext: 1,
     worldInfoActivationCapture: 1,
+    worldInfoRuntimePlacement: 1,
   }),
 
   registerContextHandler(
