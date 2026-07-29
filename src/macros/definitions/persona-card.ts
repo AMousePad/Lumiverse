@@ -1,7 +1,12 @@
 import { registry } from "../MacroRegistry";
 
 function getFocusedCharacterField(
-  ctx: { env: { extra?: Record<string, any>; character: Record<string, string> } },
+  ctx: {
+    env: {
+      extra?: Record<string, any>;
+      character: { description: string; personality: string };
+    };
+  },
   field: "description" | "personality",
 ): string {
   const focused = ctx.env.extra?.groupFocusedCharacter as

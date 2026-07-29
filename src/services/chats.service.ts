@@ -1002,6 +1002,15 @@ export function getChat(userId: string, id: string): Chat | null {
 export function createChat(userId: string, input: CreateChatInput): Chat {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
+  const requestedGreetingIndex = input.greeting_index
+    ?? input.metadata?.activeGreetingIndex;
+  const greetingIndex =
+    Number.isInteger(requestedGreetingIndex) && requestedGreetingIndex >= 0
+      ? requestedGreetingIndex
+      : 0;
+  const metadata = input.character_id
+    ? { ...(input.metadata || {}), activeGreetingIndex: greetingIndex }
+    : (input.metadata || {});
 
   // Auto-name with character name
   let chatName = input.name || "";
@@ -1012,14 +1021,14 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
 
   getDb()
     .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(id, userId, input.character_id ?? null, chatName, JSON.stringify(input.metadata || {}), now, now);
+    .run(id, userId, input.character_id ?? null, chatName, JSON.stringify(metadata), now, now);
 
   // Insert the character's greeting as the opening message
   const character = input.character_id ? getCharacter(userId, input.character_id) : null;
   if (character) {
     let greeting = character.first_mes;
-    if (input.greeting_index && input.greeting_index >= 1 && character.alternate_greetings?.length) {
-      const altIdx = input.greeting_index - 1;
+    if (greetingIndex >= 1 && character.alternate_greetings?.length) {
+      const altIdx = greetingIndex - 1;
       if (altIdx < character.alternate_greetings.length) {
         greeting = character.alternate_greetings[altIdx];
       }
@@ -1032,7 +1041,7 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
         extra: {
           greeting: true,
           greeting_character_id: character.id,
-          greeting_index: input.greeting_index ?? 0,
+          greeting_index: greetingIndex,
         },
       }, userId);
     }

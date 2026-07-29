@@ -124,6 +124,56 @@ describe("buildEnv firstMessage", () => {
 
     expect(env.character.firstMessage).toBe("Group greeting");
   });
+
+  test("exposes the selected greeting identity without matching message text", () => {
+    const env = buildEnv({
+      character: {
+        ...baseCharacter,
+        alternate_greetings: ["Alternate one", "Alternate two"],
+      },
+      persona: null,
+      chat: {
+        ...baseChat,
+        metadata: { activeGreetingIndex: 2 },
+      },
+      messages: [
+        makeMessage({
+          content: "Edited selected greeting",
+          extra: { greeting: true, greeting_index: 0 },
+        }),
+      ],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.character.firstMessage).toBe("Edited selected greeting");
+    expect(env.character.alternateGreetings).toEqual([
+      "Alternate one",
+      "Alternate two",
+    ]);
+    expect(env.chat.greetingIndex).toBe(2);
+  });
+
+  test("falls back to the persisted greeting message index", () => {
+    const env = buildEnv({
+      character: {
+        ...baseCharacter,
+        alternate_greetings: ["Alternate one"],
+      },
+      persona: null,
+      chat: baseChat,
+      messages: [
+        makeMessage({
+          content: "Alternate one",
+          extra: { greeting: true, greeting_index: 1 },
+        }),
+      ],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.chat.greetingIndex).toBe(1);
+  });
 });
 
 describe("buildEnv persona pronouns", () => {
