@@ -47,6 +47,7 @@ async function processChatGreeting(userId: string, chat: { id: string }) {
     chatId: chat.id,
     messageId: greeting.id,
     content: greeting.content,
+    isUser: false,
     extra: greeting.extra,
     origin: "create",
     userId,
@@ -102,6 +103,7 @@ async function runDisplayPreprocessItem(
     ? await messageContentProcessorChain.run({
         chatId,
         content: item.rawContent,
+        isUser: item.role === "user",
         origin: "render",
         userId,
         ...(item.messageId ? { messageId: item.messageId } : {}),
@@ -742,7 +744,14 @@ app.post("/:chatId/messages", async (c) => {
   }
 
   const processed = await runMessageContentProcessors(
-    { chatId, content: body.content, extra: body.extra, origin: "create", userId },
+    {
+      chatId,
+      content: body.content,
+      isUser: body.is_user === true,
+      extra: body.extra,
+      origin: "create",
+      userId,
+    },
     userId,
     c.req.raw.signal,
   );
@@ -894,11 +903,13 @@ app.put("/:chatId/messages/:id", async (c) => {
   const body = await c.req.json();
 
   if (body.content !== undefined) {
+    const existing = svc.getMessage(userId, messageId);
     const processed = await runMessageContentProcessors(
       {
         chatId,
         messageId,
         content: body.content,
+        isUser: existing?.is_user === true,
         extra: body.extra,
         origin: "update",
         userId,
@@ -916,7 +927,6 @@ app.put("/:chatId/messages/:id", async (c) => {
         chatId,
       });
       if (editScripts.length > 0) {
-        const existing = svc.getMessage(userId, messageId);
         const placement = existing?.is_user ? "user_input" as const : "ai_output" as const;
         body.content = await regexScriptsSvc.applyRegexScripts(
           body.content,
@@ -966,11 +976,13 @@ app.post("/:chatId/messages/:id/swipe", async (c) => {
   if (body.direction === "left" || body.direction === "right") {
     msg = svc.cycleSwipe(userId, messageId, body.direction);
   } else if (body.content !== undefined) {
+    const existing = svc.getMessage(userId, messageId);
     const processed = await runMessageContentProcessors(
       {
         chatId,
         messageId,
         content: body.content,
+        isUser: existing?.is_user === true,
         origin: "swipe_add",
         userId,
       },
@@ -993,12 +1005,14 @@ app.put("/:chatId/messages/:id/swipe/:idx", async (c) => {
   const body = await c.req.json();
   if (body.content === undefined) return c.json({ error: "content is required" }, 400);
   const idx = parseInt(c.req.param("idx"), 10);
+  const existing = svc.getMessage(userId, messageId);
 
   const processed = await runMessageContentProcessors(
     {
       chatId,
       messageId,
       content: body.content,
+      isUser: existing?.is_user === true,
       origin: "swipe_update",
       swipeIndex: idx,
       userId,
@@ -1015,7 +1029,6 @@ app.put("/:chatId/messages/:id/swipe/:idx", async (c) => {
       chatId,
     });
     if (editScripts.length > 0) {
-      const existing = svc.getMessage(userId, messageId);
       const placement = existing?.is_user ? "user_input" as const : "ai_output" as const;
       finalContent = await regexScriptsSvc.applyRegexScripts(
         finalContent,
