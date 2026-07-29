@@ -96,6 +96,7 @@ export interface ActivationInput {
   settings?: Partial<WorldInfoSettings>;
   scanCache?: WorldInfoActivationScanCache;
   random?: () => number;
+  selectionContentByEntryId?: ReadonlyMap<string, string>;
 }
 
 export interface WorldInfoActivationScanCache {
@@ -185,6 +186,8 @@ export interface FinalizeWorldInfoOptions {
   random?: () => number;
   /** Internal competition priorities used only for budget ordering. */
   budgetPriorityById?: ReadonlyMap<string, number>;
+  /** Prompt-local content used only for selection and token accounting. */
+  selectionContentByEntryId?: ReadonlyMap<string, string>;
 }
 
 // ─── Activation cache (short-TTL for rapid dry-run optimization) ───
@@ -282,6 +285,13 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
       vectorized: e.vectorized,
     }));
     hasher.update("\0");
+  }
+  for (const entry of entries) {
+    const content = input.selectionContentByEntryId?.get(entry.id);
+    if (content !== undefined && content !== entry.content) {
+      hasher.update(JSON.stringify([entry.id, content]));
+      hasher.update("\0");
+    }
   }
   const readsMessages = entries.some(
     (entry) =>
@@ -449,6 +459,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
 
   const finalized = finalizeActivatedWorldInfoEntries(activated, settings, {
     random: input.random,
+    selectionContentByEntryId: input.selectionContentByEntryId,
   });
 
   const stats: ActivationStats = {
@@ -481,7 +492,11 @@ export function finalizeActivatedWorldInfoEntries(
   const afterGroups = options.skipGroupLogic
     ? [...entries]
     : applyWorldInfoGroupLogic([...entries], options.random);
-  const insertableEntries = afterGroups.filter(hasMeaningfulWorldInfoContent);
+  const insertableEntries = afterGroups.filter((entry) =>
+    hasMeaningfulWorldInfoContent({
+      content: selectionContentFor(entry, options.selectionContentByEntryId),
+    }),
+  );
 
   if (!options.preserveOrder) {
     insertableEntries.sort((a, b) => {
@@ -493,7 +508,11 @@ export function finalizeActivatedWorldInfoEntries(
   }
 
   const activatedBeforeBudget = insertableEntries.length;
-  const activatedEntries = enforceBudget(insertableEntries, settings);
+  const activatedEntries = enforceBudget(
+    insertableEntries,
+    settings,
+    options.selectionContentByEntryId,
+  );
   const evictedByBudget = activatedBeforeBudget - activatedEntries.length;
 
   return {
@@ -502,7 +521,10 @@ export function finalizeActivatedWorldInfoEntries(
     activatedBeforeBudget,
     activatedAfterBudget: activatedEntries.length,
     evictedByBudget,
-    estimatedTokens: estimateTokens(activatedEntries),
+    estimatedTokens: estimateTokens(
+      activatedEntries,
+      options.selectionContentByEntryId,
+    ),
   };
 }
 
@@ -515,10 +537,21 @@ function estimateEntryTokens(content: string): number {
   return Math.ceil(content.length / 4);
 }
 
-function estimateTokens(entries: WorldBookEntry[]): number {
+function selectionContentFor(
+  entry: Pick<WorldBookEntry, "id" | "content">,
+  selectionContentByEntryId?: ReadonlyMap<string, string>,
+): string {
+  return selectionContentByEntryId?.get(entry.id) ?? entry.content;
+}
+
+function estimateTokens(
+  entries: WorldBookEntry[],
+  selectionContentByEntryId?: ReadonlyMap<string, string>,
+): number {
   let total = 0;
   for (const e of entries) {
-    if (e.content) total += estimateEntryTokens(e.content);
+    const content = selectionContentFor(e, selectionContentByEntryId);
+    if (content) total += estimateEntryTokens(content);
   }
   return total;
 }
@@ -528,7 +561,11 @@ function estimateTokens(entries: WorldBookEntry[]): number {
  * Entries are already sorted by priority desc, order_value asc.
  * Constants are never evicted — they take priority over conditional entries.
  */
-function enforceBudget(entries: WorldBookEntry[], settings: WorldInfoSettings): WorldBookEntry[] {
+function enforceBudget(
+  entries: WorldBookEntry[],
+  settings: WorldInfoSettings,
+  selectionContentByEntryId?: ReadonlyMap<string, string>,
+): WorldBookEntry[] {
   let result = entries;
 
   // Max activated entries cap
@@ -552,7 +589,8 @@ function enforceBudget(entries: WorldBookEntry[], settings: WorldInfoSettings): 
     // Constants first (never evicted)
     for (const e of result) {
       if (e.constant) {
-        totalTokens += e.content ? estimateEntryTokens(e.content) : 0;
+        const content = selectionContentFor(e, selectionContentByEntryId);
+        totalTokens += content ? estimateEntryTokens(content) : 0;
         kept.push(e);
       }
     }
@@ -560,7 +598,8 @@ function enforceBudget(entries: WorldBookEntry[], settings: WorldInfoSettings): 
     // Non-constants in priority order until budget exhausted
     for (const e of result) {
       if (e.constant) continue;
-      const tokens = e.content ? estimateEntryTokens(e.content) : 0;
+      const content = selectionContentFor(e, selectionContentByEntryId);
+      const tokens = content ? estimateEntryTokens(content) : 0;
       if (totalTokens + tokens > settings.maxTokenBudget) continue;
       totalTokens += tokens;
       kept.push(e);

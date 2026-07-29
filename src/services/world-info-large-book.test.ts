@@ -684,6 +684,71 @@ describe("mergeActivatedWorldInfoEntries — user-shape (9000+ entries, keys=[],
   });
 });
 
+describe("prompt-local world-info selection content", () => {
+  test("filters a raw constant whose selection view is empty without caching the empty result", () => {
+    const entry = makeEntry({
+      id: crypto.randomUUID(),
+      uid: crypto.randomUUID(),
+      constant: true,
+      content: "{{runtime condition}}large hidden payload{{/runtime condition}}",
+      vectorized: false,
+    });
+
+    const hidden = activateWorldInfo({
+      entries: [entry],
+      messages: [],
+      chatTurn: 0,
+      wiState: {},
+      settings: {},
+      selectionContentByEntryId: new Map([[entry.id, ""]]),
+    });
+    const visible = activateWorldInfo({
+      entries: [entry],
+      messages: [],
+      chatTurn: 0,
+      wiState: {},
+      settings: {},
+      selectionContentByEntryId: new Map([[entry.id, "visible"]]),
+    });
+
+    expect(hidden.activatedEntries).toEqual([]);
+    expect(visible.activatedEntries).toEqual([entry]);
+  });
+
+  test("uses selection content for budget and dedup while returning raw content", () => {
+    const first = makeEntry({
+      content: "A".repeat(4_000),
+      priority: 20,
+      vectorized: false,
+    });
+    const duplicate = makeEntry({
+      content: "B".repeat(4_000),
+      priority: 10,
+      vectorized: false,
+    });
+    const selectionContentByEntryId = new Map([
+      [first.id, "same"],
+      [duplicate.id, "same"],
+    ]);
+
+    const result = mergeActivatedWorldInfoEntries(
+      [first, duplicate],
+      [],
+      { maxTokenBudget: 1 },
+      undefined,
+      undefined,
+      undefined,
+      selectionContentByEntryId,
+    );
+
+    expect(result.activatedEntries).toEqual([first]);
+    expect(result.activatedEntries[0]?.content).toBe(first.content);
+    expect(result.cache.before[0]?.content).toBe(first.content);
+    expect(result.estimatedTokens).toBe(1);
+    expect(result.deduplicated).toBe(1);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Scenario 2: equal priority + high order_value loses even when budget has room
 // ---------------------------------------------------------------------------

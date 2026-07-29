@@ -63,7 +63,10 @@ export interface WorldInfoInterceptorCtxDTO {
 
 export interface WorldInfoInterceptorMutationDTO {
   readonly id: string;
+  /** Prompt-local replacement used for final insertion. */
   readonly content?: string;
+  /** Prompt-local alternate used only by host selection and token accounting. */
+  readonly selectionContent?: string;
 }
 
 export interface WorldInfoInterceptorResultDTO {
@@ -79,6 +82,7 @@ export interface WorldInfoInterceptorChainResult {
   readonly entries: WorldBookEntry[];
   readonly captureRequests: Map<string, Set<string>>;
   readonly activationOverrides: WorldInfoActivationOverridesDTO;
+  readonly selectionContentByEntryId: ReadonlyMap<string, string>;
 }
 
 export interface WorldInfoInterceptor {
@@ -118,6 +122,7 @@ export class WorldInfoInterceptorChain {
         entries: [...entries],
         captureRequests: new Map(),
         activationOverrides: {},
+        selectionContentByEntryId: new Map(),
       };
     }
 
@@ -160,6 +165,7 @@ export class WorldInfoInterceptorChain {
     const contentOverrides = new Map<string, string>();
     const captureRequests = new Map<string, Set<string>>();
     const candidateIds = new Set(entries.map((entry) => entry.id));
+    const selectionContentByEntryId = new Map<string, string>();
     let disableRecursion = false;
 
     let working: WorldBookEntry[] = [...entries];
@@ -223,6 +229,9 @@ export class WorldInfoInterceptorChain {
         for (const id of forcedList) forcedByChain.add(id);
         for (const m of mutatedList) {
           if (m.content !== undefined) contentOverrides.set(m.id, m.content);
+          if (m.selectionContent !== undefined) {
+            selectionContentByEntryId.set(m.id, m.selectionContent);
+          }
         }
         disableRecursion ||= disablesRecursion;
 
@@ -250,6 +259,7 @@ export class WorldInfoInterceptorChain {
       activationOverrides: {
         ...(disableRecursion ? { disableRecursion: true as const } : {}),
       },
+      selectionContentByEntryId,
     };
   }
 
