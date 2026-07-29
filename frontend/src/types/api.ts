@@ -725,6 +725,21 @@ export interface DeletePersonaFolderResponse {
   count: number;
 }
 
+export interface BulkPersonaImportResult {
+  imported: Persona[];
+  count: number;
+  failed: number;
+  errors: Array<{
+    index: number;
+    name: string;
+    error: string;
+  }>;
+  warnings: {
+    detached_world_books: number;
+    skipped_asset_references: number;
+  };
+}
+
 // ---- Preset ----
 export interface Preset {
   id: string;

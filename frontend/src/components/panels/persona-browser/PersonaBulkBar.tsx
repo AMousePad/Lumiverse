@@ -1,5 +1,5 @@
-import { useEffect, useId, useState } from 'react'
-import { CheckSquare, X } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { CheckSquare, FileUp, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
 import type { WorldBook } from '@/types/api'
@@ -10,6 +10,7 @@ export type PersonaBulkAction =
   | 'attachLorebook'
   | 'removeLorebook'
   | 'toggleNarrator'
+  | 'import'
   | 'export'
   | 'delete'
 
@@ -22,7 +23,7 @@ interface PersonaBulkBarProps {
   onSelectAll: () => void
   onClearSelection: () => void
   onCancel: () => void
-  onApply: (action: PersonaBulkAction, value?: string) => Promise<boolean>
+  onApply: (action: PersonaBulkAction, value?: string, file?: File) => Promise<boolean>
 }
 
 export default function PersonaBulkBar({
@@ -40,22 +41,31 @@ export default function PersonaBulkBar({
   const [action, setAction] = useState<PersonaBulkAction | ''>('')
   const [folder, setFolder] = useState('')
   const [worldBookId, setWorldBookId] = useState('')
+  const [importFile, setImportFile] = useState<File | null>(null)
   const folderListId = useId()
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (selectedCount === 0) setAction('')
+    if (selectedCount === 0) {
+      setAction((current) => current === 'import' ? current : '')
+    }
   }, [selectedCount])
 
   const needsLorebook = action === 'attachLorebook'
-  const canApply = selectedCount > 0 && !!action && (!needsLorebook || !!worldBookId)
+  const isImport = action === 'import'
+  const canApply = isImport
+    ? !!importFile
+    : selectedCount > 0 && !!action && (!needsLorebook || !!worldBookId)
 
   const apply = async () => {
     if (!action || !canApply || busy) return
     const value = action === 'move' ? folder : action === 'attachLorebook' ? worldBookId : undefined
-    if (await onApply(action, value)) {
+    if (await onApply(action, value, importFile ?? undefined)) {
       setAction('')
       setFolder('')
       setWorldBookId('')
+      setImportFile(null)
+      if (importInputRef.current) importInputRef.current.value = ''
     }
   }
 
@@ -83,7 +93,14 @@ export default function PersonaBulkBar({
         <select
           className={styles.select}
           value={action}
-          onChange={(event) => setAction(event.target.value as PersonaBulkAction | '')}
+          onChange={(event) => {
+            const nextAction = event.target.value as PersonaBulkAction | ''
+            setAction(nextAction)
+            if (nextAction !== 'import') {
+              setImportFile(null)
+              if (importInputRef.current) importInputRef.current.value = ''
+            }
+          }}
           disabled={busy}
           aria-label={t('action')}
         >
@@ -92,6 +109,7 @@ export default function PersonaBulkBar({
           <option value="attachLorebook">{t('attachLorebook')}</option>
           <option value="removeLorebook">{t('removeLorebook')}</option>
           <option value="toggleNarrator">{t('toggleNarrator')}</option>
+          <option value="import">{t('import')}</option>
           <option value="export">{t('export')}</option>
           <option value="delete">{t('delete')}</option>
         </select>
@@ -126,13 +144,35 @@ export default function PersonaBulkBar({
           </select>
         )}
 
+        {isImport && (
+          <>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json,application/json"
+              hidden
+              onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+            />
+            <button
+              type="button"
+              className={clsx(styles.targetInput, styles.fileBtn)}
+              onClick={() => importInputRef.current?.click()}
+              disabled={busy}
+              title={importFile?.name || t('chooseFile')}
+            >
+              <FileUp size={13} />
+              <span>{importFile?.name || t('chooseFile')}</span>
+            </button>
+          </>
+        )}
+
         <button
           type="button"
           className={clsx(styles.applyBtn, action === 'delete' && styles.deleteBtn)}
           onClick={() => void apply()}
           disabled={!canApply || busy}
         >
-          {busy ? t('working') : t('apply')}
+          {busy ? t('working') : isImport ? t('import') : t('apply')}
         </button>
       </div>
     </div>

@@ -72,6 +72,20 @@
   padding: 0 8px;
 }
 
+.fileBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.fileBtn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .select:focus,
 .targetInput:focus {
   border-color: var(--lumiverse-primary);
