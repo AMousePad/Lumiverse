@@ -1,7 +1,7 @@
 export type RegexPlacement = "user_input" | "ai_output" | "world_info" | "reasoning" | "memory";
 export type RegexScope = "global" | "character" | "chat";
 export type RegexTarget = "prompt" | "response" | "display";
-export type RegexMacroMode = "none" | "raw" | "escaped" | "after";
+export type RegexMacroMode = "none" | "find" | "raw" | "escaped" | "after";
 export type RegexActionType = "send" | "append" | "effects";
 
 export interface RegexActionSetStateEffect {

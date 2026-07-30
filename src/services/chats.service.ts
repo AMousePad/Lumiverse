@@ -1587,6 +1587,30 @@ export function getLastAssistantMessage(userId: string, chatId: string): Message
   return rowToMessage(row);
 }
 
+export function getPreviousSameRoleContent(
+  userId: string,
+  chatId: string,
+  isUser: boolean,
+  beforeMessageId?: string,
+): string | undefined {
+  const boundary = beforeMessageId
+    ? getDb()
+        .query("SELECT m.index_in_chat FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.id = ? AND m.chat_id = ? AND c.user_id = ?")
+        .get(beforeMessageId, chatId, userId) as { index_in_chat?: number } | null
+    : null;
+  const beforeIndex = typeof boundary?.index_in_chat === "number"
+    ? boundary.index_in_chat
+    : Number.MAX_SAFE_INTEGER;
+  const prior = getDb()
+    .query("SELECT m.content FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? AND m.is_user = ? AND m.index_in_chat < ? ORDER BY m.index_in_chat DESC LIMIT 1")
+    .get(chatId, userId, isUser ? 1 : 0, beforeIndex) as { content?: string } | null;
+  if (typeof prior?.content === "string") return prior.content;
+  const greeting = getDb()
+    .query("SELECT m.content FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC LIMIT 1")
+    .get(chatId, userId) as { content?: string } | null;
+  return typeof greeting?.content === "string" ? greeting.content : undefined;
+}
+
 export function getLastMessage(userId: string, chatId: string): Message | null {
   const row = getDb()
     .query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC LIMIT 1")

@@ -374,6 +374,10 @@ const RAW_MACRO_RE = /\{\{(?!\s*(?:user|char|bot|notChar|not_char|charName)\s*\}
 // messages-array identity. The previous per-card findIndex selector was
 // O(messages) per card per store update — O(n²) on chat open.
 const messageIndexMaps = new WeakMap<readonly Message[], Map<string, number>>()
+const previousSameRoleMaps = new WeakMap<
+  readonly Message[],
+  Map<string, string | undefined>
+>()
 
 function getMessageIndex(messages: readonly Message[], messageId: string): number {
   let map = messageIndexMaps.get(messages)
@@ -383,6 +387,34 @@ function getMessageIndex(messages: readonly Message[], messageId: string): numbe
     messageIndexMaps.set(messages, map)
   }
   return map.get(messageId) ?? -1
+}
+
+function getPreviousSameRoleContent(
+  messages: readonly Message[],
+  messageId: string,
+): string | undefined {
+  let map = previousSameRoleMaps.get(messages)
+  if (!map) {
+    map = new Map()
+    const greeting = messages[0]?.content
+    let previousUser: string | undefined
+    let previousAssistant: string | undefined
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index]!
+      map.set(
+        message.id,
+        index === 0
+          ? undefined
+          : message.is_user
+            ? previousUser ?? greeting
+            : previousAssistant ?? greeting,
+      )
+      if (message.is_user) previousUser = message.content
+      else previousAssistant = message.content
+    }
+    previousSameRoleMaps.set(messages, map)
+  }
+  return map.get(messageId)
 }
 
 /** Quick check for macro syntax in a string. */
@@ -564,12 +596,32 @@ export function useDisplayRegex(
       ),
     [regexScripts, activeCharacterId, activeChatId],
   )
+  const needsPreviousContent = useMemo(
+    () => displayScripts.some(
+      (script) =>
+        Array.isArray(script.metadata?.match_actions)
+        && script.metadata.match_actions.includes('repeat_back'),
+    ),
+    [displayScripts],
+  )
+  const previousContent = useStore((s) => {
+    if (!needsPreviousContent || !preprocessOpts?.messageId) return undefined
+    return getPreviousSameRoleContent(s.messages, preprocessOpts.messageId)
+  })
 
   // Collect display scripts that need backend macro resolution
   const scriptsNeedingResolution = useMemo(
     () =>
       displayScripts.filter(
-        (s) => s.substitute_macros !== 'none' && (hasMacroSyntax(s.find_regex) || hasMacroSyntax(s.replace_string)),
+        (s) =>
+          s.substitute_macros !== 'none'
+          && (
+            hasMacroSyntax(s.find_regex)
+            || (
+              s.substitute_macros !== 'find'
+              && hasMacroSyntax(s.replace_string)
+            )
+          ),
       ),
     [displayScripts],
   )
@@ -582,7 +634,13 @@ export function useDisplayRegex(
       if (hasMacroSyntax(s.find_regex)) {
         templates[`find:${s.id}`] = s.find_regex
       }
-      if (s.substitute_macros !== 'raw' && s.substitute_macros !== 'after' && hasMacroSyntax(s.replace_string)) {
+      if (
+        s.substitute_macros !== 'none'
+        && s.substitute_macros !== 'find'
+        && s.substitute_macros !== 'raw'
+        && s.substitute_macros !== 'after'
+        && hasMacroSyntax(s.replace_string)
+      ) {
         templates[`replace:${s.id}`] = s.replace_string
       }
     }
@@ -626,7 +684,13 @@ export function useDisplayRegex(
       if (hasMacroSyntax(s.find_regex)) {
         templates[`find:${s.id}`] = s.find_regex
       }
-      if (s.substitute_macros !== 'raw' && s.substitute_macros !== 'after' && hasMacroSyntax(s.replace_string)) {
+      if (
+        s.substitute_macros !== 'none'
+        && s.substitute_macros !== 'find'
+        && s.substitute_macros !== 'raw'
+        && s.substitute_macros !== 'after'
+        && hasMacroSyntax(s.replace_string)
+      ) {
         templates[`replace:${s.id}`] = s.replace_string
       }
     }
@@ -705,13 +769,15 @@ export function useDisplayRegex(
         resolvedFindPatterns: resolvedTemplates.resolvedFindPatterns,
         resolvedReplacements: resolvedTemplates.resolvedReplacements,
         dynamicMacros,
+        ...(messageIndex >= 0 ? { messageIndex } : {}),
+        ...(previousContent !== undefined ? { previousContent } : {}),
       }, ({ script, elapsedMs, timedOut, thresholdMs }) => {
         slowReports.push({ script, elapsedMs, timedOut, thresholdMs })
       })
       pendingSlowReportsRef.current = slowReports
       return next
     },
-    [content, displayScripts, isUser, depth, macroCtx, resolvedTemplates, dynamicMacros, regexGated],
+    [content, displayScripts, isUser, depth, macroCtx, resolvedTemplates, dynamicMacros, messageIndex, previousContent, regexGated],
   )
 
   useEffect(() => {
@@ -752,6 +818,7 @@ export function useDisplayRegex(
       content,
       resolvedTemplateKey,
       dynamicMacros: dynamicMacros ?? null,
+      previousContent: previousContent ?? null,
       scripts: displayScripts.map((s) => [
         s.id,
         s.updated_at,
@@ -763,6 +830,9 @@ export function useDisplayRegex(
         s.max_depth,
         s.trim_strings,
         s.substitute_macros,
+        s.metadata?.match_actions,
+        s.metadata?.repeat_position,
+        s.metadata?.repeat_raw_match,
       ]),
     })
   }, [
@@ -777,6 +847,7 @@ export function useDisplayRegex(
     content,
     resolvedTemplateKey,
     dynamicMacros,
+    previousContent,
     regexGated,
   ])
 
@@ -819,6 +890,8 @@ export function useDisplayRegex(
           resolvedReplacements: resolvedTemplates.resolvedReplacements,
           dynamicMacros,
           ...(preprocessOpts?.messageId ? { messageId: preprocessOpts.messageId } : {}),
+          ...(messageIndex >= 0 ? { messageIndex } : {}),
+          ...(previousContent !== undefined ? { previousContent } : {}),
           ...(preprocessOpts?.role ? { role: preprocessOpts.role } : {}),
         },
         (templates) => resolveMacrosBatchChunked(templates, {
@@ -873,6 +946,8 @@ export function useDisplayRegex(
     activePersonaId,
     contentCacheKey,
     dynamicMacros,
+    messageIndex,
+    previousContent,
     cvSnapshot,
     preprocessOpts?.messageId,
     preprocessOpts?.role,

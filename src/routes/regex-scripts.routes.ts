@@ -12,7 +12,7 @@ const APPLY_MAX_PATTERN_LENGTH = 10_000;
 const APPLY_MAX_RESOLVED_TEMPLATE_LENGTH = 100_000;
 const APPLY_VALID_PLACEMENTS = new Set<RegexPlacement>(["user_input", "ai_output", "world_info", "reasoning"]);
 const APPLY_VALID_FLAGS = new Set(["d", "g", "i", "m", "s", "u", "v", "y"]);
-const APPLY_VALID_MACRO_MODES = new Set<RegexMacroMode>(["none", "raw", "escaped", "after"]);
+const APPLY_VALID_MACRO_MODES = new Set<RegexMacroMode>(["none", "find", "raw", "escaped", "after"]);
 
 function isStringRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -206,10 +206,17 @@ app.post("/apply", async (c) => {
 
 // POST /test — test regex
 app.post("/test", async (c) => {
-  const userId = c.get("userId");
-  const { find_regex, replace_string, flags, content } = await c.req.json();
+  const { find_regex, replace_string, flags, content, match_actions } = await c.req.json();
   if (!find_regex || content === undefined) return c.json({ error: "find_regex and content are required" }, 400);
-  return c.json(await svc.testRegex(find_regex, replace_string ?? "", flags ?? "gi", content));
+  const actions = Array.isArray(match_actions)
+    ? match_actions.filter(
+        (action): action is "move_top" | "move_bottom" | "repeat_back" =>
+          action === "move_top"
+          || action === "move_bottom"
+          || action === "repeat_back",
+      )
+    : [];
+  return c.json(await svc.testRegex(find_regex, replace_string ?? "", flags ?? "gi", content, actions));
 });
 
 // POST /export — export scripts
