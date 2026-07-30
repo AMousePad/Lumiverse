@@ -90,7 +90,13 @@ export const regexApi = {
     return post<{ imported: number; skipped: number; errors: string[] }>('/regex-scripts/import', body)
   },
 
-  testRegex(params: { find_regex: string; replace_string: string; flags: string; content: string }) {
+  testRegex(params: {
+    find_regex: string
+    replace_string: string
+    flags: string
+    content: string
+    match_actions?: string[]
+  }) {
     return post<{ result: string; matches: number; error?: string }>('/regex-scripts/test', params)
   },
 
