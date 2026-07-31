@@ -11,7 +11,7 @@ import * as connectionsSvc from "./connections.service";
 import * as personasSvc from "./personas.service";
 import { resolvePersonaForChatMacros } from "./persona-addon-states";
 import { populateLumiaLoomContext } from "./prompt-assembly.service";
-import { applyRegexScripts } from "./regex-scripts.service";
+import { applyRegexScripts, hasRegexMatchAction } from "./regex-scripts.service";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 
@@ -154,6 +154,32 @@ export interface ApplyDisplayRegexResult {
   cacheable: boolean;
 }
 
+function getDisplayBehaviorContext(
+  userId: string,
+  context: DisplayRegexContext,
+): { previousContent?: string } {
+  if (!context.chat_id) return {};
+  const message = context.message_id
+    ? chatsSvc.getMessage(userId, context.message_id)
+    : undefined;
+  const messageIndex = message?.index_in_chat ?? context.message_index;
+  if (typeof messageIndex !== "number" || messageIndex <= 0) {
+    return {};
+  }
+  const isUser = context.role
+    ? context.role === "user"
+    : message?.is_user ?? context.is_user;
+  const previousContent = chatsSvc.getPreviousSameRoleContent(
+    userId,
+    context.chat_id,
+    isUser,
+    context.message_id,
+  );
+  return {
+    ...(previousContent !== undefined ? { previousContent } : {}),
+  };
+}
+
 type DisplayVarEnv = { variables: { local: Map<string, unknown>; chat: Map<string, unknown>; global: Map<string, unknown> } } | null | undefined;
 
 const DISPLAY_REGEX_CACHE = new Map<string, { result: string; touched: ReadonlyArray<readonly [string, string]> }>();
@@ -283,6 +309,10 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
   }
 
   const fingerprint = { touchedVars: new Set<string>(), cacheable: true };
+  const hasRepeatBack = hasRegexMatchAction(input.scripts, "repeat_back");
+  const behaviorContext = hasRepeatBack
+    ? getDisplayBehaviorContext(input.userId, input.context)
+    : undefined;
   const result = await applyRegexScripts(
     content,
     input.scripts,
@@ -293,7 +323,11 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
       resolvedFindPatterns: input.resolvedFindPatterns,
       resolvedReplacements: input.resolvedReplacements,
     },
-    { source: "display_backend", outFingerprint: fingerprint },
+    {
+      source: "display_backend",
+      outFingerprint: fingerprint,
+      ...(behaviorContext ?? {}),
+    },
   );
   if (!noCache && fingerprint.cacheable) {
     DISPLAY_REGEX_CACHE.set(cacheKey, {

@@ -28,6 +28,39 @@ function mustGetScript(id: string) {
   return script!;
 }
 
+function runtimeScript(overrides: Partial<RegexScript>): RegexScript {
+  return {
+    id: "runtime-script",
+    user_id: USER_ID,
+    name: "Runtime script",
+    script_id: "runtime_script",
+    find_regex: "x",
+    replace_string: "y",
+    actions: [],
+    flags: "g",
+    placement: ["ai_output"],
+    scope: "global",
+    scope_id: null,
+    target: ["display"],
+    min_depth: null,
+    max_depth: null,
+    substitute_macros: "none",
+    trim_strings: [],
+    run_on_edit: false,
+    disabled: false,
+    sort_order: 0,
+    description: "",
+    folder: "",
+    pack_id: null,
+    preset_id: null,
+    character_id: null,
+    metadata: {},
+    created_at: 0,
+    updated_at: 0,
+    ...overrides,
+  };
+}
+
 beforeAll(() => {
   initMacros();
   closeDatabase();
@@ -672,6 +705,200 @@ describe("raw capture processing", () => {
       undefined,
       macroEnv,
     )).toBe("A-a-a0");
+  });
+});
+
+describe("find-only macro processing", () => {
+  test("resolves the find pattern without resolving the replacement", async () => {
+    const script = runtimeScript({
+      find_regex: "{{upper::a}}",
+      replace_string: "{{upper::x}}",
+      substitute_macros: "find",
+    });
+    const macroEnv = {
+      commit: true,
+      variables: {
+        local: new Map<string, string>(),
+        global: new Map<string, string>(),
+        chat: new Map<string, string>(),
+      },
+      dynamicMacros: {},
+      extra: {},
+    } as any;
+
+    expect(await applyRegexScripts(
+      "A",
+      [script],
+      "ai_output",
+      undefined,
+      macroEnv,
+    )).toBe("{{upper::x}}");
+  });
+});
+
+describe("regex match actions", () => {
+  test("moves only the first matching replacement to the top", async () => {
+    const script = runtimeScript({
+      find_regex: "\\[x\\]",
+      replace_string: "<$&>",
+      metadata: { match_actions: ["move_top"] },
+    });
+
+    expect(await applyRegexScripts(
+      "a [x] b [x]",
+      [script],
+      "ai_output",
+    )).toBe("<[x]>\na  b [x]");
+  });
+
+  test("moves a capture-expanded replacement to the bottom", async () => {
+    const script = runtimeScript({
+      find_regex: "\\[([^\\]]+)\\]",
+      replace_string: "<$1>",
+      metadata: { match_actions: ["move_bottom"] },
+    });
+
+    expect(await applyRegexScripts(
+      "a [x] b",
+      [script],
+      "ai_output",
+    )).toBe("a  b\n<x>");
+  });
+
+  test("repeats a previous same-role match only when the current text misses", async () => {
+    const script = runtimeScript({
+      find_regex: "<status>([^<]+)</status>",
+      replace_string: "<strong>$1</strong>",
+      metadata: {
+        match_actions: ["repeat_back"],
+        repeat_position: "end_nl",
+      },
+    });
+
+    expect(await applyRegexScripts(
+      "new",
+      [script],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { previousContent: "old <status>ready</status>" },
+    )).toBe("new\n<strong>ready</strong>");
+    expect(await applyRegexScripts(
+      "<status>new</status>",
+      [script],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { previousContent: "old <status>ready</status>" },
+    )).toBe("<strong>new</strong>");
+  });
+
+  test("can carry the original previous match without replacing it", async () => {
+    const script = runtimeScript({
+      find_regex: "<status>([^<]+)</status>",
+      replace_string: "<strong>$1</strong>",
+      metadata: {
+        match_actions: ["repeat_back"],
+        repeat_position: "end_nl",
+        repeat_raw_match: true,
+      },
+    });
+
+    expect(await applyRegexScripts(
+      "new",
+      [script],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { previousContent: "old <status>ready</status>" },
+    )).toBe("new\n<status>ready</status>");
+  });
+
+  test("resolves captures before raw macros in a carried replacement", async () => {
+    const script = runtimeScript({
+      find_regex: "<status>([^<]+)</status>",
+      replace_string: "<strong>{{upper::$1}}</strong>",
+      substitute_macros: "raw",
+      metadata: {
+        match_actions: ["repeat_back"],
+        repeat_position: "end_nl",
+      },
+    });
+    const macroEnv = {
+      commit: true,
+      variables: {
+        local: new Map<string, string>(),
+        global: new Map<string, string>(),
+        chat: new Map<string, string>(),
+      },
+      dynamicMacros: {},
+      extra: {},
+    } as any;
+
+    expect(await applyRegexScripts(
+      "new",
+      [script],
+      "ai_output",
+      undefined,
+      macroEnv,
+      undefined,
+      { previousContent: "old <status>ready</status>" },
+    )).toBe("new\n<strong>READY</strong>");
+  });
+
+  test("uses explicit repeat position metadata after replacement normalization", async () => {
+    const script = runtimeScript({
+      find_regex: "\\[x\\]",
+      replace_string: "$1",
+      metadata: {
+        match_actions: ["move_top", "repeat_back"],
+        repeat_position: "$1",
+      },
+    });
+
+    expect(await applyRegexScripts(
+      "new",
+      [script],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { previousContent: "old [x]" },
+    )).toBe("new");
+  });
+
+  test("supports every repeat placement", async () => {
+    const expected = {
+      end: "new[x]",
+      start: "[x]new",
+      end_nl: "new\n[x]",
+      start_nl: "[x]\nnew",
+    } as const;
+
+    for (const [repeatPosition, result] of Object.entries(expected)) {
+      const script = runtimeScript({
+        find_regex: "\\[x\\]",
+        replace_string: "",
+        metadata: {
+          match_actions: ["repeat_back"],
+          repeat_position: repeatPosition,
+          repeat_raw_match: true,
+        },
+      });
+
+      expect(await applyRegexScripts(
+        "new",
+        [script],
+        "ai_output",
+        undefined,
+        undefined,
+        undefined,
+        { previousContent: "old [x]" },
+      )).toBe(result);
+    }
   });
 });
 

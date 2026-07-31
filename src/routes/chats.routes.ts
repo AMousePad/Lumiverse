@@ -35,6 +35,30 @@ async function runMessageContentProcessors(
   return messageContentProcessorChain.run(ctx, userId, signal);
 }
 
+function editRegexOptions(
+  scripts: readonly { metadata?: Record<string, any> }[],
+  userId: string,
+  chatId: string,
+  message: { id: string; index_in_chat: number; is_user: boolean } | null,
+) {
+  const hasRepeatBack = regexScriptsSvc.hasRegexMatchAction(
+    scripts,
+    "repeat_back",
+  );
+  if (!hasRepeatBack || (message?.index_in_chat ?? -1) <= 0) return undefined;
+  const previousContent = message
+    ? svc.getPreviousSameRoleContent(
+        userId,
+        chatId,
+        message.is_user,
+        message.id,
+      )
+    : undefined;
+  return {
+    ...(previousContent !== undefined ? { previousContent } : {}),
+  };
+}
+
 // Auto-greetings are inserted by service-layer createMessage calls that
 // bypass the per-route processor hook; run the chain explicitly so the
 // DB holds resolved content before MESSAGE_SENT broadcasts.
@@ -933,6 +957,14 @@ app.put("/:chatId/messages/:id", async (c) => {
           editScripts,
           placement,
           0,
+          undefined,
+          undefined,
+          editRegexOptions(
+            editScripts,
+            userId,
+            chatId,
+            existing,
+          ),
         );
       }
     }
@@ -1035,6 +1067,14 @@ app.put("/:chatId/messages/:id/swipe/:idx", async (c) => {
         editScripts,
         placement,
         0,
+        undefined,
+        undefined,
+        editRegexOptions(
+          editScripts,
+          userId,
+          chatId,
+          existing,
+        ),
       );
     }
   }

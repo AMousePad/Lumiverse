@@ -9,6 +9,7 @@ import {
   cycleSwipe,
   getMessage,
   getMessages,
+  getPreviousSameRoleContent,
   listHiddenRecentChats,
   listRecentChats,
   listRecentChatsGrouped,
@@ -154,6 +155,33 @@ beforeEach(() => {
 
 afterEach(() => {
   closeDatabase();
+});
+
+describe("previous same-role content", () => {
+  test("finds the nearest earlier message with the same role", () => {
+    seedCharacter("char", "Character");
+    seedChat("chat", "char", "Chat", "{}", 1);
+    seedMessage("greeting", "chat", "hello", {}, { index: 0 });
+    seedMessage("user-1", "chat", "first user", {}, { index: 1, isUser: true });
+    seedMessage("assistant-1", "chat", "first assistant", {}, { index: 2 });
+    seedMessage("user-2", "chat", "second user", {}, { index: 3, isUser: true });
+    seedMessage("assistant-2", "chat", "second assistant", {}, { index: 4 });
+
+    expect(getPreviousSameRoleContent("u1", "chat", true, "user-2"))
+      .toBe("first user");
+    expect(getPreviousSameRoleContent("u1", "chat", false, "assistant-2"))
+      .toBe("first assistant");
+  });
+
+  test("falls back to the greeting when no same-role message exists", () => {
+    seedCharacter("char", "Character");
+    seedChat("chat", "char", "Chat", "{}", 1);
+    seedMessage("greeting", "chat", "hello", {}, { index: 0 });
+    seedMessage("user-1", "chat", "first user", {}, { index: 1, isUser: true });
+
+    expect(getPreviousSameRoleContent("u1", "chat", true, "user-1"))
+      .toBe("hello");
+  });
 });
 
 describe("chat greeting selection", () => {

@@ -124,12 +124,12 @@ const active = await spindle.regex_scripts.getActive({
 | `max_depth` | `number \| null` | No | Upper bound on chat-history depth. |
 | `trim_strings` | `string[]` | No | Additional substrings stripped from output after the regex pass. |
 | `run_on_edit` | `boolean` | No | Re-run the rule when a message is edited. |
-| `substitute_macros` | `"none" \| "raw" \| "escaped" \| "after"` | No | How CBS / `{{...}}` macros inside the rule resolve. Prefer `"after"` for any rule whose `replace_string` contains macros — see "Macro substitution modes" below. Default `"none"`. |
+| `substitute_macros` | `"none" \| "find" \| "raw" \| "escaped" \| "after"` | No | How CBS / `{{...}}` macros inside the rule resolve. Use `"find"` to resolve only `find_regex`. Prefer `"after"` when `replace_string` contains macros. Default `"none"`. |
 | `disabled` | `boolean` | No | Create as disabled. |
 | `sort_order` | `number` | No | Lower values run earlier within the same scope tier. Default `0`. |
 | `description` | `string` | No | Free-form note. |
 | `folder` | `string` | No | Folder label shown in the regex panel. |
-| `metadata` | `Record<string, unknown>` | No | Arbitrary metadata namespaced to your extension. |
+| `metadata` | `Record<string, unknown>` | No | Host behavior fields described below, plus namespaced extension metadata. |
 | `script_id` | `string` | No | Stable identifier (normalized to lowercase + underscores) for cross-instance references. |
 
 ## RegexScriptUpdateDTO
@@ -176,7 +176,7 @@ Multi-select options toggle in a provisional client-side pool. They can be remov
   max_depth: number | null
   trim_strings: string[]        // additional substrings stripped from output
   run_on_edit: boolean
-  substitute_macros: "none" | "raw" | "escaped" | "after"
+  substitute_macros: "none" | "find" | "raw" | "escaped" | "after"
   disabled: boolean
   sort_order: number            // lower runs earlier within the same scope tier
   description: string
@@ -189,9 +189,10 @@ Multi-select options toggle in a provisional client-side pool. They can be remov
 
 ### Macro substitution modes
 
-`substitute_macros` controls **when** macros inside `replace_string` evaluate relative to capture-group substitution. The mode you pick is mostly a performance decision — all four are correct, but their cost and capability profiles differ.
+Every mode except `"none"` resolves macros in `find_regex`. The selected mode also controls whether and when macros in `replace_string` resolve.
 
 - **`"none"`** — no macro evaluation. `replace_string` is substituted as-is by the regex engine; capture refs (`$1`, `$&`, `$<name>`) work, but any `{{...}}` survives literal in the output. Use when you don't need macros.
+- **`"find"`**: evaluate macros in `find_regex` only. `replace_string` remains unchanged.
 - **`"raw"`** — substitute captures into `replace_string` first, then evaluate the result **per match**. Macros can reference captures (e.g. `{{lower::$1}}`). Cost: N `evaluate()` calls for N matches.
 - **`"escaped"`** — evaluate `replace_string` **once before** substitution, then double-escape `$` so capture refs do not fire. Cost: one `evaluate()` call per render. Cannot use captures (`$1` is dead).
 - **`"after"`** — substitute captures literally with native `String.replace`, then run one `evaluate()` over the **entire result body**. Cost: one `evaluate()` call per render. Macros can reference captures (they appear as plain text by the time evaluation runs).
@@ -199,6 +200,18 @@ Multi-select options toggle in a provisional client-side pool. They can be remov
 **Prefer `"after"` whenever your `replace_string` contains macros.** It collapses N evaluation calls to one (matching `"escaped"` performance) while keeping capture support (matching `"raw"` capability). It also matches how single-pass parsers in upstream regex pipelines already work, so ported rules behave the same.
 
 The one observable difference from `"raw"`: stateful macros (`{{counter::*}}`, `{{addvar::*::1}}{{getvar::*}}` patterns, etc.) accumulate left-to-right across matches in `"after"` mode rather than running in isolation per match. A counter that emitted `1, 1, 1, 1` under `"raw"` emits `1, 2, 3, 4` under `"after"`. The `"after"` behavior is almost always what you actually want; stay on `"raw"` only if you specifically need per-match isolation.
+
+### Match behavior metadata
+
+The regex editor stores these optional host fields in `metadata`:
+
+- `match_actions`: any of `"move_top"`, `"move_bottom"`, and `"repeat_back"`.
+- `repeat_position`: optional repeat placement override. Supported values are `"start"`, `"end"`, `"start_nl"`, and `"end_nl"`.
+- `repeat_raw_match`: when `true`, `repeat_back` carries the original matched text without applying `replace_string`. Defaults to `false`.
+
+Move actions remove the first match and place its capture-expanded replacement at the start or end of the current value. Repeat runs only when the current value has no match. It copies the first match from the nearest earlier message with the same role, falling back to the greeting. When the current value matches, normal replacement behavior still applies.
+
+These behaviors are shared by prompt, response, and display execution. Frontend display execution stays local and does not add a backend round trip.
 
 !!! note "Targets and where they fire"
     - **`prompt`** rules run during prompt assembly, against each message before it goes to the LLM. They do not modify stored content.

@@ -678,13 +678,43 @@ async function applyPromptRegexScriptsBeforeClipping(
   if (scripts.length === 0) return;
 
   const chatHistoryDepth = new Map<number, number>();
+  const hasRepeatBack = regexScriptsSvc.hasRegexMatchAction(
+    scripts,
+    "repeat_back",
+  );
+  const chatHistoryPosition = hasRepeatBack
+    ? new Map<number, number>()
+    : null;
   const chIndices: number[] = [];
   for (let i = 0; i < result.length; i++) {
     if (isChatHistoryMessage(result[i])) chIndices.push(i);
   }
   for (let pos = 0; pos < chIndices.length; pos++) {
     chatHistoryDepth.set(chIndices[pos], chIndices.length - 1 - pos);
+    chatHistoryPosition?.set(chIndices[pos], pos);
   }
+  const originalContent = hasRepeatBack
+    ? result.map((message) => getTextContent(message))
+    : [];
+  const regexOptionsFor = (index: number, message: LlmMessage) => {
+    if (!hasRepeatBack) return { source: "prompt_backend" as const };
+    const position = chatHistoryPosition!.get(index);
+    let previousContent: string | undefined;
+    if (position !== undefined && position > 0) {
+      for (let previous = position! - 1; previous >= 1; previous--) {
+        const previousIndex = chIndices[previous]!;
+        if (result[previousIndex]?.role === message.role) {
+          previousContent = originalContent[previousIndex];
+          break;
+        }
+      }
+      previousContent ??= originalContent[chIndices[0]!];
+    }
+    return {
+      source: "prompt_backend" as const,
+      ...(previousContent !== undefined ? { previousContent } : {}),
+    };
+  };
 
   for (let i = 0; i < result.length; i++) {
     if (i > 0 && (i & 15) === 0) await yieldAndCheckAbort(ctx.signal);
@@ -708,7 +738,7 @@ async function applyPromptRegexScriptsBeforeClipping(
           depth,
           macroEnv,
           undefined,
-          { source: "prompt_backend" },
+          regexOptionsFor(i, msg),
         ),
       };
       if (isChatHistoryMessage(msg)) markAsChatHistory(result[i]);
@@ -725,7 +755,7 @@ async function applyPromptRegexScriptsBeforeClipping(
                   depth,
                   macroEnv,
                   undefined,
-                  { source: "prompt_backend" },
+                  regexOptionsFor(i, msg),
                 ),
               }
             : part,

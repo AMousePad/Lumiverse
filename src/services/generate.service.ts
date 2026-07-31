@@ -1478,13 +1478,43 @@ async function runPromptPipeline(opts: {
       // works regardless of contiguity — depth-injected blocks splicing into
       // the chat history range no longer skew depth values.
       const chatHistoryDepth = new Map<number, number>();
+      const hasRepeatBack = regexScriptsSvc.hasRegexMatchAction(
+        promptScripts,
+        "repeat_back",
+      );
+      const chatHistoryPosition = hasRepeatBack
+        ? new Map<number, number>()
+        : null;
       const chIndices: number[] = [];
       for (let i = 0; i < messages.length; i++) {
         if (isChatHistoryMessage(messages[i])) chIndices.push(i);
       }
       for (let pos = 0; pos < chIndices.length; pos++) {
         chatHistoryDepth.set(chIndices[pos], chIndices.length - 1 - pos);
+        chatHistoryPosition?.set(chIndices[pos], pos);
       }
+      const originalPromptContent = hasRepeatBack
+        ? messages.map((message) => getTextContent(message))
+        : [];
+      const promptRegexOptionsFor = (index: number, message: LlmMessage) => {
+        if (!hasRepeatBack) return { source: "prompt_backend" as const };
+        const position = chatHistoryPosition!.get(index);
+        let previousContent: string | undefined;
+        if (position !== undefined && position > 0) {
+          for (let previous = position! - 1; previous >= 1; previous--) {
+            const previousIndex = chIndices[previous]!;
+            if (messages[previousIndex]?.role === message.role) {
+              previousContent = originalPromptContent[previousIndex];
+              break;
+            }
+          }
+          previousContent ??= originalPromptContent[chIndices[0]!];
+        }
+        return {
+          source: "prompt_backend" as const,
+          ...(previousContent !== undefined ? { previousContent } : {}),
+        };
+      };
 
       const regexedChatHistoryMessages: LlmMessage[] = [];
 
@@ -1522,7 +1552,7 @@ async function runPromptPipeline(opts: {
               depth,
               macroEnv,
               undefined,
-              { source: "prompt_backend" },
+              promptRegexOptionsFor(i, msg),
             ),
           };
         } else if (Array.isArray(msg.content)) {
@@ -1538,7 +1568,7 @@ async function runPromptPipeline(opts: {
                       depth,
                       macroEnv,
                       undefined,
-                      { source: "prompt_backend" },
+                      promptRegexOptionsFor(i, msg),
                     ),
                   }
                 : part,
@@ -3283,6 +3313,34 @@ async function runGeneration(
   let fullContent = "";
   let fullReasoning = "";
   const trimIncompleteWords = lifecycle.trimIncompleteWords === true;
+  let responseBehaviorOptions:
+    | {
+        source: "response_backend";
+        previousContent?: string;
+      }
+    | undefined;
+  const getResponseBehaviorOptions = () => {
+    if (responseBehaviorOptions) return responseBehaviorOptions;
+    const beforeMessageId =
+      lifecycle.continueMessageId
+      ?? lifecycle.targetMessageId
+      ?? lifecycle.stagedMessageId;
+    const previousContent = chatsSvc.getPreviousSameRoleContent(
+      userId,
+      chatId,
+      false,
+      beforeMessageId,
+    );
+    responseBehaviorOptions = {
+      source: "response_backend",
+      ...(previousContent !== undefined ? { previousContent } : {}),
+    };
+    return responseBehaviorOptions;
+  };
+  const responseOptionsFor = (scripts: readonly { metadata?: Record<string, any> }[]) =>
+    regexScriptsSvc.hasRegexMatchAction(scripts, "repeat_back")
+      ? getResponseBehaviorOptions()
+      : { source: "response_backend" as const };
 
   let streamUsage:
     | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
@@ -3361,7 +3419,7 @@ async function runGeneration(
         0,
         macroEnv,
         undefined,
-        { source: "response_backend" },
+        responseOptionsFor(responseScripts),
       );
       if (fullReasoning) {
         fullReasoning = await regexScriptsSvc.applyRegexScripts(
@@ -3371,7 +3429,7 @@ async function runGeneration(
           0,
           macroEnv,
           undefined,
-          { source: "response_backend" },
+          responseOptionsFor(responseScripts),
         );
       }
     }
@@ -3792,7 +3850,7 @@ async function runGeneration(
             0,
             macroEnv,
             undefined,
-            { source: "response_backend" },
+            responseOptionsFor(responseScripts),
           );
           if (fullReasoning) {
             fullReasoning = await regexScriptsSvc.applyRegexScripts(
@@ -3802,7 +3860,7 @@ async function runGeneration(
               0,
               macroEnv,
               undefined,
-              { source: "response_backend" },
+              responseOptionsFor(responseScripts),
             );
           }
         }
