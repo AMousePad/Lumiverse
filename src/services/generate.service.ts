@@ -3347,6 +3347,25 @@ async function runGeneration(
     | undefined;
   let reasoningStartedAt = 0;
   let reasoningDurationMs = 0;
+  // Keep the provider-native carrier independently from the text shown in the
+  // Reasoning tab. `fullReasoning` also contains parsed CoT, which must never
+  // be replayed as API reasoning on a later assistant history turn.
+  let nativeReasoningContent = "";
+  let nativeThinkingBlocks: LlmThinkingBlock[] | undefined;
+  let nativeReasoningDetails: Record<string, unknown>[] | undefined;
+
+  function storedReasoningCarrier(): Record<string, unknown> | undefined {
+    if (nativeThinkingBlocks?.length) {
+      return { type: "thinking_blocks", blocks: nativeThinkingBlocks };
+    }
+    if (nativeReasoningDetails?.length) {
+      return { type: "reasoning_details", details: nativeReasoningDetails };
+    }
+    if (nativeReasoningContent) {
+      return { type: "reasoning_content", content: nativeReasoningContent };
+    }
+    return undefined;
+  }
 
   // ── Guided CoT detection ───────────────────────────────────────────
   // When autoParse is enabled, detect the user's configured reasoning
@@ -3434,6 +3453,7 @@ async function runGeneration(
       }
     }
     closedContent = healFormattingArtifacts(closedContent);
+    const carrier = storedReasoningCarrier();
 
     let messageId: string | undefined;
     if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {
@@ -3444,18 +3464,21 @@ async function runGeneration(
         closedContent,
       );
       messageId = updated?.id ?? lifecycle.targetMessageId;
-      if (fullReasoning) {
+      if (fullReasoning || carrier) {
         // Target the regenerated swipe, not the displayed one (the user may have
         // navigated away mid-stream before stopping).
         chatsSvc.setSwipeScopedExtra(
           userId,
           lifecycle.targetMessageId,
           lifecycle.streamingSwipeId,
-          { reasoning: fullReasoning },
+          {
+            ...(fullReasoning ? { reasoning: fullReasoning } : {}),
+            ...(carrier ? { reasoningCarrier: carrier } : {}),
+          },
         );
       }
     } else if (lifecycle.stagedMessageId) {
-      if (!closedContent && !fullReasoning) {
+      if (!closedContent && !fullReasoning && !carrier) {
         try {
           chatsSvc.deleteMessage(userId, lifecycle.stagedMessageId);
         } catch {
@@ -3466,9 +3489,14 @@ async function runGeneration(
 
       const existingStagedExtra =
         chatsSvc.getMessage(userId, lifecycle.stagedMessageId)?.extra || {};
-      const partialExtra = fullReasoning
-        ? { ...existingStagedExtra, reasoning: fullReasoning }
-        : existingStagedExtra;
+      const partialExtra =
+        fullReasoning || carrier
+          ? {
+              ...existingStagedExtra,
+              ...(fullReasoning ? { reasoning: fullReasoning } : {}),
+              ...(carrier ? { reasoningCarrier: carrier } : {}),
+            }
+          : existingStagedExtra;
       chatsSvc.updateMessage(userId, lifecycle.stagedMessageId, {
         content: closedContent,
         ...(Object.keys(partialExtra).length > 0
@@ -3489,12 +3517,15 @@ async function runGeneration(
         contentSwipeId: lifecycle.streamingSwipeId,
         skipCouncilCacheInvalidation: true,
       });
-      if (fullReasoning) {
+      if (fullReasoning || carrier) {
         chatsSvc.setSwipeScopedExtra(
           userId,
           lifecycle.continueMessageId,
           lifecycle.streamingSwipeId,
-          { reasoning: fullReasoning },
+          {
+            ...(fullReasoning ? { reasoning: fullReasoning } : {}),
+            ...(carrier ? { reasoningCarrier: carrier } : {}),
+          },
         );
       }
       messageId = lifecycle.continueMessageId;
@@ -3509,6 +3540,7 @@ async function runGeneration(
       if (!isImpersonate && lifecycle.targetCharacterId)
         extra.character_id = lifecycle.targetCharacterId;
       if (fullReasoning) extra.reasoning = fullReasoning;
+      if (!isImpersonate && carrier) extra.reasoningCarrier = carrier;
       const created = chatsSvc.createMessage(
         chatId,
         {
@@ -3707,6 +3739,7 @@ async function runGeneration(
         if (chunk.reasoning) {
           if (!reasoningStartedAt) reasoningStartedAt = Date.now();
           fullReasoning += chunk.reasoning;
+          nativeReasoningContent += chunk.reasoning;
           const appended = pool.appendPoolReasoning(generationId, chunk.reasoning);
           queueStreamSegment(chunk.reasoning, appended.seq, appended.offset, "reasoning");
         }
@@ -3721,10 +3754,18 @@ async function runGeneration(
 
         if (chunk.thinking_blocks) {
           pendingThinkingBlocks = chunk.thinking_blocks;
+          nativeThinkingBlocks = [
+            ...(nativeThinkingBlocks ?? []),
+            ...chunk.thinking_blocks,
+          ];
         }
 
         if (chunk.reasoning_details) {
           pendingReasoningDetails = chunk.reasoning_details;
+          nativeReasoningDetails = [
+            ...(nativeReasoningDetails ?? []),
+            ...chunk.reasoning_details,
+          ];
         }
 
         // Capture provider usage data (token counts) from the stream
@@ -4000,6 +4041,10 @@ async function runGeneration(
       {
         const immediateExtra: Record<string, any> = {};
         if (fullReasoning) immediateExtra.reasoning = fullReasoning;
+        const carrier = storedReasoningCarrier();
+        if (carrier && lifecycle.generationType !== "impersonate") {
+          immediateExtra.reasoningCarrier = carrier;
+        }
         if (streamUsage) immediateExtra.usage = streamUsage;
         if (reasoningDurationMs > 0)
           immediateExtra.reasoningDuration = reasoningDurationMs;

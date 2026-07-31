@@ -442,6 +442,32 @@ describe("recent chats", () => {
     expect(restoredSecondSwipe.extra.reasoningDuration).toBeUndefined();
   });
 
+  test("keeps native reasoning carriers scoped to the swipe that produced them", () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "first swipe", {
+      reasoningCarrier: { type: "reasoning_content", content: "first native" },
+    });
+
+    const added = addSwipe("u1", "msg-1", "second swipe")!;
+    patchMessageExtra("u1", "msg-1", {
+      ...added.extra,
+      reasoningCarrier: {
+        type: "reasoning_details",
+        details: [{ type: "reasoning.text", text: "second native" }],
+      },
+    });
+
+    expect(getMessage("u1", "msg-1")!.extra.reasoningCarrier).toEqual({
+      type: "reasoning_details",
+      details: [{ type: "reasoning.text", text: "second native" }],
+    });
+
+    expect(cycleSwipe("u1", "msg-1", "left")!.extra.reasoningCarrier).toEqual({
+      type: "reasoning_content",
+      content: "first native",
+    });
+  });
+
   test("keeps generation metadata scoped to the active swipe", () => {
     seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
     seedMessage("msg-1", "chat-1", "first swipe", {

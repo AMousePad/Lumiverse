@@ -242,6 +242,62 @@ export function getSourceIndexInChat(msg: LlmMessage): number | undefined {
 
 export { getSourceMessageMetadata };
 
+/**
+ * Native reasoning is persisted separately from the display-only `extra.reasoning`
+ * string. Keeping the carrier name and opaque payload lets prompt history replay
+ * what the provider actually returned instead of converting it into CoT tags.
+ */
+function getStoredReasoningCarrier(message: Message): Pick<
+  LlmMessage,
+  "reasoning_content" | "thinking_blocks" | "reasoning_details"
+> {
+  if (message.is_user) return {};
+  const carrier = message.extra?.reasoningCarrier;
+  if (!carrier || typeof carrier !== "object" || Array.isArray(carrier)) {
+    return {};
+  }
+
+  const value = carrier as Record<string, unknown>;
+  if (
+    value.type === "thinking_blocks" &&
+    Array.isArray(value.blocks) &&
+    value.blocks.length > 0
+  ) {
+    return { thinking_blocks: value.blocks as LlmMessage["thinking_blocks"] };
+  }
+  if (
+    value.type === "reasoning_details" &&
+    Array.isArray(value.details) &&
+    value.details.length > 0
+  ) {
+    return {
+      reasoning_details: value.details as LlmMessage["reasoning_details"],
+    };
+  }
+  if (
+    value.type === "reasoning_content" &&
+    typeof value.content === "string" &&
+    value.content.length > 0
+  ) {
+    return { reasoning_content: value.content };
+  }
+  return {};
+}
+
+function hasNativeReasoningCarrier(message: LlmMessage): boolean {
+  return Boolean(
+    message.reasoning_content ||
+      message.thinking_blocks?.length ||
+      message.reasoning_details?.length,
+  );
+}
+
+function omitNativeReasoningCarrier(message: LlmMessage): LlmMessage {
+  const { reasoning_content, thinking_blocks, reasoning_details, ...withoutCarrier } =
+    message;
+  return withoutCarrier;
+}
+
 function markPreserveDisplayReasoningDelimiters(msg: LlmMessage): LlmMessage {
   (msg as any)[PRESERVE_DISPLAY_REASONING_DELIMS_KEY] = true;
   return msg;
@@ -3088,7 +3144,7 @@ export async function assemblePrompt(
           if (parts.length > 0) {
             result.push(
               markAsChatHistory(
-                { role, content: parts },
+                { role, content: parts, ...getStoredReasoningCarrier(msg) },
                 source,
                 contextAnchorProtected,
               ),
@@ -3096,7 +3152,11 @@ export async function assemblePrompt(
           } else {
             result.push(
               markAsChatHistory(
-                { role, content: contentForPrompt },
+                {
+                  role,
+                  content: contentForPrompt,
+                  ...getStoredReasoningCarrier(msg),
+                },
                 source,
                 contextAnchorProtected,
               ),
@@ -3105,7 +3165,11 @@ export async function assemblePrompt(
         } else {
           result.push(
             markAsChatHistory(
-              { role, content: contentForPrompt },
+              {
+                role,
+                content: contentForPrompt,
+                ...getStoredReasoningCarrier(msg),
+              },
               {
                 id: msg.id,
                 index_in_chat: msg.index_in_chat,
@@ -6207,20 +6271,13 @@ function stripReasoningFromChatHistory(
   if (keepInHistory === -1) return;
 
   const delimiters = resolveReasoningDelimiters(reasoningSettings);
-  if (!hasReasoningDelimiters(delimiters)) return;
-
-  const escapedPrefix = delimiters.prefix.replace(
-    /[.*+?^${}()|[\]\\]/g,
-    "\\$&",
-  );
-  const escapedSuffix = delimiters.suffix.replace(
-    /[.*+?^${}()|[\]\\]/g,
-    "\\$&",
-  );
-  const pattern = new RegExp(
-    `\\s*${escapedPrefix}[\\s\\S]*?${escapedSuffix}\\s*`,
-    "g",
-  );
+  const hasDelimitedReasoning = hasReasoningDelimiters(delimiters);
+  const pattern = hasDelimitedReasoning
+    ? new RegExp(
+        `\\s*${delimiters.prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[\\s\\S]*?${delimiters.suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`,
+        "g",
+      )
+    : undefined;
 
   const endIdx = firstChatIdx + historyCount;
   let reasoningBlocksSeen = 0;
@@ -6228,17 +6285,29 @@ function stripReasoningFromChatHistory(
   for (let i = endIdx - 1; i >= firstChatIdx; i--) {
     if (result[i].role !== "assistant") continue;
     const content = result[i].content;
-    if (typeof content !== "string") continue;
-
-    const stripped = content.replace(pattern, "").trim();
-    if (stripped === content.trim()) continue; // No reasoning found
+    const stripped =
+      typeof content === "string" && pattern
+        ? content.replace(pattern, "").trim()
+        : content;
+    const hasDelimitedBlock =
+      typeof content === "string" && stripped !== content.trim();
+    const hasNativeBlock = hasNativeReasoningCarrier(result[i]);
+    if (!hasDelimitedBlock && !hasNativeBlock) continue;
 
     reasoningBlocksSeen++;
     if (reasoningBlocksSeen > keepInHistory) {
-      result[i] = { ...result[i], content: stripped };
+      result[i] = omitNativeReasoningCarrier({
+        ...result[i],
+        ...(hasDelimitedBlock ? { content: stripped } : {}),
+      });
     }
   }
 }
+
+export const __reasoningHistoryTest = {
+  getStoredReasoningCarrier,
+  stripReasoningFromChatHistory,
+};
 
 // ---------------------------------------------------------------------------
 // Context Filters — strip or keep-only details blocks, loom tags, HTML tags
@@ -7812,6 +7881,7 @@ async function legacyAssembly(
           {
             role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
             content: parts.length > 0 ? parts : resolved,
+            ...getStoredReasoningCarrier(m),
           },
           {
             id: m.id,
@@ -7826,6 +7896,7 @@ async function legacyAssembly(
           {
             role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
             content: resolved,
+            ...getStoredReasoningCarrier(m),
           },
           {
             id: m.id,

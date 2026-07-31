@@ -265,6 +265,10 @@ function normalizeStoredMessageExtra(
     normalized.usageBySwipe,
     safeSwipeCount,
   );
+  const reasoningCarrierBySwipe = normalizeObjectEntries(
+    normalized.reasoningCarrierBySwipe,
+    safeSwipeCount,
+  );
 
   if (normalized.reasoning === null) {
     reasoningBySwipe[safeLegacySwipeId] = null;
@@ -305,11 +309,18 @@ function normalizeStoredMessageExtra(
     usageBySwipe[safeLegacySwipeId] = normalized.usage;
   }
 
+  if (normalized.reasoningCarrier === null) {
+    reasoningCarrierBySwipe[safeLegacySwipeId] = null;
+  } else if (isPlainObject(normalized.reasoningCarrier)) {
+    reasoningCarrierBySwipe[safeLegacySwipeId] = normalized.reasoningCarrier;
+  }
+
   delete normalized.reasoning;
   delete normalized.reasoningDuration;
   delete normalized.tokenCount;
   delete normalized.generationMetrics;
   delete normalized.usage;
+  delete normalized.reasoningCarrier;
 
   if (reasoningBySwipe.some((entry) => entry !== null)) {
     normalized.reasoningBySwipe = reasoningBySwipe;
@@ -341,6 +352,12 @@ function normalizeStoredMessageExtra(
     delete normalized.usageBySwipe;
   }
 
+  if (reasoningCarrierBySwipe.some((entry) => entry !== null)) {
+    normalized.reasoningCarrierBySwipe = reasoningCarrierBySwipe;
+  } else {
+    delete normalized.reasoningCarrierBySwipe;
+  }
+
   return normalized;
 }
 
@@ -363,6 +380,9 @@ function projectActiveSwipeExtra(
     : null;
   const activeUsage = Array.isArray(extra.usageBySwipe)
     ? extra.usageBySwipe[swipeId]
+    : null;
+  const activeReasoningCarrier = Array.isArray(extra.reasoningCarrierBySwipe)
+    ? extra.reasoningCarrierBySwipe[swipeId]
     : null;
 
   if (typeof activeReasoning === "string" && activeReasoning.length > 0) {
@@ -401,6 +421,12 @@ function projectActiveSwipeExtra(
     projected.usage = activeUsage;
   } else {
     delete projected.usage;
+  }
+
+  if (isPlainObject(activeReasoningCarrier)) {
+    projected.reasoningCarrier = activeReasoningCarrier;
+  } else {
+    delete projected.reasoningCarrier;
   }
 
   return projected;
@@ -474,6 +500,18 @@ function removeSwipeScopedExtraEntry(
     }
   }
 
+  if (Array.isArray(normalized.reasoningCarrierBySwipe)) {
+    const reasoningCarrierBySwipe = [
+      ...(normalized.reasoningCarrierBySwipe as (Record<string, unknown> | null)[]),
+    ];
+    reasoningCarrierBySwipe.splice(removedSwipeId, 1);
+    if (reasoningCarrierBySwipe.some((entry) => entry !== null)) {
+      normalized.reasoningCarrierBySwipe = reasoningCarrierBySwipe;
+    } else {
+      delete normalized.reasoningCarrierBySwipe;
+    }
+  }
+
   return normalized;
 }
 
@@ -502,6 +540,7 @@ const SWIPE_SCOPED_EXTRA_ARRAY_KEYS = [
   "tokenCountBySwipe",
   "generationMetricsBySwipe",
   "usageBySwipe",
+  "reasoningCarrierBySwipe",
 ] as const;
 
 /**
@@ -2197,6 +2236,7 @@ const SWIPE_SCOPED_EXTRA_KEYS = [
   "tokenCount",
   "generationMetrics",
   "usage",
+  "reasoningCarrier",
 ] as const;
 
 /**

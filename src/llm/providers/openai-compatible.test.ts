@@ -196,9 +196,9 @@ describe("OpenAICompatibleProvider tool calling wire shape", () => {
 // tool call. Without this, the API rejects the request with:
 //   "The `reasoning_content` in the thinking mode must be passed back to
 //   the API." (deepseek 400 invalid_request_error)
-// Per DeepSeek's docs (api-docs.deepseek.com/guides/thinking_mode), the
-// requirement applies ONLY to tool-call continuations — plain-text
-// continuations don't need the field. Tests pin that scope deliberately.
+// Tool-call continuations require the field. Retained prompt-history reasoning
+// also stays on its original assistant turn, so replay is faithful even when a
+// turn did not invoke a tool.
 describe("OpenAICompatibleProvider reasoning_content roundtrip", () => {
   const provider = new TestOpenAICompatibleProvider();
 
@@ -265,13 +265,7 @@ describe("OpenAICompatibleProvider reasoning_content roundtrip", () => {
     expect("reasoning_content" in body.messages[1]).toBe(false);
   });
 
-  test("assistant + text-only parts (no tool_use) + reasoning_content → field NOT propagated", () => {
-    // DeepSeek's docs are explicit: reasoning_content is required only on
-    // tool-call continuations, NOT on plain-text continuations. We honour
-    // that scope and deliberately do not propagate the field for non-tool
-    // assistant turns, even when the script supplies it. If a future
-    // provider requires broader propagation, expand this then — but pinning
-    // the current narrow scope prevents accidental over-propagation.
+  test("assistant + text-only parts + reasoning_content → field on its assistant turn", () => {
     const body = (provider as any).buildBody(
       {
         model: "deepseek-reasoner",
@@ -291,7 +285,11 @@ describe("OpenAICompatibleProvider reasoning_content roundtrip", () => {
       false,
     );
 
-    expect("reasoning_content" in body.messages[1]).toBe(false);
+    expect(body.messages[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "The answer is 4." }],
+      reasoning_content: "2+2 is basic arithmetic; the answer is 4.",
+    });
   });
 
   test("user-role message with reasoning_content → field ignored (only assistant tool-call turns carry reasoning)", () => {
