@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { getPreset, getPresetCacheRevision, getPresetRegistrySignature, updatePreset } from "./presets.service";
-import { PresetRevisionConflictError } from "../types/preset";
+import { PresetRevisionConflictError, type PromptBlock } from "../types/preset";
+import { addPromptBlockToStash, removePromptBlockFromStash } from "./prompt-stash.service";
 
 function initPresetsTestDb(): void {
   closeDatabase();
@@ -19,6 +20,13 @@ function initPresetsTestDb(): void {
     user_id TEXT,
     engine TEXT NOT NULL DEFAULT 'classic',
     cache_revision INTEGER NOT NULL DEFAULT 0
+  )`);
+  getDb().run(`CREATE TABLE settings (
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (key, user_id)
   )`);
 }
 
@@ -166,5 +174,56 @@ describe("presets.service — ETag sources + row trim", () => {
 
     expect(getPreset("u1", "p1")?.name).toBe("newer");
     expect(getPreset("u1", "p1")?.cache_revision).toBe(1);
+  });
+});
+
+describe("presets.service — prompt stash", () => {
+  test("syncs a stashed block globally while keeping visibility and grouping local", () => {
+    const source: PromptBlock = {
+      id: "source-block", name: "Shared prompt", content: "original", role: "system",
+      enabled: true, position: "pre_history", depth: 0, marker: null, isLocked: false,
+      color: null, injectionTrigger: [], group: null,
+    };
+    const stash = addPromptBlockToStash("u1", source);
+    insertPreset({
+      id: "p1", name: "One", provider: "loom", user_id: "u1",
+      prompt_order: [{ ...source, id: "p1-block", stashId: stash.id }],
+    });
+    insertPreset({
+      id: "p2", name: "Two", provider: "loom", user_id: "u1",
+      prompt_order: [{ ...source, id: "p2-block", stashId: stash.id, enabled: false, group: "local-category" }],
+    });
+
+    updatePreset("u1", "p1", {
+      prompt_order: [{ ...source, id: "p1-block", stashId: stash.id, content: "updated everywhere" }],
+    });
+
+    const second = getPreset("u1", "p2")!;
+    expect(second.prompt_order[0]).toMatchObject({
+      content: "updated everywhere",
+      enabled: false,
+      group: "local-category",
+      stashId: stash.id,
+    });
+    expect(second.cache_revision).toBe(1);
+  });
+
+  test("un-stashing keeps linked blocks as independent local copies", () => {
+    const source: PromptBlock = {
+      id: "source-block", name: "Shared prompt", content: "keep this", role: "system",
+      enabled: true, position: "pre_history", depth: 0, marker: null, isLocked: false,
+      color: null, injectionTrigger: [], group: null,
+    };
+    const stash = addPromptBlockToStash("u1", source, { id: "origin", name: "Origin preset" });
+    insertPreset({
+      id: "p1", name: "One", provider: "loom", user_id: "u1",
+      prompt_order: [{ ...source, id: "p1-block", stashId: stash.id, enabled: false, group: "local-category" }],
+    });
+
+    expect(removePromptBlockFromStash("u1", stash.id)).toBe(true);
+    expect(getPreset("u1", "p1")?.prompt_order[0]).toMatchObject({
+      content: "keep this", enabled: false, group: "local-category",
+    });
+    expect(getPreset("u1", "p1")?.prompt_order[0].stashId).toBeUndefined();
   });
 });

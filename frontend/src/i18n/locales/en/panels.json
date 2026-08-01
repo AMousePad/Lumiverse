@@ -3590,6 +3590,10 @@
     },
     "actions": {
       "addPrompt": "Add Prompt",
+      "fromStash": "From stash…",
+      "addToStash": "Add to stash",
+      "addedToStash": "Prompt block added to stash",
+      "stashFailed": "Unable to add prompt block to stash",
       "addCategory": "Add Category",
       "addMarker": "Add Marker",
       "newCategory": "New Category",

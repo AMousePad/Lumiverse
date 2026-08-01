@@ -107,6 +107,8 @@ export interface PromptBlock {
   categoryMode?: 'radio' | 'checkbox' | null
   variables?: PromptVariableDef[]
   placementBinding?: PromptBlockPlacementBinding
+  /** Stable identity of a user-owned stash entry shared across presets. */
+  stashId?: string
   /** When uploaded to LumiHub, content is extracted into a private sidecar block. */
   sealed?: boolean
   sealedKey?: string

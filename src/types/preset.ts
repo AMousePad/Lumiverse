@@ -162,6 +162,8 @@ export interface PromptBlock {
   categoryMode?: 'radio' | 'checkbox' | null;
   variables?: PromptVariableDef[];
   placementBinding?: PromptBlockPlacementBinding;
+  /** Stable identity of a user-owned stash entry shared across presets. */
+  stashId?: string;
   sealed?: boolean;
   sealedKey?: string;
   sealedSource?: string;

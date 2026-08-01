@@ -57,6 +57,7 @@ import {
   Link,
   Unlink,
   Shield,
+  Archive,
 } from 'lucide-react'
 import clsx from 'clsx'
 import ExpandedTextEditor, { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
@@ -64,6 +65,7 @@ import { ModalShell } from '@/components/shared/ModalShell'
 import { RangeSlider } from '@/components/shared/RangeSlider'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
+import { presetsApi, type StashedPromptBlock } from '@/api/presets'
 import { usePresetProfiles } from '@/hooks/usePresetProfiles'
 import { computeGroups, createBlock, createMarkerBlock, resolvePromptBlockPlacements } from '@/lib/loom/service'
 import { sanitizeCharacterTagTrigger, splitCharacterTagTriggerInput } from '@/lib/loom/characterTagTrigger'
@@ -86,6 +88,7 @@ import { useStore as __contextMeterStore } from '@/store'
 import { groupBreakdownEntries as __groupBreakdownEntries } from '@/lib/prompt-breakdown'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import { Toggle } from '@/components/shared/Toggle'
+import { PromptStashModal } from './PromptStashModal'
 import { Button } from '@/components/shared/FormComponents'
 import { toast } from '@/lib/toast'
 import { markLoomRuntimeProfileContext } from '@/lib/loom/runtimeProfile'
@@ -305,11 +308,12 @@ interface SortableBlockItemProps {
   onEdit: (block: PromptBlock) => void
   onDelete: (id: string) => void
   onToggle: (id: string) => void
+  onStash?: (block: PromptBlock) => void
   indented: boolean
   dragDisabled?: boolean
 }
 
-function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, indented, dragDisabled = false }: SortableBlockItemProps) {
+function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, onStash, indented, dragDisabled = false }: SortableBlockItemProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
   const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
@@ -339,6 +343,7 @@ function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, i
             {isMarker && <Hash size={12} className={s.blockNameIcon} />}
             {block.isLocked && <Lock size={10} className={clsx(s.blockNameIcon, s.blockNameIconMuted)} />}
             {block.sealed === true && <Shield size={10} className={clsx(s.blockNameIcon, s.blockNameIconSealed)} />}
+            {block.stashId && <Archive size={10} className={clsx(s.blockNameIcon, s.blockNameIconMuted)} />}
             <span className={s.blockNameText}>{block.name}</span>
           </span>
         </div>
@@ -366,6 +371,11 @@ function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, i
       <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={tc('actions.edit')}>
         <Edit2 size={14} />
       </Button>
+      {!isMarker && !block.stashId && onStash && (
+        <Button size="icon-sm" variant="ghost" onClick={() => onStash(block)} title={t('actions.addToStash')}>
+          <Archive size={14} />
+        </Button>
+      )}
       {!block.isLocked && (
         <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title={tc('actions.delete')}>
           <Trash2 size={14} />
@@ -1901,6 +1911,7 @@ export default function LoomBuilder({
   const [confirmDeletePreset, setConfirmDeletePreset] = useState(false)
   const [showLegacyExportConfirm, setShowLegacyExportConfirm] = useState(false)
   const [showPromptVariablesModal, setShowPromptVariablesModal] = useState(false)
+  const [showPromptStashModal, setShowPromptStashModal] = useState(false)
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -2288,6 +2299,29 @@ export default function LoomBuilder({
     addBlock(createBlock({ name: template.name, content: template.content, role: template.role as PromptBlock['role'] }))
     setPromptMenuOpen(false)
   }, [addBlock])
+
+  const handleInsertStashedBlock = useCallback((entry: StashedPromptBlock) => {
+    addBlock(createBlock({ ...entry.block, stashId: entry.id }))
+  }, [addBlock])
+
+  const handleUnstash = useCallback((entry: StashedPromptBlock) => {
+    if (!activePreset) return
+    saveBlocks(activePreset.blocks.map((block) => {
+      if (block.stashId !== entry.id) return block
+      const { stashId: _stashId, ...unlinked } = block
+      return unlinked
+    }))
+  }, [activePreset, saveBlocks])
+
+  const handleAddToStash = useCallback(async (block: PromptBlock) => {
+    try {
+      const entry = await presetsApi.addToStash(block, activePreset?.id)
+      updateBlock(block.id, { stashId: entry.id })
+      addToast({ type: 'success', message: lb('actions.addedToStash') })
+    } catch {
+      addToast({ type: 'error', message: lb('actions.stashFailed') })
+    }
+  }, [activePreset?.id, addToast, lb, updateBlock])
 
   const handleAddCategory = useCallback(() => {
     addBlock(createMarkerBlock('category', lb('actions.newCategory')))
@@ -2829,6 +2863,7 @@ export default function LoomBuilder({
                           onEdit={handleEdit}
                           onDelete={handleDelete}
                           onToggle={toggleBlock}
+                          onStash={handleAddToStash}
                           indented={!!group.categoryBlock}
                           dragDisabled={isSearchActive}
                         />
@@ -2880,6 +2915,10 @@ export default function LoomBuilder({
               </div>
             )}
           </div>
+
+          <button className={s.btn} onClick={() => setShowPromptStashModal(true)} type="button">
+            <Archive size={14} /> {lb('actions.fromStash')}
+          </button>
 
           <button className={s.btn} onClick={handleAddCategory} type="button">
             <ChevronRight size={14} /> {lb('actions.addCategory')}
@@ -2961,6 +3000,12 @@ export default function LoomBuilder({
             onClose={() => setShowPromptVariablesModal(false)}
           />
         )}
+        <PromptStashModal
+          isOpen={showPromptStashModal}
+          onClose={() => setShowPromptStashModal(false)}
+          onSelect={handleInsertStashedBlock}
+          onUnstash={handleUnstash}
+        />
       </div>
     </PanelFadeIn>
   )

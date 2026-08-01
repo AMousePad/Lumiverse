@@ -10,6 +10,10 @@ import { paginatedQuery } from "./pagination";
 import { deleteRegexScriptsByPresetId } from "./regex-scripts.service";
 import { sanitizePromptBlockCharacterTagTrigger } from "../utils/prompt-block-character-tags";
 import * as settingsSvc from "./settings.service";
+import {
+  reconcileStashedPromptBlocks,
+  syncStashedBlocksAcrossPresets,
+} from "./prompt-stash.service";
 
 /**
  * Drop entries in metadata.promptVariables that no longer correspond to a
@@ -305,6 +309,30 @@ export function createPreset(userId: string, input: CreatePresetInput): Preset {
 export function updatePreset(userId: string, id: string, input: UpdatePresetInput): Preset | null {
   const existing = getPreset(userId, id);
   if (!existing) return null;
+  // Avoid mutating shared stash state for a request we already know is stale.
+  // The conditional UPDATE below remains the authoritative race-safe check.
+  if (input.expected_cache_revision !== undefined && input.expected_cache_revision !== (existing.cache_revision ?? 0)) {
+    throw new PresetRevisionConflictError(id, input.expected_cache_revision, existing.cache_revision ?? 0);
+  }
+
+  // A stashed block has global content/configuration but local visibility and
+  // list placement. Reconcile before validating prompt variables so the
+  // response and persisted row both contain the canonical stash fields.
+  let reconciledPromptOrder = input.prompt_order;
+  let changedStashIds: string[] = [];
+  let commitStashReconciliation: (() => void) | undefined;
+  if (Array.isArray(input.prompt_order) && input.prompt_order.some(
+    (block) => block && typeof block === "object" && typeof (block as PromptBlock).stashId === "string",
+  )) {
+    const reconciliation = reconcileStashedPromptBlocks(
+      userId,
+      (existing.prompt_order || []) as PromptBlock[],
+      input.prompt_order as PromptBlock[],
+    );
+    reconciledPromptOrder = reconciliation.blocks;
+    changedStashIds = reconciliation.changedStashIds;
+    commitStashReconciliation = reconciliation.commit;
+  }
 
   const fields: string[] = [];
   const values: any[] = [];
@@ -315,10 +343,10 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
   // caller didn't touch it — otherwise the orphans would live forever.
   let writeMetadata: Record<string, any> | undefined;
   if (input.metadata !== undefined) {
-    const resolvedOrder = input.prompt_order !== undefined ? input.prompt_order : existing.prompt_order;
+    const resolvedOrder = reconciledPromptOrder !== undefined ? reconciledPromptOrder : existing.prompt_order;
     writeMetadata = (prunePromptVariableOrphans(resolvedOrder, input.metadata) as Record<string, any>) ?? input.metadata;
-  } else if (input.prompt_order !== undefined) {
-    const cleaned = prunePromptVariableOrphans(input.prompt_order, existing.metadata as Record<string, unknown>);
+  } else if (reconciledPromptOrder !== undefined) {
+    const cleaned = prunePromptVariableOrphans(reconciledPromptOrder, existing.metadata as Record<string, unknown>);
     if (cleaned && JSON.stringify(cleaned) !== JSON.stringify(existing.metadata)) {
       writeMetadata = cleaned as Record<string, any>;
     }
@@ -328,7 +356,7 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
   if (input.provider !== undefined) { fields.push("provider = ?"); values.push(input.provider); }
   if (input.engine !== undefined) { fields.push("engine = ?"); values.push(input.engine); }
   if (input.parameters !== undefined) { fields.push("parameters = ?"); values.push(JSON.stringify(input.parameters)); }
-  if (input.prompt_order !== undefined) { fields.push("prompt_order = ?"); values.push(JSON.stringify(input.prompt_order)); }
+  if (reconciledPromptOrder !== undefined) { fields.push("prompt_order = ?"); values.push(JSON.stringify(reconciledPromptOrder)); }
   if (input.prompts !== undefined) { fields.push("prompts = ?"); values.push(JSON.stringify(input.prompts)); }
   if (writeMetadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(writeMetadata)); }
 
@@ -368,6 +396,8 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
 
   const updated = getPreset(userId, id);
   if (!updated) return null;
+  commitStashReconciliation?.();
+  syncStashedBlocksAcrossPresets(userId, id, changedStashIds);
   eventBus.emit(EventType.PRESET_CHANGED, { id, preset: updated }, userId);
   return updated;
 }
@@ -456,6 +486,7 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
       : null,
     ...(Array.isArray(input.variables) ? { variables: input.variables } : {}),
     ...(placementBinding ? { placementBinding } : {}),
+    ...(typeof input.stashId === "string" && input.stashId.trim() ? { stashId: input.stashId.trim() } : {}),
   };
 }
 
