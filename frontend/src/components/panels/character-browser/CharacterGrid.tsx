@@ -86,6 +86,11 @@ export default function CharacterGrid({
   const gap = getGap(containerWidth)
   const colWidth = Math.max(1, (containerWidth - gap * columns) / columns)
   const rowHeight = Math.ceil(colWidth * (4 / 3)) + gap
+  // Every expanded folder is a flex item. Giving its virtualized viewport a
+  // width-aware minimum prevents multiple open folders from sharing the
+  // available height down to unusable slivers. Include paddingStart so the
+  // first complete card row remains visible on desktop and mobile.
+  const minimumViewportHeight = rowHeight + gap
 
   const rowCount = Math.ceil(characters.length / columns)
 
@@ -136,7 +141,11 @@ export default function CharacterGrid({
   if (characters.length === 0) return null
 
   return (
-    <div ref={parentRef} className={styles.scrollContainer}>
+    <div
+      ref={parentRef}
+      className={styles.scrollContainer}
+      style={{ minHeight: minimumViewportHeight }}
+    >
       <div
         style={{
           height: virtualizer.getTotalSize(),

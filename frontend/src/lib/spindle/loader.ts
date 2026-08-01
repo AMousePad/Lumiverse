@@ -187,7 +187,14 @@ type FrontendExtensionUI = SpindleFrontendContext['ui'] & {
   getTabLocation(tabId: string): TabLocation
 }
 
-type FrontendExtensionContext = Omit<SpindleFrontendContext, 'ui' | 'messages'> & {
+interface FrontendExpressionUpdate {
+  chatId: string
+  characterId: string
+  label: string
+  imageId: string
+}
+
+type FrontendExtensionContext = Omit<SpindleFrontendContext, 'ui' | 'messages' | 'display'> & {
   ready(): void
   deferReady(): void
   ui: FrontendExtensionUI & SpindleCharacterEditorUI & SpindlePresetEditorUI & {
@@ -208,6 +215,10 @@ type FrontendExtensionContext = Omit<SpindleFrontendContext, 'ui' | 'messages'> 
   }
   chats: {
     updateMessage(chatId: string, messageId: string, input: { content?: string }): Promise<unknown>
+  }
+  display: NonNullable<SpindleFrontendContext['display']> & {
+    /** Apply a transient expression selected during frontend display resolution. */
+    setExpression(update: FrontendExpressionUpdate): void
   }
 }
 

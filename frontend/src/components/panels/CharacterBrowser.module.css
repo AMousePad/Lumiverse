@@ -32,8 +32,12 @@
 }
 
 .folderGroup {
-  flex: 1;
-  min-height: 0;
+  /* Expanded folders contain their own virtualized scroll viewport. Let open
+     folders share any spare space, but never shrink one below the viewport's
+     intrinsic minimum (one complete card/list row). When those minimums no
+     longer fit, .folderGroups scrolls instead of crushing every folder. */
+  flex: 1 0 0;
+  min-height: auto;
 }
 
 /* A collapsed folder only renders its header. It must not participate in
@@ -41,6 +45,7 @@
    shrinks the visible area of every open gallery. */
 .folderGroupCollapsed {
   flex: 0 0 auto;
+  min-height: 0;
 }
 
 .folderHeaderRow {
