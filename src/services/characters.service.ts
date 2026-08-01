@@ -598,6 +598,55 @@ function cleanupUnreferencedImageIds(userId: string, ids: Iterable<string>): voi
   );
 }
 
+function clearRemovedChatAvatarReferences(userId: string, removedImageIds: Iterable<string>): void {
+  const removed = new Set(removedImageIds);
+  if (removed.size === 0) return;
+  let rows: any[];
+  try {
+    rows = getDb().query("SELECT id, character_id, name, metadata, created_at, updated_at FROM chats WHERE user_id = ?").all(userId) as any[];
+  } catch {
+    return;
+  }
+  for (const row of rows) {
+    let metadata: Record<string, any>;
+    try {
+      metadata = JSON.parse(row.metadata || "{}");
+    } catch {
+      continue;
+    }
+    let changed = false;
+    if (typeof metadata.active_avatar_id === "string" && removed.has(metadata.active_avatar_id)) {
+      delete metadata.active_avatar_id;
+      delete metadata.active_avatar_entry_id;
+      changed = true;
+    }
+    if (metadata.group_active_avatar_ids && typeof metadata.group_active_avatar_ids === "object") {
+      const ids = { ...metadata.group_active_avatar_ids };
+      const entries = metadata.group_active_avatar_entry_ids && typeof metadata.group_active_avatar_entry_ids === "object"
+        ? { ...metadata.group_active_avatar_entry_ids }
+        : {};
+      for (const [characterId, imageId] of Object.entries(ids)) {
+        if (typeof imageId !== "string" || !removed.has(imageId)) continue;
+        delete ids[characterId];
+        delete entries[characterId];
+        changed = true;
+      }
+      if (Object.keys(ids).length > 0) metadata.group_active_avatar_ids = ids;
+      else delete metadata.group_active_avatar_ids;
+      if (Object.keys(entries).length > 0) metadata.group_active_avatar_entry_ids = entries;
+      else delete metadata.group_active_avatar_entry_ids;
+    }
+    if (!changed) continue;
+    const now = Math.floor(Date.now() / 1000);
+    getDb().query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(JSON.stringify(metadata), now, row.id, userId);
+    eventBus.emit(EventType.CHAT_CHANGED, {
+      chat: { ...row, metadata, updated_at: now },
+      changedFields: ["metadata.active_avatar_id", "metadata.group_active_avatar_ids"],
+    }, userId);
+  }
+}
+
 function listCharacterGalleryImageIds(userId: string, characterId: string): string[] {
   const rows = getDb()
     .query("SELECT image_id FROM character_gallery WHERE user_id = ? AND character_id = ?")
@@ -801,6 +850,7 @@ export function updateCharacter(userId: string, id: string, input: UpdateCharact
   if (input.extensions !== undefined) {
     const newImageIds = collectCharacterImageIds(updated);
     const removedImageIds = [...oldImageIds].filter((imageId) => !newImageIds.has(imageId));
+    clearRemovedChatAvatarReferences(userId, removedImageIds);
     cleanupUnreferencedImageIds(userId, removedImageIds);
   }
   eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);

@@ -199,6 +199,10 @@ export async function applyCharxModulesAndAssets(
       }
     }
 
+    if (lumiverseModules.avatar_bindings && typeof lumiverseModules.avatar_bindings === "object") {
+      extensions.avatar_bindings = lumiverseModules.avatar_bindings;
+    }
+
     // Landing perspective layers (ordered back → front)
     const landingLayers: Array<{ id: string; image_id: string; label?: string; intensity: number }> = [];
     if (Array.isArray(lumiverseModules.landing_perspective_layers)) {

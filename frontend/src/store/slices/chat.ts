@@ -156,7 +156,19 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
 
     setActiveChatAvatarId: (imageId) => set({ activeChatAvatarId: imageId }),
 
-    setActiveChatMetadata: (metadata) => set({ activeChatMetadata: metadata }),
+    setActiveChatMetadata: (metadata) => set((state) => {
+      const groupAvatar = metadata?.group === true && state.activeCharacterId
+        ? metadata.group_active_avatar_ids?.[state.activeCharacterId]
+        : undefined
+      const avatarId = typeof groupAvatar === 'string'
+        ? groupAvatar
+        : metadata?.group === true
+          ? null
+          : typeof metadata?.active_avatar_id === 'string'
+            ? metadata.active_avatar_id
+            : null
+      return { activeChatMetadata: metadata, activeChatAvatarId: avatarId }
+    }),
 
     setActiveChatDisplayOwner: (owner) => set({ activeChatDisplayOwner: owner }),
 

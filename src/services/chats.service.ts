@@ -4,7 +4,8 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspectiveLayers } from "./characters.service";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
-import type { Chat, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
+import type { Character } from "../types/character";
+import type { Chat, ChatAppearanceAction, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
 import type {
   Message,
@@ -27,6 +28,15 @@ import { buildEnv, type MacroEnv } from "../macros";
 import { resolvePersonaOrDefault } from "./personas.service";
 import { resolvePersonaForChatMacros } from "./persona-addon-states";
 import { resolveAndSanitizeForVectorization, contentHasMacroHints } from "./vectorization-content.service";
+import {
+  AVATAR_BINDING_PRIMARY,
+  AVATAR_BINDING_FIELDS,
+  findAvatarForFieldBinding,
+  findAvatarForGreetingBinding,
+  getAvatarBindings,
+  resolveAvatarImageId,
+  type AvatarBindingField,
+} from "./avatar-bindings";
 
 // --- Chat helpers ---
 
@@ -1086,7 +1096,15 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
     }
   }
 
-  return getChat(userId, id)!;
+  const created = getChat(userId, id)!;
+  if (character && findAvatarForGreetingBinding(character, greetingIndex)) {
+    return applyChatAppearance(userId, id, {
+      type: "greeting",
+      greeting_index: greetingIndex,
+      ...(metadata.group === true ? { character_id: character.id } : {}),
+    })?.chat || created;
+  }
+  return created;
 }
 
 export function createGroupChat(userId: string, input: CreateGroupChatInput): Chat {
@@ -1323,15 +1341,33 @@ export function updateChat(
   const changedFields = diffChatChangedFields(existing, updated);
   eventBus.emit(EventType.CHAT_CHANGED, { chat: updated, changedFields }, userId);
 
-  // Detect avatar switch and emit specific event for theme resampling / extensions
-  const oldAvatarId = existing.metadata?.active_avatar_id as string | undefined;
-  const newAvatarId = updated.metadata?.active_avatar_id as string | undefined;
-  if (oldAvatarId !== newAvatarId) {
-    eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
-      chatId: id,
-      characterId: updated.character_id,
-      imageId: newAvatarId || null,
-    }, userId);
+  // Detect avatar switches and emit specific events for theme resampling / extensions.
+  if (updated.metadata?.group === true) {
+    const oldByCharacter = isPlainObject(existing.metadata?.group_active_avatar_ids)
+      ? existing.metadata.group_active_avatar_ids
+      : {};
+    const newByCharacter = isPlainObject(updated.metadata?.group_active_avatar_ids)
+      ? updated.metadata.group_active_avatar_ids
+      : {};
+    const characterIds = new Set([...Object.keys(oldByCharacter), ...Object.keys(newByCharacter)]);
+    for (const characterId of characterIds) {
+      if (oldByCharacter[characterId] === newByCharacter[characterId]) continue;
+      eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
+        chatId: id,
+        characterId,
+        imageId: typeof newByCharacter[characterId] === "string" ? newByCharacter[characterId] : null,
+      }, userId);
+    }
+  } else {
+    const oldAvatarId = existing.metadata?.active_avatar_id as string | undefined;
+    const newAvatarId = updated.metadata?.active_avatar_id as string | undefined;
+    if (oldAvatarId !== newAvatarId) {
+      eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
+        chatId: id,
+        characterId: updated.character_id,
+        imageId: newAvatarId || null,
+      }, userId);
+    }
   }
 
   return updated;
@@ -1441,6 +1477,222 @@ export function setGroupMemberAlternateFields(
   return updateChat(userId, chatId, { metadata: nextMetadata });
 }
 
+export interface ChatAppearanceResult {
+  chat: Chat;
+  greeting_message?: Message;
+}
+
+function setCharacterMetadataValue(
+  metadata: Record<string, any>,
+  group: boolean,
+  characterId: string,
+  soloKey: string,
+  groupKey: string,
+  value: unknown,
+): void {
+  if (!group) {
+    if (value === undefined || value === null) delete metadata[soloKey];
+    else metadata[soloKey] = value;
+    return;
+  }
+
+  const current = isPlainObject(metadata[groupKey]) ? { ...metadata[groupKey] } : {};
+  if (value === undefined || value === null) delete current[characterId];
+  else current[characterId] = value;
+  if (Object.keys(current).length > 0) metadata[groupKey] = current;
+  else delete metadata[groupKey];
+}
+
+function getCharacterSelections(
+  metadata: Record<string, any>,
+  group: boolean,
+  characterId: string,
+): Record<string, string> {
+  if (!group) {
+    return isPlainObject(metadata.alternate_field_selections)
+      ? { ...metadata.alternate_field_selections } as Record<string, string>
+      : {};
+  }
+  const byCharacter = isPlainObject(metadata.group_alternate_field_selections)
+    ? metadata.group_alternate_field_selections
+    : {};
+  return isPlainObject(byCharacter[characterId])
+    ? { ...byCharacter[characterId] } as Record<string, string>
+    : {};
+}
+
+function setCharacterSelections(
+  metadata: Record<string, any>,
+  group: boolean,
+  characterId: string,
+  selections: Record<string, string>,
+): void {
+  setCharacterMetadataValue(
+    metadata,
+    group,
+    characterId,
+    "alternate_field_selections",
+    "group_alternate_field_selections",
+    Object.keys(selections).length > 0 ? selections : null,
+  );
+}
+
+function applyAvatarEntryToMetadata(
+  character: Character,
+  metadata: Record<string, any>,
+  group: boolean,
+  characterId: string,
+  avatarEntryId: string,
+): boolean {
+  const imageId = resolveAvatarImageId(character, avatarEntryId);
+  if (imageId === undefined) return false;
+
+  setCharacterMetadataValue(
+    metadata,
+    group,
+    characterId,
+    "active_avatar_id",
+    "group_active_avatar_ids",
+    avatarEntryId === AVATAR_BINDING_PRIMARY ? null : imageId,
+  );
+  setCharacterMetadataValue(
+    metadata,
+    group,
+    characterId,
+    "active_avatar_entry_id",
+    "group_active_avatar_entry_ids",
+    avatarEntryId,
+  );
+
+  const binding = getAvatarBindings(character)[avatarEntryId];
+  if (!binding) return true;
+
+  const selections = getCharacterSelections(metadata, group, characterId);
+  for (const field of AVATAR_BINDING_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(binding, field)) continue;
+    const variantId = binding[field];
+    if (variantId === null) {
+      delete selections[field];
+    } else if (typeof variantId === "string" && hasAlternateVariant(character, field, variantId)) {
+      selections[field] = variantId;
+    } else {
+      return false;
+    }
+  }
+  setCharacterSelections(metadata, group, characterId, selections);
+
+  if (Object.prototype.hasOwnProperty.call(binding, "greeting_index")) {
+    const index = binding.greeting_index === null ? 0 : binding.greeting_index;
+    if (!Number.isInteger(index) || index! < 0 || index! > character.alternate_greetings.length) return false;
+    setCharacterMetadataValue(
+      metadata,
+      group,
+      characterId,
+      "activeGreetingIndex",
+      "group_active_greeting_indices",
+      index,
+    );
+  }
+  return true;
+}
+
+function updateAppearanceGreetingMessage(
+  userId: string,
+  chatId: string,
+  character: Character,
+  greetingIndex: number,
+  group: boolean,
+): Message | undefined {
+  const greeting = greetingIndex === 0
+    ? character.first_mes
+    : character.alternate_greetings[greetingIndex - 1];
+  if (typeof greeting !== "string") return undefined;
+
+  const message = getMessages(userId, chatId).find((candidate) =>
+    candidate.extra?.greeting === true
+    && (candidate.extra?.greeting_character_id === character.id
+      || (!group && !candidate.extra?.greeting_character_id)),
+  );
+  if (!message) return undefined;
+  return updateMessage(userId, message.id, {
+    content: greeting,
+    extra: { ...message.extra, greeting_index: greetingIndex },
+  }) || undefined;
+}
+
+/**
+ * Apply one appearance action using the latest chat row. Avatar bindings are
+ * resolved server-side so all metadata keys change in one CHAT_CHANGED event.
+ */
+export function applyChatAppearance(
+  userId: string,
+  chatId: string,
+  action: ChatAppearanceAction,
+): ChatAppearanceResult | null {
+  const chat = getChat(userId, chatId);
+  if (!chat) return null;
+  const group = chat.metadata?.group === true;
+  const characterId = action.character_id || chat.character_id;
+  if (!characterId) return null;
+  if (group && !getGroupMemberIds(chat.metadata).includes(characterId)) return null;
+  if (!group && characterId !== chat.character_id) return null;
+
+  const character = getCharacter(userId, characterId);
+  if (!character) return null;
+  const metadata: Record<string, any> = { ...(chat.metadata || {}) };
+  let greetingChanged = false;
+
+  if (action.type === "avatar") {
+    if (!applyAvatarEntryToMetadata(character, metadata, group, characterId, action.avatar_entry_id)) return null;
+    greetingChanged = Object.prototype.hasOwnProperty.call(
+      getAvatarBindings(character)[action.avatar_entry_id] || {},
+      "greeting_index",
+    );
+  } else if (action.type === "field") {
+    if (!AVATAR_BINDING_FIELDS.includes(action.field as AvatarBindingField)) return null;
+    if (action.variant_id !== null && !hasAlternateVariant(character, action.field, action.variant_id)) return null;
+    const selections = getCharacterSelections(metadata, group, characterId);
+    if (action.variant_id === null) delete selections[action.field];
+    else selections[action.field] = action.variant_id;
+    setCharacterSelections(metadata, group, characterId, selections);
+
+    const avatarEntryId = findAvatarForFieldBinding(character, action.field, action.variant_id);
+    if (avatarEntryId) {
+      if (!applyAvatarEntryToMetadata(character, metadata, group, characterId, avatarEntryId)) return null;
+      greetingChanged = Object.prototype.hasOwnProperty.call(
+        getAvatarBindings(character)[avatarEntryId] || {},
+        "greeting_index",
+      );
+    }
+  } else {
+    if (!Number.isInteger(action.greeting_index)
+      || action.greeting_index < 0
+      || action.greeting_index > character.alternate_greetings.length) return null;
+    setCharacterMetadataValue(
+      metadata,
+      group,
+      characterId,
+      "activeGreetingIndex",
+      "group_active_greeting_indices",
+      action.greeting_index,
+    );
+    const avatarEntryId = findAvatarForGreetingBinding(character, action.greeting_index);
+    if (avatarEntryId && !applyAvatarEntryToMetadata(character, metadata, group, characterId, avatarEntryId)) return null;
+    greetingChanged = true;
+  }
+
+  const updated = updateChat(userId, chatId, { metadata });
+  if (!updated) return null;
+
+  const greetingIndex = group
+    ? (updated.metadata.group_active_greeting_indices?.[characterId] as number | undefined)
+    : (updated.metadata.activeGreetingIndex as number | undefined);
+  const greetingMessage = greetingChanged && Number.isInteger(greetingIndex)
+    ? updateAppearanceGreetingMessage(userId, chatId, character, greetingIndex!, group)
+    : undefined;
+  return { chat: updated, ...(greetingMessage ? { greeting_message: greetingMessage } : {}) };
+}
+
 // ---- Group chat member management ----
 
 export function addGroupMember(
@@ -1481,6 +1733,14 @@ export function addGroupMember(
         },
       }, userId);
     }
+    const greetingIndex = options?.greeting_index ?? 0;
+    if (findAvatarForGreetingBinding(character, greetingIndex)) {
+      return applyChatAppearance(userId, chatId, {
+        type: "greeting",
+        greeting_index: greetingIndex,
+        character_id: character.id,
+      })?.chat || updated;
+    }
   }
 
   return updated;
@@ -1517,6 +1777,19 @@ export function removeGroupMember(userId: string, chatId: string, characterId: s
     delete groupAlternateFieldSelections[characterId];
   }
 
+  const groupActiveAvatarIds = isPlainObject(chat.metadata.group_active_avatar_ids)
+    ? { ...chat.metadata.group_active_avatar_ids }
+    : undefined;
+  if (groupActiveAvatarIds) delete groupActiveAvatarIds[characterId];
+  const groupActiveAvatarEntryIds = isPlainObject(chat.metadata.group_active_avatar_entry_ids)
+    ? { ...chat.metadata.group_active_avatar_entry_ids }
+    : undefined;
+  if (groupActiveAvatarEntryIds) delete groupActiveAvatarEntryIds[characterId];
+  const groupActiveGreetingIndices = isPlainObject(chat.metadata.group_active_greeting_indices)
+    ? { ...chat.metadata.group_active_greeting_indices }
+    : undefined;
+  if (groupActiveGreetingIndices) delete groupActiveGreetingIndices[characterId];
+
   const newMetadata = {
     ...chat.metadata,
     character_ids: newCharacterIds,
@@ -1525,11 +1798,17 @@ export function removeGroupMember(userId: string, chatId: string, characterId: s
     ...(groupAlternateFieldSelections !== undefined && {
       group_alternate_field_selections: groupAlternateFieldSelections,
     }),
+    ...(groupActiveAvatarIds !== undefined && { group_active_avatar_ids: groupActiveAvatarIds }),
+    ...(groupActiveAvatarEntryIds !== undefined && { group_active_avatar_entry_ids: groupActiveAvatarEntryIds }),
+    ...(groupActiveGreetingIndices !== undefined && { group_active_greeting_indices: groupActiveGreetingIndices }),
   };
 
   if (groupAlternateFieldSelections && Object.keys(groupAlternateFieldSelections).length === 0) {
     delete newMetadata.group_alternate_field_selections;
   }
+  if (groupActiveAvatarIds && Object.keys(groupActiveAvatarIds).length === 0) delete newMetadata.group_active_avatar_ids;
+  if (groupActiveAvatarEntryIds && Object.keys(groupActiveAvatarEntryIds).length === 0) delete newMetadata.group_active_avatar_entry_ids;
+  if (groupActiveGreetingIndices && Object.keys(groupActiveGreetingIndices).length === 0) delete newMetadata.group_active_greeting_indices;
 
   // If the removed character was the primary character_id on the chat row,
   // reassign to the first remaining member

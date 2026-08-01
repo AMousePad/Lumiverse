@@ -196,6 +196,7 @@ const INTERNAL_EXTENSION_KEYS = new Set([
   "expression_groups",
   "alternate_fields",
   "alternate_avatars",
+  "avatar_bindings",
   "world_book_id",
   "world_book_ids",
   "avatar_crop_image_id",
@@ -371,6 +372,7 @@ export interface LumiverseModulesExport {
   };
   alternate_fields?: Record<string, Array<{ id: string; label: string; content: string }>>;
   alternate_avatars?: Array<{ id: string; label: string; path: string }>;
+  avatar_bindings?: Record<string, { description?: string | null; personality?: string | null; scenario?: string | null; greeting_index?: number | null }>;
   landing_perspective_layers?: Array<{ id: string; label?: string; path: string; intensity: number }>;
   world_books?: Record<string, any>[];
   regex_scripts?: import("./character-card.service").BundledRegexScript[];
@@ -514,6 +516,11 @@ export async function exportAsCharx(
     }
   }
 
+  const avatarBindings = character.extensions?.avatar_bindings;
+  if (avatarBindings && typeof avatarBindings === "object" && !Array.isArray(avatarBindings)) {
+    modules.avatar_bindings = avatarBindings;
+  }
+
   // Alternate avatars
   const altAvatars: Array<{ id: string; label: string; path: string }> = [];
   const altAvatarEntries = character.extensions?.alternate_avatars;
@@ -627,7 +634,7 @@ export async function exportAsCharx(
 
   // Only include lumiverse_modules.json if there's content.
   const hasModules =
-    modules.expressions || modules.expression_groups || modules.alternate_fields || modules.alternate_avatars || modules.landing_perspective_layers || modules.world_books?.length || modules.regex_scripts;
+    modules.expressions || modules.expression_groups || modules.alternate_fields || modules.alternate_avatars || modules.avatar_bindings || modules.landing_perspective_layers || modules.world_books?.length || modules.regex_scripts;
   if (hasModules) {
     entries["lumiverse_modules.json"] = new TextEncoder().encode(
       JSON.stringify(modules, null, 2)

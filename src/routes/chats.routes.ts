@@ -345,6 +345,35 @@ app.patch("/:id/members/:characterId/alternate-fields", async (c) => {
   return c.json(updated);
 });
 
+app.patch("/:id/appearance", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Appearance action must be an object" }, 400);
+  }
+
+  const characterId = typeof body.character_id === "string" && body.character_id
+    ? body.character_id
+    : undefined;
+  let action: import("../types/chat").ChatAppearanceAction | null = null;
+  if (body.type === "avatar" && typeof body.avatar_entry_id === "string" && body.avatar_entry_id) {
+    action = { type: "avatar", avatar_entry_id: body.avatar_entry_id, ...(characterId ? { character_id: characterId } : {}) };
+  } else if (
+    body.type === "field"
+    && (body.field === "description" || body.field === "personality" || body.field === "scenario")
+    && (body.variant_id === null || typeof body.variant_id === "string")
+  ) {
+    action = { type: "field", field: body.field, variant_id: body.variant_id, ...(characterId ? { character_id: characterId } : {}) };
+  } else if (body.type === "greeting" && Number.isInteger(body.greeting_index)) {
+    action = { type: "greeting", greeting_index: body.greeting_index, ...(characterId ? { character_id: characterId } : {}) };
+  }
+  if (!action) return c.json({ error: "Invalid appearance action" }, 400);
+
+  const result = svc.applyChatAppearance(userId, c.req.param("id"), action);
+  if (!result) return c.json({ error: "Invalid character, avatar, or binding" }, 400);
+  return c.json(result);
+});
+
 /**
  * Atomically toggle one persona add-on in this chat. Besides the existing
  * boolean override, this records toggle recency so that the newest enabled

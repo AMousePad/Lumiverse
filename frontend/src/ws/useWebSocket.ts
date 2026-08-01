@@ -24,6 +24,7 @@ import {
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration, requestStreamGapRecovery } from '@/lib/generation-recovery'
 import { checkForBundleUpdate } from '@/lib/swUpdater'
+import { hasPendingChatAppearance } from '@/lib/chatAppearance'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
@@ -698,11 +699,11 @@ export function useWebSocket() {
 
         if (payload.chat) {
           state.setActiveChatName(payload.chat.name ?? null)
-          state.setActiveChatMetadata(payload.chat.metadata ?? null)
+          if (!hasPendingChatAppearance(changedChatId)) {
+            state.setActiveChatMetadata(payload.chat.metadata ?? null)
+          }
           const wallpaper = payload.chat.metadata?.wallpaper as import('@/types/store').WallpaperRef | undefined
           state.setActiveChatWallpaper(wallpaper?.image_id ? wallpaper : null)
-          const avatarOverride = payload.chat.metadata?.active_avatar_id as string | undefined
-          state.setActiveChatAvatarId(avatarOverride || null)
         }
 
         const changedFields = payload.changedFields

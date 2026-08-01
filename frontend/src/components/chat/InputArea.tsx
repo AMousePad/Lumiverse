@@ -63,6 +63,7 @@ import {
   type RegexActionActivation,
 } from '@/lib/regex/actionBus'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
+import { applyChatAppearance } from '@/lib/chatAppearance'
 
 interface InputAreaProps {
   chatId: string
@@ -475,6 +476,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     if (!activeCharacterId) { setAltFieldsData({}); return }
     charactersApi.get(activeCharacterId)
       .then((c) => {
+        useStore.getState().updateCharacter(c.id, c)
         const af = c.extensions?.alternate_fields as Record<string, AltFieldVariant[]> | undefined
         setAltFieldsData(af && typeof af === 'object' ? af : {})
         setAltFieldsLoaded(true)
@@ -548,7 +550,8 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     pruneAltSelections,
   ])
 
-  // Load per-chat alternate field selections
+  // Keep the selector synchronized with the canonical chat metadata. This also
+  // reflects avatar-bound changes and changes made in another tab immediately.
   useEffect(() => {
     if (!chatId) {
       setAltFieldSelections({})
@@ -556,19 +559,11 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       setGroupScenarioMode('individual')
       return
     }
-    chatsApi.get(chatId, { messages: false })
-      .then((chat) => {
-        setAltFieldSelections((chat.metadata?.alternate_field_selections as Record<string, string>) || {})
-        setGroupAltFieldSelections((chat.metadata?.group_alternate_field_selections as Record<string, Record<string, string>>) || {})
-        const mode = chat.metadata?.group_scenario_override?.mode
-        setGroupScenarioMode(mode === 'member' || mode === 'custom' ? mode : 'individual')
-      })
-      .catch(() => {
-        setAltFieldSelections({})
-        setGroupAltFieldSelections({})
-        setGroupScenarioMode('individual')
-      })
-  }, [chatId])
+    setAltFieldSelections((activeChatMetadata?.alternate_field_selections as Record<string, string>) || {})
+    setGroupAltFieldSelections((activeChatMetadata?.group_alternate_field_selections as Record<string, Record<string, string>>) || {})
+    const mode = activeChatMetadata?.group_scenario_override?.mode
+    setGroupScenarioMode(mode === 'member' || mode === 'custom' ? mode : 'individual')
+  }, [activeChatMetadata, chatId])
 
   useEffect(() => {
     if (!chatId) { setImpersonationPresetId(null); return }
@@ -581,24 +576,27 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
   }, [chatId])
 
   const handleAltFieldSelect = useCallback(async (field: string, variantId: string | null) => {
+    const character = characters.find((entry) => entry.id === activeCharacterId)
+    if (!character || !ALT_FIELD_NAMES.includes(field as typeof ALT_FIELD_NAMES[number])) return
     const newSelections = { ...altFieldSelections }
     if (variantId) newSelections[field] = variantId
     else delete newSelections[field]
     setAltFieldSelections(newSelections)
     try {
-      // Atomic merge — server re-reads the latest chat row so background
-      // writers (post-generation expression detection, council caching,
-      // deferred WI/chat var persistence) cannot clobber this selection.
-      // Send `null` to delete the key when no fields are selected.
-      await chatsApi.patchMetadata(chatId, {
-        alternate_field_selections: Object.keys(newSelections).length > 0 ? newSelections : null,
+      await applyChatAppearance(chatId, character, {
+        type: 'field',
+        field: field as typeof ALT_FIELD_NAMES[number],
+        variant_id: variantId,
       })
     } catch (err) {
       console.error('[AltFields] Failed to save:', err)
+      toast.error(err instanceof Error ? err.message : 'Failed to change alternate field')
     }
-  }, [chatId, altFieldSelections])
+  }, [activeCharacterId, altFieldSelections, characters, chatId])
 
   const handleGroupAltFieldSelect = useCallback(async (characterId: string, field: string, variantId: string | null) => {
+    const character = characters.find((entry) => entry.id === characterId)
+    if (!character || !ALT_FIELD_NAMES.includes(field as typeof ALT_FIELD_NAMES[number])) return
     const memberSelections = { ...(groupAltFieldSelections[characterId] || {}) }
     if (variantId) memberSelections[field] = variantId
     else delete memberSelections[field]
@@ -609,11 +607,17 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     setGroupAltFieldSelections(newSelections)
 
     try {
-      await chatsApi.setGroupMemberAlternateFields(chatId, characterId, memberSelections)
+      await applyChatAppearance(chatId, character, {
+        type: 'field',
+        field: field as typeof ALT_FIELD_NAMES[number],
+        variant_id: variantId,
+        character_id: characterId,
+      })
     } catch (err) {
       console.error('[AltFields] Failed to save group member selection:', err)
+      toast.error(err instanceof Error ? err.message : 'Failed to change alternate field')
     }
-  }, [chatId, groupAltFieldSelections])
+  }, [characters, chatId, groupAltFieldSelections])
 
   // Track persona add-ons for the active persona
   const [personaAddons, setPersonaAddons] = useState<PersonaAddon[]>([])
@@ -3553,10 +3557,12 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span className={styles.personaAvatar}>
-                            {char.avatar_path || char.image_id ? (
+                            {activeChatMetadata?.group_active_avatar_ids?.[char.id] || char.avatar_path || char.image_id ? (
                               <img
                                 className={styles.personaAvatarImg}
-                                src={getCharacterAvatarThumbUrl(char) || undefined}
+                                src={typeof activeChatMetadata?.group_active_avatar_ids?.[char.id] === 'string'
+                                  ? imagesApi.smallUrl(activeChatMetadata.group_active_avatar_ids[char.id])
+                                  : getCharacterAvatarThumbUrl(char) || undefined}
                                 alt={char.name}
                                 loading="lazy"
                               />

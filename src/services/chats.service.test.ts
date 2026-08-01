@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import {
   addSwipe,
+  applyChatAppearance,
   convertSoloChatToGroup,
   createChat,
   deleteChats,
@@ -627,5 +628,101 @@ describe("group member alternate fields", () => {
     expect(updated?.metadata.group_alternate_field_selections).toEqual({
       char3: { personality: "quiet" },
     });
+  });
+});
+
+describe("avatar-bound appearance", () => {
+  const appearanceExtensions = {
+    alternate_fields: {
+      description: [{ id: "winter-desc", label: "Winter", content: "Winter coat" }],
+      personality: [{ id: "warm", label: "Warm", content: "Warm personality" }],
+    },
+    alternate_avatars: [{ id: "winter-avatar", image_id: "winter-image", label: "Winter" }],
+    avatar_bindings: {
+      "winter-avatar": {
+        description: "winter-desc",
+        personality: "warm",
+        scenario: null,
+        greeting_index: 1,
+      },
+    },
+  };
+
+  test("selecting an avatar applies its complete field and greeting state", () => {
+    seedCharacterWithExtensions("char1", appearanceExtensions);
+    getDb().query("UPDATE characters SET image_id = ?, first_mes = ?, alternate_greetings = ? WHERE id = ?")
+      .run("primary-image", "Default hello", JSON.stringify(["Winter hello"]), "char1");
+    const chat = createChat("u1", { character_id: "char1", name: "Chat" });
+
+    const result = applyChatAppearance("u1", chat.id, { type: "avatar", avatar_entry_id: "winter-avatar" });
+
+    expect(result?.chat.metadata.active_avatar_id).toBe("winter-image");
+    expect(result?.chat.metadata.active_avatar_entry_id).toBe("winter-avatar");
+    expect(result?.chat.metadata.alternate_field_selections).toEqual({
+      description: "winter-desc",
+      personality: "warm",
+    });
+    expect(result?.chat.metadata.activeGreetingIndex).toBe(1);
+    expect(result?.greeting_message?.content).toBe("Winter hello");
+    expect(result?.greeting_message?.extra.greeting_index).toBe(1);
+  });
+
+  test("selecting a uniquely bound field activates the owning avatar", () => {
+    seedCharacterWithExtensions("char1", appearanceExtensions);
+    getDb().query("UPDATE characters SET alternate_greetings = ? WHERE id = ?")
+      .run(JSON.stringify(["Winter hello"]), "char1");
+    seedChat("chat1", "char1", "Chat", "{}", 1);
+
+    const result = applyChatAppearance("u1", "chat1", {
+      type: "field",
+      field: "description",
+      variant_id: "winter-desc",
+    });
+
+    expect(result?.chat.metadata.active_avatar_id).toBe("winter-image");
+    expect(result?.chat.metadata.alternate_field_selections.personality).toBe("warm");
+  });
+
+  test("an unbound field change does not rewrite an edited greeting", () => {
+    seedCharacterWithExtensions("char1", {
+      alternate_fields: {
+        description: [{ id: "winter-desc", label: "Winter", content: "Winter coat" }],
+      },
+    });
+    getDb().query("UPDATE characters SET first_mes = ? WHERE id = ?").run("Card greeting", "char1");
+    const chat = createChat("u1", { character_id: "char1", name: "Chat" });
+    const greeting = getMessages("u1", chat.id)[0];
+    updateMessage("u1", greeting.id, { content: "User-edited greeting" });
+
+    const result = applyChatAppearance("u1", chat.id, {
+      type: "field",
+      field: "description",
+      variant_id: "winter-desc",
+    });
+
+    expect(result?.greeting_message).toBeUndefined();
+    expect(getMessages("u1", chat.id)[0]?.content).toBe("User-edited greeting");
+  });
+
+  test("stores group member avatars independently", () => {
+    seedCharacterWithExtensions("char1", appearanceExtensions);
+    seedCharacterWithExtensions("char2", appearanceExtensions);
+    getDb().query("UPDATE characters SET alternate_greetings = ? WHERE id IN (?, ?)")
+      .run(JSON.stringify(["Winter hello"]), "char1", "char2");
+    seedChat("chat1", "char1", "Group", JSON.stringify({ group: true, character_ids: ["char1", "char2"] }), 1);
+
+    const result = applyChatAppearance("u1", "chat1", {
+      type: "field",
+      field: "description",
+      variant_id: "winter-desc",
+      character_id: "char2",
+    });
+
+    expect(result?.chat.metadata.group_active_avatar_ids).toEqual({ char2: "winter-image" });
+    expect(result?.chat.metadata.group_alternate_field_selections.char2).toEqual({
+      description: "winter-desc",
+      personality: "warm",
+    });
+    expect(result?.chat.metadata.active_avatar_id).toBeUndefined();
   });
 });

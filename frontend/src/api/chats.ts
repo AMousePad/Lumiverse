@@ -6,6 +6,16 @@ import type {
 } from '@/types/api'
 import type { RegexActionEffect } from '@/types/regex'
 
+export type ChatAppearanceAction =
+  | { type: 'avatar'; avatar_entry_id: string; character_id?: string }
+  | { type: 'field'; field: 'description' | 'personality' | 'scenario'; variant_id: string | null; character_id?: string }
+  | { type: 'greeting'; greeting_index: number; character_id?: string }
+
+export interface ChatAppearanceResult {
+  chat: Chat
+  greeting_message?: Message
+}
+
 /** Use the user's local date and time so automatically named chats are easy to distinguish. */
 export function createTimestampedChatName(now = new Date()): string {
   return now.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
@@ -83,6 +93,10 @@ export const chatsApi = {
    */
   patchMetadata(id: string, partial: Record<string, any>) {
     return patch<Chat>(`/chats/${id}/metadata`, partial)
+  },
+
+  applyAppearance(id: string, action: ChatAppearanceAction) {
+    return patch<ChatAppearanceResult>(`/chats/${id}/appearance`, action)
   },
 
   /**

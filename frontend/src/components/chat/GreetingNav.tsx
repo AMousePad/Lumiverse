@@ -3,11 +3,12 @@ import { useTranslation } from 'react-i18next'
 import { MessageCircle } from 'lucide-react'
 import { useStore } from '@/store'
 import { charactersApi } from '@/api/characters'
-import { messagesApi, chatsApi } from '@/api/chats'
 import GreetingPickerModal from '@/components/modals/GreetingPickerModal'
 import type { Message, Character } from '@/types/api'
 import styles from './GreetingNav.module.css'
 import clsx from 'clsx'
+import { applyChatAppearance } from '@/lib/chatAppearance'
+import { toast } from '@/lib/toast'
 
 interface GreetingNavProps {
   message: Message
@@ -26,7 +27,7 @@ export default function GreetingNav({ message, chatId, variant = 'minimal' }: Gr
   const [pickerOpen, setPickerOpen] = useState(false)
 
   const greetingCharId = isGroupChat
-    ? (typeof message.extra?.character_id === 'string' ? message.extra.character_id : activeCharacterId)
+    ? (typeof message.extra?.greeting_character_id === 'string' ? message.extra.greeting_character_id : activeCharacterId)
     : activeCharacterId
 
   useEffect(() => {
@@ -53,19 +54,20 @@ export default function GreetingNav({ message, chatId, variant = 'minimal' }: Gr
       const newContent = greetings[greetingIndex]
       const contentChanged = !!newContent && newContent !== message.content
       if (contentChanged) {
-        try {
-          const updated = await messagesApi.update(chatId, message.id, { content: newContent })
-          updateMessage(updated.id, updated)
-        } catch (err) {
-          console.error('[GreetingNav] Failed to update greeting:', err)
-        }
+        updateMessage(message.id, { content: newContent })
       }
 
-      chatsApi.patchMetadata(chatId, { activeGreetingIndex: greetingIndex }).then(() => {
-        const store = useStore.getState()
-        const prev = store.activeChatMetadata ?? {}
-        store.setActiveChatMetadata({ ...prev, activeGreetingIndex: greetingIndex })
-      }).catch(() => {})
+      try {
+        await applyChatAppearance(chatId, character, {
+          type: 'greeting',
+          greeting_index: greetingIndex,
+          ...(isGroupChat && greetingCharId ? { character_id: greetingCharId } : {}),
+        })
+      } catch (err) {
+        if (contentChanged) updateMessage(message.id, { content: message.content })
+        console.error('[GreetingNav] Failed to update greeting:', err)
+        toast.error(err instanceof Error ? err.message : 'Failed to change greeting')
+      }
 
       setPickerOpen(false)
 
@@ -81,7 +83,7 @@ export default function GreetingNav({ message, chatId, variant = 'minimal' }: Gr
         }, 1700)
       })
     },
-    [character, chatId, message.id, message.content, setHighlightedMessageId, updateMessage]
+    [character, chatId, greetingCharId, isGroupChat, message.id, message.content, setHighlightedMessageId, updateMessage]
   )
 
   if (!character || !character.alternate_greetings?.length) return null

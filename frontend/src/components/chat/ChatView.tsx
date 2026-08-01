@@ -554,10 +554,6 @@ export default function ChatView() {
           useStore.getState().setActiveChatWallpaper(wp)
         }
 
-        // Restore active avatar override from metadata
-        const avatarOverride = chat.metadata?.active_avatar_id as string | undefined
-        useStore.getState().setActiveChatAvatarId(avatarOverride || null)
-
         // Detect group chat and initialize group state
         const isGroup = chat.metadata?.group === true
         const groupCharIds: string[] = isGroup ? (chat.metadata.character_ids || []) : []

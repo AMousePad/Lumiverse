@@ -663,6 +663,7 @@ export interface LumiverseModules {
   };
   alternate_fields?: Record<string, Array<{ id: string; label: string; content: string }>>;
   alternate_avatars?: Array<{ id: string; label: string; path: string }>;
+  avatar_bindings?: Record<string, { description?: string | null; personality?: string | null; scenario?: string | null; greeting_index?: number | null }>;
   landing_perspective_layers?: Array<{ id: string; label?: string; path: string; intensity: number }>;
   world_books?: Record<string, any>[];
   regex_scripts?: BundledRegexScript[];

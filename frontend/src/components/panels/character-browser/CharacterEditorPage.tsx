@@ -61,6 +61,8 @@ import { filterWorldBooksForChatContextAttachment } from '@/lib/worldBookIndexPr
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { useFolders } from '@/hooks/useFolders'
 import { setCharacterEditorController, syncCharacterEditorState } from '@/lib/spindle/character-editor-helper'
+import { applyChatAppearance } from '@/lib/chatAppearance'
+import type { AvatarBindings } from '@/lib/avatarBindings'
 import styles from './CharacterEditorPage.module.css'
 import clsx from 'clsx'
 import {
@@ -373,7 +375,6 @@ export default function CharacterEditorPage() {
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
-  const setActiveChatAvatarId = useStore((s) => s.setActiveChatAvatarId)
   const setActiveChatWallpaper = useStore((s) => s.setActiveChatWallpaper)
   const setSceneBackground = useStore((s) => s.setSceneBackground)
   const updateCharInStore = useStore((s) => s.updateCharacter)
@@ -957,6 +958,18 @@ export default function CharacterEditorPage() {
     [mutateExtensions]
   )
 
+  const handleAvatarBindingsChange = useCallback(
+    (bindings: AvatarBindings) => {
+      mutateExtensions((ext) => {
+        const next = { ...ext }
+        if (Object.keys(bindings).length > 0) next.avatar_bindings = bindings
+        else delete next.avatar_bindings
+        return next
+      }, false)
+    },
+    [mutateExtensions]
+  )
+
   const handleAlternateCharacterNameChange = useCallback(
     (value: string) => {
       setAlternateCharacterName(value)
@@ -971,18 +984,18 @@ export default function CharacterEditorPage() {
   )
 
   const handleAvatarSelect = useCallback(
-    async (imageId: string | null) => {
-      if (!activeChatId) return
-      setActiveChatAvatarId(imageId)
+    async (avatarEntryId: string) => {
+      if (!activeChatId || !character) return
       try {
-        // Atomic merge — server re-reads the latest chat row so background
-        // writers can't clobber this avatar binding.
-        await chatsApi.patchMetadata(activeChatId, { active_avatar_id: imageId ?? null })
+        await flushExtensionsSave()
+        const latestCharacter = useStore.getState().characters.find((entry) => entry.id === character.id) || character
+        await applyChatAppearance(activeChatId, latestCharacter, { type: 'avatar', avatar_entry_id: avatarEntryId })
       } catch (err) {
         console.error('[Editor] Avatar select failed:', err)
+        toast.error(err instanceof Error ? err.message : 'Failed to change avatar')
       }
     },
-    [activeChatId, setActiveChatAvatarId]
+    [activeChatId, character, flushExtensionsSave]
   )
 
   const handleAddTag = useCallback(() => {
@@ -1030,12 +1043,39 @@ export default function CharacterEditorPage() {
     (index: number) => {
       const updated = alternateGreetings.filter((_, i) => i !== index)
       setAlternateGreetings(updated)
+      const removedGreetingIndex = index + 1
+      mutateExtensions((ext) => {
+        const nextBindings: AvatarBindings = {}
+        for (const [avatarId, rawBinding] of Object.entries(isRecord(ext.avatar_bindings) ? ext.avatar_bindings : {})) {
+          if (!isRecord(rawBinding)) continue
+          const binding = { ...rawBinding } as AvatarBindings[string]
+          if (binding.greeting_index === removedGreetingIndex) delete binding.greeting_index
+          else if (typeof binding.greeting_index === 'number' && binding.greeting_index > removedGreetingIndex) {
+            binding.greeting_index -= 1
+          }
+          if (Object.keys(binding).length > 0) nextBindings[avatarId] = binding
+        }
+        const next = { ...ext }
+        if (Object.keys(nextBindings).length > 0) next.avatar_bindings = nextBindings
+        else delete next.avatar_bindings
+        if (isRecord(ext.greeting_backgrounds)) {
+          const backgrounds: Record<number, unknown> = {}
+          for (const [rawIndex, imageId] of Object.entries(ext.greeting_backgrounds)) {
+            const greetingIndex = Number(rawIndex)
+            if (!Number.isInteger(greetingIndex) || greetingIndex === removedGreetingIndex) continue
+            backgrounds[greetingIndex > removedGreetingIndex ? greetingIndex - 1 : greetingIndex] = imageId
+          }
+          if (Object.keys(backgrounds).length > 0) next.greeting_backgrounds = backgrounds
+          else delete next.greeting_backgrounds
+        }
+        return next
+      }, false)
       if (editingCharacterId) {
         showSaving()
         browser.updateCharacter(editingCharacterId, { alternate_greetings: updated })
       }
     },
-    [alternateGreetings, editingCharacterId, browser, showSaving]
+    [alternateGreetings, editingCharacterId, browser, mutateExtensions, showSaving]
   )
 
   const handleExtensionsChange = useCallback(
@@ -2081,8 +2121,12 @@ export default function CharacterEditorPage() {
                       </div>
                       <AlternateAvatarManager
                         primaryImageId={character?.image_id || null}
-                        alternates={(character?.extensions?.alternate_avatars || []) as AlternateAvatarEntry[]}
+                        alternates={(workingExtensions.alternate_avatars || []) as AlternateAvatarEntry[]}
                         onChange={handleAlternateAvatarsChange}
+                        bindings={(workingExtensions.avatar_bindings || {}) as AvatarBindings}
+                        alternateFields={(workingExtensions.alternate_fields || {}) as Record<string, Array<{ id: string; label: string; content: string }>>}
+                        greetingCount={1 + alternateGreetings.length}
+                        onBindingsChange={handleAvatarBindingsChange}
                         openCropFlow={openAltAvatarCropFlow}
                         activeChatAvatarId={activeChatId ? activeChatAvatarId : undefined}
                         onAvatarSelect={activeChatId ? handleAvatarSelect : undefined}
