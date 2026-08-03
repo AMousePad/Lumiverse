@@ -7,6 +7,8 @@ import { useStore } from '@/store'
 import { sendRoomAction } from '@/ws/relayClient'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { presetsApi } from '@/api/presets'
+import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profiles'
+import { ApiError } from '@/api/client'
 import { charactersApi } from '@/api/characters'
 import { generateApi } from '@/api/generate'
 import { memoryCortexApi } from '@/api/memory-cortex'
@@ -40,7 +42,7 @@ import type { AutocompleteResult } from '@/api/databank'
 import styles from './InputArea.module.css'
 import clsx from 'clsx'
 import InputBarExtensionActions from './InputBarExtensionActions'
-import { didMobileQueueHoldReachThreshold, getMobileQueueHoldPreviewState } from './mobileQueueHold'
+import { getMobileQueueHoldPreviewState, shouldQueueMobileHold } from './mobileQueueHold'
 import { getMobileQueueHintKey, type MobileQueueHoldState } from './mobileQueueHint'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
@@ -82,6 +84,19 @@ function stackVisibleRegexSelections(base: string, selections: PendingRegexSelec
   return [base.trim(), ...selections.filter((item) => item.type === 'send').map((item) => item.content.trim())]
     .filter(Boolean)
     .join('\n\n')
+}
+
+function mergePromptVariableValues(
+  presetValues: PromptVariableValues,
+  profileValues: PromptVariableValues | undefined,
+): PromptVariableValues {
+  if (!profileValues) return presetValues
+  const merged: PromptVariableValues = {}
+  for (const [blockId, values] of Object.entries(presetValues)) merged[blockId] = { ...values }
+  for (const [blockId, values] of Object.entries(profileValues)) {
+    merged[blockId] = { ...(merged[blockId] ?? {}), ...values }
+  }
+  return merged
 }
 
 function serializeHiddenRegexSelections(selections: PendingRegexSelection[]) {
@@ -263,6 +278,10 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
   const [promptVariablesModalOpen, setPromptVariablesModalOpen] = useState(false)
   const [promptVariablesPreset, setPromptVariablesPreset] = useState<LoomPreset | null>(null)
+  const [promptVariablesBinding, setPromptVariablesBinding] = useState<{
+    chatId: string
+    binding: PresetProfileBinding
+  } | null>(null)
   const [promptVariablesLoading, setPromptVariablesLoading] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
@@ -296,6 +315,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
   const touchHoldPromptTimerRef = useRef<number>(0)
   const touchQueueArmTimerRef = useRef<number>(0)
   const touchHoldStartedAtRef = useRef(0)
+  const touchHoldPointerIdRef = useRef<number | null>(null)
   const ignoreFollowupClickUntilRef = useRef(0)
   const ignoreFollowupClickCountRef = useRef(0)
   const mobileQueueHoldStateRef = useRef<MobileQueueHoldState>('idle')
@@ -1060,12 +1080,23 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     const presetId = activeLoomPresetId
     const hydration = presetSaveCoordinator.beginHydration(presetId, 'prompt-variables')
     try {
-      const preset = await presetsApi.get(presetId)
+      const [preset, chatBinding] = await Promise.all([
+        presetsApi.get(presetId),
+        presetProfilesApi.getChatBinding(chatId).catch((error: unknown) => {
+          if (error instanceof ApiError && error.status === 404) return null
+          throw error
+        }),
+      ])
       if (useStore.getState().activeLoomPresetId !== presetId) {
         presetSaveCoordinator.cancelHydration(hydration)
         return
       }
-      setPromptVariablesPreset(presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration))
+      const hydrated = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
+      const binding = chatBinding?.preset_id === presetId ? chatBinding : null
+      setPromptVariablesPreset(binding
+        ? { ...hydrated, promptVariables: mergePromptVariableValues(hydrated.promptVariables, binding.prompt_variables) }
+        : hydrated)
+      setPromptVariablesBinding(binding ? { chatId, binding } : null)
       setPromptVariablesModalOpen(true)
     } catch (err) {
       presetSaveCoordinator.cancelHydration(hydration)
@@ -1075,13 +1106,29 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     } finally {
       setPromptVariablesLoading(false)
     }
-  }, [activeLoomPresetId, promptVariablesLoading, t])
+  }, [activeLoomPresetId, chatId, promptVariablesLoading, t])
 
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
     if (!promptVariablesPreset || useStore.getState().activeLoomPresetId !== promptVariablesPreset.id) {
       setPromptVariablesModalOpen(false)
       setPromptVariablesPreset(null)
+      setPromptVariablesBinding(null)
       return
+    }
+    const bound = promptVariablesBinding
+    if (bound && bound.chatId === chatId && useStore.getState().activeChatId === chatId) {
+      try {
+        const binding = await presetProfilesApi.updateChatPromptVariables(chatId, values)
+        setPromptVariablesBinding({ chatId, binding })
+        setPromptVariablesPreset((current) => current
+          ? { ...current, promptVariables: values }
+          : current)
+        return
+      } catch (err) {
+        console.warn('[InputArea] Failed to save profile prompt variable values:', err)
+        toast.error(t('toast.failedSavePromptVariables'))
+        throw err
+      }
     }
     const updated = presetSaveCoordinator.mutate(
       promptVariablesPreset.id,
@@ -1097,7 +1144,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       toast.error(t('toast.failedSavePromptVariables'))
       throw err
     }
-  }, [promptVariablesPreset, t])
+  }, [promptVariablesPreset, promptVariablesBinding, chatId, t])
 
   const consumeOneshotGuides = useCallback(() => {
     const next = guidedGenerations.map((g) =>
@@ -1125,10 +1172,11 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
 
   useEffect(() => {
     if (!promptVariablesPreset) return
-    if (promptVariablesPreset.id === activeLoomPresetId) return
+    if (promptVariablesPreset.id === activeLoomPresetId && (!promptVariablesBinding || promptVariablesBinding.chatId === chatId)) return
     setPromptVariablesModalOpen(false)
     setPromptVariablesPreset(null)
-  }, [activeLoomPresetId, promptVariablesPreset])
+    setPromptVariablesBinding(null)
+  }, [activeLoomPresetId, chatId, promptVariablesPreset, promptVariablesBinding])
 
   // Databank # autocomplete — search when hash query changes
   useEffect(() => {
@@ -2484,10 +2532,14 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     }
   }, [hasDraftContent, handleQueueMessage, handleSend])
 
-  // Touch interactions with draft content are handled on touchend directly so
-  // the synthetic follow-up click cannot trigger a second action.
-  const handleSendTouchStart = useCallback((e: React.TouchEvent<HTMLButtonElement>) => {
+  // Use a captured pointer rather than touch events. Android can cancel a touch
+  // sequence when a tiny finger drift is interpreted as a pan; pointer capture
+  // keeps the release associated with this button instead.
+  const handleSendPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.pointerType !== 'touch') return
     if (!hasDraftContent || isGeneratingInChat) return
+    touchHoldPointerIdRef.current = e.pointerId
+    e.currentTarget.setPointerCapture(e.pointerId)
     const holdStartedAt = e.timeStamp
     touchHoldStartedAtRef.current = holdStartedAt
     clearTouchQueueTimers()
@@ -2508,16 +2560,22 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     }, MOBILE_QUEUE_HOLD_MS)
   }, [hasDraftContent, isGeneratingInChat, clearTouchQueueTimers, setMobileQueueHoldVisualState, syncMobileQueueHoldVisualState])
 
-  const handleSendTouchEnd = useCallback((e: React.TouchEvent<HTMLButtonElement>) => {
+  const handleSendPointerUp = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.pointerType !== 'touch' || touchHoldPointerIdRef.current !== e.pointerId) return
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
     // Use the native event timestamps instead of Date.now(). On Android the
     // button tap can trigger keyboard/viewport reflow before JS handles
     // touchend, which inflates wall-clock duration and turns a tap into a
     // false long-press.
-    const heldLongEnough = didMobileQueueHoldReachThreshold({
+    const heldLongEnough = shouldQueueMobileHold({
+      isArmed: mobileQueueHoldStateRef.current === 'armed',
       holdStartedAt: touchHoldStartedAtRef.current,
       releasedAt: e.timeStamp,
       thresholdMs: MOBILE_QUEUE_HOLD_MS,
     })
+    touchHoldPointerIdRef.current = null
     touchHoldStartedAtRef.current = 0
     clearTouchQueueTimers()
     if (heldLongEnough && hasDraftContent) {
@@ -2556,7 +2614,9 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     }
   }, [handleQueueMessage, handleSend, hasDraftContent, suppressFollowupClick, clearTouchQueueTimers, setMobileQueueHoldVisualState])
 
-  const handleSendTouchCancel = useCallback(() => {
+  const handleSendPointerCancel = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.pointerType !== 'touch' || touchHoldPointerIdRef.current !== e.pointerId) return
+    touchHoldPointerIdRef.current = null
     touchHoldStartedAtRef.current = 0
     clearTouchQueueTimers()
     if (mobileQueueHoldStateRef.current !== 'queueing') {
@@ -4043,9 +4103,9 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
                   mobileQueueHoldState === 'queueing' && styles.sendBtnQueueing
                 )}
                 onClick={handleSendClick}
-                onTouchStart={handleSendTouchStart}
-                onTouchEnd={handleSendTouchEnd}
-                onTouchCancel={handleSendTouchCancel}
+                onPointerDown={handleSendPointerDown}
+                onPointerUp={handleSendPointerUp}
+                onPointerCancel={handleSendPointerCancel}
                 disabled={isGeneratingInChat}
                 style={sendButtonStyle}
                 title={sendButtonTitle}

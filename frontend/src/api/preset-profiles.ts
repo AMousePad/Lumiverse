@@ -1,8 +1,10 @@
-import { get, put, del } from './client'
+import { get, put, patch, del } from './client'
+import type { PromptVariableValues } from '@/lib/loom/types'
 
 export interface PresetProfileBinding {
   preset_id: string
   block_states: Record<string, boolean>
+  prompt_variables?: PromptVariableValues
   captured_at: number
   linked_to_defaults?: boolean
 }
@@ -19,10 +21,11 @@ export const presetProfilesApi = {
     return get<PresetProfileBinding>('/preset-profiles/defaults', { preset_id: presetId })
   },
 
-  captureDefaults(presetId: string, blockStates: Record<string, boolean>) {
+  captureDefaults(presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
     return put<PresetProfileBinding>('/preset-profiles/defaults', {
       preset_id: presetId,
       block_states: blockStates,
+      ...(promptVariables ? { prompt_variables: promptVariables } : {}),
     })
   },
 
@@ -35,10 +38,11 @@ export const presetProfilesApi = {
     return get<PresetProfileBinding>(`/preset-profiles/character/${characterId}`)
   },
 
-  setCharacterBinding(characterId: string, presetId: string, blockStates: Record<string, boolean>) {
+  setCharacterBinding(characterId: string, presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
     return put<PresetProfileBinding>(`/preset-profiles/character/${characterId}`, {
       preset_id: presetId,
       block_states: blockStates,
+      ...(promptVariables ? { prompt_variables: promptVariables } : {}),
     })
   },
 
@@ -51,10 +55,11 @@ export const presetProfilesApi = {
     return get<PresetProfileBinding>(`/preset-profiles/persona/${personaId}`)
   },
 
-  setPersonaBinding(personaId: string, presetId: string, blockStates: Record<string, boolean>) {
+  setPersonaBinding(personaId: string, presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
     return put<PresetProfileBinding>(`/preset-profiles/persona/${personaId}`, {
       preset_id: presetId,
       block_states: blockStates,
+      ...(promptVariables ? { prompt_variables: promptVariables } : {}),
     })
   },
 
@@ -67,10 +72,17 @@ export const presetProfilesApi = {
     return get<PresetProfileBinding>(`/preset-profiles/chat/${chatId}`)
   },
 
-  setChatBinding(chatId: string, presetId: string, blockStates: Record<string, boolean>) {
+  setChatBinding(chatId: string, presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
     return put<PresetProfileBinding>(`/preset-profiles/chat/${chatId}`, {
       preset_id: presetId,
       block_states: blockStates,
+      ...(promptVariables ? { prompt_variables: promptVariables } : {}),
+    })
+  },
+
+  updateChatPromptVariables(chatId: string, promptVariables: PromptVariableValues) {
+    return patch<PresetProfileBinding>(`/preset-profiles/chat/${chatId}/prompt-variables`, {
+      prompt_variables: promptVariables,
     })
   },
 
@@ -83,10 +95,11 @@ export const presetProfilesApi = {
     return get<PresetProfileBinding>(`/preset-profiles/connection/${connectionId}`)
   },
 
-  setConnectionBinding(connectionId: string, presetId: string, blockStates: Record<string, boolean>) {
+  setConnectionBinding(connectionId: string, presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
     return put<PresetProfileBinding>(`/preset-profiles/connection/${connectionId}`, {
       preset_id: presetId,
       block_states: blockStates,
+      ...(promptVariables ? { prompt_variables: promptVariables } : {}),
     })
   },
 

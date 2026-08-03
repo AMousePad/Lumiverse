@@ -1,3 +1,5 @@
+import type { PromptVariableValues } from "./preset";
+
 /**
  * A preset profile binding captures both the preset selection and a snapshot of
  * which prompt blocks are enabled/disabled in that preset. These snapshots can
@@ -18,6 +20,8 @@ export interface PresetProfileBinding {
   preset_id: string;
   /** Map of block ID → enabled state */
   block_states: Record<string, boolean>;
+  /** End-user selections captured with this profile (optional for legacy bindings). */
+  prompt_variables?: PromptVariableValues;
   /** Unix epoch seconds when the snapshot was captured */
   captured_at: number;
   /**

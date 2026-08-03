@@ -5,7 +5,7 @@ import * as connectionsSvc from "./connections.service";
 import * as presetsSvc from "./presets.service";
 import * as personasSvc from "./personas.service";
 import type { PresetProfileBinding, ResolvedPresetProfile } from "../types/preset-profile";
-import type { PromptBlock } from "../types/preset";
+import type { PromptBlock, PromptVariableValues } from "../types/preset";
 
 // ---------------------------------------------------------------------------
 // Setting key conventions
@@ -54,11 +54,13 @@ function getDefaultsForBinding(
 function createBinding(
   presetId: string,
   blockStates: Record<string, boolean>,
+  promptVariables?: PromptVariableValues,
   linkedToDefaults?: boolean
 ): PresetProfileBinding {
   return {
     preset_id: presetId,
     block_states: blockStates,
+    ...(promptVariables ? { prompt_variables: promptVariables } : {}),
     captured_at: Math.floor(Date.now() / 1000),
     ...(linkedToDefaults ? { linked_to_defaults: true } : {}),
   };
@@ -105,10 +107,11 @@ function resolveSpecificBinding(
 export function captureDefaults(
   userId: string,
   presetId: string,
-  blockStates: Record<string, boolean>
+  blockStates: Record<string, boolean>,
+  promptVariables?: PromptVariableValues,
 ): PresetProfileBinding {
   assertPresetExists(userId, presetId);
-  const binding = createBinding(presetId, blockStates);
+  const binding = createBinding(presetId, blockStates, promptVariables);
   settingsSvc.putSetting(userId, defaultsKey(presetId), binding);
   return binding;
 }
@@ -138,14 +141,15 @@ export function setCharacterBinding(
   userId: string,
   characterId: string,
   presetId: string,
-  blockStates: Record<string, boolean>
+  blockStates: Record<string, boolean>,
+  promptVariables?: PromptVariableValues,
 ): PresetProfileBinding {
   // Validate character exists
   const character = charactersSvc.getCharacter(userId, characterId);
   if (!character) throw new Error("Character not found");
   assertPresetExists(userId, presetId);
 
-  const binding = createBinding(presetId, blockStates);
+  const binding = createBinding(presetId, blockStates, promptVariables);
   settingsSvc.putSetting(userId, characterKey(characterId), binding);
   return binding;
 }
@@ -173,11 +177,12 @@ export function setPersonaBinding(
   personaId: string,
   presetId: string,
   blockStates: Record<string, boolean>,
+  promptVariables?: PromptVariableValues,
 ): PresetProfileBinding {
   if (!personasSvc.getPersona(userId, personaId)) throw new Error("Persona not found");
   assertPresetExists(userId, presetId);
 
-  const binding = createBinding(presetId, blockStates);
+  const binding = createBinding(presetId, blockStates, promptVariables);
   settingsSvc.putSetting(userId, personaKey(personaId), binding);
   return binding;
 }
@@ -202,6 +207,7 @@ export function setChatBinding(
   chatId: string,
   presetId: string,
   blockStates: Record<string, boolean> | null,
+  promptVariables?: PromptVariableValues,
   linkedToDefaults?: boolean
 ): PresetProfileBinding {
   // Validate chat exists
@@ -209,7 +215,7 @@ export function setChatBinding(
   if (!chat) throw new Error("Chat not found");
   assertPresetExists(userId, presetId);
 
-  const binding = createBinding(presetId, blockStates ?? {}, linkedToDefaults);
+  const binding = createBinding(presetId, blockStates ?? {}, promptVariables, linkedToDefaults);
   settingsSvc.putSetting(userId, chatKey(chatId), binding);
   return binding;
 }
@@ -219,6 +225,34 @@ export function deleteChatBinding(
   chatId: string
 ): boolean {
   return settingsSvc.deleteSetting(userId, chatKey(chatId));
+}
+
+/** Update a chat profile's values without replacing its saved block states. */
+export function updateChatPromptVariables(
+  userId: string,
+  chatId: string,
+  promptVariables: PromptVariableValues,
+): PresetProfileBinding {
+  const binding = getChatBinding(userId, chatId);
+  if (!binding) throw new Error("No binding for this chat");
+
+  // A linked chat delegates both block and variable state to the defaults.
+  if (binding.linked_to_defaults) {
+    const defaults = getDefaults(userId, binding.preset_id);
+    if (!defaults) throw new Error("No defaults captured");
+    const updated = createBinding(defaults.preset_id, defaults.block_states, promptVariables);
+    settingsSvc.putSetting(userId, defaultsKey(defaults.preset_id), updated);
+    return updated;
+  }
+
+  const updated = createBinding(
+    binding.preset_id,
+    binding.block_states,
+    promptVariables,
+    binding.linked_to_defaults,
+  );
+  settingsSvc.putSetting(userId, chatKey(chatId), updated);
+  return updated;
 }
 
 // ---------------------------------------------------------------------------
@@ -236,13 +270,14 @@ export function setConnectionBinding(
   userId: string,
   connectionId: string,
   presetId: string,
-  blockStates: Record<string, boolean>
+  blockStates: Record<string, boolean>,
+  promptVariables?: PromptVariableValues,
 ): PresetProfileBinding {
   const connection = connectionsSvc.getConnection(userId, connectionId);
   if (!connection) throw new Error("Connection not found");
   assertPresetExists(userId, presetId);
 
-  const binding = createBinding(presetId, blockStates);
+  const binding = createBinding(presetId, blockStates, promptVariables);
   settingsSvc.putSetting(userId, connectionKey(connectionId), binding);
   return binding;
 }

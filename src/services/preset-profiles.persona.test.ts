@@ -4,6 +4,9 @@ import {
   getPersonaBinding,
   resolveProfile,
   setPersonaBinding,
+  setChatBinding,
+  updateChatPromptVariables,
+  getChatBinding,
 } from "./preset-profiles.service";
 import * as settingsSvc from "./settings.service";
 
@@ -25,6 +28,15 @@ function initTestDb(): void {
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
     metadata TEXT NOT NULL DEFAULT '{}'
+  )`);
+  db.run(`CREATE TABLE chats (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    character_id TEXT,
+    name TEXT NOT NULL DEFAULT '',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
   )`);
   db.run(`CREATE TABLE presets (
     id TEXT PRIMARY KEY,
@@ -56,6 +68,43 @@ describe("persona preset profiles", () => {
     const binding = setPersonaBinding(USER, "persona-1", "preset-1", { style: true, analysis: false });
 
     expect(getPersonaBinding(USER, "persona-1")).toEqual(binding);
+  });
+
+  test("captures prompt-variable selections with the profile snapshot", () => {
+    const db = getDb();
+    db.run("INSERT INTO personas (id, user_id, name, metadata) VALUES (?, ?, ?, '{}')", ["persona-1", USER, "Mode switcher"]);
+    db.run(
+      "INSERT INTO presets (id, user_id, name, provider) VALUES (?, ?, ?, ?)",
+      ["preset-1", USER, "RP", "openai"],
+    );
+
+    const binding = setPersonaBinding(
+      USER,
+      "persona-1",
+      "preset-1",
+      { style: true },
+      { style: { tone: "warm" } },
+    );
+
+    expect(binding.prompt_variables).toEqual({ style: { tone: "warm" } });
+    expect(getPersonaBinding(USER, "persona-1")?.prompt_variables).toEqual({ style: { tone: "warm" } });
+  });
+
+  test("updates chat variable selections without replacing its block snapshot", () => {
+    const db = getDb();
+    db.run("INSERT INTO chats (id, user_id, name, metadata) VALUES (?, ?, ?, '{}')", ["chat-1", USER, "Chat"]);
+    db.run(
+      "INSERT INTO presets (id, user_id, name, provider) VALUES (?, ?, ?, ?)",
+      ["preset-1", USER, "RP", "openai"],
+    );
+    setChatBinding(USER, "chat-1", "preset-1", { style: false }, { style: { tone: "cold" } });
+
+    updateChatPromptVariables(USER, "chat-1", { style: { tone: "warm" } });
+
+    expect(getChatBinding(USER, "chat-1")).toMatchObject({
+      block_states: { style: false },
+      prompt_variables: { style: { tone: "warm" } },
+    });
   });
 
   test("lets a persona profile override a character profile but not a chat profile", () => {

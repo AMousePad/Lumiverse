@@ -241,6 +241,16 @@ describe("resolvePromptBlockPlacements", () => {
     });
     expect(unchanged[0]).toBe(unmapped);
   });
+
+  test("uses a profile selection over the preset's shared placement selection", () => {
+    const resolved = resolvePromptBlockPlacements(
+      [block],
+      { metadata: { promptVariables: { "placement-block": { adherence_target: "baseline" } } } },
+      { "placement-block": { adherence_target: "frontier" } },
+    );
+
+    expect(resolved[0]).toMatchObject({ role: "user", position: "in_history", depth: 3 });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -377,5 +387,25 @@ describe("resolvePromptVariables", () => {
     resolvePromptVariables(env, blocks, preset);
 
     expect(await ev("{{var::tone}}", env)).toBe("");
+  });
+
+  test("uses a profile snapshot over shared preset values", async () => {
+    const env = makeEnv();
+    const blocks: PromptBlock[] = [{
+      id: "block-1", name: "Style", content: "{{var::tone}}", role: "system",
+      enabled: true, position: "pre_history", depth: 0, marker: null, isLocked: false,
+      color: null, injectionTrigger: [], group: null,
+      variables: [{ id: "var-1", name: "tone", label: "Tone", type: "text", defaultValue: "default tone" }],
+    }];
+    const preset = {
+      id: "preset-1", name: "Preset", provider: "test", engine: "test", parameters: {},
+      prompt_order: blocks, prompts: {},
+      metadata: { promptVariables: { "block-1": { tone: "outside chat" } } },
+      created_at: 0, updated_at: 0,
+    } satisfies Preset;
+
+    resolvePromptVariables(env, blocks, preset, { "block-1": { tone: "chat-specific" } });
+
+    expect(await ev("{{var::tone}}", env)).toBe("chat-specific");
   });
 });

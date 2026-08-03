@@ -4,7 +4,7 @@ title: Preset Profiles
 
 # Preset Profiles
 
-Preset profiles let you save and restore a **preset selection plus its block enabled/disabled states**. You can bind these snapshots to specific personas, characters, or chats so Lumiverse switches to the right preset and block configuration automatically.
+Preset profiles let you save and restore a **preset selection, block enabled/disabled states, and prompt-variable selections**. You can bind these snapshots to specific personas, characters, or chats so Lumiverse switches to the right preset and configuration automatically.
 
 ---
 
@@ -12,7 +12,7 @@ Preset profiles let you save and restore a **preset selection plus its block ena
 
 Imagine you have a preset with 15 blocks. For one character, you want blocks 1-10 enabled. For another, you want blocks 3, 7, and 11-15 enabled. Without profiles, you'd have to manually toggle blocks every time you switch characters.
 
-Profiles automate this. Each profile remembers which preset to use and the on/off state of every block inside it, then restores both when you switch context.
+Profiles automate this. Each profile remembers which preset to use, the on/off state of every block inside it, and the configured prompt-variable values, then restores all three when you switch context.
 
 ---
 
@@ -60,7 +60,7 @@ Chat, persona, and character profiles are authoritative: they choose the preset 
     - **Character** — Bound to the current character
     - **Chat** — Bound to the current chat
 
-The snapshot records the current preset and the enabled/disabled state of every block.
+The snapshot records the current preset, the enabled/disabled state of every block, and the current prompt-variable selections.
 
 ---
 

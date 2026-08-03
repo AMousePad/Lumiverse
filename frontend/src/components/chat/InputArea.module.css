@@ -921,7 +921,9 @@
     box-shadow var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
   font-size: calc(16px * var(--lumiverse-font-scale, 1));
   padding: 0;
-  touch-action: manipulation;
+  /* The send button owns a touch for the duration of a hold-to-queue gesture.
+     Allowing panning here lets Android cancel the touch before its release. */
+  touch-action: none;
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
 }

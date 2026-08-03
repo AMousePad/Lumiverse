@@ -5,7 +5,7 @@ import { ApiError } from '@/api/client'
 import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profiles'
 import { createPresetProfileSelectionController, type PresetProfileSelectionController } from './usePresetProfiles-selection'
 import { createPresetProfileMutationCoordinator, runPresetProfileMutation, type PresetProfileMutationCoordinator } from './preset-profile-mutation-coordinator'
-import type { PromptBlock } from '@/lib/loom/types'
+import type { PromptBlock, PromptVariableValues } from '@/lib/loom/types'
 
 /**
  * Captures the current block enabled/disabled states as a map of block ID → boolean.
@@ -16,6 +16,10 @@ function snapshotBlockStates(blocks: PromptBlock[]): Record<string, boolean> {
     states[block.id] = block.enabled
   }
   return states
+}
+
+function snapshotPromptVariables(values: PromptVariableValues | undefined): PromptVariableValues | undefined {
+  return values ? structuredClone(values) : undefined
 }
 
 function refreshProfileBinding(
@@ -51,6 +55,7 @@ const profileScopes = {
 export function usePresetProfiles(
   presetId: string | null,
   blocks: PromptBlock[] | undefined,
+  promptVariables?: PromptVariableValues,
 ) {
   const { t } = useTranslation('panels', { keyPrefix: 'loomBuilder.toast' })
   const activeChatId = useStore((s) => s.activeChatId)
@@ -262,7 +267,7 @@ export function usePresetProfiles(
       const result = await runPresetProfileMutation({
         coordinator: mutationCoordinator,
         scope,
-        operation: () => presetProfilesApi.captureDefaults(targetPresetId, snapshot),
+        operation: () => presetProfilesApi.captureDefaults(targetPresetId, snapshot, snapshotPromptVariables(promptVariables)),
         canStart: () => authUserIdRef.current === authUserId && presetIdRef.current === targetPresetId,
         refresh: () => refreshProfileBinding(presetProfilesApi.getDefaults(targetPresetId)),
         isCurrent: (revision) => presetIdRef.current === targetPresetId && mutationCoordinator.isMutationCurrent(scope, revision),
@@ -282,7 +287,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, blocks, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
+  }, [presetId, blocks, promptVariables, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Clear defaults
   const clearDefaults = useCallback(async () => {
@@ -328,7 +333,7 @@ export function usePresetProfiles(
       const result = await runPresetProfileMutation({
         coordinator: mutationCoordinator,
         scope,
-        operation: () => presetProfilesApi.setChatBinding(targetChatId, targetPresetId, snapshot),
+        operation: () => presetProfilesApi.setChatBinding(targetChatId, targetPresetId, snapshot, snapshotPromptVariables(promptVariables)),
         canStart: () => authUserIdRef.current === authUserId
           && presetIdRef.current === targetPresetId
           && activeChatIdRef.current === targetChatId,
@@ -344,7 +349,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, blocks, activeChatId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
+  }, [presetId, blocks, promptVariables, activeChatId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Unbind from current chat
   const unbindChat = useCallback(async () => {
@@ -384,7 +389,7 @@ export function usePresetProfiles(
       const result = await runPresetProfileMutation({
         coordinator: mutationCoordinator,
         scope,
-        operation: () => presetProfilesApi.setPersonaBinding(targetPersonaId, targetPresetId, snapshot),
+        operation: () => presetProfilesApi.setPersonaBinding(targetPersonaId, targetPresetId, snapshot, snapshotPromptVariables(promptVariables)),
         canStart: () => authUserIdRef.current === authUserId
           && presetIdRef.current === targetPresetId
           && activePersonaIdRef.current === targetPersonaId,
@@ -400,7 +405,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, blocks, activePersonaId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
+  }, [presetId, blocks, promptVariables, activePersonaId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   const unbindPersona = useCallback(async () => {
     const targetPersonaId = activePersonaId
@@ -438,7 +443,7 @@ export function usePresetProfiles(
       const result = await runPresetProfileMutation({
         coordinator: mutationCoordinator,
         scope,
-        operation: () => presetProfilesApi.setCharacterBinding(targetCharacterId, targetPresetId, snapshot),
+        operation: () => presetProfilesApi.setCharacterBinding(targetCharacterId, targetPresetId, snapshot, snapshotPromptVariables(promptVariables)),
         canStart: () => authUserIdRef.current === authUserId
           && presetIdRef.current === targetPresetId
           && activeCharacterIdRef.current === targetCharacterId,
@@ -454,7 +459,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, blocks, activeCharacterId, isGroupChat, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
+  }, [presetId, blocks, promptVariables, activeCharacterId, isGroupChat, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Unbind from current character
   const unbindCharacter = useCallback(async () => {
@@ -493,7 +498,7 @@ export function usePresetProfiles(
       const result = await runPresetProfileMutation({
         coordinator: mutationCoordinator,
         scope,
-        operation: () => presetProfilesApi.setConnectionBinding(targetProfileId, targetPresetId, snapshot),
+        operation: () => presetProfilesApi.setConnectionBinding(targetProfileId, targetPresetId, snapshot, snapshotPromptVariables(promptVariables)),
         canStart: () => authUserIdRef.current === authUserId
           && presetIdRef.current === targetPresetId
           && activeProfileIdRef.current === targetProfileId,
@@ -509,7 +514,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, blocks, activeProfileId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
+  }, [presetId, blocks, promptVariables, activeProfileId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Unbind from current connection profile
   const unbindConnection = useCallback(async () => {

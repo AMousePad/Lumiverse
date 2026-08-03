@@ -1803,7 +1803,7 @@ export default function LoomBuilder({
     exportLegacy,
   } = useLoomBuilder()
 
-  const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
+  const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks, activePreset?.promptVariables)
   const presetEditorTabs = __contextMeterStore((state) => state.presetEditorTabs)
   const presetEditorToolbarItems = __contextMeterStore((state) => state.presetEditorToolbarItems)
   const addToast = __contextMeterStore((s) => s.addToast)
