@@ -67,7 +67,7 @@ import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
 import { presetsApi, type StashedPromptBlock } from '@/api/presets'
 import { usePresetProfiles } from '@/hooks/usePresetProfiles'
-import { mergePromptVariableValues } from '@/hooks/preset-profile-prompt-variables'
+import { getEffectivePromptVariableValues } from '@/hooks/preset-profile-prompt-variables'
 import { computeGroups, createBlock, createMarkerBlock, resolvePromptBlockPlacements } from '@/lib/loom/service'
 import { sanitizeCharacterTagTrigger, splitCharacterTagTriggerInput } from '@/lib/loom/characterTagTrigger'
 import {
@@ -1805,11 +1805,10 @@ export default function LoomBuilder({
   } = useLoomBuilder()
 
   const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks, activePreset?.promptVariables)
-  const effectivePromptVariableValues = useMemo(() => mergePromptVariableValues(
+  const effectivePromptVariableValues = useMemo(() => getEffectivePromptVariableValues(
+    activePreset?.id,
     activePreset?.promptVariables ?? {},
-    presetProfiles.activeBinding?.preset_id === activePreset?.id
-      ? presetProfiles.activeBinding.prompt_variables
-      : undefined,
+    presetProfiles.activeBinding,
   ), [activePreset?.id, activePreset?.promptVariables, presetProfiles.activeBinding])
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
     const savedToProfile = await presetProfiles.saveActivePromptVariableValues(values)

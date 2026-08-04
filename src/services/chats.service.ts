@@ -1127,11 +1127,22 @@ export function convertSoloChatToGroup(userId: string, chatId: string): Chat | n
   if (source.metadata?.group) throw new Error("Chat is already a group chat");
   if (!source.character_id) throw new Error("Temporary chats cannot be converted to group chats");
 
+  // Conversion copies the conversation into a new, independently managed
+  // group chat. A solo fork's lineage markers describe its relationship to
+  // another solo chat; carrying them into the group makes the new group show
+  // up in that solo branch tree and lets lineage-based consumers treat it as
+  // another solo-character branch instead of a distinct group.
+  const {
+    branched_from: _branchedFrom,
+    branch_at_message: _branchAtMessage,
+    ...sourceMetadata
+  } = source.metadata || {};
+
   const converted = createChatRaw(userId, {
     character_id: source.character_id,
     name: source.name,
     metadata: {
-      ...(source.metadata || {}),
+      ...sourceMetadata,
       group: true,
       character_ids: [source.character_id],
     },

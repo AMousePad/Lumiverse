@@ -29,6 +29,19 @@ export function mergePromptVariableValues(
   return merged
 }
 
+export function getEffectivePromptVariableValues(
+  presetId: string | undefined,
+  presetValues: PromptVariableValues,
+  binding: PresetProfileBinding | null,
+): PromptVariableValues {
+  return mergePromptVariableValues(
+    presetValues,
+    binding && presetId && binding.preset_id === presetId
+      ? binding.prompt_variables
+      : undefined,
+  )
+}
+
 export function updatePresetProfilePromptVariables(
   api: PresetProfilePromptVariableApi,
   target: PresetProfilePromptVariableTarget,

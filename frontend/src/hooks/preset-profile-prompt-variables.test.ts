@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'bun:test'
 import type { PresetProfileBinding } from '@/api/preset-profiles'
 import type { PromptVariableValues } from '@/lib/loom/types'
 import {
+  getEffectivePromptVariableValues,
   mergePromptVariableValues,
   updatePresetProfilePromptVariables,
   type PresetProfilePromptVariableSource,
@@ -16,6 +17,10 @@ const binding: PresetProfileBinding = {
 }
 
 describe('preset profile prompt variables', () => {
+  test('accepts an absent profile snapshot while presets and bindings are loading', () => {
+    expect(getEffectivePromptVariableValues(undefined, {}, null)).toEqual({})
+  })
+
   test('merges profile values over preset defaults without dropping unrelated values', () => {
     expect(mergePromptVariableValues(
       { block: { tone: 'neutral', length: 2 }, other: { style: 'plain' } },

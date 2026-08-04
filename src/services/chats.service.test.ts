@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import {
+  addGroupMember,
   addSwipe,
   applyChatAppearance,
+  branchChat,
   convertSoloChatToGroup,
   createChat,
   deleteChats,
   getChat,
+  getChatTree,
   cycleSwipe,
   getMessage,
   getMessages,
@@ -549,6 +552,23 @@ describe("recent chats", () => {
       },
     ]);
     expect(original.metadata).toEqual({ author_note: "keep me" });
+  });
+
+  test("detaches a converted group chat from a solo fork lineage", () => {
+    seedChat("solo-root", "c1", "Alpha chat", "{}", 100);
+    seedMessage("msg-1", "solo-root", "Hello there", {}, { index: 0 });
+
+    const fork = branchChat("u1", "solo-root", "msg-1")!;
+    expect(fork.metadata.branched_from).toBe("solo-root");
+
+    const converted = convertSoloChatToGroup("u1", fork.id)!;
+    const group = addGroupMember("u1", converted.id, "c2", { skip_greeting: true })!;
+
+    expect(group.metadata.group).toBe(true);
+    expect(group.metadata.character_ids).toEqual(["c1", "c2"]);
+    expect(group.metadata.branched_from).toBeUndefined();
+    expect(group.metadata.branch_at_message).toBeUndefined();
+    expect(getChatTree("u1", group.id)?.id).toBe(group.id);
   });
 });
 
