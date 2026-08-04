@@ -16,17 +16,18 @@ interface PresetProfilePromptVariableApi {
   updateDefaultsPromptVariables(id: string, values: PromptVariableValues): Promise<PresetProfileBinding>
 }
 
-export function mergePromptVariableValues(
-  presetValues: PromptVariableValues,
-  profileValues: PromptVariableValues | undefined,
-): PromptVariableValues {
-  if (!profileValues) return presetValues
-  const merged: PromptVariableValues = {}
-  for (const [blockId, values] of Object.entries(presetValues)) merged[blockId] = { ...values }
-  for (const [blockId, values] of Object.entries(profileValues)) {
-    merged[blockId] = { ...(merged[blockId] ?? {}), ...values }
-  }
-  return merged
+export interface PresetProfilePromptVariableChange {
+  target: PresetProfilePromptVariableTarget
+  binding: PresetProfileBinding
+}
+
+const promptVariableChangeListeners = new Set<(change: PresetProfilePromptVariableChange) => void>()
+
+export function subscribePresetProfilePromptVariableChanges(
+  listener: (change: PresetProfilePromptVariableChange) => void,
+): () => void {
+  promptVariableChangeListeners.add(listener)
+  return () => promptVariableChangeListeners.delete(listener)
 }
 
 export function getEffectivePromptVariableValues(
@@ -34,29 +35,43 @@ export function getEffectivePromptVariableValues(
   presetValues: PromptVariableValues,
   binding: PresetProfileBinding | null,
 ): PromptVariableValues {
-  return mergePromptVariableValues(
-    presetValues,
-    binding && presetId && binding.preset_id === presetId
-      ? binding.prompt_variables
-      : undefined,
-  )
+  if (binding && presetId && binding.preset_id === presetId) {
+    return binding.prompt_variables ? structuredClone(binding.prompt_variables) : {}
+  }
+  return presetValues
 }
 
-export function updatePresetProfilePromptVariables(
+export async function updatePresetProfilePromptVariables(
   api: PresetProfilePromptVariableApi,
   target: PresetProfilePromptVariableTarget,
   values: PromptVariableValues,
 ): Promise<PresetProfileBinding> {
+  let binding: PresetProfileBinding
   switch (target.source) {
     case 'chat':
-      return api.updateChatPromptVariables(target.id, values)
+      binding = await api.updateChatPromptVariables(target.id, values)
+      break
     case 'persona':
-      return api.updatePersonaPromptVariables(target.id, values)
+      binding = await api.updatePersonaPromptVariables(target.id, values)
+      break
     case 'character':
-      return api.updateCharacterPromptVariables(target.id, values)
+      binding = await api.updateCharacterPromptVariables(target.id, values)
+      break
     case 'connection':
-      return api.updateConnectionPromptVariables(target.id, values)
+      binding = await api.updateConnectionPromptVariables(target.id, values)
+      break
     case 'defaults':
-      return api.updateDefaultsPromptVariables(target.id, values)
+      binding = await api.updateDefaultsPromptVariables(target.id, values)
+      break
   }
+  const change = { target, binding }
+  for (const listener of promptVariableChangeListeners) {
+    try {
+      listener(change)
+    } catch {
+      // The profile write is already committed. A stale consumer must not
+      // turn that successful save into a modal error.
+    }
+  }
+  return binding
 }

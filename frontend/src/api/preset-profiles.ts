@@ -13,6 +13,7 @@ export interface ResolvedPresetProfile {
   preset_id: string | null
   binding: PresetProfileBinding | null
   source: 'chat' | 'persona' | 'character' | 'connection' | 'defaults' | 'none'
+  source_id: string | null
 }
 
 export const presetProfilesApi = {

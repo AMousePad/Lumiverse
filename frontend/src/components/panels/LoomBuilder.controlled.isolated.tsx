@@ -278,6 +278,7 @@ function configureMainLoomState(): void {
     saveCompletionSettings: () => {},
     saveAdvancedSettings: () => {},
     savePromptVariableValues: () => {},
+    applyRuntimeBlockProfile: () => {},
     updatePresetDraft: () => {},
     flushPresetDraft: () => {},
     importFromFile: async () => {},

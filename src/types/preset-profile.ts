@@ -39,4 +39,6 @@ export interface ResolvedPresetProfile {
   binding: PresetProfileBinding | null;
   /** Where the binding came from */
   source: "chat" | "persona" | "character" | "connection" | "defaults" | "none";
+  /** Identifier of the chat/persona/character/connection/defaults scope that matched. */
+  source_id: string | null;
 }

@@ -3,7 +3,7 @@ import type { PresetProfileBinding } from '@/api/preset-profiles'
 import type { PromptVariableValues } from '@/lib/loom/types'
 import {
   getEffectivePromptVariableValues,
-  mergePromptVariableValues,
+  subscribePresetProfilePromptVariableChanges,
   updatePresetProfilePromptVariables,
   type PresetProfilePromptVariableSource,
 } from './preset-profile-prompt-variables'
@@ -21,14 +21,18 @@ describe('preset profile prompt variables', () => {
     expect(getEffectivePromptVariableValues(undefined, {}, null)).toEqual({})
   })
 
-  test('merges profile values over preset defaults without dropping unrelated values', () => {
-    expect(mergePromptVariableValues(
-      { block: { tone: 'neutral', length: 2 }, other: { style: 'plain' } },
-      { block: { tone: 'warm' } },
-    )).toEqual({
-      block: { tone: 'warm', length: 2 },
-      other: { style: 'plain' },
-    })
+  test('uses only scope-bound values so missing variables seed from their definitions', () => {
+    expect(getEffectivePromptVariableValues(
+      'preset-1',
+      { block: { tone: 'shared', length: 4 } },
+      binding,
+    )).toEqual({ block: { tone: 'warm' } })
+
+    expect(getEffectivePromptVariableValues(
+      'preset-1',
+      { block: { tone: 'shared' } },
+      { ...binding, prompt_variables: undefined },
+    )).toEqual({})
   })
 
   test.each([
@@ -54,5 +58,25 @@ describe('preset profile prompt variables', () => {
 
     expect(api[expectedMethod]).toHaveBeenCalledWith('profile-1', values)
     expect(Object.values(api).reduce((count, fn) => count + fn.mock.calls.length, 0)).toBe(1)
+  })
+
+  test('publishes the committed scoped binding to other profile consumers', async () => {
+    const changes: unknown[] = []
+    const unsubscribe = subscribePresetProfilePromptVariableChanges((change) => changes.push(change))
+    const api = {
+      updateChatPromptVariables: mock(async () => binding),
+      updatePersonaPromptVariables: mock(async () => binding),
+      updateCharacterPromptVariables: mock(async () => binding),
+      updateConnectionPromptVariables: mock(async () => binding),
+      updateDefaultsPromptVariables: mock(async () => binding),
+    }
+    const target = { source: 'chat' as const, id: 'chat-1' }
+
+    try {
+      const committed = await updatePresetProfilePromptVariables(api, target, values)
+      expect(changes).toEqual([{ target, binding: committed }])
+    } finally {
+      unsubscribe()
+    }
   })
 })

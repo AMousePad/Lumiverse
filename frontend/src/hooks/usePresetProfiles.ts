@@ -5,8 +5,13 @@ import { ApiError } from '@/api/client'
 import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profiles'
 import { createPresetProfileSelectionController, type PresetProfileSelectionController } from './usePresetProfiles-selection'
 import { createPresetProfileMutationCoordinator, runPresetProfileMutation, type PresetProfileMutationCoordinator } from './preset-profile-mutation-coordinator'
-import { updatePresetProfilePromptVariables } from './preset-profile-prompt-variables'
+import {
+  subscribePresetProfilePromptVariableChanges,
+  updatePresetProfilePromptVariables,
+} from './preset-profile-prompt-variables'
 import type { PromptBlock, PromptVariableValues } from '@/lib/loom/types'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/ws/events'
 
 /**
  * Captures the current block enabled/disabled states as a map of block ID → boolean.
@@ -73,6 +78,7 @@ export function usePresetProfiles(
   const [personaSlot, setPersonaSlot] = useState<PersonaSlot>(EMPTY_PERSONA_SLOT)
   const [charSlot, setCharSlot] = useState<CharSlot>(EMPTY_CHAR_SLOT)
   const [connectionSlot, setConnectionSlot] = useState<ConnectionSlot>(EMPTY_CONNECTION_SLOT)
+  const [profileRevision, setProfileRevision] = useState(0)
   const presetIdRef = useRef(presetId)
   const authUserIdRef = useRef(authUserId)
   presetIdRef.current = presetId
@@ -105,6 +111,18 @@ export function usePresetProfiles(
     selectionControllerRef.current = createPresetProfileSelectionController()
   }
 
+  // Profile bindings are edited from more than one surface (the chat input
+  // modal, Loom Builder, and other browser tabs). Keep this hook's scoped
+  // binding cache authoritative by invalidating it whenever the backend
+  // announces a profile change. Fetch tokens below discard any response that
+  // was already in flight when this revision changed.
+  useEffect(() => wsClient.on(EventType.PRESET_PROFILE_CHANGED, () => {
+    setProfileRevision((revision) => revision + 1)
+  }), [])
+  useEffect(() => subscribePresetProfilePromptVariableChanges(() => {
+    setProfileRevision((revision) => revision + 1)
+  }), [])
+
   useEffect(() => {
     return () => {
       selectionControllerRef.current?.cancel()
@@ -134,7 +152,7 @@ export function usePresetProfiles(
         setDefaultsFor(targetPresetId)
       })
     return () => { cancelled = true }
-  }, [presetId, mutationCoordinator])
+  }, [presetId, mutationCoordinator, profileRevision])
 
   // Load chat binding when chat changes. Stale fetches are discarded by the
   // cancelled flag, and the slot is keyed by the chat id it was fetched for so
@@ -161,7 +179,7 @@ export function usePresetProfiles(
         }
       })
     return () => { cancelled = true }
-  }, [activeChatId, mutationCoordinator])
+  }, [activeChatId, mutationCoordinator, profileRevision])
 
   // Load persona binding when the active persona changes. A persona profile
   // takes precedence over the character profile, mirroring backend resolution.
@@ -187,7 +205,7 @@ export function usePresetProfiles(
         }
       })
     return () => { cancelled = true }
-  }, [activePersonaId, mutationCoordinator])
+  }, [activePersonaId, mutationCoordinator, profileRevision])
 
   // Load character binding when character changes (same pattern as chat).
   useEffect(() => {
@@ -212,7 +230,7 @@ export function usePresetProfiles(
         }
       })
     return () => { cancelled = true }
-  }, [activeCharacterId, mutationCoordinator])
+  }, [activeCharacterId, mutationCoordinator, profileRevision])
 
   // Load connection profile binding when active connection changes.
   useEffect(() => {
@@ -237,7 +255,7 @@ export function usePresetProfiles(
         }
       })
     return () => { cancelled = true }
-  }, [activeProfileId, mutationCoordinator])
+  }, [activeProfileId, mutationCoordinator, profileRevision])
 
   // A binding is only considered current when it was fetched for the active id.
   const chatBinding = chatSlot.for === activeChatId ? chatSlot.binding : null
@@ -595,11 +613,18 @@ export function usePresetProfiles(
     if (defaultsFor === presetId && defaults) return 'defaults'
     return 'none'
   })()
+  const activeSourceId = activeSource === 'chat' ? activeChatId
+    : activeSource === 'persona' ? activePersonaId
+      : activeSource === 'character' ? activeCharacterId
+        : activeSource === 'connection' ? activeProfileId
+          : activeSource === 'defaults' ? presetId
+            : null
 
   // Save variable values into the resolved profile without rewriting the
   // binding's block-state snapshot. Returning false tells callers that no
   // profile is active and the base preset is therefore the correct target.
   const saveActivePromptVariableValues = useCallback(async (values: PromptVariableValues): Promise<boolean> => {
+    if (!isResolved) throw new Error('The active preset profile is still resolving')
     const source = activeSource
     if (source === 'none') return false
     if (!activeBinding || !presetId || activeBinding.preset_id !== presetId) {
@@ -714,6 +739,7 @@ export function usePresetProfiles(
     }
   }, [
     activeSource,
+    isResolved,
     activeBinding,
     presetId,
     activeChatId,
@@ -748,6 +774,7 @@ export function usePresetProfiles(
     hasConnectionBinding,
     characterBindingEnabled,
     activeSource,
+    activeSourceId,
     activeBinding,
     resolvedPresetId,
     isResolved,

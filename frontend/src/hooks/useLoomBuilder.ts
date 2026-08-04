@@ -94,9 +94,42 @@ export function useLoomBuilder() {
   const providers = useStore((s) => s.providers)
 
   const [activePreset, setActivePreset] = useState<LoomPreset | null>(null)
+  const [runtimePresetProfile, setRuntimePresetProfile] = useState<{
+    presetId: string
+    blockStates: Record<string, boolean>
+    promptVariables: PromptVariableValues
+  } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const activePresetRef = useRef<LoomPreset | null>(null)
+  const effectiveActivePreset = useMemo(() => {
+    if (!activePreset || runtimePresetProfile?.presetId !== activePreset.id) return activePreset
+    return {
+      ...activePreset,
+      blocks: activePreset.blocks.map((block) => (
+        block.id in runtimePresetProfile.blockStates
+          ? { ...block, enabled: runtimePresetProfile.blockStates[block.id] }
+          : block
+      )),
+      promptVariables: runtimePresetProfile.promptVariables,
+    }
+  }, [activePreset, runtimePresetProfile])
+  const effectiveActivePresetRef = useRef<LoomPreset | null>(effectiveActivePreset)
+  effectiveActivePresetRef.current = effectiveActivePreset
+
+  const applyRuntimeBlockProfile = useCallback((
+    presetId: string,
+    blockStates: Record<string, boolean> | null,
+    promptVariables: PromptVariableValues = {},
+  ) => {
+    setRuntimePresetProfile(blockStates
+      ? {
+          presetId,
+          blockStates: { ...blockStates },
+          promptVariables: structuredClone(promptVariables),
+        }
+      : null)
+  }, [])
 
   // Load active preset when activeLoomPresetId changes. Durable recovery is
   // rebased through the process-wide coordinator so an old local snapshot
@@ -329,6 +362,13 @@ export function useLoomBuilder() {
       } catch {
         promptVariables = pruneOrphanPromptVariables(current.promptVariables, normalizedBlocks)
       }
+      setRuntimePresetProfile((profile) => profile?.presetId === current.id
+        ? {
+            presetId: current.id,
+            blockStates: Object.fromEntries(normalizedBlocks.map((block) => [block.id, block.enabled])),
+            promptVariables: profile.promptVariables,
+          }
+        : profile)
       const updated = presetSaveCoordinator.mutate(
         current.id,
         current,
@@ -361,6 +401,13 @@ export function useLoomBuilder() {
     const normalizedBlocks = normalizeCategoryBlockState(blocks)
     validatePromptVariableSchema(normalizedBlocks, { legacyBaseline: current.blocks })
     const nextBlocks = applyPrivateBlockChange(current.blocks, normalizedBlocks, privateBlockChange)
+    setRuntimePresetProfile((profile) => profile?.presetId === current.id
+      ? {
+          presetId: current.id,
+          blockStates: Object.fromEntries(nextBlocks.map((block) => [block.id, block.enabled])),
+          promptVariables,
+        }
+      : profile)
     const updated = presetSaveCoordinator.mutate(
       current.id,
       current,
@@ -483,21 +530,22 @@ export function useLoomBuilder() {
 
   // Block manipulation helpers
   const addBlock = useCallback((block: PromptBlock, index?: number) => {
-    if (!activePreset) return
-    const blocks = [...activePreset.blocks]
+    const current = effectiveActivePresetRef.current
+    if (!current) return
+    const blocks = [...current.blocks]
     if (typeof index === 'number') {
       blocks.splice(index, 0, block)
     } else {
       blocks.push(block)
     }
     saveBlocks(blocks)
-  }, [activePreset, saveBlocks])
+  }, [saveBlocks])
 
   const removeBlock = useCallback(async (
     blockId: string,
     replacement?: { blocks: PromptBlock[]; promptVariables?: PromptVariableValues },
   ) => {
-    const current = activePresetRef.current
+    const current = effectiveActivePresetRef.current
     if (!current) return
     const sourceBlocks = replacement?.blocks ?? current.blocks
     const blocks = sourceBlocks
@@ -509,7 +557,7 @@ export function useLoomBuilder() {
   }, [saveLoomValue])
 
   const updateBlock = useCallback((blockId: string, updates: Partial<PromptBlock>): boolean => {
-    const current = activePresetRef.current
+    const current = effectiveActivePresetRef.current
     if (!current) return false
     const blocks = current.blocks.map(b => (
       b.id === blockId ? { ...b, ...updates } : b
@@ -526,18 +574,20 @@ export function useLoomBuilder() {
   }, [saveBlocks])
 
   const toggleBlock = useCallback((blockId: string) => {
-    if (!activePreset) return
-    const blocks = toggleBlockWithCategoryRules(activePreset.blocks, blockId)
+    const current = effectiveActivePresetRef.current
+    if (!current) return
+    const blocks = toggleBlockWithCategoryRules(current.blocks, blockId)
     saveBlocks(blocks)
-  }, [activePreset, saveBlocks])
+  }, [saveBlocks])
 
   const reorderBlocks = useCallback((fromIndex: number, toIndex: number) => {
-    if (!activePreset) return
-    const blocks = [...activePreset.blocks]
+    const current = effectiveActivePresetRef.current
+    if (!current) return
+    const blocks = [...current.blocks]
     const [moved] = blocks.splice(fromIndex, 1)
     blocks.splice(toIndex, 0, moved)
     saveBlocks(blocks)
-  }, [activePreset, saveBlocks])
+  }, [saveBlocks])
 
   // Save sampler overrides — immediate state update, debounced API save
   const saveSamplerOverrides = useCallback((overrides: any) => {
@@ -740,7 +790,7 @@ export function useLoomBuilder() {
     // State
     registry: loomRegistry,
     activePresetId: activeLoomPresetId,
-    activePreset: activePreset?.id === activeLoomPresetId ? activePreset : null,
+    activePreset: effectiveActivePreset?.id === activeLoomPresetId ? effectiveActivePreset : null,
     isLoading,
     error,
     availableMacros,
@@ -782,6 +832,7 @@ export function useLoomBuilder() {
     saveCompletionSettings,
     saveAdvancedSettings,
     savePromptVariableValues,
+    applyRuntimeBlockProfile,
     updatePresetDraft: updateActivePreset,
     flushPresetDraft: flushPendingPreset,
 

@@ -66,7 +66,8 @@ import {
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
 import { applyChatAppearance } from '@/lib/chatAppearance'
 import {
-  mergePromptVariableValues,
+  getEffectivePromptVariableValues,
+  subscribePresetProfilePromptVariableChanges,
   updatePresetProfilePromptVariables,
 } from '@/hooks/preset-profile-prompt-variables'
 
@@ -276,6 +277,8 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
   const [promptVariablesModalOpen, setPromptVariablesModalOpen] = useState(false)
   const [promptVariablesPreset, setPromptVariablesPreset] = useState<LoomPreset | null>(null)
   const [promptVariablesBinding, setPromptVariablesBinding] = useState<PromptVariableProfileTarget | null>(null)
+  const promptVariablesBindingRef = useRef<PromptVariableProfileTarget | null>(null)
+  promptVariablesBindingRef.current = promptVariablesBinding
   const [promptVariablesLoading, setPromptVariablesLoading] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
@@ -1080,21 +1083,23 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       }
       const binding = resolvedProfile.binding?.preset_id === presetId ? resolvedProfile.binding : null
       const targetId = binding
-        ? resolvedProfile.source === 'chat' ? chatId
-          : resolvedProfile.source === 'persona' ? activePersonaId
-            : resolvedProfile.source === 'character' ? activeCharacterId
-              : resolvedProfile.source === 'connection' ? activeProfileId
-                : resolvedProfile.source === 'defaults' ? presetId
-                  : null
+        ? resolvedProfile.source_id
+          ?? (resolvedProfile.source === 'chat' ? chatId
+            : resolvedProfile.source === 'persona' ? activePersonaId
+              : resolvedProfile.source === 'character' ? activeCharacterId
+                : resolvedProfile.source === 'connection' ? activeProfileId
+                  : resolvedProfile.source === 'defaults' ? presetId
+                    : null)
         : null
+      if (resolvedProfile.source !== 'none' && (!binding || !targetId)) {
+        throw new Error('The bound preset profile changed while prompt variables were loading')
+      }
       const target = binding && targetId && resolvedProfile.source !== 'none'
         ? { chatId, source: resolvedProfile.source, id: targetId, binding } as PromptVariableProfileTarget
         : null
-      // Hydrating a profile-bound preset into the shared save coordinator
-      // publishes its raw persisted blocks to LoomBuilder. The profile apply
-      // effect correctly avoids re-running for the unchanged chat context,
-      // leaving the bound block states visibly overwritten. Keep this modal's
-      // profile-bound copy local instead.
+      // Profile values are an overlay, not part of the shared preset draft.
+      // Keep the bound modal copy local so it cannot publish profile state to
+      // the global preset save coordinator.
       const hydrated = binding
         ? unmarshalPreset(preset)
         : presetSaveCoordinator.hydrate(
@@ -1102,7 +1107,10 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
             presetSaveCoordinator.beginHydration(presetId, 'prompt-variables'),
           )
       setPromptVariablesPreset(binding
-        ? { ...hydrated, promptVariables: mergePromptVariableValues(hydrated.promptVariables, binding.prompt_variables) }
+        ? {
+            ...hydrated,
+            promptVariables: getEffectivePromptVariableValues(hydrated.id, hydrated.promptVariables, binding),
+          }
         : hydrated)
       setPromptVariablesBinding(target)
       setPromptVariablesModalOpen(true)
@@ -1152,6 +1160,23 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       throw err
     }
   }, [promptVariablesPreset, promptVariablesBinding, chatId, t])
+
+  useEffect(() => subscribePresetProfilePromptVariableChanges(({ target, binding }) => {
+    const currentTarget = promptVariablesBindingRef.current
+    if (
+      !currentTarget
+      || currentTarget.source !== target.source
+      || currentTarget.id !== target.id
+    ) return
+
+    setPromptVariablesBinding({ ...currentTarget, binding })
+    setPromptVariablesPreset((current) => current && current.id === binding.preset_id
+      ? {
+          ...current,
+          promptVariables: getEffectivePromptVariableValues(current.id, current.promptVariables, binding),
+        }
+      : current)
+  }), [])
 
   const consumeOneshotGuides = useCallback(() => {
     const next = guidedGenerations.map((g) =>
@@ -2959,6 +2984,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
 
       {promptVariablesPreset && (
         <PromptVariablesModal
+          key={`${promptVariablesBinding?.source ?? 'global'}:${promptVariablesBinding?.id ?? promptVariablesPreset.id}:${chatId}`}
           isOpen={promptVariablesModalOpen}
           blocks={promptVariablesPreset.blocks}
           values={promptVariablesPreset.promptVariables ?? {}}

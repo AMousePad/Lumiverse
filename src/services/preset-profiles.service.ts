@@ -143,6 +143,7 @@ function getValidBinding(
 function resolveSpecificBinding(
   userId: string,
   source: "chat" | "persona" | "character" | "connection",
+  sourceId: string,
   binding: PresetProfileBinding
 ): ResolvedPresetProfile {
   if (binding.linked_to_defaults) {
@@ -150,6 +151,7 @@ function resolveSpecificBinding(
       preset_id: binding.preset_id,
       binding: getDefaultsForBinding(userId, binding),
       source,
+      source_id: sourceId,
     };
   }
 
@@ -157,6 +159,7 @@ function resolveSpecificBinding(
     preset_id: binding.preset_id,
     binding,
     source,
+    source_id: sourceId,
   };
 }
 
@@ -398,7 +401,7 @@ export function resolveProfile(
   // 1. Chat-level binding (most specific)
   const chatBinding = getChatBinding(userId, chatId);
   if (chatBinding) {
-    return resolveSpecificBinding(userId, "chat", chatBinding);
+    return resolveSpecificBinding(userId, "chat", chatId, chatBinding);
   }
 
   // 2. Persona-level binding. It deliberately outranks a character profile:
@@ -407,7 +410,7 @@ export function resolveProfile(
   if (options.personaId) {
     const personaBinding = getPersonaBinding(userId, options.personaId);
     if (personaBinding) {
-      return resolveSpecificBinding(userId, "persona", personaBinding);
+      return resolveSpecificBinding(userId, "persona", options.personaId, personaBinding);
     }
   }
 
@@ -416,7 +419,7 @@ export function resolveProfile(
   if (!options.isGroup && characterId) {
     const charBinding = getCharacterBinding(userId, characterId);
     if (charBinding) {
-      return resolveSpecificBinding(userId, "character", charBinding);
+      return resolveSpecificBinding(userId, "character", characterId, charBinding);
     }
   }
 
@@ -425,7 +428,7 @@ export function resolveProfile(
   if (options.connectionId) {
     const connectionBinding = getConnectionBinding(userId, options.connectionId);
     if (connectionBinding) {
-      return resolveSpecificBinding(userId, "connection", connectionBinding);
+      return resolveSpecificBinding(userId, "connection", options.connectionId, connectionBinding);
     }
   }
 
@@ -434,12 +437,12 @@ export function resolveProfile(
   if (fallbackPresetId) {
     const defaults = getDefaults(userId, fallbackPresetId);
     if (defaults) {
-      return { preset_id: defaults.preset_id, binding: defaults, source: "defaults" };
+      return { preset_id: defaults.preset_id, binding: defaults, source: "defaults", source_id: fallbackPresetId };
     }
   }
 
   // 6. No matching binding — use raw preset block states
-  return { preset_id: fallbackPresetId, binding: null, source: "none" };
+  return { preset_id: fallbackPresetId, binding: null, source: "none", source_id: null };
 }
 
 // ---------------------------------------------------------------------------

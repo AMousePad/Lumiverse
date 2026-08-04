@@ -1253,22 +1253,14 @@ function appendBaseRole(role: string): "user" | "assistant" {
 }
 
 /**
- * A profile is an overlay on its preset's shared selections. This lets old or
- * partial profile snapshots inherit values for variables added later.
+ * A resolved profile owns its variable scope. Missing values use the variable
+ * definition's default rather than leaking selections from the shared preset.
  */
-function mergePromptVariableValues(
+function resolveStoredPromptVariableValues(
   presetValues: Record<string, Record<string, PromptVariableValue>>,
   profileValues?: PromptVariableValues,
 ): Record<string, Record<string, PromptVariableValue>> {
-  if (!profileValues) return presetValues;
-  const merged: Record<string, Record<string, PromptVariableValue>> = {};
-  for (const [blockId, values] of Object.entries(presetValues)) {
-    merged[blockId] = { ...values };
-  }
-  for (const [blockId, values] of Object.entries(profileValues)) {
-    merged[blockId] = { ...(merged[blockId] ?? {}), ...values };
-  }
-  return merged;
+  return profileValues === undefined ? presetValues : profileValues;
 }
 
 /**
@@ -1307,7 +1299,7 @@ export function resolvePromptVariables(
     string,
     Record<string, PromptVariableValue>
   >;
-  const stored = mergePromptVariableValues(presetValues, profileValues);
+  const stored = resolveStoredPromptVariableValues(presetValues, profileValues);
 
   const values: Record<string, string | number> = {};
   const defaults: Record<string, string | number> = {};
@@ -1479,7 +1471,7 @@ export function resolvePromptBlockPlacements(
     string,
     Record<string, PromptVariableValue>
   >;
-  const stored = mergePromptVariableValues(presetValues, profileValues);
+  const stored = resolveStoredPromptVariableValues(presetValues, profileValues);
 
   return blocks.map((block) => {
     const binding = block.placementBinding;
@@ -2434,12 +2426,15 @@ export async function assemblePrompt(
   // Prompt variables — resolve creator-defined schemas + end-user overrides and
   // surface them on env.extra so {{var::name}} / {{hasVar::name}} / {{varDefault::name}}
   // can read consistent values across every block in this assembly.
-  resolvePromptVariables(macroEnv, blocks, preset, resolvedProfile.binding?.prompt_variables);
+  const profilePromptVariables = resolvedProfile.binding
+    ? resolvedProfile.binding.prompt_variables ?? {}
+    : undefined;
+  resolvePromptVariables(macroEnv, blocks, preset, profilePromptVariables);
 
   // A select variable may choose an in-memory insertion profile for its own
   // block. Project that configuration before ordering/rendering, rather than
   // asking macro output to mutate placement during the render pass.
-  const effectiveBlocks = resolvePromptBlockPlacements(blocks, preset, resolvedProfile.binding?.prompt_variables);
+  const effectiveBlocks = resolvePromptBlockPlacements(blocks, preset, profilePromptVariables);
   reorderBlocksByPosition(effectiveBlocks);
 
   // Use prefetched settings or batch-load all needed settings in a single query

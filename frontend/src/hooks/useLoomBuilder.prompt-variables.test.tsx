@@ -160,6 +160,11 @@ mock.restore()
 
 interface LoomBuilderTestSurface {
   activePreset: { blocks: PromptBlock[]; promptVariables: Record<string, Record<string, string>> } | null
+  applyRuntimeBlockProfile(
+    presetId: string,
+    blockStates: Record<string, boolean> | null,
+    promptVariables?: PromptVariableValues,
+  ): void
   updateBlock(blockId: string, updates: Partial<PromptBlock>): boolean
   saveLoomValue(
     blocks: PromptBlock[],
@@ -236,6 +241,29 @@ afterAll(() => {
 })
 
 describe('useLoomBuilder prompt-variable structure persistence', () => {
+  test('applies and clears profile block states without persisting the shared preset', async () => {
+    const { host, root } = await renderHook()
+    try {
+      expect(hookSurface.activePreset?.blocks[0]?.enabled).toBe(true)
+
+      await act(async () => {
+        hookSurface.applyRuntimeBlockProfile(presetId, { chat: false }, { chat: { tone: 'scoped' } })
+      })
+      expect(hookSurface.activePreset?.blocks[0]?.enabled).toBe(false)
+      expect(hookSurface.activePreset?.promptVariables).toEqual({ chat: { tone: 'scoped' } })
+      expect(updateCalls).toHaveLength(0)
+
+      await act(async () => {
+        hookSurface.applyRuntimeBlockProfile(presetId, null)
+      })
+      expect(hookSurface.activePreset?.blocks[0]?.enabled).toBe(true)
+      expect(updateCalls).toHaveLength(0)
+    } finally {
+      unmountRoot(root)
+      host.remove()
+    }
+  })
+
   test('repairs a legacy duplicate-name schema atomically and rejects a newly duplicate proposal', async () => {
     const { host, root } = await renderHook()
     try {

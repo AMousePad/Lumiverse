@@ -157,7 +157,7 @@ describe("persona preset profiles", () => {
 
     expect(
       resolveProfile(USER, "character-preset", "chat-1", "character-1", { personaId: "persona-1" }),
-    ).toMatchObject({ preset_id: "persona-preset", source: "persona" });
+    ).toMatchObject({ preset_id: "persona-preset", source: "persona", source_id: "persona-1" });
 
     settingsSvc.putSetting(USER, "presetProfile:chat:chat-1", {
       preset_id: "chat-preset",
@@ -166,6 +166,6 @@ describe("persona preset profiles", () => {
     });
     expect(
       resolveProfile(USER, "character-preset", "chat-1", "character-1", { personaId: "persona-1" }),
-    ).toMatchObject({ preset_id: "chat-preset", source: "chat" });
+    ).toMatchObject({ preset_id: "chat-preset", source: "chat", source_id: "chat-1" });
   });
 });
