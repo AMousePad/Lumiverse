@@ -29,6 +29,12 @@ function chatKey(chatId: string): string {
 function connectionKey(connectionId: string): string {
   return `presetProfile:connection:${connectionId}`;
 }
+function defaultsVariablesKey(presetId: string): string {
+  return `presetProfileVariables:defaults:${presetId}`;
+}
+function variablesKey(scope: "chat" | "persona" | "character" | "connection", id: string): string {
+  return `presetProfileVariables:${scope}:${id}`;
+}
 
 /**
  * Profile bindings happen to be stored in the settings table, but they are
@@ -40,6 +46,40 @@ function putProfileBinding(userId: string, key: string, binding: PresetProfileBi
   eventBus.emit(EventType.PRESET_PROFILE_CHANGED, { key, binding }, userId);
 }
 
+function getProfilePromptVariables(
+  userId: string,
+  key: string,
+  legacyBinding: PresetProfileBinding,
+): PromptVariableValues | undefined {
+  const stored = settingsSvc.getSetting(userId, key)?.value;
+  if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+    return stored as PromptVariableValues;
+  }
+  return legacyBinding.prompt_variables;
+}
+
+function withProfilePromptVariables(
+  userId: string,
+  binding: PresetProfileBinding,
+  key: string,
+): PresetProfileBinding {
+  const promptVariables = getProfilePromptVariables(userId, key, binding);
+  return promptVariables ? { ...binding, prompt_variables: promptVariables } : binding;
+}
+
+function replaceProfilePromptVariables(
+  userId: string,
+  key: string,
+  promptVariables: PromptVariableValues | undefined,
+): void {
+  if (promptVariables) {
+    settingsSvc.putSetting(userId, key, promptVariables, { suppressBroadcast: true });
+    eventBus.emit(EventType.PRESET_PROFILE_CHANGED, { key, promptVariables }, userId);
+  } else {
+    settingsSvc.deleteSetting(userId, key);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
@@ -47,13 +87,17 @@ function putProfileBinding(userId: string, key: string, binding: PresetProfileBi
 export function getDefaults(userId: string, presetId: string): PresetProfileBinding | null {
   const current = getValidBinding(userId, defaultsKey(presetId));
   if (current) {
-    if (current.preset_id === presetId) return current;
+    if (current.preset_id === presetId) {
+      return withProfilePromptVariables(userId, current, defaultsVariablesKey(presetId));
+    }
     settingsSvc.deleteSetting(userId, defaultsKey(presetId));
   }
 
   // Legacy fallback: older builds stored a single shared defaults snapshot.
   const legacy = getValidBinding(userId, LEGACY_DEFAULTS_KEY);
-  return legacy?.preset_id === presetId ? legacy : null;
+  return legacy?.preset_id === presetId
+    ? withProfilePromptVariables(userId, legacy, defaultsVariablesKey(presetId))
+    : null;
 }
 
 function getDefaultsForBinding(
@@ -123,13 +167,15 @@ export function captureDefaults(
   promptVariables?: PromptVariableValues,
 ): PresetProfileBinding {
   assertPresetExists(userId, presetId);
-  const binding = createBinding(presetId, blockStates, promptVariables);
+  const binding = createBinding(presetId, blockStates);
   putProfileBinding(userId, defaultsKey(presetId), binding);
-  return binding;
+  replaceProfilePromptVariables(userId, defaultsVariablesKey(presetId), promptVariables);
+  return withProfilePromptVariables(userId, binding, defaultsVariablesKey(presetId));
 }
 
 export function deleteDefaults(userId: string, presetId: string): boolean {
   const deleted = settingsSvc.deleteSetting(userId, defaultsKey(presetId));
+  settingsSvc.deleteSetting(userId, defaultsVariablesKey(presetId));
   const legacy = settingsSvc.getSetting(userId, LEGACY_DEFAULTS_KEY);
   if (legacy && (legacy.value as PresetProfileBinding)?.preset_id === presetId) {
     settingsSvc.deleteSetting(userId, LEGACY_DEFAULTS_KEY);
@@ -146,7 +192,8 @@ export function getCharacterBinding(
   userId: string,
   characterId: string
 ): PresetProfileBinding | null {
-  return getValidBinding(userId, characterKey(characterId));
+  const binding = getValidBinding(userId, characterKey(characterId));
+  return binding ? withProfilePromptVariables(userId, binding, variablesKey("character", characterId)) : null;
 }
 
 export function setCharacterBinding(
@@ -161,16 +208,19 @@ export function setCharacterBinding(
   if (!character) throw new Error("Character not found");
   assertPresetExists(userId, presetId);
 
-  const binding = createBinding(presetId, blockStates, promptVariables);
+  const binding = createBinding(presetId, blockStates);
   putProfileBinding(userId, characterKey(characterId), binding);
-  return binding;
+  replaceProfilePromptVariables(userId, variablesKey("character", characterId), promptVariables);
+  return withProfilePromptVariables(userId, binding, variablesKey("character", characterId));
 }
 
 export function deleteCharacterBinding(
   userId: string,
   characterId: string
 ): boolean {
-  return settingsSvc.deleteSetting(userId, characterKey(characterId));
+  const deleted = settingsSvc.deleteSetting(userId, characterKey(characterId));
+  settingsSvc.deleteSetting(userId, variablesKey("character", characterId));
+  return deleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +231,8 @@ export function getPersonaBinding(
   userId: string,
   personaId: string,
 ): PresetProfileBinding | null {
-  return getValidBinding(userId, personaKey(personaId));
+  const binding = getValidBinding(userId, personaKey(personaId));
+  return binding ? withProfilePromptVariables(userId, binding, variablesKey("persona", personaId)) : null;
 }
 
 export function setPersonaBinding(
@@ -194,13 +245,16 @@ export function setPersonaBinding(
   if (!personasSvc.getPersona(userId, personaId)) throw new Error("Persona not found");
   assertPresetExists(userId, presetId);
 
-  const binding = createBinding(presetId, blockStates, promptVariables);
+  const binding = createBinding(presetId, blockStates);
   putProfileBinding(userId, personaKey(personaId), binding);
-  return binding;
+  replaceProfilePromptVariables(userId, variablesKey("persona", personaId), promptVariables);
+  return withProfilePromptVariables(userId, binding, variablesKey("persona", personaId));
 }
 
 export function deletePersonaBinding(userId: string, personaId: string): boolean {
-  return settingsSvc.deleteSetting(userId, personaKey(personaId));
+  const deleted = settingsSvc.deleteSetting(userId, personaKey(personaId));
+  settingsSvc.deleteSetting(userId, variablesKey("persona", personaId));
+  return deleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +265,8 @@ export function getChatBinding(
   userId: string,
   chatId: string
 ): PresetProfileBinding | null {
-  return getValidBinding(userId, chatKey(chatId));
+  const binding = getValidBinding(userId, chatKey(chatId));
+  return binding ? withProfilePromptVariables(userId, binding, variablesKey("chat", chatId)) : null;
 }
 
 export function setChatBinding(
@@ -227,22 +282,26 @@ export function setChatBinding(
   if (!chat) throw new Error("Chat not found");
   assertPresetExists(userId, presetId);
 
-  const binding = createBinding(presetId, blockStates ?? {}, promptVariables, linkedToDefaults);
+  const binding = createBinding(presetId, blockStates ?? {}, undefined, linkedToDefaults);
   putProfileBinding(userId, chatKey(chatId), binding);
-  return binding;
+  replaceProfilePromptVariables(userId, variablesKey("chat", chatId), promptVariables);
+  return withProfilePromptVariables(userId, binding, variablesKey("chat", chatId));
 }
 
 export function deleteChatBinding(
   userId: string,
   chatId: string
 ): boolean {
-  return settingsSvc.deleteSetting(userId, chatKey(chatId));
+  const deleted = settingsSvc.deleteSetting(userId, chatKey(chatId));
+  settingsSvc.deleteSetting(userId, variablesKey("chat", chatId));
+  return deleted;
 }
 
 /** Update a profile's values without replacing its saved block states. */
 function updateBindingPromptVariables(
   userId: string,
   key: string,
+  promptVariablesKey: string,
   promptVariables: PromptVariableValues,
 ): PresetProfileBinding {
   const binding = getValidBinding(userId, key);
@@ -252,19 +311,12 @@ function updateBindingPromptVariables(
   if (binding.linked_to_defaults) {
     const defaults = getDefaults(userId, binding.preset_id);
     if (!defaults) throw new Error("No defaults captured");
-    const updated = createBinding(defaults.preset_id, defaults.block_states, promptVariables);
-    putProfileBinding(userId, defaultsKey(defaults.preset_id), updated);
-    return updated;
+    replaceProfilePromptVariables(userId, defaultsVariablesKey(defaults.preset_id), promptVariables);
+    return getDefaults(userId, defaults.preset_id)!;
   }
 
-  const updated = createBinding(
-    binding.preset_id,
-    binding.block_states,
-    promptVariables,
-    binding.linked_to_defaults,
-  );
-  putProfileBinding(userId, key, updated);
-  return updated;
+  replaceProfilePromptVariables(userId, promptVariablesKey, promptVariables);
+  return withProfilePromptVariables(userId, binding, promptVariablesKey);
 }
 
 export function updateDefaultsPromptVariables(
@@ -274,25 +326,24 @@ export function updateDefaultsPromptVariables(
 ): PresetProfileBinding {
   const binding = getDefaults(userId, presetId);
   if (!binding) throw new Error("No defaults captured");
-  const updated = createBinding(binding.preset_id, binding.block_states, promptVariables);
-  putProfileBinding(userId, defaultsKey(presetId), updated);
-  return updated;
+  replaceProfilePromptVariables(userId, defaultsVariablesKey(presetId), promptVariables);
+  return getDefaults(userId, presetId)!;
 }
 
 export function updateChatPromptVariables(userId: string, chatId: string, promptVariables: PromptVariableValues): PresetProfileBinding {
-  return updateBindingPromptVariables(userId, chatKey(chatId), promptVariables);
+  return updateBindingPromptVariables(userId, chatKey(chatId), variablesKey("chat", chatId), promptVariables);
 }
 
 export function updatePersonaPromptVariables(userId: string, personaId: string, promptVariables: PromptVariableValues): PresetProfileBinding {
-  return updateBindingPromptVariables(userId, personaKey(personaId), promptVariables);
+  return updateBindingPromptVariables(userId, personaKey(personaId), variablesKey("persona", personaId), promptVariables);
 }
 
 export function updateCharacterPromptVariables(userId: string, characterId: string, promptVariables: PromptVariableValues): PresetProfileBinding {
-  return updateBindingPromptVariables(userId, characterKey(characterId), promptVariables);
+  return updateBindingPromptVariables(userId, characterKey(characterId), variablesKey("character", characterId), promptVariables);
 }
 
 export function updateConnectionPromptVariables(userId: string, connectionId: string, promptVariables: PromptVariableValues): PresetProfileBinding {
-  return updateBindingPromptVariables(userId, connectionKey(connectionId), promptVariables);
+  return updateBindingPromptVariables(userId, connectionKey(connectionId), variablesKey("connection", connectionId), promptVariables);
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +354,8 @@ export function getConnectionBinding(
   userId: string,
   connectionId: string
 ): PresetProfileBinding | null {
-  return getValidBinding(userId, connectionKey(connectionId));
+  const binding = getValidBinding(userId, connectionKey(connectionId));
+  return binding ? withProfilePromptVariables(userId, binding, variablesKey("connection", connectionId)) : null;
 }
 
 export function setConnectionBinding(
@@ -317,16 +369,19 @@ export function setConnectionBinding(
   if (!connection) throw new Error("Connection not found");
   assertPresetExists(userId, presetId);
 
-  const binding = createBinding(presetId, blockStates, promptVariables);
+  const binding = createBinding(presetId, blockStates);
   putProfileBinding(userId, connectionKey(connectionId), binding);
-  return binding;
+  replaceProfilePromptVariables(userId, variablesKey("connection", connectionId), promptVariables);
+  return withProfilePromptVariables(userId, binding, variablesKey("connection", connectionId));
 }
 
 export function deleteConnectionBinding(
   userId: string,
   connectionId: string
 ): boolean {
-  return settingsSvc.deleteSetting(userId, connectionKey(connectionId));
+  const deleted = settingsSvc.deleteSetting(userId, connectionKey(connectionId));
+  settingsSvc.deleteSetting(userId, variablesKey("connection", connectionId));
+  return deleted;
 }
 
 // ---------------------------------------------------------------------------

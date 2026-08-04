@@ -6,6 +6,8 @@ import {
   setPersonaBinding,
   setChatBinding,
   updateChatPromptVariables,
+  updateCharacterPromptVariables,
+  updateConnectionPromptVariables,
   getChatBinding,
 } from "./preset-profiles.service";
 import * as settingsSvc from "./settings.service";
@@ -105,6 +107,35 @@ describe("persona preset profiles", () => {
       block_states: { style: false },
       prompt_variables: { style: { tone: "warm" } },
     });
+    expect(settingsSvc.getSetting(USER, "presetProfile:chat:chat-1")?.value).toEqual(expect.objectContaining({
+      block_states: { style: false },
+    }));
+    expect(settingsSvc.getSetting(USER, "presetProfile:chat:chat-1")?.value.prompt_variables).toBeUndefined();
+    expect(settingsSvc.getSetting(USER, "presetProfileVariables:chat:chat-1")?.value).toEqual({
+      style: { tone: "warm" },
+    });
+  });
+
+  test("stores character and connection variable updates separately from their bindings", () => {
+    const db = getDb();
+    db.run(
+      "INSERT INTO presets (id, user_id, name, provider) VALUES (?, ?, ?, ?)",
+      ["preset-1", USER, "RP", "openai"],
+    );
+    for (const [key, states] of [
+      ["presetProfile:character:character-1", { character: true }],
+      ["presetProfile:connection:connection-1", { connection: false }],
+    ] as const) {
+      settingsSvc.putSetting(USER, key, { preset_id: "preset-1", block_states: states, captured_at: 1 });
+    }
+
+    updateCharacterPromptVariables(USER, "character-1", { character: { tone: "warm" } });
+    updateConnectionPromptVariables(USER, "connection-1", { connection: { tone: "cold" } });
+
+    expect(settingsSvc.getSetting(USER, "presetProfile:character:character-1")?.value.block_states).toEqual({ character: true });
+    expect(settingsSvc.getSetting(USER, "presetProfile:connection:connection-1")?.value.block_states).toEqual({ connection: false });
+    expect(settingsSvc.getSetting(USER, "presetProfileVariables:character:character-1")?.value).toEqual({ character: { tone: "warm" } });
+    expect(settingsSvc.getSetting(USER, "presetProfileVariables:connection:connection-1")?.value).toEqual({ connection: { tone: "cold" } });
   });
 
   test("lets a persona profile override a character profile but not a chat profile", () => {
