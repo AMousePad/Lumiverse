@@ -239,14 +239,14 @@ export function deleteChatBinding(
   return settingsSvc.deleteSetting(userId, chatKey(chatId));
 }
 
-/** Update a chat profile's values without replacing its saved block states. */
-export function updateChatPromptVariables(
+/** Update a profile's values without replacing its saved block states. */
+function updateBindingPromptVariables(
   userId: string,
-  chatId: string,
+  key: string,
   promptVariables: PromptVariableValues,
 ): PresetProfileBinding {
-  const binding = getChatBinding(userId, chatId);
-  if (!binding) throw new Error("No binding for this chat");
+  const binding = getValidBinding(userId, key);
+  if (!binding) throw new Error("No profile binding found");
 
   // A linked chat delegates both block and variable state to the defaults.
   if (binding.linked_to_defaults) {
@@ -263,8 +263,36 @@ export function updateChatPromptVariables(
     promptVariables,
     binding.linked_to_defaults,
   );
-  putProfileBinding(userId, chatKey(chatId), updated);
+  putProfileBinding(userId, key, updated);
   return updated;
+}
+
+export function updateDefaultsPromptVariables(
+  userId: string,
+  presetId: string,
+  promptVariables: PromptVariableValues,
+): PresetProfileBinding {
+  const binding = getDefaults(userId, presetId);
+  if (!binding) throw new Error("No defaults captured");
+  const updated = createBinding(binding.preset_id, binding.block_states, promptVariables);
+  putProfileBinding(userId, defaultsKey(presetId), updated);
+  return updated;
+}
+
+export function updateChatPromptVariables(userId: string, chatId: string, promptVariables: PromptVariableValues): PresetProfileBinding {
+  return updateBindingPromptVariables(userId, chatKey(chatId), promptVariables);
+}
+
+export function updatePersonaPromptVariables(userId: string, personaId: string, promptVariables: PromptVariableValues): PresetProfileBinding {
+  return updateBindingPromptVariables(userId, personaKey(personaId), promptVariables);
+}
+
+export function updateCharacterPromptVariables(userId: string, characterId: string, promptVariables: PromptVariableValues): PresetProfileBinding {
+  return updateBindingPromptVariables(userId, characterKey(characterId), promptVariables);
+}
+
+export function updateConnectionPromptVariables(userId: string, connectionId: string, promptVariables: PromptVariableValues): PresetProfileBinding {
+  return updateBindingPromptVariables(userId, connectionKey(connectionId), promptVariables);
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,6 @@ import { sendRoomAction } from '@/ws/relayClient'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { presetsApi } from '@/api/presets'
 import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profiles'
-import { ApiError } from '@/api/client'
 import { charactersApi } from '@/api/characters'
 import { generateApi } from '@/api/generate'
 import { memoryCortexApi } from '@/api/memory-cortex'
@@ -97,6 +96,13 @@ function mergePromptVariableValues(
     merged[blockId] = { ...(merged[blockId] ?? {}), ...values }
   }
   return merged
+}
+
+type PromptVariableProfileTarget = {
+  chatId: string
+  source: 'chat' | 'persona' | 'character' | 'connection' | 'defaults'
+  id: string
+  binding: PresetProfileBinding
 }
 
 function serializeHiddenRegexSelections(selections: PendingRegexSelection[]) {
@@ -278,10 +284,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
   const [promptVariablesModalOpen, setPromptVariablesModalOpen] = useState(false)
   const [promptVariablesPreset, setPromptVariablesPreset] = useState<LoomPreset | null>(null)
-  const [promptVariablesBinding, setPromptVariablesBinding] = useState<{
-    chatId: string
-    binding: PresetProfileBinding
-  } | null>(null)
+  const [promptVariablesBinding, setPromptVariablesBinding] = useState<PromptVariableProfileTarget | null>(null)
   const [promptVariablesLoading, setPromptVariablesLoading] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
@@ -1078,35 +1081,48 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     setOpenPopover(null)
     setPromptVariablesLoading(true)
     const presetId = activeLoomPresetId
-    const hydration = presetSaveCoordinator.beginHydration(presetId, 'prompt-variables')
     try {
-      const [preset, chatBinding] = await Promise.all([
-        presetsApi.get(presetId),
-        presetProfilesApi.getChatBinding(chatId).catch((error: unknown) => {
-          if (error instanceof ApiError && error.status === 404) return null
-          throw error
-        }),
-      ])
+      const resolvedProfile = await presetProfilesApi.resolve(chatId, presetId, activeProfileId, activePersonaId)
+      const preset = await presetsApi.get(presetId)
       if (useStore.getState().activeLoomPresetId !== presetId) {
-        presetSaveCoordinator.cancelHydration(hydration)
         return
       }
-      const hydrated = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
-      const binding = chatBinding?.preset_id === presetId ? chatBinding : null
+      const binding = resolvedProfile.binding?.preset_id === presetId ? resolvedProfile.binding : null
+      const targetId = binding
+        ? resolvedProfile.source === 'chat' ? chatId
+          : resolvedProfile.source === 'persona' ? activePersonaId
+            : resolvedProfile.source === 'character' ? activeCharacterId
+              : resolvedProfile.source === 'connection' ? activeProfileId
+                : resolvedProfile.source === 'defaults' ? presetId
+                  : null
+        : null
+      const target = binding && targetId && resolvedProfile.source !== 'none'
+        ? { chatId, source: resolvedProfile.source, id: targetId, binding } as PromptVariableProfileTarget
+        : null
+      // Hydrating a profile-bound preset into the shared save coordinator
+      // publishes its raw persisted blocks to LoomBuilder. The profile apply
+      // effect correctly avoids re-running for the unchanged chat context,
+      // leaving the bound block states visibly overwritten. Keep this modal's
+      // profile-bound copy local instead.
+      const hydrated = binding
+        ? unmarshalPreset(preset)
+        : presetSaveCoordinator.hydrate(
+            unmarshalPreset(preset),
+            presetSaveCoordinator.beginHydration(presetId, 'prompt-variables'),
+          )
       setPromptVariablesPreset(binding
         ? { ...hydrated, promptVariables: mergePromptVariableValues(hydrated.promptVariables, binding.prompt_variables) }
         : hydrated)
-      setPromptVariablesBinding(binding ? { chatId, binding } : null)
+      setPromptVariablesBinding(target)
       setPromptVariablesModalOpen(true)
     } catch (err) {
-      presetSaveCoordinator.cancelHydration(hydration)
       if (err instanceof StalePresetHydrationError) return
       console.error('[InputArea] Failed to load prompt variables preset:', err)
       toast.error(t('toast.failedLoadPromptVariables'))
     } finally {
       setPromptVariablesLoading(false)
     }
-  }, [activeLoomPresetId, chatId, promptVariablesLoading, t])
+  }, [activeLoomPresetId, activeCharacterId, activePersonaId, activeProfileId, chatId, promptVariablesLoading, t])
 
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
     if (!promptVariablesPreset || useStore.getState().activeLoomPresetId !== promptVariablesPreset.id) {
@@ -1118,8 +1134,14 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     const bound = promptVariablesBinding
     if (bound && bound.chatId === chatId && useStore.getState().activeChatId === chatId) {
       try {
-        const binding = await presetProfilesApi.updateChatPromptVariables(chatId, values)
-        setPromptVariablesBinding({ chatId, binding })
+        const binding = await (
+          bound.source === 'chat' ? presetProfilesApi.updateChatPromptVariables(bound.id, values)
+            : bound.source === 'persona' ? presetProfilesApi.updatePersonaPromptVariables(bound.id, values)
+              : bound.source === 'character' ? presetProfilesApi.updateCharacterPromptVariables(bound.id, values)
+                : bound.source === 'connection' ? presetProfilesApi.updateConnectionPromptVariables(bound.id, values)
+                  : presetProfilesApi.updateDefaultsPromptVariables(bound.id, values)
+        )
+        setPromptVariablesBinding({ ...bound, binding })
         setPromptVariablesPreset((current) => current
           ? { ...current, promptVariables: values }
           : current)

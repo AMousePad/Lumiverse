@@ -33,6 +33,13 @@ export const presetProfilesApi = {
     return del<void>(`/preset-profiles/defaults?preset_id=${encodeURIComponent(presetId)}`)
   },
 
+  updateDefaultsPromptVariables(presetId: string, promptVariables: PromptVariableValues) {
+    return patch<PresetProfileBinding>('/preset-profiles/defaults/prompt-variables', {
+      preset_id: presetId,
+      prompt_variables: promptVariables,
+    })
+  },
+
   // Character bindings
   getCharacterBinding(characterId: string) {
     return get<PresetProfileBinding>(`/preset-profiles/character/${characterId}`)
@@ -50,6 +57,12 @@ export const presetProfilesApi = {
     return del<void>(`/preset-profiles/character/${characterId}`)
   },
 
+  updateCharacterPromptVariables(characterId: string, promptVariables: PromptVariableValues) {
+    return patch<PresetProfileBinding>(`/preset-profiles/character/${characterId}/prompt-variables`, {
+      prompt_variables: promptVariables,
+    })
+  },
+
   // Persona bindings
   getPersonaBinding(personaId: string) {
     return get<PresetProfileBinding>(`/preset-profiles/persona/${personaId}`)
@@ -65,6 +78,12 @@ export const presetProfilesApi = {
 
   deletePersonaBinding(personaId: string) {
     return del<void>(`/preset-profiles/persona/${personaId}`)
+  },
+
+  updatePersonaPromptVariables(personaId: string, promptVariables: PromptVariableValues) {
+    return patch<PresetProfileBinding>(`/preset-profiles/persona/${personaId}/prompt-variables`, {
+      prompt_variables: promptVariables,
+    })
   },
 
   // Chat bindings
@@ -105,6 +124,12 @@ export const presetProfilesApi = {
 
   deleteConnectionBinding(connectionId: string) {
     return del<void>(`/preset-profiles/connection/${connectionId}`)
+  },
+
+  updateConnectionPromptVariables(connectionId: string, promptVariables: PromptVariableValues) {
+    return patch<PresetProfileBinding>(`/preset-profiles/connection/${connectionId}/prompt-variables`, {
+      prompt_variables: promptVariables,
+    })
   },
 
   // Resolution
