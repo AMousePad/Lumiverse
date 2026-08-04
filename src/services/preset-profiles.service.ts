@@ -4,6 +4,8 @@ import * as charactersSvc from "./characters.service";
 import * as connectionsSvc from "./connections.service";
 import * as presetsSvc from "./presets.service";
 import * as personasSvc from "./personas.service";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 import type { PresetProfileBinding, ResolvedPresetProfile } from "../types/preset-profile";
 import type { PromptBlock, PromptVariableValues } from "../types/preset";
 
@@ -26,6 +28,16 @@ function chatKey(chatId: string): string {
 }
 function connectionKey(connectionId: string): string {
   return `presetProfile:connection:${connectionId}`;
+}
+
+/**
+ * Profile bindings happen to be stored in the settings table, but they are
+ * not app settings. Broadcasting SETTINGS_UPDATED makes clients reload the
+ * globally selected preset, which can race and undo a chat-bound selection.
+ */
+function putProfileBinding(userId: string, key: string, binding: PresetProfileBinding): void {
+  settingsSvc.putSetting(userId, key, binding, { suppressBroadcast: true });
+  eventBus.emit(EventType.PRESET_PROFILE_CHANGED, { key, binding }, userId);
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +124,7 @@ export function captureDefaults(
 ): PresetProfileBinding {
   assertPresetExists(userId, presetId);
   const binding = createBinding(presetId, blockStates, promptVariables);
-  settingsSvc.putSetting(userId, defaultsKey(presetId), binding);
+  putProfileBinding(userId, defaultsKey(presetId), binding);
   return binding;
 }
 
@@ -150,7 +162,7 @@ export function setCharacterBinding(
   assertPresetExists(userId, presetId);
 
   const binding = createBinding(presetId, blockStates, promptVariables);
-  settingsSvc.putSetting(userId, characterKey(characterId), binding);
+  putProfileBinding(userId, characterKey(characterId), binding);
   return binding;
 }
 
@@ -183,7 +195,7 @@ export function setPersonaBinding(
   assertPresetExists(userId, presetId);
 
   const binding = createBinding(presetId, blockStates, promptVariables);
-  settingsSvc.putSetting(userId, personaKey(personaId), binding);
+  putProfileBinding(userId, personaKey(personaId), binding);
   return binding;
 }
 
@@ -216,7 +228,7 @@ export function setChatBinding(
   assertPresetExists(userId, presetId);
 
   const binding = createBinding(presetId, blockStates ?? {}, promptVariables, linkedToDefaults);
-  settingsSvc.putSetting(userId, chatKey(chatId), binding);
+  putProfileBinding(userId, chatKey(chatId), binding);
   return binding;
 }
 
@@ -241,7 +253,7 @@ export function updateChatPromptVariables(
     const defaults = getDefaults(userId, binding.preset_id);
     if (!defaults) throw new Error("No defaults captured");
     const updated = createBinding(defaults.preset_id, defaults.block_states, promptVariables);
-    settingsSvc.putSetting(userId, defaultsKey(defaults.preset_id), updated);
+    putProfileBinding(userId, defaultsKey(defaults.preset_id), updated);
     return updated;
   }
 
@@ -251,7 +263,7 @@ export function updateChatPromptVariables(
     promptVariables,
     binding.linked_to_defaults,
   );
-  settingsSvc.putSetting(userId, chatKey(chatId), updated);
+  putProfileBinding(userId, chatKey(chatId), updated);
   return updated;
 }
 
@@ -278,7 +290,7 @@ export function setConnectionBinding(
   assertPresetExists(userId, presetId);
 
   const binding = createBinding(presetId, blockStates, promptVariables);
-  settingsSvc.putSetting(userId, connectionKey(connectionId), binding);
+  putProfileBinding(userId, connectionKey(connectionId), binding);
   return binding;
 }
 
