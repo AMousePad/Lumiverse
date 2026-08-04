@@ -65,6 +65,10 @@ import {
 } from '@/lib/regex/actionBus'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
 import { applyChatAppearance } from '@/lib/chatAppearance'
+import {
+  mergePromptVariableValues,
+  updatePresetProfilePromptVariables,
+} from '@/hooks/preset-profile-prompt-variables'
 
 interface InputAreaProps {
   chatId: string
@@ -83,19 +87,6 @@ function stackVisibleRegexSelections(base: string, selections: PendingRegexSelec
   return [base.trim(), ...selections.filter((item) => item.type === 'send').map((item) => item.content.trim())]
     .filter(Boolean)
     .join('\n\n')
-}
-
-function mergePromptVariableValues(
-  presetValues: PromptVariableValues,
-  profileValues: PromptVariableValues | undefined,
-): PromptVariableValues {
-  if (!profileValues) return presetValues
-  const merged: PromptVariableValues = {}
-  for (const [blockId, values] of Object.entries(presetValues)) merged[blockId] = { ...values }
-  for (const [blockId, values] of Object.entries(profileValues)) {
-    merged[blockId] = { ...(merged[blockId] ?? {}), ...values }
-  }
-  return merged
 }
 
 type PromptVariableProfileTarget = {
@@ -1134,13 +1125,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     const bound = promptVariablesBinding
     if (bound && bound.chatId === chatId && useStore.getState().activeChatId === chatId) {
       try {
-        const binding = await (
-          bound.source === 'chat' ? presetProfilesApi.updateChatPromptVariables(bound.id, values)
-            : bound.source === 'persona' ? presetProfilesApi.updatePersonaPromptVariables(bound.id, values)
-              : bound.source === 'character' ? presetProfilesApi.updateCharacterPromptVariables(bound.id, values)
-                : bound.source === 'connection' ? presetProfilesApi.updateConnectionPromptVariables(bound.id, values)
-                  : presetProfilesApi.updateDefaultsPromptVariables(bound.id, values)
-        )
+        const binding = await updatePresetProfilePromptVariables(presetProfilesApi, bound, values)
         setPromptVariablesBinding({ ...bound, binding })
         setPromptVariablesPreset((current) => current
           ? { ...current, promptVariables: values }

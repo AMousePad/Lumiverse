@@ -5,6 +5,7 @@ import { ApiError } from '@/api/client'
 import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profiles'
 import { createPresetProfileSelectionController, type PresetProfileSelectionController } from './usePresetProfiles-selection'
 import { createPresetProfileMutationCoordinator, runPresetProfileMutation, type PresetProfileMutationCoordinator } from './preset-profile-mutation-coordinator'
+import { updatePresetProfilePromptVariables } from './preset-profile-prompt-variables'
 import type { PromptBlock, PromptVariableValues } from '@/lib/loom/types'
 
 /**
@@ -595,6 +596,140 @@ export function usePresetProfiles(
     return 'none'
   })()
 
+  // Save variable values into the resolved profile without rewriting the
+  // binding's block-state snapshot. Returning false tells callers that no
+  // profile is active and the base preset is therefore the correct target.
+  const saveActivePromptVariableValues = useCallback(async (values: PromptVariableValues): Promise<boolean> => {
+    const source = activeSource
+    if (source === 'none') return false
+    if (!activeBinding || !presetId || activeBinding.preset_id !== presetId) {
+      throw new Error('The active preset profile is not resolved')
+    }
+
+    let targetId: string | null = null
+    let scope = ''
+    let refresh: () => Promise<PresetProfileBinding | null>
+    let contextIsCurrent: () => boolean
+    let commit: (binding: PresetProfileBinding) => void
+    let recover: (binding: PresetProfileBinding | null) => void
+
+    switch (source) {
+      case 'chat': {
+        targetId = activeChatId
+        if (!targetId || !chatBinding) throw new Error('The active chat profile is not resolved')
+        const targetChatId = targetId
+        const writesDefaults = !!chatBinding.linked_to_defaults
+        scope = profileScopes.chat(targetChatId)
+        refresh = () => refreshProfileBinding(presetProfilesApi.getChatBinding(targetChatId))
+        contextIsCurrent = () => activeChatIdRef.current === targetChatId
+        commit = (binding) => {
+          if (writesDefaults) {
+            setDefaults(binding)
+            setDefaultsFor(binding.preset_id)
+          } else {
+            setChatSlot({ for: targetChatId, binding })
+          }
+        }
+        recover = (binding) => setChatSlot({ for: targetChatId, binding })
+        break
+      }
+      case 'persona': {
+        targetId = activePersonaId
+        if (!targetId || !personaBinding) throw new Error('The active persona profile is not resolved')
+        const targetPersonaId = targetId
+        const writesDefaults = !!personaBinding.linked_to_defaults
+        scope = profileScopes.persona(targetPersonaId)
+        refresh = () => refreshProfileBinding(presetProfilesApi.getPersonaBinding(targetPersonaId))
+        contextIsCurrent = () => activePersonaIdRef.current === targetPersonaId
+        commit = (binding) => {
+          if (writesDefaults) {
+            setDefaults(binding)
+            setDefaultsFor(binding.preset_id)
+          } else {
+            setPersonaSlot({ for: targetPersonaId, binding })
+          }
+        }
+        recover = (binding) => setPersonaSlot({ for: targetPersonaId, binding })
+        break
+      }
+      case 'character': {
+        targetId = activeCharacterId
+        if (!targetId || !characterBinding) throw new Error('The active character profile is not resolved')
+        const targetCharacterId = targetId
+        scope = profileScopes.character(targetCharacterId)
+        refresh = () => refreshProfileBinding(presetProfilesApi.getCharacterBinding(targetCharacterId))
+        contextIsCurrent = () => activeCharacterIdRef.current === targetCharacterId
+        commit = (binding) => setCharSlot({ for: targetCharacterId, binding })
+        recover = (binding) => setCharSlot({ for: targetCharacterId, binding })
+        break
+      }
+      case 'connection': {
+        targetId = activeProfileId
+        if (!targetId || !connectionBinding) throw new Error('The active connection profile is not resolved')
+        const targetProfileId = targetId
+        scope = profileScopes.connection(targetProfileId)
+        refresh = () => refreshProfileBinding(presetProfilesApi.getConnectionBinding(targetProfileId))
+        contextIsCurrent = () => activeProfileIdRef.current === targetProfileId
+        commit = (binding) => setConnectionSlot({ for: targetProfileId, binding })
+        recover = (binding) => setConnectionSlot({ for: targetProfileId, binding })
+        break
+      }
+      case 'defaults': {
+        targetId = presetId
+        const targetPresetId = targetId
+        scope = profileScopes.defaults(targetPresetId)
+        refresh = () => refreshProfileBinding(presetProfilesApi.getDefaults(targetPresetId))
+        contextIsCurrent = () => presetIdRef.current === targetPresetId
+        commit = (binding) => {
+          setDefaults(binding)
+          setDefaultsFor(targetPresetId)
+        }
+        recover = (binding) => {
+          setDefaults(binding)
+          setDefaultsFor(targetPresetId)
+        }
+        break
+      }
+    }
+
+    const target = { source, id: targetId }
+    beginMutation()
+    try {
+      const result = await runPresetProfileMutation({
+        coordinator: mutationCoordinator,
+        scope,
+        operation: () => updatePresetProfilePromptVariables(presetProfilesApi, target, values),
+        canStart: () => authUserIdRef.current === authUserId
+          && presetIdRef.current === presetId
+          && contextIsCurrent(),
+        refresh,
+        isCurrent: (revision) => contextIsCurrent() && mutationCoordinator.isMutationCurrent(scope, revision),
+        commit,
+        recover,
+      })
+      if (result === 'failed') throw new Error('Failed to save profile prompt variables')
+      return true
+    } finally {
+      endMutation()
+    }
+  }, [
+    activeSource,
+    activeBinding,
+    presetId,
+    activeChatId,
+    activePersonaId,
+    activeCharacterId,
+    activeProfileId,
+    chatBinding,
+    personaBinding,
+    characterBinding,
+    connectionBinding,
+    authUserId,
+    beginMutation,
+    endMutation,
+    mutationCoordinator,
+  ])
+
   const hasChatBinding = chatBinding !== null
   const hasPersonaBinding = personaBinding !== null
   const hasCharacterBinding = characterBindingEnabled && characterBinding !== null
@@ -633,6 +768,7 @@ export function usePresetProfiles(
     // Actions
     captureDefaults,
     clearDefaults,
+    saveActivePromptVariableValues,
     selectResolvedPreset,
     bindToChat,
     unbindChat,

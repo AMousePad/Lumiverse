@@ -67,6 +67,7 @@ import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
 import { presetsApi, type StashedPromptBlock } from '@/api/presets'
 import { usePresetProfiles } from '@/hooks/usePresetProfiles'
+import { mergePromptVariableValues } from '@/hooks/preset-profile-prompt-variables'
 import { computeGroups, createBlock, createMarkerBlock, resolvePromptBlockPlacements } from '@/lib/loom/service'
 import { sanitizeCharacterTagTrigger, splitCharacterTagTriggerInput } from '@/lib/loom/characterTagTrigger'
 import {
@@ -1794,7 +1795,7 @@ export default function LoomBuilder({
     savePromptBehavior,
     saveCompletionSettings,
     saveAdvancedSettings,
-    savePromptVariableValues,
+    savePromptVariableValues: savePresetPromptVariableValues,
     updatePresetDraft,
     flushPresetDraft,
     importFromFile,
@@ -1804,6 +1805,16 @@ export default function LoomBuilder({
   } = useLoomBuilder()
 
   const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks, activePreset?.promptVariables)
+  const effectivePromptVariableValues = useMemo(() => mergePromptVariableValues(
+    activePreset?.promptVariables ?? {},
+    presetProfiles.activeBinding?.preset_id === activePreset?.id
+      ? presetProfiles.activeBinding.prompt_variables
+      : undefined,
+  ), [activePreset?.id, activePreset?.promptVariables, presetProfiles.activeBinding])
+  const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
+    const savedToProfile = await presetProfiles.saveActivePromptVariableValues(values)
+    if (!savedToProfile) await savePresetPromptVariableValues(values)
+  }, [presetProfiles.saveActivePromptVariableValues, savePresetPromptVariableValues])
   const presetEditorTabs = __contextMeterStore((state) => state.presetEditorTabs)
   const presetEditorToolbarItems = __contextMeterStore((state) => state.presetEditorToolbarItems)
   const addToast = __contextMeterStore((s) => s.addToast)
@@ -2995,7 +3006,7 @@ export default function LoomBuilder({
           <PromptVariablesModal
             isOpen={showPromptVariablesModal}
             blocks={activePreset.blocks}
-            values={activePreset.promptVariables ?? {}}
+            values={effectivePromptVariableValues}
             onSave={savePromptVariableValues}
             onClose={() => setShowPromptVariablesModal(false)}
           />
