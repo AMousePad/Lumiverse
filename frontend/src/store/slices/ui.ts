@@ -1,5 +1,6 @@
 import type { StateCreator } from 'zustand'
 import type { UISlice } from '@/types/store'
+import { CUSTOM_CSS_DOCK_DEFAULT_SIZE } from '@/lib/custom-css-dock'
 
 let toastCounter = 0
 let settingsScrollCounter = 0
@@ -16,11 +17,45 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   settingsScrollTarget: null,
   portraitPanelOpen: false,
   commandPaletteOpen: false,
+  customCSSDockOpen: false,
+  customCSSDockSize: CUSTOM_CSS_DOCK_DEFAULT_SIZE,
+  customCSSDockSide: 'left',
+  customCSSEditorSession: {
+    search: '',
+    selected: '__global__',
+    activeTab: 'css',
+    sidebarOpen: true,
+    showReference: false,
+    showAssets: false,
+  },
   toasts: [],
   badgeCount: 0,
 
-  openModal: (name, props = {}) => set({ activeModal: name, modalProps: props }),
+  openModal: (name, props = {}) =>
+    set({
+      activeModal: name,
+      modalProps: props,
+      ...(name === 'customCSS' ? { customCSSDockOpen: false } : {}),
+    }),
   closeModal: () => set({ activeModal: null, modalProps: {} }),
+
+  openCustomCSSDock: () =>
+    set({
+      customCSSDockOpen: true,
+      activeModal: null,
+      modalProps: {},
+    }),
+  closeCustomCSSDock: () => set({ customCSSDockOpen: false }),
+  setCustomCSSDockSize: (size) => set({ customCSSDockSize: size }),
+  setCustomCSSDockSide: (side) => set({ customCSSDockSide: side }),
+  setCustomCSSEditorSession: (patch) =>
+    set((state) => ({
+      customCSSEditorSession: {
+        ...state.customCSSEditorSession,
+        ...patch,
+      },
+    })),
+
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
 

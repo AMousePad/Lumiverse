@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { Outlet } from 'react-router'
 import { listen } from '@tauri-apps/api/event'
 import { useTranslation } from 'react-i18next'
@@ -21,6 +21,10 @@ import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useIsMobile from '@/hooks/useIsMobile'
+import {
+  clampCustomCSSDockSize,
+  CUSTOM_CSS_DOCK_BREAKPOINT,
+} from '@/lib/custom-css-dock'
 import { useBadging } from '@/hooks/useBadging'
 import { useTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { useAutoSummarization } from '@/hooks/useAutoSummarization'
@@ -41,6 +45,8 @@ import {
 } from '@/lib/desktop-floating-widget'
 import styles from './App.module.css'
 
+const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
+
 export default function App() {
   const { t } = useTranslation('common')
   const safeTheme = getSafeThemeState()
@@ -59,6 +65,11 @@ export default function App() {
   useEffect(() => installNotificationAudioPrimer(), [])
 
   const isMobile = useIsMobile()
+  const customCSSDockUnavailable = useIsMobile(CUSTOM_CSS_DOCK_BREAKPOINT)
+  const customCSSDockOpen = useStore((s) => s.customCSSDockOpen)
+  const customCSSDockSize = useStore((s) => s.customCSSDockSize)
+  const customCSSDockSide = useStore((s) => s.customCSSDockSide)
+  const closeCustomCSSDock = useStore((s) => s.closeCustomCSSDock)
   const dockPanels = useStore((s) => s.dockPanels)
   const hiddenPlacements = useStore((s) => s.hiddenPlacements)
   const dockPanelDesktopSide = useStore((s) => s.spindleSettings.dockPanelDesktopSide)
@@ -70,6 +81,12 @@ export default function App() {
   const floatWidgets = useStore((s) => s.floatWidgets)
   const extensions = useStore((s) => s.extensions)
   const lastDesktopCatalog = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (customCSSDockUnavailable && customCSSDockOpen) {
+      closeCustomCSSDock()
+    }
+  }, [customCSSDockUnavailable, customCSSDockOpen, closeCustomCSSDock])
 
   // Native child windows send their resized bounds back here. Keeping the
   // primary placement registry current means a later extension setSize call
@@ -142,6 +159,12 @@ export default function App() {
     })
   }, [floatWidgets, extensions])
 
+  const customCSSDockInset = useMemo(() => {
+    if (!customCSSDockOpen || customCSSDockUnavailable) return 0
+
+    return clampCustomCSSDockSize(customCSSDockSize, window.innerWidth)
+  }, [customCSSDockOpen, customCSSDockSize, customCSSDockUnavailable])
+
   const dockInsets = useMemo(() => {
     let left = 0, right = 0, top = 0, bottom = 0
     for (const p of dockPanels) {
@@ -155,8 +178,22 @@ export default function App() {
         case 'bottom': bottom = Math.max(bottom, size); break
       }
     }
+
+    if (customCSSDockSide === 'left') {
+      left = Math.max(left, customCSSDockInset)
+    } else {
+      right = Math.max(right, customCSSDockInset)
+    }
+
     return { left, right, top, bottom }
-  }, [dockPanels, hiddenPlacements, isMobile, dockPanelDesktopSide])
+  }, [
+    dockPanels,
+    hiddenPlacements,
+    isMobile,
+    dockPanelDesktopSide,
+    customCSSDockInset,
+    customCSSDockSide,
+  ])
 
   const openDrawer = useStore((s) => s.openDrawer)
   const setDrawerTab = useStore((s) => s.setDrawerTab)
@@ -273,6 +310,11 @@ export default function App() {
                 <ViewportDrawer />
                 {editingCharacterId && <CharacterEditorPage />}
                 <ModalContainer />
+                {customCSSDockOpen && !customCSSDockUnavailable && (
+                  <Suspense fallback={null}>
+                    <CustomCSSDock />
+                  </Suspense>
+                )}
                 <SpindleUIManager />
                 <ToastContainer />
                 <ChatHeads />
