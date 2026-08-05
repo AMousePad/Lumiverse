@@ -950,6 +950,8 @@ const activeGenerations = new Map<
     userId: string;
     chatId: string;
     startedAt: number;
+    /** Timestamp of the most recently received content or reasoning token. */
+    lastTokenAt: number;
     /** Resolves when the generation's streaming continuation finishes
      *  (success, error, or abort). Used by the per-chat lock to wait for
      *  teardown before starting a replacement generation — this prevents
@@ -1760,11 +1762,16 @@ export async function startGeneration(
   const abortController = new AbortController();
   let resolveCompletion!: () => void;
   const completion = new Promise<void>((r) => { resolveCompletion = r; });
+  const generationStartedAt = Date.now();
   activeGenerations.set(generationId, {
     controller: abortController,
     userId: input.userId,
     chatId: input.chat_id,
-    startedAt: Date.now(),
+    startedAt: generationStartedAt,
+    // Until the provider returns its first token, the generation start is the
+    // last observed progress. This still protects requests that never begin
+    // streaming while allowing long-running streams to continue indefinitely.
+    lastTokenAt: generationStartedAt,
     completion,
   });
   activeChatGenerations.set(chatKey, generationId);
@@ -3735,6 +3742,14 @@ async function runGeneration(
           break;
         }
 
+        // The generation watchdog is based on upstream token activity, not
+        // total request age. Count reasoning as well as visible content: both
+        // are streamed model output and demonstrate the provider is healthy.
+        if (chunk.reasoning || chunk.token) {
+          const entry = activeGenerations.get(generationId);
+          if (entry) entry.lastTokenAt = Date.now();
+        }
+
         // Emit reasoning tokens (provider thinking/extended thinking)
         if (chunk.reasoning) {
           if (!reasoningStartedAt) reasoningStartedAt = Date.now();
@@ -4561,21 +4576,28 @@ export function getActiveGenerationCount(): number {
   return activeGenerations.size;
 }
 
-// Periodically abort generations that have been running too long (provider hung, broken stream)
-const GENERATION_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
-let _generationSweepTimer: ReturnType<typeof setInterval> | null = setInterval(
-  () => {
-    const now = Date.now();
-    for (const [id, entry] of activeGenerations) {
-      if (now - entry.startedAt > GENERATION_MAX_AGE_MS) {
-        console.warn(
-          `[generate] Aborting stale generation ${id} (age: ${Math.round((now - entry.startedAt) / 1000)}s)`,
-        );
-        entry.controller.abort();
-      }
+// Abort only stalled generations. A slow model may legitimately stream for
+// longer than ten minutes; a provider that has sent no tokens for this long is
+// presumed hung or disconnected. Before the first token arrives, registration
+// time acts as the initial activity timestamp.
+const GENERATION_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const GENERATION_IDLE_SWEEP_INTERVAL_MS = 60_000;
+
+export function sweepInactiveGenerations(now = Date.now()): void {
+  for (const [id, entry] of activeGenerations) {
+    const idleForMs = now - entry.lastTokenAt;
+    if (idleForMs > GENERATION_IDLE_TIMEOUT_MS) {
+      console.warn(
+        `[generate] Aborting inactive generation ${id} (no tokens for ${Math.round(idleForMs / 1000)}s; age: ${Math.round((now - entry.startedAt) / 1000)}s)`,
+      );
+      entry.controller.abort();
     }
-  },
-  60_000,
+  }
+}
+
+let _generationSweepTimer: ReturnType<typeof setInterval> | null = setInterval(
+  sweepInactiveGenerations,
+  GENERATION_IDLE_SWEEP_INTERVAL_MS,
 );
 
 export function stopGenerationSweep(): void {

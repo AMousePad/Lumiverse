@@ -23,7 +23,7 @@ import * as poolSvc from "../src/services/generation-pool.service";
 const USER_ID = "stop-test-user";
 const enc = new TextEncoder();
 
-interface RequestState { cancelled: boolean; sent: number }
+interface RequestState { cancelled: boolean; paused: boolean; sent: number }
 const requests: RequestState[] = [];
 let server: ReturnType<typeof Bun.serve>;
 let connectionId: string;
@@ -48,12 +48,13 @@ beforeAll(async () => {
       if (!new URL(req.url).pathname.endsWith("/chat/completions")) {
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
-      const state: RequestState = { cancelled: false, sent: 0 };
+      const state: RequestState = { cancelled: false, paused: false, sent: 0 };
       requests.push(state);
       let timer: ReturnType<typeof setInterval> | null = null;
       const stream = new ReadableStream({
         start(controller) {
           timer = setInterval(() => {
+            if (state.paused) return;
             state.sent++;
             const chunk = { choices: [{ delta: { content: `tok${state.sent} ` }, finish_reason: null }] };
             try {
@@ -156,5 +157,43 @@ describe("stop generation", () => {
 
   test("stopChatGenerations reports false when nothing is running", () => {
     expect(genSvc.stopChatGenerations(USER_ID, "idle-chat")).toBe(false);
+  });
+
+  test("generation sweep allows streams that keep receiving tokens beyond ten minutes", async () => {
+    const { generationId, state } = await startStreamingGeneration();
+    const realNow = Date.now;
+    const currentTime = realNow();
+    let mockNow = currentTime + 10 * 60 * 1000 + 1;
+    Date.now = () => mockNow;
+
+    try {
+      // A token received after the request has crossed the former hard cap
+      // refreshes the inactivity deadline instead of terminating the stream.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      genSvc.sweepInactiveGenerations();
+      expect(state.cancelled).toBe(false);
+    } finally {
+      Date.now = realNow;
+      genSvc.stopGeneration(USER_ID, generationId);
+      await waitFor(() => state.cancelled, 2000);
+    }
+  });
+
+  test("generation sweep aborts a stream that stops producing tokens", async () => {
+    const { generationId, state } = await startStreamingGeneration();
+    state.paused = true;
+    // Let an already-scheduled interval tick observe the pause.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const realNow = Date.now;
+    Date.now = () => realNow() + 10 * 60 * 1000 + 1;
+    try {
+      genSvc.sweepInactiveGenerations();
+    } finally {
+      Date.now = realNow;
+    }
+
+    expect(await waitFor(() => state.cancelled, 2000)).toBe(true);
+    expect(genSvc.stopGeneration(USER_ID, generationId)).toBe(false);
   });
 });
