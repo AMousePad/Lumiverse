@@ -362,7 +362,13 @@ export default function ExpandedTextEditor({
     shouldRestoreSelectionRef.current = true
     shouldFocusSelectionRef.current = false
     const textarea = textareaRef.current
-    if (textarea) textarea.setSelectionRange(match.start, match.end, 'forward')
+    if (textarea) {
+      textarea.setSelectionRange(match.start, match.end, 'forward')
+      // Find navigation changes selection without changing `value`, so there
+      // will be no layout effect to consume this request. Do not let it leak
+      // into the user's next native keystroke.
+      shouldRestoreSelectionRef.current = false
+    }
   }, [])
 
   const goToMatch = useCallback((nextIndex: number) => {
@@ -437,10 +443,7 @@ export default function ExpandedTextEditor({
       hasInitializedSelectionRef.current = true
       shouldRestoreSelectionRef.current = true
       shouldFocusSelectionRef.current = true
-    } else if (document.activeElement === textarea || shouldFocusSelectionRef.current) {
-      shouldRestoreSelectionRef.current = true
     }
-
     if (!shouldRestoreSelectionRef.current || isComposingRef.current) return
     restoreSelection()
   }, [initialCursorPos, restoreSelection, value])
@@ -497,7 +500,10 @@ export default function ExpandedTextEditor({
 
   const handleTextareaChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     captureSelection(e.currentTarget)
-    shouldRestoreSelectionRef.current = true
+    // Native typing has already placed the caret correctly. Reapplying the
+    // selection after React commits the controlled value can race mobile IMEs
+    // and make the cursor land beside the wrong character. Reserve explicit
+    // restoration for programmatic edits (macro insertion and replace).
     onChange(e.currentTarget.value)
   }, [captureSelection, onChange])
 
@@ -513,7 +519,6 @@ export default function ExpandedTextEditor({
   const handleCompositionEnd = useCallback((e: CompositionEvent<HTMLTextAreaElement>) => {
     isComposingRef.current = false
     captureSelection(e.currentTarget)
-    shouldRestoreSelectionRef.current = true
   }, [captureSelection])
 
   const replaceSelection = useCallback((
