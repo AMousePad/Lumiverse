@@ -240,6 +240,15 @@ export interface Toast {
 }
 
 // ---- UI Slice ----
+export interface CustomCSSEditorSession {
+  search: string
+  selected: string
+  activeTab: 'css' | 'tsx'
+  sidebarOpen: boolean
+  showReference: boolean
+  showAssets: boolean
+}
+
 export interface UISlice {
   activeModal: string | null
   modalProps: Record<string, any>
@@ -252,9 +261,21 @@ export interface UISlice {
   settingsScrollTarget: { extensionId?: string; nonce: number } | null
   portraitPanelOpen: boolean
   commandPaletteOpen: boolean
+
+  // Custom CSS editor dock
+  customCSSDockOpen: boolean
+  customCSSDockSize: number
+  customCSSDockSide: 'left' | 'right'
+  customCSSEditorSession: CustomCSSEditorSession
+
   toasts: Toast[]
   openModal: (name: string, props?: Record<string, any>) => void
   closeModal: () => void
+  openCustomCSSDock: () => void
+  closeCustomCSSDock: () => void
+  setCustomCSSDockSize: (size: number) => void
+  setCustomCSSDockSide: (side: 'left' | 'right') => void
+  setCustomCSSEditorSession: (patch: Partial<CustomCSSEditorSession>) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   openDrawer: (tab?: string) => void
