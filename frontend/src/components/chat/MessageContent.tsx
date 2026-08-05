@@ -7,6 +7,7 @@ import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
 import { healFormattingArtifacts } from '@/lib/formatHealing'
+import { normalizeLegacyFontTags } from '@/lib/legacyFontTags'
 import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { sanitizeHtmlIsland, sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
@@ -209,17 +210,6 @@ function colorizeDialogue(html: string): string {
 
 function addLazyLoadingToImages(html: string): string {
   return html.replace(/<img\b(?![^>]*\bloading=)/gi, '<img loading="lazy"')
-}
-
-function normalizeLegacyFontTags(html: string): string {
-  return html
-    .replace(/<font\b([^>]*)>/gi, (_match, attrs: string) => {
-      const color = attrs.match(/\bcolor\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i)?.slice(1).find(Boolean)
-      const safeColor = color && /^[#\w\s(),.%+-]+$/.test(color) ? color : null
-
-      return safeColor ? `<span style="color:${escapeHtml(safeColor)}">` : '<span>'
-    })
-    .replace(/<\/font\s*>/gi, '</span>')
 }
 
 interface MarkdownFence {
