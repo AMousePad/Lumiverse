@@ -338,6 +338,10 @@ The delay should match the widget's CSS width/height transition. Calling
 content before its visual animation has finished. Clear any pending timer when
 the widget changes state again or the extension unloads.
 
+On mobile, Lumiverse honors the widget's requested dimensions when they fit.
+Oversized widgets are clamped to the viewport with 12 pixels of space on each
+edge, so extension interfaces remain usable without overflowing the screen.
+
 When users send a registered widget to a Lumiverse Desktop pop-out, the native
 host owns the window bounds but the extension still uses the same standard
 `setSize` call. Browser and PWA clients simply retain their existing CSS and

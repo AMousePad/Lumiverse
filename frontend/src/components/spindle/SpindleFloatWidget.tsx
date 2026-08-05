@@ -7,7 +7,11 @@ import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/compo
 import { useLongPress } from '@/hooks/useLongPress'
 import { getLiveRootRecordExact } from '@/lib/spindle/live-root-registry'
 import { scheduleSpindleDomTask } from '@/lib/spindle/browser-scheduler'
-import { resolveFloatWidgetStyle } from './spindle-float-widget-layout'
+import {
+  FLOAT_WIDGET_VIEWPORT_PADDING,
+  resolveFloatWidgetSize,
+  resolveFloatWidgetStyle,
+} from './spindle-float-widget-layout'
 import styles from './SpindleFloatWidget.module.css'
 
 interface Props {
@@ -25,14 +29,32 @@ export default function SpindleFloatWidget({ widget }: Props) {
   const contentHostRef = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState({ x: widget.x, y: widget.y })
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
+  const [viewport, setViewport] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }))
 
-  const size = isMobile
-    ? { width: Math.min(widget.width, 40), height: Math.min(widget.height, 40) }
-    : { width: widget.width, height: widget.height }
+  const size = useMemo(() => resolveFloatWidgetSize(
+    isMobile,
+    { width: widget.width, height: widget.height },
+    viewport,
+  ), [isMobile, viewport, widget.height, widget.width])
 
   useEffect(() => {
-    setPos({ x: widget.x, y: widget.y })
-  }, [widget.x, widget.y])
+    const updateViewport = () => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight })
+    }
+    window.addEventListener('resize', updateViewport)
+    return () => window.removeEventListener('resize', updateViewport)
+  }, [])
+
+  useEffect(() => {
+    const pad = FLOAT_WIDGET_VIEWPORT_PADDING
+    setPos({
+      x: Math.max(pad, Math.min(widget.x, viewport.width - size.width - pad)),
+      y: Math.max(pad, Math.min(widget.y, viewport.height - size.height - pad)),
+    })
+  }, [size.height, size.width, viewport.height, viewport.width, widget.x, widget.y])
 
   useEffect(() => {
     const host = contentHostRef.current
@@ -49,22 +71,22 @@ export default function SpindleFloatWidget({ widget }: Props) {
 
   const clampPos = useCallback(
     (x: number, y: number) => {
-      const pad = 12
+      const pad = FLOAT_WIDGET_VIEWPORT_PADDING
       return {
-        x: Math.max(pad, Math.min(x, window.innerWidth - size.width - pad)),
-        y: Math.max(pad, Math.min(y, window.innerHeight - size.height - pad)),
+        x: Math.max(pad, Math.min(x, viewport.width - size.width - pad)),
+        y: Math.max(pad, Math.min(y, viewport.height - size.height - pad)),
       }
     },
-    [size.width, size.height]
+    [size.width, size.height, viewport.height, viewport.width]
   )
 
   const snapToEdge = useCallback(
     (x: number, y: number) => {
       if (!widget.snapToEdge) return { x, y }
       const snapDist = 24
-      const pad = 12
-      const vw = window.innerWidth
-      const vh = window.innerHeight
+      const pad = FLOAT_WIDGET_VIEWPORT_PADDING
+      const vw = viewport.width
+      const vh = viewport.height
       let sx = x, sy = y
       if (x < snapDist) sx = pad
       else if (x + size.width > vw - snapDist) sx = vw - size.width - pad
@@ -72,7 +94,7 @@ export default function SpindleFloatWidget({ widget }: Props) {
       else if (y + size.height > vh - snapDist) sy = vh - size.height - pad
       return { x: sx, y: sy }
     },
-    [widget.snapToEdge, size.width, size.height]
+    [widget.snapToEdge, size.width, size.height, viewport.height, viewport.width]
   )
 
   const isFullscreen = widget.fullscreen ?? false
@@ -136,7 +158,7 @@ export default function SpindleFloatWidget({ widget }: Props) {
       key: 'reset',
       label: t('resetPosition'),
       onClick: () => {
-        const pad = 12
+        const pad = FLOAT_WIDGET_VIEWPORT_PADDING
         const resetWidth = widget.defaultWidth
         const resetHeight = widget.defaultHeight
         const reset = {

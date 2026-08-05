@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { FULLSCREEN_FLOAT_WIDGET_STYLE, resolveFloatWidgetStyle } from './spindle-float-widget-layout'
+import {
+  FULLSCREEN_FLOAT_WIDGET_STYLE,
+  resolveFloatWidgetSize,
+  resolveFloatWidgetStyle,
+} from './spindle-float-widget-layout'
 
 describe('Spindle float widget layout', () => {
   test('uses scale-compensated viewport dimensions in fullscreen mode', () => {
@@ -19,6 +23,27 @@ describe('Spindle float widget layout', () => {
       top: 96,
       width: 320,
       height: 148,
+    })
+  })
+
+  test('preserves a mobile widget requested size when it fits the viewport', () => {
+    expect(resolveFloatWidgetSize(true, { width: 320, height: 500 }, { width: 390, height: 844 })).toEqual({
+      width: 320,
+      height: 500,
+    })
+  })
+
+  test('clamps oversized mobile widgets to the padded viewport', () => {
+    expect(resolveFloatWidgetSize(true, { width: 900, height: 1000 }, { width: 390, height: 844 })).toEqual({
+      width: 366,
+      height: 820,
+    })
+  })
+
+  test('does not clamp desktop widget sizes', () => {
+    expect(resolveFloatWidgetSize(false, { width: 900, height: 1000 }, { width: 390, height: 844 })).toEqual({
+      width: 900,
+      height: 1000,
     })
   })
 })
