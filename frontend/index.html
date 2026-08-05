@@ -11,10 +11,19 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
-    <!-- Frames are allowed only so Lumiverse can create opaque-origin sandbox
-         frames for Spindle extension isolation. Extension code is still
-         prohibited from creating raw iframes by the Spindle DOM APIs. -->
-    <meta http-equiv="Content-Security-Policy" content="frame-src 'self' blob: https://www.youtube-nocookie.com; child-src 'self' blob: https://www.youtube-nocookie.com; object-src 'none'; worker-src 'self' blob:;" />
+    <!--
+      This is a containment boundary for untrusted Spindle frontends while the
+      runtime migrates to mandatory opaque-origin frames. In particular,
+      `connect-src` blocks fetch/XHR/WebSocket/beacon exfiltration. Image
+      sources intentionally remain unrestricted for compatibility with local,
+      extension-provided, and remote rich-content images; image-beacon
+      containment requires the mandatory opaque-origin extension frame.
+
+      Frames are allowed only so Lumiverse can create opaque-origin sandbox
+      frames for Spindle extension isolation. Extension code is still
+      prohibited from creating raw iframes by the Spindle DOM APIs.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'self' blob: https://www.youtube-nocookie.com; child-src 'self' blob: https://www.youtube-nocookie.com; worker-src 'self' blob:;" />
   </head>
   <body>
     <div id="root"></div>
