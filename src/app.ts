@@ -269,30 +269,10 @@ app.use("/api/auth/*", async (c, next) => {
   );
 });
 
-// Global document security headers.  The source HTML carries the same policy
-// for Vite development, while this response header makes production delivery
-// authoritative.  Keep the policy on the HTML document: a CSP sent with an
-// extension JavaScript bundle does not constrain a module after it is imported
-// into the host document.
-//
-// `connect-src` stops direct fetch/XHR/WebSocket/beacon exfiltration. Image
-// sources stay unrestricted for compatibility with local, extension-provided,
-// and remote rich-content images. Image-pixel containment requires the
-// mandatory opaque-origin extension frame; it cannot be safely applied to the
-// current host document without breaking those image capabilities.
-const DOCUMENT_CONTENT_SECURITY_POLICY =
-  "script-src 'self' blob:; style-src 'self' 'unsafe-inline'; " +
-  "font-src 'self' data:; connect-src 'self'; " +
-  "media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; " +
-  "frame-src 'self' blob: https://www.youtube-nocookie.com; " +
-  "child-src 'self' blob: https://www.youtube-nocookie.com; worker-src 'self' blob:;";
-
-// The frame-ancestors directive cannot be set in a meta CSP, so add it only
-// to non-local HTML responses. Localhost is intentionally exempt because the
-// desktop tray wrapper embeds the UI there.
-//
-// Restrict this to documents rather than overwriting CSPs set by assets (for
-// example SVGs and extension bundles).
+// Global security headers — applied to every response.
+// frame-src / child-src are enforced via the frontend HTML meta tag as well;
+// these headers complement it by preventing the app from being embedded in
+// external frames and hardening the overall document boundary.
 // Exempt localhost resources so the desktop tray wrapper can iframe the UI.
 //
 // Use the Host header (set on every HTTP request, including top-level
@@ -305,17 +285,9 @@ app.use("*", async (c, next) => {
   await next();
   const host = c.req.header("host") ?? "";
   const isLocal = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
-  const contentType = c.res.headers.get("Content-Type") ?? "";
-  if (/^text\/html(?:;|$)/i.test(contentType)) {
-    c.res.headers.set(
-      "Content-Security-Policy",
-      isLocal
-        ? DOCUMENT_CONTENT_SECURITY_POLICY
-        : `${DOCUMENT_CONTENT_SECURITY_POLICY} frame-ancestors 'none';`,
-    );
-  }
   if (!isLocal) {
     c.res.headers.set("X-Frame-Options", "DENY");
+    c.res.headers.set("Content-Security-Policy", "frame-ancestors 'none';");
   }
 });
 
