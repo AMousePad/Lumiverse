@@ -45,6 +45,25 @@ type WebSocketPreviewImageProvider = ImageProvider & {
  * `generateStream` alone is not enough: an extension-facing stream promises
  * WebSocket previews and status, so providers must explicitly advertise both.
  */
+
+/**
+ * Shapes the result returned to an extension.
+ *
+ * The base64 `imageDataUrl` is the largest per-image RPC field. It is required
+ * host-side (to persist the image into the images table), but extensions that
+ * only consume `imageId` / `imageUrl` can opt out of receiving it by passing
+ * `includeDataUrl: false` in the generate request. The default keeps the data
+ * URL for backward compatibility.
+ */
+export function applyDataUrlInclusion(
+  result: Record<string, unknown>,
+  includeDataUrl: boolean,
+): Record<string, unknown> {
+  if (includeDataUrl) return result;
+  const { imageDataUrl: _omitted, ...rest } = result;
+  return rest;
+}
+
 export function supportsWebSocketPreviewStreaming(
   provider: ImageProvider,
 ): provider is WebSocketPreviewImageProvider {
@@ -160,7 +179,9 @@ export class WorkerHostImageGenApi {
       }
     }
 
-    return { ...result, imageId, imageUrl };
+    // Persisting already consumed the data URL; the extension-facing result
+    // can drop it when the caller opts out of the base64 payload.
+    return applyDataUrlInclusion({ ...result, imageId, imageUrl }, input?.includeDataUrl !== false);
   }
 
   async handleGenerate(requestId: string, input: any): Promise<void> {
