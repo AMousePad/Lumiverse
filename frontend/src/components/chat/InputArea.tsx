@@ -83,6 +83,7 @@ const STT_VISUALIZER_BARS = 18
 const MOBILE_QUEUE_HOLD_PROMPT_MS = 180
 const MOBILE_QUEUE_HOLD_MS = 900
 const LIVE_GENERATION_HEAD_STATUSES = new Set(['assembling', 'council', 'waiting', 'reasoning', 'streaming'])
+const ALT_FIELD_NAMES = ['description', 'personality', 'scenario'] as const
 
 function stackVisibleRegexSelections(base: string, selections: PendingRegexSelection[]): string {
   return [base.trim(), ...selections.filter((item) => item.type === 'send').map((item) => item.content.trim())]
@@ -418,7 +419,6 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
 
   // Track alternate fields for the active character or group members.
   type AltFieldVariant = { id: string; label: string; content: string }
-  const ALT_FIELD_NAMES = ['description', 'personality', 'scenario'] as const
   const [altFieldsData, setAltFieldsData] = useState<Record<string, AltFieldVariant[]>>({})
   const [groupAltFieldsData, setGroupAltFieldsData] = useState<Record<string, Record<string, AltFieldVariant[]>>>({})
   const [altFieldsLoaded, setAltFieldsLoaded] = useState(false)
