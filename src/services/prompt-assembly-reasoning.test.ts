@@ -103,6 +103,23 @@ describe("injectReasoningParams (bedrock)", () => {
   });
 });
 
+describe("injectReasoningParams (OpenAI-compatible)", () => {
+  test("passes xhigh through for OpenAI and custom connections", () => {
+    for (const provider of ["openai", "custom"]) {
+      const params: Record<string, any> = {};
+      injectReasoningParams(params, provider, "xhigh");
+      expect(params.reasoning).toEqual({ effort: "xhigh" });
+    }
+  });
+
+  test("passes xhigh through for NanoGPT", () => {
+    const params: Record<string, any> = {};
+    injectReasoningParams(params, "nanogpt", "xhigh");
+    expect(params.reasoning).toEqual({ effort: "xhigh" });
+    expect(params.reasoning_effort).toBeUndefined();
+  });
+});
+
 describe("injectReasoningParams (zai)", () => {
   test("sends thinking and reasoning_effort for GLM-5.2 models", () => {
     const params: Record<string, any> = {};

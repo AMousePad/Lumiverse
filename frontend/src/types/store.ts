@@ -354,7 +354,8 @@ export interface RegenFeedbackSettings {
  * - OpenRouter: none, minimal, low, medium, high, xhigh
  * - Google:     minimal, low, medium, high
  * - Anthropic:  low, medium, high, max
- * - NanoGPT:    none, minimal, low, medium, high
+ * - NanoGPT:    none, minimal, low, medium, high, xhigh
+ * - OpenAI/Custom: auto, low, medium, high, xhigh, max
  * - Moonshot:   (toggle-only — no effort dropdown)
  * - Z.AI:       (toggle-only — no effort dropdown)
  * - Others:     auto, low, medium, high, max (generic)

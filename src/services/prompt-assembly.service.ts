@@ -7230,7 +7230,7 @@ export function buildParameters(
  * - DeepSeek:    thinking + reasoning_effort (OpenAI-format API). Effort is
  *                normalized to high/max per the official docs.
  * - OpenRouter:  reasoning: { effort } with values: none/minimal/low/medium/high/xhigh
- * - NanoGPT:     reasoning: { effort } with values: none/minimal/low/medium/high.
+ * - NanoGPT:     reasoning: { effort } with values: none/minimal/low/medium/high/xhigh.
  *                Object form is used so `reasoning.exclude = true` can suppress
  *                thinking on `:thinking`-suffixed models when the user disables
  *                API reasoning (the `:thinking` suffix activates reasoning
@@ -7358,8 +7358,8 @@ export function injectReasoningParams(
     // `reasoning_effort` and nested `reasoning.effort` are equivalent, but the
     // object form is the only one that also exposes `exclude` (strip reasoning
     // from the response) and `delta_field` (legacy `reasoning_content` streams).
-    // Valid efforts: none, minimal, low, medium, high.
-    const validEfforts = new Set(["none", "minimal", "low", "medium", "high"]);
+    // Valid efforts: none, minimal, low, medium, high, xhigh.
+    const validEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
     const mappedEffort = validEfforts.has(effort) ? effort : "high";
     const existing =
       params.reasoning && typeof params.reasoning === "object"
