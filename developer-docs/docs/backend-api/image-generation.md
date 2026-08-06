@@ -16,6 +16,24 @@ const result = await spindle.imageGen.generate({
 // result: { imageDataUrl: "data:image/png;base64,...", model: "...", provider: "..." }
 ```
 
+When the extension only needs the persisted image (`imageId` / `imageUrl`), pass
+`includeDataUrl: false` to omit the base64 `imageDataUrl` from the result. The
+host still persists the image (so `imageId` / `imageUrl` remain available) but
+skips shipping the largest per-image RPC payload back to the worker:
+
+```ts
+const result = await spindle.imageGen.generate({
+  prompt: 'A serene mountain landscape at sunset, anime style',
+  connection_id: 'optional-connection-id',
+  includeDataUrl: false,
+})
+// result: { imageId: "img-...", imageUrl: "/api/v1/image-gen/results/img-...", model: "...", provider: "..." }
+```
+
+The default (`includeDataUrl` omitted or `true`) keeps the data URL for
+backward compatibility.
+
+
 You can override the model and pass provider-specific parameters:
 
 ```ts

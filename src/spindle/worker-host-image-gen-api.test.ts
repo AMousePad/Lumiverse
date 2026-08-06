@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ImageProvider } from "../image-gen/provider";
 import {
+  applyDataUrlInclusion,
   WorkerHostImageGenApi,
   supportsWebSocketPreviewStreaming,
 } from "./worker-host-image-gen-api";
@@ -75,3 +76,44 @@ test("streaming requests retain the image_gen permission gate", async () => {
     }),
   ]);
 });
+
+
+test("applyDataUrlInclusion keeps the base64 payload by default", () => {
+  const result = {
+    imageDataUrl: "data:image/png;base64,AAAA",
+    imageId: "img-1",
+    imageUrl: "/api/v1/image-gen/results/img-1",
+    model: "test",
+    provider: "test",
+  };
+  expect(applyDataUrlInclusion(result, true)).toEqual(result);
+});
+
+test("applyDataUrlInclusion strips the base64 payload when opted out", () => {
+  const result = {
+    imageDataUrl: "data:image/png;base64,AAAA",
+    imageId: "img-1",
+    imageUrl: "/api/v1/image-gen/results/img-1",
+    model: "test",
+    provider: "test",
+  };
+  expect(applyDataUrlInclusion(result, false)).toEqual({
+    imageId: "img-1",
+    imageUrl: "/api/v1/image-gen/results/img-1",
+    model: "test",
+    provider: "test",
+  });
+});
+
+test("applyDataUrlInclusion does not mutate the source result", () => {
+  const result = {
+    imageDataUrl: "data:image/png;base64,AAAA",
+    imageId: "img-1",
+    imageUrl: "/api/v1/image-gen/results/img-1",
+  };
+  const stripped = applyDataUrlInclusion(result, false);
+  expect(stripped).not.toBe(result);
+  expect(result.imageDataUrl).toBe("data:image/png;base64,AAAA");
+  expect("imageDataUrl" in stripped).toBe(false);
+});
+
