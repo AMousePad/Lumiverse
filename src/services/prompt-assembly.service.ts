@@ -1170,8 +1170,8 @@ const ZERO_EXCLUDES_SAMPLER = new Set([
 
 /**
  * Default sampler values — mirrors the frontend's `defaultHint` from SAMPLER_PARAMS.
- * When samplerOverrides is enabled but a value is null, these are sent to ensure
- * generation behavior matches what the user sees in the UI sliders.
+ * When samplerOverrides is enabled but a value is null, these are sent for
+ * controls without an include toggle so generation behavior matches the UI.
  *
  * Only includes params that should ALWAYS be sent when enabled. Opt-in params
  * (frequencyPenalty, presencePenalty, repetitionPenalty) are excluded — a null
@@ -1180,7 +1180,6 @@ const ZERO_EXCLUDES_SAMPLER = new Set([
 const SAMPLER_DEFAULTS: Record<string, number> = {
   maxTokens: 16384,
   temperature: 1.0,
-  topP: 0.95,
 };
 
 interface GuidedGeneration {
@@ -7141,7 +7140,8 @@ export function buildParameters(
     params._streaming = false;
   }
 
-  // Sampler overrides — when enabled, apply user values (or defaults for core params).
+  // Sampler overrides — when enabled, apply user values (or defaults for
+  // controls without an include toggle).
   // A value of 0 on selected sampling params means "exclude from request", allowing
   // users to avoid provider conflicts (e.g. Claude rejects requests with both
   // temperature and top_p). top_k is handled separately via an explicit UI toggle.

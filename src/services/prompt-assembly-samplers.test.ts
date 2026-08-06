@@ -23,6 +23,24 @@ function samplerOverrides(
 }
 
 describe("sampler parameter assembly", () => {
+  test("omits Top P when its include checkbox is unchecked", () => {
+    const parameters = buildParameters(
+      samplerOverrides({ topP: null }),
+      null,
+    );
+
+    expect(parameters).not.toHaveProperty("top_p");
+  });
+
+  test("sends Top P when its include checkbox is checked", () => {
+    const parameters = buildParameters(
+      samplerOverrides({ topP: 0.95 }),
+      null,
+    );
+
+    expect(parameters.top_p).toBe(0.95);
+  });
+
   test("omits top_p when Top P is set to zero", () => {
     const parameters = buildParameters(
       samplerOverrides({ topP: 0 }),
@@ -39,6 +57,33 @@ describe("sampler parameter assembly", () => {
     );
 
     expect(parameters.top_p).toBe(0.8);
+  });
+
+  test("omits Top K when its include checkbox is unchecked", () => {
+    const parameters = buildParameters(
+      samplerOverrides({ topK: null }),
+      null,
+    );
+
+    expect(parameters).not.toHaveProperty("top_k");
+  });
+
+  test("sends Top K's zero default when its include checkbox is checked", () => {
+    const parameters = buildParameters(
+      samplerOverrides({ topK: 0 }),
+      null,
+    );
+
+    expect(parameters.top_k).toBe(0);
+  });
+
+  test("sends a custom Top K value", () => {
+    const parameters = buildParameters(
+      samplerOverrides({ topK: 40 }),
+      null,
+    );
+
+    expect(parameters.top_k).toBe(40);
   });
 
   test("applies the reasoning custom body instead of the legacy preset body", () => {
