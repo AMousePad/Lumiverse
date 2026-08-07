@@ -51,6 +51,32 @@ function sameValue(left: unknown, right: unknown): boolean {
   try { return JSON.stringify(left) === JSON.stringify(right) } catch { return false }
 }
 
+let settingsTraceSequence = 0
+
+function traceSettings(stage: string, data: Record<string, unknown>): void {
+  settingsTraceSequence += 1
+  console.debug('[SuiteSettingsTrace]', {
+    seq: settingsTraceSequence,
+    at: new Date().toISOString(),
+    stage,
+    ...data,
+  })
+}
+
+function portraitDockSummary(value: unknown): Record<string, unknown> | undefined {
+  const source = record(value)
+  if (!source) return undefined
+  const rect = record(source.rect)
+  return {
+    open: source.open,
+    dockSide: source.dockSide,
+    defaultDockSide: source.defaultDockSide,
+    rememberSizePosition: source.rememberSizePosition,
+    pinned: source.pinned,
+    rect: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : undefined,
+  }
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -290,10 +316,22 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
       if (!settingsApi) throw new Error('SETTINGS_API_UNAVAILABLE')
       let canonical: unknown
       let canonicalSettingsSeen = false
+      traceSettings('module:start', {
+        moduleId: options.id,
+        surfaceId: options.surfaceId,
+        settingsKey: options.settingsKey,
+        coreSettingsKey: options.coreSettingsKey,
+      })
       try {
         canonical = settingsApi.core.get<unknown>(options.coreSettingsKey)
         canonicalSettingsSeen = canonical !== undefined
+        traceSettings('module:canonical-read', {
+          moduleId: options.id,
+          canonicalSettingsSeen,
+          portraitDock: options.settingsKey === 'portraitDockSettings' ? portraitDockSummary(canonical) : undefined,
+        })
       } catch {
+        traceSettings('module:canonical-read:unsupported', { moduleId: options.id })
         // Older core hosts reject unknown canonical keys; private settings remain usable.
       }
       // Current hosts expose the canonical productivity blob synchronously.
@@ -302,6 +340,12 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
       const saved = canonicalSettingsSeen
         ? undefined
         : await settingsApi.get<unknown>(options.settingsKey)
+      traceSettings('module:private-read', {
+        moduleId: options.id,
+        canonicalSettingsSeen,
+        privateFound: saved !== undefined,
+        portraitDock: options.settingsKey === 'portraitDockSettings' ? portraitDockSummary(saved) : undefined,
+      })
       const source = canonical ?? saved
       // Extension schemas only describe the fields they actively consume. Keep
       // the rest of the host-owned blob intact so a newer core field survives
@@ -311,6 +355,13 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
         ...options.normalize(source),
       } as T
       settings = normalized
+      traceSettings('module:normalized', {
+        moduleId: options.id,
+        canonicalSettingsSeen,
+        enabled: options.enabled(normalized),
+        portraitDock: options.settingsKey === 'portraitDockSettings' ? portraitDockSummary(normalized) : undefined,
+        normalizationChanged: !sameValue(source, normalized),
+      })
       running = true
       let stopLegacyWatch: () => void = () => undefined
       if (canonicalSettingsSeen) {
@@ -318,11 +369,25 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
         // watcher alive here turns every SETTINGS_UPDATED broadcast into a stale
         // fallback read, which can race a freshly persisted canonical value.
       } else {
-        if (!sameValue(saved, normalized)) await settingsApi.set(options.settingsKey, normalized)
+        const needsPrivateRepair = !sameValue(saved, normalized)
+        traceSettings('module:legacy-repair-decision', {
+          moduleId: options.id,
+          needsPrivateRepair,
+        })
+        if (needsPrivateRepair) {
+          await settingsApi.set(options.settingsKey, normalized)
+          traceSettings('module:legacy-repair-committed', { moduleId: options.id })
+        }
         stopLegacyWatch = settingsApi.watch<unknown>(options.settingsKey, value => {
           if (!running || canonicalSettingsSeen) return
           const next = { ...(record(value) ?? {}), ...options.normalize(value) } as T
-          if (sameValue(settings, next)) return
+          const unchanged = sameValue(settings, next)
+          traceSettings('module:private-watch', {
+            moduleId: options.id,
+            unchanged,
+            portraitDock: options.settingsKey === 'portraitDockSettings' ? portraitDockSummary(next) : undefined,
+          })
+          if (unchanged) return
           settings = next
           reconcile()
         })
@@ -333,11 +398,18 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
           if (!running) return
           if (!canonicalSettingsSeen) {
             canonicalSettingsSeen = true
+            traceSettings('module:canonical-watch-promoted', { moduleId: options.id })
             stopLegacyWatch()
             stopLegacyWatch = () => undefined
           }
           const next = { ...(record(value) ?? {}), ...options.normalize(value) } as T
-          if (sameValue(settings, next)) return
+          const unchanged = sameValue(settings, next)
+          traceSettings('module:canonical-watch', {
+            moduleId: options.id,
+            unchanged,
+            portraitDock: options.settingsKey === 'portraitDockSettings' ? portraitDockSummary(next) : undefined,
+          })
+          if (unchanged) return
           settings = next
           reconcile()
         })
@@ -350,6 +422,12 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
       }
       try {
         reconcile()
+        traceSettings('module:reconciled', {
+          moduleId: options.id,
+          canonicalSettingsSeen,
+          enabled: settings ? options.enabled(settings) : false,
+          portraitDock: options.settingsKey === 'portraitDockSettings' ? portraitDockSummary(settings) : undefined,
+        })
       } catch (error) {
         stopModule()
         throw error

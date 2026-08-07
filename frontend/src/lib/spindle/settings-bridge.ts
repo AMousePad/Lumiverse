@@ -146,6 +146,18 @@ function isNotFound(error: unknown): boolean {
 export function createSettingsBridge(options: SettingsBridgeOptions): SpindleSettingsBridge {
   ensureIdentifier(options.manifestIdentifier)
 
+  let traceSequence = 0
+  const trace = (stage: string, data: Record<string, unknown>): void => {
+    traceSequence += 1
+    console.debug('[SettingsBridgeTrace]', {
+      seq: traceSequence,
+      at: new Date().toISOString(),
+      extension: options.manifestIdentifier,
+      stage,
+      ...data,
+    })
+  }
+
   const coreSettings = new Map<string, CoreSettingKey>()
   for (const definition of options.coreSettingKeys) {
     if (coreSettings.has(definition.key)) {
@@ -163,6 +175,11 @@ export function createSettingsBridge(options: SettingsBridgeOptions): SpindleSet
   }
 
   const notifyPrivate = (storageKey: string, value: unknown): void => {
+    trace('private:notify', {
+      storageKey,
+      watcherCount: privateWatchers.get(storageKey)?.size ?? 0,
+      hasValue: value !== undefined,
+    })
     for (const watcher of privateWatchers.get(storageKey) ?? []) {
       try {
         watcher(value)
@@ -173,10 +190,13 @@ export function createSettingsBridge(options: SettingsBridgeOptions): SpindleSet
   }
 
   const refreshPrivate = async (storageKey: string): Promise<void> => {
+    trace('private:refresh:start', { storageKey })
     try {
       const row = await options.persistence.get(storageKey)
+      trace('private:refresh:result', { storageKey, found: row !== undefined })
       if (!disposed) notifyPrivate(storageKey, row?.value)
     } catch (error) {
+      trace('private:refresh:failed', { storageKey })
       if (!disposed) {
         // A deleted row is represented as undefined. The watcher API has no
         // error channel, so a failed refresh must not create an unhandled
@@ -188,6 +208,11 @@ export function createSettingsBridge(options: SettingsBridgeOptions): SpindleSet
 
   const refreshMatchingPrivateWatchers = (event: SettingsUpdatedEvent): void => {
     const changedKeys = event.key ? [event.key] : event.keys ?? []
+    trace('serverUpdate', {
+      changedKeys,
+      source: event.source ?? 'host',
+      watchedKeys: [...privateWatchers.keys()],
+    })
     for (const storageKey of privateWatchers.keys()) {
       if (event.key === storageKey && Object.prototype.hasOwnProperty.call(event, 'value')) {
         notifyPrivate(storageKey, event.value)
@@ -235,13 +260,16 @@ export function createSettingsBridge(options: SettingsBridgeOptions): SpindleSet
     async get<T>(key: string): Promise<T | undefined> {
       const storageKey = composePrivateSettingKey(options.manifestIdentifier, key)
       assertActive()
+      trace('private:get:start', { key, storageKey })
       try {
         const row = await options.persistence.get(storageKey)
         assertActive()
+        trace('private:get:result', { key, storageKey, found: row !== undefined })
         return row?.value as T | undefined
       } catch (error) {
         if (isNotFound(error)) {
           assertActive()
+          trace('private:get:result', { key, storageKey, found: false })
           return undefined
         }
         throw error
@@ -251,8 +279,10 @@ export function createSettingsBridge(options: SettingsBridgeOptions): SpindleSet
       const storageKey = composePrivateSettingKey(options.manifestIdentifier, key)
       validateSettingValue(value)
       assertActive()
+      trace('private:set:start', { key, storageKey })
       await options.persistence.set(storageKey, value)
       assertActive()
+      trace('private:set:committed', { key, storageKey })
       notifyPrivate(storageKey, value)
     },
     async remove(key: string): Promise<void> {
@@ -276,31 +306,38 @@ export function createSettingsBridge(options: SettingsBridgeOptions): SpindleSet
       }
       const watcher: PrivateWatcher = (value) => callback(value as T | undefined)
       watchers.add(watcher)
+      trace('private:watch:subscribed', { key, storageKey, watcherCount: watchers.size })
 
       let active = true
       return () => {
         if (!active) return
         active = false
         watchers?.delete(watcher)
+        trace('private:watch:unsubscribed', { key, storageKey, watcherCount: watchers?.size ?? 0 })
         if (watchers?.size === 0) privateWatchers.delete(storageKey)
       }
     },
     core: {
       get<T>(key: string): T | undefined {
         resolveCore(key)
-        return options.core.get(key) as T | undefined
+        const value = options.core.get(key) as T | undefined
+        trace('core:get', { key, found: value !== undefined })
+        return value
       },
       watch<T>(key: string, callback: (value: T) => void): () => void {
         resolveCore(key)
         const unsubscribe = options.core.subscribe(key, (value) => {
+          trace('core:watch:event', { key, hasValue: value !== undefined })
           try { callback(value as T) } catch (error) { console.error('[Spindle] Core settings watcher error:', error) }
         })
         coreSubscriptions.add(unsubscribe)
+        trace('core:watch:subscribed', { key })
         let active = true
         return () => {
           if (!active) return
           active = false
           coreSubscriptions.delete(unsubscribe)
+          trace('core:watch:unsubscribed', { key })
           unsubscribe()
         }
       },

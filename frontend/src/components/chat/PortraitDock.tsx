@@ -228,6 +228,8 @@ export function shouldAutoOpenPortraitForChat(
 export default function PortraitDock({ mobile = false, extensionOwned = false }: PortraitDockProps) {
   const floatingAvatar = useStore((s) => s.floatingAvatar)
   const settings = useStore((s) => s.portraitDockSettings)
+  const settingsLoaded = useStore((s) => s.settingsLoaded)
+  const fullSettingsLoaded = useStore((s) => s.fullSettingsLoaded)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
@@ -246,6 +248,26 @@ export default function PortraitDock({ mobile = false, extensionOwned = false }:
   const autoSyncedChatIdRef = useRef<string | null>(null)
   const closedChatIdRef = useRef<string | null>(null)
   const manualPreviewRef = useRef<ManualPortraitPreviewOwner | null>(null)
+  const settingsTraceRef = useRef(0)
+
+  useEffect(() => {
+    settingsTraceRef.current += 1
+    console.debug('[PortraitDockTrace]', {
+      seq: settingsTraceRef.current,
+      at: new Date().toISOString(),
+      stage: 'settings:observed',
+      extensionOwned,
+      settingsLoaded,
+      fullSettingsLoaded,
+      open: settings.open,
+      dockSide: settings.dockSide,
+      defaultDockSide: settings.defaultDockSide,
+      rememberSizePosition: settings.rememberSizePosition,
+      pinned: settings.pinned,
+      aspectRatioLocked: settings.aspectRatioLocked,
+      rect: settings.rect,
+    })
+  }, [extensionOwned, fullSettingsLoaded, settings, settingsLoaded])
 
   const bounds = useMemo(() => getViewportBounds(settings), [settings])
   const ratio = resolvePortraitRatio(naturalSize)

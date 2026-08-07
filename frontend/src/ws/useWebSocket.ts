@@ -6,7 +6,7 @@ import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
 import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
-import { hasUnsavedSettings, shouldReloadSettingsAfterUpdate } from '@/store/slices/settings'
+import { hasUnsavedSettings, settingsUpdateKeys, shouldReloadSettingsAfterUpdate } from '@/store/slices/settings'
 import { routeBackendMessage, routeFrontendProcessEvent, loadFrontendExtension } from '@/lib/spindle/loader'
 import { applyHostAction, type HostActionRuntime } from '@/lib/spindle/host-actions'
 import { spindleApi } from '@/api/spindle'
@@ -1269,8 +1269,38 @@ export function useWebSocket() {
       // writes to the settings table. Skip if this tab has pending writes to
       // avoid overwriting in-flight local changes with stale DB values.
       wsClient.on(EventType.SETTINGS_UPDATED, (payload: unknown) => {
-        if (shouldReloadSettingsAfterUpdate(payload)) {
+        const keys = settingsUpdateKeys(payload)
+        const before = useStore.getState()
+        const beforePortraitDock = before.portraitDockSettings
+        const reload = shouldReloadSettingsAfterUpdate(payload)
+        console.debug('[SettingsTrace]', {
+          at: new Date().toISOString(),
+          stage: 'websocket:SETTINGS_UPDATED',
+          keys,
+          payloadShape: payload && typeof payload === 'object' && !Array.isArray(payload)
+            ? Object.keys(payload)
+            : typeof payload,
+          reload,
+          unsavedBeforeDecision: hasUnsavedSettings(),
+          portraitDockBefore: {
+            open: beforePortraitDock?.open,
+            dockSide: beforePortraitDock?.dockSide,
+            rect: beforePortraitDock?.rect,
+          },
+        })
+        if (reload) {
           store.getState().loadSettings()
+          const after = useStore.getState().portraitDockSettings
+          console.debug('[SettingsTrace]', {
+            at: new Date().toISOString(),
+            stage: 'websocket:loadSettings:triggered',
+            keys,
+            portraitDockAfterTrigger: {
+              open: after?.open,
+              dockSide: after?.dockSide,
+              rect: after?.rect,
+            },
+          })
         }
       }),
 
