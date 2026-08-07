@@ -221,8 +221,14 @@ export default function ChatView() {
   const [portraitSurfaceOccupied, setPortraitSurfaceOccupied] = useState(false)
   useEffect(() => {
     const readOccupied = () => {
-      const anchor = document.querySelector(`[data-spindle-mount="${'chat_surface_side'}"]`)
-      setPortraitSurfaceOccupied(Boolean(anchor?.querySelector('[data-spindle-host-surface="portrait_dock.workspace"]')))
+      // The extension root can survive a ChatView transition while its new mount
+      // anchor is being committed. Looking beneath only the first side anchor can
+      // therefore miss the live owner and briefly restore the native dock. The
+      // host-surface marker is unique to the extension-owned Portrait Dock, so it
+      // is the ownership authority regardless of which current anchor contains it.
+      setPortraitSurfaceOccupied(Boolean(
+        document.querySelector('[data-spindle-host-surface="portrait_dock.workspace"]'),
+      ))
     }
     readOccupied()
     const Observer = document.defaultView?.MutationObserver

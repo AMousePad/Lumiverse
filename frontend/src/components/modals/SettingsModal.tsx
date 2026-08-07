@@ -206,7 +206,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
           </nav>
 
           <div className={styles.content} ref={contentRef}>
-            <SettingsView view={activeView} />
+            {!settingsTabs.some((tab) => tab.tabId === activeView) && (
+              <SettingsView view={activeView} />
+            )}
             <div
               className={clsx(
                 styles.extensionMountHost,
