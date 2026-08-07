@@ -77,6 +77,7 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
   let handle: SurfaceHandle | undefined
   let eventStop: (() => void) | undefined
   let mountedPoint: string | undefined
+  const inFlightMounts = new Set<string>()
   let generation = 0
   let launcherHandle: SurfaceHandle | undefined
   let launcherEventStop: (() => void) | undefined
@@ -213,6 +214,8 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
     }
     const surfaceId = options.panel && panelOpen ? options.panel.surfaceId : options.surfaceId
     const point = options.panel && panelOpen ? options.panel.mountPoint(settings) : options.mountPoint(settings)
+    const mountKey = `${surfaceId}:${point}`
+    if (inFlightMounts.has(mountKey)) return
     if (handle && mountedPoint === `${surfaceId}:${point}`) {
       try {
         handle.update?.(props(surfaceId))
@@ -223,6 +226,7 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
       return
     }
     clearSurface()
+    inFlightMounts.add(mountKey)
     try {
       const root = host.ui!.mount!(point)
       generation += 1
@@ -244,6 +248,8 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
     } catch (error) {
       clearSurface()
       throw error
+    } finally {
+      inFlightMounts.delete(mountKey)
     }
   }
 
@@ -282,7 +288,6 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
       context = moduleContext
       const settingsApi = moduleContext.settings as SurfaceSettingsApi
       if (!settingsApi) throw new Error('SETTINGS_API_UNAVAILABLE')
-      const saved = await settingsApi.get<unknown>(options.settingsKey)
       let canonical: unknown
       let canonicalSettingsSeen = false
       try {
@@ -291,6 +296,12 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
       } catch {
         // Older core hosts reject unknown canonical keys; private settings remain usable.
       }
+      // Current hosts expose the canonical productivity blob synchronously.
+      // Do not touch the compatibility row in that case: it is a one-way
+      // mirror and may be stale after a canonical write.
+      const saved = canonicalSettingsSeen
+        ? undefined
+        : await settingsApi.get<unknown>(options.settingsKey)
       const source = canonical ?? saved
       // Extension schemas only describe the fields they actively consume. Keep
       // the rest of the host-owned blob intact so a newer core field survives

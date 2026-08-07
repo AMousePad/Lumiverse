@@ -56,6 +56,7 @@ import DataPortability from '@/components/settings/DataPortability'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { getVisibleSettingsTabs, sectionAnchorId } from '@/lib/settings-tab-registry'
+import { getSettingsTabRootsForView, joinExtensionSettingsTabs } from '@/lib/spindle/settings-tab-bridge'
 import SettingsSearch from './SettingsSearch'
 import styles from './SettingsModal.module.css'
 import formStyles from '@/components/shared/FormComponents.module.css'
@@ -70,11 +71,16 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const settingsActiveView = useStore((s) => s.settingsActiveView)
   const settingsScrollTarget = useStore((s) => s.settingsScrollTarget)
   const user = useStore((s) => s.user)
+  const settingsTabs = useStore((s) => s.settingsTabs)
   const [activeView, setActiveView] = useState(settingsActiveView || 'display')
 
-  const VIEWS = useMemo(() => getVisibleSettingsTabs(user?.role), [user?.role])
+  const VIEWS = useMemo(() => {
+    void settingsTabs
+    return joinExtensionSettingsTabs(getVisibleSettingsTabs(user?.role), user?.role)
+  }, [settingsTabs, user?.role])
 
   const contentRef = useRef<HTMLDivElement>(null)
+  const extensionMountRef = useRef<HTMLDivElement>(null)
   const navNonce = useRef(0)
   const handledScrollTargetNonce = useRef<number | null>(null)
   const [scrollTarget, setScrollTarget] = useState<{ anchorId: string | null; nonce: number } | null>(null)
@@ -88,6 +94,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       setActiveView(VIEWS[0].id)
     }
   }, [VIEWS, activeView])
+
+  useEffect(() => {
+    const target = extensionMountRef.current
+    if (!target) return
+    while (target.firstChild) target.firstChild.remove()
+    for (const root of getSettingsTabRootsForView(settingsTabs, activeView)) target.append(root)
+  }, [activeView, settingsTabs])
 
   // Open a tab from the in-modal search and remember where to scroll.
   const handleSearchNavigate = (tabId: string, anchorId: string | null) => {
@@ -197,10 +210,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             <div
               className={clsx(
                 styles.extensionMountHost,
-                activeView !== 'extensions' && styles.extensionMountHostHidden
+                activeView !== 'extensions' && !settingsTabs.some((tab) => tab.tabId === activeView) && styles.extensionMountHostHidden
               )}
             >
-              <div className={styles.extensionMount} data-spindle-mount="settings_extensions" />
+              <div ref={extensionMountRef} className={styles.extensionMount} data-spindle-mount="settings_extensions" />
             </div>
           </div>
         </div>

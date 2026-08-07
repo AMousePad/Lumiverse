@@ -69,7 +69,7 @@ describe('H4 host surface catalog and invocation', () => {
     expect(catalog.filter((surface) => surface.kind === 'route').map((surface) => surface.id)).toEqual([
       '/', '/chat/:chatId', '/characters', '/characters/:id',
     ])
-    expect(catalog.filter((surface) => surface.kind === 'modal').map((surface) => surface.id)).toEqual(['character_editor'])
+    expect(catalog.filter((surface) => surface.kind === 'modal').map((surface) => surface.id)).toEqual(['character_editor', 'world_book_editor'])
   })
 
   test('authority is checked per action id and unknown command ids fail closed', () => {

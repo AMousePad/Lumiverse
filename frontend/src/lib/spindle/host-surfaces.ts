@@ -91,6 +91,7 @@ const ROUTES: readonly HostSurface[] = Object.freeze([
 
 const MODALS: readonly HostSurface[] = Object.freeze([
   { kind: 'modal', id: HOST_MODAL_IDS[0], label: 'Character editor', description: 'Open the character editor', scope: 'character' },
+  { kind: 'modal', id: HOST_MODAL_IDS[1], label: 'World book editor', description: 'Open a world book editor', scope: 'global' },
 ])
 
 function settingsRole(role: string | undefined): 'admin' | 'owner' | undefined {
@@ -250,6 +251,7 @@ function defaultRuntime(
     },
     navigate: (path) => { void router.navigate(path) },
     setEditingCharacterId: (id) => useStore.getState().setEditingCharacterId(id),
+    openWorldBookEditor: (id) => useStore.getState().openModal('worldBookEditor', { bookId: id }),
     invokeInputBarAction: async (id) => {
       const action = getInputAction(id)
       if (!action) throw new Error(`HOST_ACTION_UNMAPPED:input_bar_action:${id}`)

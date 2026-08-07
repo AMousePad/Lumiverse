@@ -65,6 +65,14 @@ export interface SpindleSettingsTabHandle extends SettingsTabRegistrationHandle 
   readonly root: HTMLElement
 }
 
+/** Return only extension roots owned by the currently active settings tab. */
+export function getSettingsTabRootsForView(
+  settingsTabs: readonly (Pick<SpindleSettingsTabHandle, 'root'> & { readonly tabId: string })[],
+  activeView: string,
+): HTMLElement[] {
+  return settingsTabs.filter((tab) => tab.tabId === activeView).map((tab) => tab.root)
+}
+
 export interface JoinedSettingsTabEntry extends SettingsTabEntry {
   iconSvg?: string
   sections?: SettingsSection[]

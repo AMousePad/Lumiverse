@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type KeyboardEvent } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
-import { Plus, Trash2, BookOpen, Upload, User, FileUp, Search, Download, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, X } from 'lucide-react'
+import { Plus, Trash2, BookOpen, Upload, User, FileUp, Search, Download, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, X, Maximize2, Minimize2 } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
@@ -53,6 +53,7 @@ export default function WorldBookEditorModal() {
   const closeModal = useStore((s) => s.closeModal)
   const modalProps = useStore((s) => s.modalProps)
   const activeChatId = useStore((s) => s.activeChatId)
+  const [fullscreen, setFullscreen] = useState(false)
 
   // Book list state
   const [books, setBooks] = useState<WorldBook[]>([])
@@ -516,10 +517,22 @@ export default function WorldBookEditorModal() {
 
   return (
     <>
-    <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 92vw, min(1160px, var(--lumiverse-content-max-width, 1160px)))" zIndex={10001} className={styles.modal}>
+    <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 92vw, min(1160px, var(--lumiverse-content-max-width, 1160px)))" zIndex={10001} className={clsx(styles.modal, fullscreen && styles.fullscreen)}>
         <div className={styles.header}>
           <h2 className={styles.title}>{t('modalTitle')}</h2>
-          <CloseButton onClick={closeModal} />
+          <div className={styles.headerActions}>
+            <button
+              type="button"
+              className={styles.fullscreenBtn}
+              onClick={() => setFullscreen((current) => !current)}
+              title={fullscreen ? 'Restore editor' : 'Fullscreen editor'}
+              aria-label={fullscreen ? 'Restore editor' : 'Fullscreen editor'}
+              aria-pressed={fullscreen}
+            >
+              {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            </button>
+            <CloseButton onClick={closeModal} />
+          </div>
         </div>
 
         <div className={styles.body}>

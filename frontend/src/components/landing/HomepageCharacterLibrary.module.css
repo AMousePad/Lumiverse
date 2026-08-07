@@ -53,6 +53,7 @@
   display: inline-flex;
   align-items: center;
   flex: 0 1 auto;
+  margin-left: auto;
   gap: 7px;
   width: min(280px, 45vw);
   border: 1px solid var(--lumiverse-border);
@@ -581,13 +582,23 @@
   overflow: hidden;
 }
 
-.lorebooks span,
+.lorebooks button,
 .lastChat {
   border: 1px solid var(--lumiverse-border-subtle);
   border-radius: var(--lumiverse-radius);
   padding: 7px 9px;
   color: var(--lumiverse-text-muted);
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+.lorebooks button {
+  background: var(--lumiverse-fill-subtle);
+  cursor: pointer;
+}
+
+.lorebooks button:hover {
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-border);
 }
 
 .lastChat {

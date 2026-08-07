@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import type { SettingsTabEntry } from '@/lib/settings-tab-registry'
 import {
   getExtensionSettingsTabRegistrations,
+  getSettingsTabRootsForView,
   joinExtensionSettingsTabs,
   registerExtensionSettingsTab,
   subscribeExtensionSettingsTabs,
@@ -60,6 +61,21 @@ afterEach(() => {
 })
 
 describe('Spindle settings tab bridge', () => {
+  test('mounts only roots owned by the active tab, including native Extensions', () => {
+    const extensionsRoot = {} as HTMLElement
+    const productivityRoot = {} as HTMLElement
+    const anotherRoot = {} as HTMLElement
+    const settingsTabs = [
+      { tabId: 'extensions', root: extensionsRoot },
+      { tabId: 'productivity', root: productivityRoot },
+      { tabId: 'another', root: anotherRoot },
+    ]
+
+    expect(getSettingsTabRootsForView(settingsTabs, 'extensions')).toEqual([extensionsRoot])
+    expect(getSettingsTabRootsForView(settingsTabs, 'productivity')).toEqual([productivityRoot])
+    expect(getSettingsTabRootsForView(settingsTabs, 'another')).toEqual([anotherRoot])
+  })
+
   test('is additive when no extension has registered a settings tab', () => {
     const joined = joinExtensionSettingsTabs(CORE_TABS)
 

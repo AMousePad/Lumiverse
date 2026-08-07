@@ -3,6 +3,16 @@
   max-height: calc(85vh / var(--lumiverse-ui-scale, 1));
 }
 
+.fullscreen {
+  position: fixed;
+  inset: 0;
+  width: calc(100vw / var(--lumiverse-ui-scale, 1));
+  height: var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1)));
+  max-height: none;
+  border-radius: 0;
+  z-index: 10002;
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -16,6 +26,31 @@
   font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fullscreenBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.fullscreenBtn:hover {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
 }
 
 

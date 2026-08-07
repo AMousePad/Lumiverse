@@ -209,7 +209,8 @@ export default function FloatingAvatarViewer() {
     updateFloatingAvatar({ width: size.width, height: size.height, x: pos.x, y: pos.y })
   }, [size, pos, updateFloatingAvatar])
 
-  if (!floatingAvatar) return null
+  const portraitDockOwnsAvatar = floatingAvatar?.owner === 'portrait-dock'
+  if (!floatingAvatar || portraitDockOwnsAvatar) return null
 
   const containerClass = [
     styles.container,

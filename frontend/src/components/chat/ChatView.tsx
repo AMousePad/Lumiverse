@@ -222,7 +222,7 @@ export default function ChatView() {
   useEffect(() => {
     const readOccupied = () => {
       const anchor = document.querySelector(`[data-spindle-mount="${'chat_surface_side'}"]`)
-      setPortraitSurfaceOccupied(Boolean(anchor?.firstElementChild))
+      setPortraitSurfaceOccupied(Boolean(anchor?.querySelector('[data-spindle-host-surface="portrait_dock.workspace"]')))
     }
     readOccupied()
     const Observer = document.defaultView?.MutationObserver
@@ -232,7 +232,7 @@ export default function ChatView() {
     return () => observer.disconnect()
   }, [])
   const isMobile = useIsMobile()
-  const portraitBackdropVisible = isMobile && portraitPanelOpen && portraitPanelSide !== 'none'
+  const portraitBackdropVisible = !portraitSurfaceOccupied && isMobile && portraitPanelOpen && portraitPanelSide !== 'none'
   const sceneBackground = useStore((s) => s.sceneBackground)
   const imageGeneration = useStore((s) => s.imageGeneration)
   const wallpaper = useStore((s) => s.wallpaper)
@@ -1031,7 +1031,7 @@ export default function ChatView() {
       />
       <div className={clsx(styles.wallpaperTransitionLayer, wallpaperTransitioning && !sceneBackground && styles.wallpaperTransitionLayerActive)} />
       <div className={styles.body} {...(chatWidthMode !== 'full' ? { 'data-chat-constrained': '' } : {})}>
-        {portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (
+        {!portraitSurfaceOccupied && portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (
           <div className={clsx(styles.portraitSide, styles.portraitSideLeft, portraitPanelOpen && styles.portraitSideOpen)}>
             {!isMobile && !portraitSurfaceOccupied && <PortraitPanel side="left" />}
             <button
@@ -1120,7 +1120,7 @@ export default function ChatView() {
           </div>
         </div>
 
-        {portraitPanelSide !== 'none' && portraitPanelSide === 'right' && (
+        {!portraitSurfaceOccupied && portraitPanelSide !== 'none' && portraitPanelSide === 'right' && (
           <div className={clsx(styles.portraitSide, styles.portraitSideRight, portraitPanelOpen && styles.portraitSideOpen)}>
             <button
               type="button"

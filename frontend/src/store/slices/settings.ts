@@ -460,6 +460,11 @@ export function consumeOwnSettingsUpdate(payload: unknown): boolean {
   return true
 }
 
+/** Whether a SETTINGS_UPDATED event requires a settings reload in this tab. */
+export function shouldReloadSettingsAfterUpdate(payload: unknown): boolean {
+  return !hasUnsavedSettings() && !consumeOwnSettingsUpdate(payload)
+}
+
 /**
  * Remove a direct-write's matching dirty value without discarding a newer
  * debounced edit that was queued while the request was in flight.

@@ -1782,7 +1782,7 @@ export default function LandingPage() {
         </header>
 
         <div className={styles.landingToolbar} data-component="LandingPageTabs" data-spindle-mount="landing_toolbar">
-          <div role="tablist" aria-label="Landing views" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flex: '0 0 auto' }}>
+          <div className={styles.landingTabs} role="tablist" aria-label="Landing views">
             {availableLandingTabs.map((tab) => {
               const selected = activeLandingTab === tab
               return (

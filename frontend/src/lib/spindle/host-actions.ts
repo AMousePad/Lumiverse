@@ -38,6 +38,7 @@ export interface HostActionRuntime {
   runCommand(id: string): void | Promise<void>
   navigate(path: string): void
   setEditingCharacterId(id: string): void
+  openWorldBookEditor(id: string): void
   invokeInputBarAction(id: string): void | Promise<void>
   invokeExtensionCommand(id: string): void
 }
@@ -54,7 +55,7 @@ export const HOST_ROUTE_PATTERNS = Object.freeze([
   '/characters/:id',
 ] as const)
 
-export const HOST_MODAL_IDS = Object.freeze(['character_editor'] as const)
+export const HOST_MODAL_IDS = Object.freeze(['character_editor', 'world_book_editor'] as const)
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/
 
@@ -149,10 +150,13 @@ export function applyHostAction(
       runtime.navigate(routePath(ref.id, params))
       return
     case 'modal':
-      if (ref.id !== 'character_editor') throw new Error(`${HOST_ACTION_UNMAPPED}:modal:${ref.id}`)
+      if (ref.id !== 'character_editor' && ref.id !== 'world_book_editor') {
+        throw new Error(`${HOST_ACTION_UNMAPPED}:modal:${ref.id}`)
+      }
       only(params, 'id')
       assertHostId(params.id, 'id')
-      runtime.setEditingCharacterId(params.id)
+      if (ref.id === 'character_editor') runtime.setEditingCharacterId(params.id)
+      else if (ref.id === 'world_book_editor') runtime.openWorldBookEditor(params.id)
       return
     case 'input_bar_action':
       only(params)

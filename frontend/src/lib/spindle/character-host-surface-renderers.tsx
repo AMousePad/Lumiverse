@@ -561,7 +561,13 @@ export function CharacterPreviewPanelSurface({
               <p data-state="empty">No world books attached.</p>
             ) : (
               <ul aria-label="Attached world books">
-                {state.value.worldBooks.map((book) => <li key={book.id}>{book.name}</li>)}
+                {state.value.worldBooks.map((book) => (
+                  <li key={book.id}>
+                    <button type="button" style={buttonStyle} onClick={() => emit('openWorldBook', { bookId: book.id })}>
+                      {book.name}
+                    </button>
+                  </li>
+                ))}
               </ul>
             )}
           </section>

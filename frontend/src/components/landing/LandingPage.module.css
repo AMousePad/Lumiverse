@@ -128,6 +128,16 @@
   margin-bottom: 20px;
 }
 
+.landingTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  /* Keep the primary view switch aligned to the viewport edge even when the
+     landing content is centered inside its 1400px desktop max-width. */
+  margin-left: calc((min(100vw, 1400px) - 100vw) / 2);
+}
+
 .landingSearch {
   /* Allow the search field to yield space to the fixed-width toolbar actions
      at high UI scales and narrow viewports. Without this, its intrinsic
@@ -164,6 +174,9 @@
   display: flex;
   align-items: center;
   gap: 14px;
+  /* Match the viewport-aligned tab group below when desktop content is
+     constrained by the landing page's max width. */
+  margin-left: calc((min(100vw, 1400px) - 100vw) / 2);
 }
 
 .headerActions {

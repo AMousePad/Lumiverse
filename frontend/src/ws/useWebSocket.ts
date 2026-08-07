@@ -6,7 +6,7 @@ import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
 import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
-import { consumeOwnSettingsUpdate, hasUnsavedSettings } from '@/store/slices/settings'
+import { hasUnsavedSettings, shouldReloadSettingsAfterUpdate } from '@/store/slices/settings'
 import { routeBackendMessage, routeFrontendProcessEvent, loadFrontendExtension } from '@/lib/spindle/loader'
 import { applyHostAction, type HostActionRuntime } from '@/lib/spindle/host-actions'
 import { spindleApi } from '@/api/spindle'
@@ -93,6 +93,7 @@ const spindleUiActionRuntime: HostActionRuntime = {
   runCommand: () => { throw new Error('HOST_ACTION_UNMAPPED:command') },
   navigate: () => { throw new Error('HOST_ACTION_UNMAPPED:route') },
   setEditingCharacterId: () => { throw new Error('HOST_ACTION_UNMAPPED:modal') },
+  openWorldBookEditor: () => { throw new Error('HOST_ACTION_UNMAPPED:modal') },
   invokeInputBarAction: () => { throw new Error('HOST_ACTION_UNMAPPED:input_bar_action') },
   invokeExtensionCommand: () => { throw new Error('HOST_ACTION_UNMAPPED:ext_command') },
 }
@@ -1268,7 +1269,7 @@ export function useWebSocket() {
       // writes to the settings table. Skip if this tab has pending writes to
       // avoid overwriting in-flight local changes with stale DB values.
       wsClient.on(EventType.SETTINGS_UPDATED, (payload: unknown) => {
-        if (!hasUnsavedSettings() && !consumeOwnSettingsUpdate(payload)) {
+        if (shouldReloadSettingsAfterUpdate(payload)) {
           store.getState().loadSettings()
         }
       }),

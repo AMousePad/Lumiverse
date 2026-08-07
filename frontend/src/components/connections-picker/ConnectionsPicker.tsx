@@ -707,6 +707,7 @@ export function ConnectionsPicker({ open, onClose, anchorElement }: ConnectionsP
       }}
       title="Connections Picker"
       aria-label="Connections Picker"
+      persistGeometry="connections_picker"
       showHeader={settings.variant !== 'provider-tags'}
       toolbar={(
         <>

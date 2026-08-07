@@ -405,6 +405,10 @@ export default function PortraitDock({ mobile = false, extensionOwned = false }:
         panel.setRect(resolveDockedPortraitImageRect(size, settings.rect, side, bounds, viewportBox()))
         return
       }
+      if (settings.rememberSizePosition && !isDefaultPortraitRect(settings.rect)) {
+        panel.setRect(clampSurfaceRect(settings.rect, bounds))
+        return
+      }
       if (floatingAvatar.x >= 0 && floatingAvatar.y >= 0 && !usesUntouchedDefaultRect) return
       panel.setRect(clampSurfaceRect(placePortraitRect(size, settings.defaultDockSide), bounds))
     }
@@ -412,7 +416,7 @@ export default function PortraitDock({ mobile = false, extensionOwned = false }:
     return () => {
       cancelled = true
     }
-  }, [bounds, floatingAvatar, isFloating, mobile, panel, settings.defaultDockSide, settings.dockSide, settings.openAtOriginalSize, settings.rect])
+  }, [bounds, floatingAvatar, isFloating, mobile, panel, settings.defaultDockSide, settings.dockSide, settings.openAtOriginalSize, settings.rect, settings.rememberSizePosition])
 
   useEffect(() => {
     if (!activeChatId || !activeCharacterId) {

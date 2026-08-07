@@ -11,6 +11,7 @@ import {
 import type { CharacterDisplaySettings } from '@/types/store'
 import type { CharacterSummary } from '@/types/api'
 import { Button } from '@/components/shared/FormComponents'
+import { useStore } from '@/store'
 import {
   clampHomepagePanelImageHeight,
   clampHomepagePanelWidth,
@@ -119,6 +120,7 @@ const LibraryCard = memo(function LibraryCard({
 })
 
 export function HomepageCharacterLibrary() {
+  const openModal = useStore((state) => state.openModal)
   const {
     settings,
     display,
@@ -456,7 +458,11 @@ export function HomepageCharacterLibrary() {
                 <div className={styles.previewSection}>
                   <h4><BookOpen size={14} /> Lorebooks</h4>
                   {preview.lorebooks.length > 0
-                    ? <div className={styles.lorebooks}>{preview.lorebooks.map((book) => <span key={book.id}>{book.name}</span>)}</div>
+                    ? <div className={styles.lorebooks}>{preview.lorebooks.map((book) => (
+                      <button key={book.id} type="button" onClick={() => openModal('worldBookEditor', { bookId: book.id })}>
+                        {book.name}
+                      </button>
+                    ))}</div>
                     : <p>No attached lorebooks</p>}
                 </div>
                 <div className={styles.previewSection}>
