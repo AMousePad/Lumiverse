@@ -246,8 +246,9 @@ function Ensure-MinimumBunVersion {
 # ─── First-run setup wizard ─────────────────────────────────────────────────
 
 function Invoke-SetupIfNeeded {
-    $identityFile = Join-Path $BackendDir "data\lumiverse.identity"
-    $credentialsFile = Join-Path $BackendDir "data\owner.credentials"
+    $dataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { Join-Path $BackendDir "data" }
+    $identityFile = Join-Path $dataDir "lumiverse.identity"
+    $credentialsFile = Join-Path $dataDir "owner.credentials"
 
     # A migrated data folder is already set up even if .env was not copied.
     # The backend can fall back to defaults for missing .env values.
@@ -256,7 +257,10 @@ function Invoke-SetupIfNeeded {
         Write-Host ""
         Install-Deps $BackendDir "backend"
         Push-Location $BackendDir
-        try { & bun run scripts/setup-wizard.ts } finally { Pop-Location }
+        try {
+            $env:DATA_DIR = $dataDir
+            & bun run scripts/setup-wizard.ts
+        } finally { Pop-Location }
 
         if (-not (Test-Path $identityFile) -or -not (Test-Path $credentialsFile)) {
             Write-Err "Setup wizard did not create the required identity and owner credentials."
@@ -430,6 +434,11 @@ function Start-Backend {
 Write-Host ""
 Write-Host "Lumiverse - Launcher" -ForegroundColor White
 Write-Host ""
+
+# Load configuration before first-run checks. DATA_DIR is intentionally read
+# before setup detection so a source checkout can use an external persistent
+# data directory instead of silently creating a new empty ./data directory.
+Load-EnvFile
 
 Ensure-Bun
 Update-BunChannel
