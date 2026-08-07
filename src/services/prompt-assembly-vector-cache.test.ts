@@ -57,6 +57,7 @@ function entry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
     created_at: 1,
     updated_at: 2,
     ...overrides,
+    revision: overrides.revision ?? 1,
   };
 }
 

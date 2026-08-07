@@ -26,6 +26,7 @@ import { useMessagePlayback } from '@/hooks/useMessagePlayback'
 import { copyTextToClipboard, getSelectionTextWithin } from '@/lib/clipboard'
 import { scheduleReplay as scheduleSpindleInjectionReplay } from '@/lib/spindle/dom-injection-registry'
 import { useStore } from '@/store'
+import { requestHostIntent } from '@/lib/hostIntents'
 import type { Message } from '@/types/api'
 import type { GenerationMetrics } from '@/types/ws-events'
 import styles from './BubbleMessage.module.css'
@@ -370,7 +371,12 @@ export default function BubbleMessageDefault({
             <div
               className={styles.avatar}
               style={fullAvatarUrl ? { cursor: 'pointer' } : undefined}
-              onClick={fullAvatarUrl ? (e) => { e.stopPropagation(); openFloatingAvatar(fullAvatarUrl, displayName) } : undefined}
+              onClick={fullAvatarUrl ? (e) => {
+                e.stopPropagation()
+                if (!requestHostIntent('image-preview', { imageUrl: fullAvatarUrl, caption: displayName, source: 'bubble-message-avatar' })) {
+                  openFloatingAvatar(fullAvatarUrl, displayName)
+                }
+              } : undefined}
             >
               {displayAvatarUrl ? (
                 <LazyImage

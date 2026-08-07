@@ -6,6 +6,7 @@ import { BASE_URL } from '@/api/client'
 import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/lib/loom/preset-selection-coordinator'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
+import { PRODUCTIVITY_DEFAULTS, migrateProductivitySetting } from '@/lib/uiProductivityDefaults'
 import { createSettingsLoadGenerationGuard } from './settings-load-generation'
 import {
   deriveReorderArgs,
@@ -25,9 +26,10 @@ export const REASONING_DEFAULTS: ReasoningSettings = {
 }
 
 /** Keys that represent persisted data (not functions) */
-const DATA_KEYS: ReadonlySet<string> = new Set([
+export const DATA_KEYS: ReadonlySet<string> = new Set([
   'landingPageChatsDisplayed',
   'landingPageLayoutMode',
+  'landingPageActiveTab',
   'landingHiddenCharacterIds',
   'charactersPerPage',
   'personasPerPage',
@@ -135,6 +137,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'chatHeadsCustomCompletionSound',
   'spindleSettings',
   'voiceSettings',
+  ...Object.keys(PRODUCTIVITY_DEFAULTS),
 ])
 
 // ── Debounced batch persistence ──────────────────────────────────────────
@@ -143,6 +146,23 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
 const FLUSH_DELAY = 1_500
 const PENDING_SETTINGS_KEY = '__lumiverse_pending_settings'
 const PENDING_IMAGE_GENERATION_PATCH_KEY = '__lumiverse_pending_image_generation_patch'
+/**
+ * Productivity controls are host-owned canonical settings. The suite reads
+ * these namespaced rows only when running against a host that cannot expose
+ * the canonical blobs through ctx.settings.core, so keep that compatibility
+ * copy in lockstep without making extension storage authoritative.
+ */
+const PRODUCTIVITY_PRIVATE_FALLBACKS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  quickToolbarSettings: ['spindle:lumiverse_suite:quick_toolbar:quickToolbarSettings'],
+  connectionsPickerSettings: ['spindle:lumiverse_suite:connections_picker:connectionsPickerSettings'],
+  loreIndicatorSettings: ['spindle:lumiverse_suite:lore_indicator:loreIndicatorSettings'],
+  homepageCharacterLibrarySettings: [
+    'spindle:lumiverse_suite:homepage_library:homepageLibrarySettings',
+    'spindle:lumiverse_suite:character_display:homepageSettings',
+  ],
+  characterTabDisplaySettings: ['spindle:lumiverse_suite:character_display:characterTabSettings'],
+  portraitDockSettings: ['spindle:lumiverse_suite:portrait_dock:portraitDockSettings'],
+})
 const dirtyKeys = new Map<string, any>()
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let flushInFlight = false
@@ -152,6 +172,7 @@ let persistenceGeneration = 0
 let localSettingsRevision = 0
 const localSettingRevisions = new Map<string, number>()
 let persistenceScope: string | null = null
+let lastCommittedSettingsKeys = new Set<string>()
 
 function bridgeStorageKey(key: string): string {
   return persistenceScope ? `${key}:${persistenceScope}` : key
@@ -170,6 +191,7 @@ function persistBatch(batch: Record<string, any>): Promise<void> {
   flushInFlight = true
   const request = settingsApi.putMany(batch).then(() => {
     if (generation === persistenceGeneration) {
+      lastCommittedSettingsKeys = new Set(Object.keys(batch))
       clearPendingSettings(batch)
       if (Object.prototype.hasOwnProperty.call(batch, 'imageGeneration')) {
         clearPendingImageGenerationPatch()
@@ -215,8 +237,29 @@ function hasNewerLocalSetting(key: string, revisionAtLoadStart: number): boolean
 export function persistKey(key: string, value: any) {
   localSettingRevisions.set(key, ++localSettingsRevision)
   dirtyKeys.set(key, value)
+  for (const fallbackKey of PRODUCTIVITY_PRIVATE_FALLBACKS[key] ?? []) {
+    dirtyKeys.set(fallbackKey, value)
+  }
   updatePendingSetting(key, value)
   scheduleFlush()
+}
+
+function persistProductivityFallbacks(
+  settings: Record<string, unknown>,
+  persistedValues: ReadonlyMap<string, unknown>,
+): void {
+  let queued = false
+  for (const [key, value] of Object.entries(settings)) {
+    for (const fallbackKey of PRODUCTIVITY_PRIVATE_FALLBACKS[key] ?? []) {
+      // A settings reload must be read-only once the compatibility row already
+      // matches its canonical source. Re-writing matching rows turns every
+      // SETTINGS_UPDATED echo into another reload and persistence cycle.
+      if (pendingValuesMatch(persistedValues.get(fallbackKey), value)) continue
+      dirtyKeys.set(fallbackKey, value)
+      queued = true
+    }
+  }
+  if (queued) scheduleFlush()
 }
 
 /**
@@ -404,6 +447,19 @@ export function hasUnsavedSettings(): boolean {
   return dirtyKeys.size > 0 || flushInFlight || activeFlushPromise !== null
 }
 
+export function consumeOwnSettingsUpdate(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false
+  const event = payload as { key?: unknown; keys?: unknown }
+  const keys = typeof event.key === 'string'
+    ? [event.key]
+    : Array.isArray(event.keys) && event.keys.every((key): key is string => typeof key === 'string')
+      ? event.keys
+      : []
+  if (keys.length === 0 || !keys.every(key => lastCommittedSettingsKeys.has(key))) return false
+  for (const key of keys) lastCommittedSettingsKeys.delete(key)
+  return true
+}
+
 /**
  * Remove a direct-write's matching dirty value without discarding a newer
  * debounced edit that was queued while the request was in flight.
@@ -440,6 +496,7 @@ export function resetSettingsPersistence(): void {
   flushInFlight = false
   activeFlushPromise = null
   activeFlushBatch = null
+  lastCommittedSettingsKeys.clear()
   persistenceScope = null
 }
 
@@ -550,7 +607,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     interceptorTimeoutMs: 10_000,
     dockPanelDesktopSide: 'right',
     infoLoggingEnabled: true,
-    extensionUpdateToastDisabled: {},
   },
   voiceSettings: {
     sttProvider: 'webspeech' as const,
@@ -572,6 +628,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     },
     narrationVoice: null,
   },
+  ...({ landingPageActiveTab: 'characters', ...PRODUCTIVITY_DEFAULTS } as any),
 
   connectionsOrder: normalizeConnectionsOrder(),
 
@@ -602,18 +659,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
     if (settings.drawerSettings && typeof settings.drawerSettings === 'object') {
       patch.drawerSettings = { ...get().drawerSettings, ...settings.drawerSettings }
-    }
-    if (settings.spindleSettings && typeof settings.spindleSettings === 'object') {
-      const current = get().spindleSettings
-      const disabled = settings.spindleSettings.extensionUpdateToastDisabled
-      patch.spindleSettings = {
-        ...current,
-        ...settings.spindleSettings,
-        extensionUpdateToastDisabled:
-          disabled && typeof disabled === 'object' && !Array.isArray(disabled)
-            ? { ...disabled }
-            : current.extensionUpdateToastDisabled,
-      }
     }
     if (settings.connectionsOrder && typeof settings.connectionsOrder === 'object') {
       patch.connectionsOrder = normalizeConnectionsOrder(settings.connectionsOrder)
@@ -897,9 +942,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           !DATA_KEYS.has(row.key)
           || hasNewerLocalSetting(row.key, localRevisionAtLoadStart)
         ) continue
-        const storedValue = row.key === 'imageGeneration'
-          ? migrateStoredImageGeneration(row.value)
-          : row.value
+          const storedValue = row.key === 'imageGeneration'
+            ? migrateStoredImageGeneration(row.value)
+            : migrateProductivitySetting(row.key, row.value)
         patch[row.key] = mergeStoredSetting((defaults as any)[row.key], storedValue)
       }
 
@@ -914,7 +959,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           ) continue
           const pendingValue = k === 'imageGeneration'
             ? migrateStoredImageGeneration(v)
-            : v
+            : migrateProductivitySetting(k, v)
           patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], pendingValue)
         }
       }
@@ -1023,6 +1068,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // image-generation row still waits for profile reconciliation when needed.
       if (!isCurrentLoad()) return
       set({ fullSettingsLoaded: true })
+      // Compatibility rows are repaired only after canonical hydration has
+      // completed; they are never allowed to race or lead the initial load.
+      persistProductivityFallbacks(patch, new Map(rows.map((row) => [row.key, row.value])))
       if (pendingKeys) {
         for (const [key, value] of Object.entries(pendingKeys)) {
           if (!DATA_KEYS.has(key) || key === 'imageGeneration') continue

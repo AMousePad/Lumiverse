@@ -47,8 +47,6 @@ import {
   type WorldInfoInterceptorCtxDTO,
   type WorldInfoInterceptorResultDTO,
 } from "./world-info-interceptor";
-import { projectWorldInfoCaptureContext } from "./world-info-capture";
-import { projectSourceMessageMetadata } from "./source-message-metadata";
 import { toolRegistry } from "./tool-registry";
 import {
   setPromptRegexOwnedChats,
@@ -135,6 +133,8 @@ type TokenCountResult = {
   tokenizer_name: string;
   approximate: boolean;
 };
+
+type TokenCountBatchResult = TokenCountResult & { index: number };
 
 
 type FrontendProcessState =
@@ -325,6 +325,31 @@ type RuntimeWorkerToHost =
       text: string;
       model?: string;
       modelSource?: TokenModelSource;
+      userId?: string;
+    }
+  | {
+      type: "tokens_count_text_batch";
+      requestId: string;
+      texts: string[];
+      model?: string;
+      modelSource?: TokenModelSource;
+      userId?: string;
+    }
+  | {
+      type: "spindle_batch";
+      requestId: string;
+      ops: import("./worker-host-content-api").SpindleBatchOperation[];
+      options?: { expected_revisions?: Record<string, number> };
+      userId?: string;
+    }
+  | {
+      type: "world_books_entry_set_extension";
+      requestId: string;
+      entity: import("./worker-host-content-api").SpindleEntityExtensionEntity;
+      entityId: string;
+      entryId?: string;
+      namespace: string;
+      value: import("./worker-host-content-api").SpindleBatchJsonValue | null;
       userId?: string;
     }
   | {
@@ -1997,6 +2022,16 @@ export class WorkerHost {
       case "world_book_entries_update":
         this.contentApi.handleWorldBookEntriesUpdate(msg.requestId, msg.entryId, msg.input, msg.userId);
         break;
+      case "world_books_entry_set_extension":
+        this.contentApi.handleEntityExtensionSet(
+          msg.requestId,
+          msg.entity,
+          msg.entityId,
+          msg.namespace,
+          msg.value,
+          msg.userId,
+        );
+        break;
       case "world_book_entries_delete":
         this.contentApi.handleWorldBookEntriesDelete(msg.requestId, msg.entryId, msg.userId);
         break;
@@ -2248,6 +2283,12 @@ export class WorkerHost {
       case "tokens_count_text":
         this.handleTokensCountText(msg.requestId, msg.text, msg.model, msg.modelSource, msg.userId);
         break;
+      case "tokens_count_text_batch":
+        this.handleTokensCountTextBatch(msg.requestId, msg.texts, msg.model, msg.modelSource, msg.userId);
+        break;
+      case "spindle_batch":
+        this.contentApi.handleSpindleBatch(msg.requestId, msg.ops, msg.options, msg.userId);
+        break;
       case "tokens_count_messages":
         this.handleTokensCountMessages(msg.requestId, msg.messages, msg.model, msg.modelSource, msg.userId);
         break;
@@ -2284,10 +2325,7 @@ export class WorkerHost {
         break;
       // ─── Text Editor (free tier — no permission needed) ─────────────────
       case "text_editor_open":
-        this.presentationApi.handleTextEditorOpen(msg.requestId, msg.title, msg.value, msg.placeholder, msg.userId, msg.editorRequestId);
-        break;
-      case "text_editor_close":
-        this.presentationApi.handleTextEditorClose(msg.requestId, msg.editorRequestId, msg.userId);
+        this.presentationApi.handleTextEditorOpen(msg.requestId, msg.title, msg.value, msg.placeholder, msg.userId);
         break;
       // ─── Modal (free tier — no permission needed) ─────────────────────
       case "modal_open":
@@ -2674,21 +2712,15 @@ export class WorkerHost {
         // can distinguish real chat turns and standalone World Info blocks
         // from other prompt material. Shallow-copy so the synthetic flags never
         // leak onto the outbound LLM payload.
-        const canReadSourceMetadata = this.hasPermission("chat_mutation");
         const messagesWithSourceFlags = messages.map((m) => {
           const llm = m as unknown as LlmMessage;
           const isChatHistory = promptAssemblySvc.isChatHistoryMessage(llm);
           const isWorldInfoEntry = promptAssemblySvc.isWorldInfoEntryMessage(llm);
-          const projected = projectSourceMessageMetadata(
-            m,
-            isChatHistory,
-            canReadSourceMetadata,
-          );
-          if (!isChatHistory && !isWorldInfoEntry) return projected;
+          if (!isChatHistory && !isWorldInfoEntry) return m;
           const sourceMessageId = promptAssemblySvc.getSourceMessageId(llm);
           const sourceIndexInChat = promptAssemblySvc.getSourceIndexInChat(llm);
           return {
-            ...projected,
+            ...m,
             ...(isChatHistory ? { __isChatHistory: true } : {}),
             ...(isWorldInfoEntry ? { __isWorldInfoEntry: true } : {}),
             ...(sourceMessageId !== undefined ? { sourceMessageId } : {}),
@@ -2696,11 +2728,7 @@ export class WorkerHost {
           };
         });
 
-        const interceptorContext =
-          projectWorldInfoCaptureContext(
-            context,
-            this.extensionId,
-          ) as unknown as Omit<InterceptorContextDTO, "signal">;
+        const interceptorContext = context as Omit<InterceptorContextDTO, "signal">;
         this.activeInterceptorContexts.set(registrationId, interceptorContext);
         this.postToWorker({
           type: "intercept_request",
@@ -4476,6 +4504,44 @@ export class WorkerHost {
       this.enforceScopedUser(resolvedUserId);
       const result = await this.buildTokenCountResult(resolvedUserId, text, model, modelSource);
       this.postToWorker({ type: "response", requestId, result });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleTokensCountTextBatch(
+    requestId: string,
+    texts: string[],
+    model?: string,
+    modelSource?: TokenModelSource,
+    userId?: string
+  ): Promise<void> {
+    try {
+      if (!Array.isArray(texts)) {
+        throw new Error("texts must be an array of strings");
+      }
+      if (texts.length > tokenizerSvc.MAX_COUNT_BATCH_TEXTS) {
+        throw new Error(`texts exceeds the ${tokenizerSvc.MAX_COUNT_BATCH_TEXTS}-item batch cap`);
+      }
+      for (let index = 0; index < texts.length; index++) {
+        if (typeof texts[index] !== "string") {
+          throw new Error(`texts[${index}] must be a string`);
+        }
+      }
+
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const results: TokenCountBatchResult[] = [];
+      for (let index = 0; index < texts.length; index++) {
+        const result = await this.buildTokenCountResult(resolvedUserId, texts[index]!, model, modelSource);
+        results.push({ ...result, index });
+        if ((index + 1) % tokenizerSvc.COUNT_BATCH_YIELD_EVERY === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+      }
+      this.postToWorker({ type: "response", requestId, result: results });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }

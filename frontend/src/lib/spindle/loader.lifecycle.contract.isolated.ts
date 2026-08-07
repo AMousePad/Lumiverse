@@ -975,8 +975,9 @@ describe('public root producers', () => {
 
   test('inject and mount roots carry generation metadata and stale factories cannot register', () => {
     let active = true
-    const domHelper = createDOMHelper(extensionId, undefined, undefined, () => {
+    const domHelper = createDOMHelper(extensionId, undefined, undefined, undefined, () => {
       if (!active) throw new Error('SPINDLE_FRONTEND_INACTIVE')
+      return true
     }, generation)
     const target = document.createElement('section')
     target.id = 'injection-target'
@@ -987,6 +988,7 @@ describe('public root producers', () => {
     const oldComponents = createComponentsHelper(extensionId, extensionId, async () => ({ categories: [] }), generation)
     const oldUI = createUIEventsHelper(extensionId, () => {
       if (!active) throw new Error('SPINDLE_FRONTEND_INACTIVE')
+      return true
     }, generation)
     createComponentsHelper(extensionId, extensionId, async () => ({ categories: [] }), nextGeneration)
     active = false

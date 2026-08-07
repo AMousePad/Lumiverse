@@ -1,4 +1,4 @@
-import { get, post, postBlob, put, del } from './client'
+import { get, post, postBlob, put, patch, del } from './client'
 import type {
   WorldBook, CreateWorldBookInput, UpdateWorldBookInput,
   WorldBookEntry, CreateWorldBookEntryInput, UpdateWorldBookEntryInput,
@@ -129,8 +129,19 @@ export const worldBooksApi = {
     return put<WorldBookEntry>(`/world-books/${bookId}/entries/${entryId}`, input)
   },
 
-  deleteEntry(bookId: string, entryId: string) {
-    return del<void>(`/world-books/${bookId}/entries/${entryId}`)
+  setEntryExtensionNamespace(bookId: string, entryId: string, namespace: string, value: unknown) {
+    return patch<{
+      entity: 'world_book_entry'
+      id: string
+      namespace: string
+      value: unknown
+      extensions: Record<string, any>
+    }>(`/world-books/${bookId}/entries/${entryId}/extensions/${encodeURIComponent(namespace)}`, { value })
+  },
+
+  deleteEntry(bookId: string, entryId: string, expectedRevision?: number) {
+    const suffix = expectedRevision === undefined ? '' : `?expected_revision=${encodeURIComponent(String(expectedRevision))}`
+    return del<void>(`/world-books/${bookId}/entries/${entryId}${suffix}`)
   },
 
   export(bookId: string, format: WorldBookExportFormat = 'lumiverse') {

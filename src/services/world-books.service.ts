@@ -1,4 +1,5 @@
 import { getDb } from "../db/connection";
+import type { SQLQueryBindings } from "bun:sqlite";
 import { zipSync, strToU8 } from "fflate";
 import type {
   WorldBook, WorldBookEntry,
@@ -8,6 +9,7 @@ import type {
   DuplicateWorldBookEntryInput,
   WorldBookEntryBulkActionInput,
   WorldBookEntryBulkActionResult,
+  WorldBookEntryConflictPayload,
 } from "../types/world-book";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
@@ -19,6 +21,121 @@ import {
 } from "./world-book-vector-state";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+
+/** Canonical stale-entry error. Routes/RPCs can serialize `payload` directly. */
+export class WorldBookEntryConflictError extends Error {
+  readonly payload: WorldBookEntryConflictPayload;
+  readonly code = "WORLD_BOOK_ENTRY_CONFLICT";
+  readonly error = "world_book_entry_conflict";
+  readonly entryId: string;
+  readonly expectedRevision: number;
+  readonly actualRevision: number;
+
+  constructor(entryId: string, expectedRevision: number, current: WorldBookEntry | null) {
+    const actualRevision = current ? entryRevisionOf(current) : 0;
+    super(
+      `World book entry ${entryId} changed since revision ${expectedRevision}; current revision is ${actualRevision}`,
+    );
+    this.name = "WorldBookEntryConflictError";
+    this.payload = {
+      error: "world_book_entry_conflict",
+      code: "WORLD_BOOK_ENTRY_CONFLICT",
+      conflicts: [{ id: entryId, current }],
+    };
+    this.entryId = entryId;
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+  }
+}
+
+/** Backward-compatible name retained for existing service consumers. */
+export class WorldBookEntryRevisionConflictError extends WorldBookEntryConflictError {
+  constructor(entryId: string, expectedRevision: number, current: WorldBookEntry | null) {
+    super(entryId, expectedRevision, current);
+    this.name = "WorldBookEntryRevisionConflictError";
+  }
+}
+
+/** Thrown when an opt-in revision field is present but malformed. Map to HTTP 428. */
+export class WorldBookEntryRevisionInvalidError extends Error {
+  readonly code = "WORLD_BOOK_ENTRY_REVISION_INVALID";
+  readonly field: "expected_revision" | "expected_revisions";
+
+  constructor(field: "expected_revision" | "expected_revisions") {
+    super(`${field} must contain safe integer revisions greater than or equal to 1`);
+    this.name = "WorldBookEntryRevisionInvalidError";
+    this.field = field;
+  }
+}
+
+function isValidEntryRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function entryRevisionOf(entry: { revision?: unknown }): number {
+  const value = entry.revision;
+  return isValidEntryRevision(value) ? value : 1;
+}
+
+function parseExpectedRevision(value: unknown, present: boolean): number | undefined {
+  if (!present) return undefined;
+  if (!isValidEntryRevision(value)) {
+    throw new WorldBookEntryRevisionInvalidError("expected_revision");
+  }
+  return value;
+}
+
+function parseExpectedRevisions(value: unknown, present: boolean): Record<string, number> | undefined {
+  if (!present) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new WorldBookEntryRevisionInvalidError("expected_revisions");
+  }
+  const out: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const [id, rev] of Object.entries(value as Record<string, unknown>)) {
+    if (!isValidEntryRevision(rev)) {
+      throw new WorldBookEntryRevisionInvalidError("expected_revisions");
+    }
+    out[id] = rev;
+  }
+  return out;
+}
+
+function readExpectedRevision(input: object): number | undefined {
+  const present = Object.prototype.hasOwnProperty.call(input, "expected_revision");
+  return parseExpectedRevision(Reflect.get(input, "expected_revision"), present);
+}
+
+function readExpectedRevisions(input: object): Record<string, number> | undefined {
+  const present = Object.prototype.hasOwnProperty.call(input, "expected_revisions");
+  return parseExpectedRevisions(Reflect.get(input, "expected_revisions"), present);
+}
+
+function expectedRevisionFor(
+  expectedRevisions: Record<string, number> | undefined,
+  entryId: string,
+): number | undefined {
+  if (!expectedRevisions || !Object.prototype.hasOwnProperty.call(expectedRevisions, entryId)) {
+    return undefined;
+  }
+  const value = expectedRevisions[entryId];
+  return value;
+}
+
+function throwEntryRevisionConflict(entryId: string, expectedRevision: number, current: WorldBookEntry | null): never {
+  throw new WorldBookEntryRevisionConflictError(entryId, expectedRevision, current);
+}
+
+function assertEntryExpectedRevision(entry: WorldBookEntry, expectedRevision: number | undefined): void {
+  if (expectedRevision === undefined) return;
+  const actual = entryRevisionOf(entry);
+  if (actual !== expectedRevision) {
+    throwEntryRevisionConflict(entry.id, expectedRevision, entry);
+  }
+}
+
+function readEntryById(userId: string, entryId: string): WorldBookEntry | null {
+  return getEntry(userId, entryId);
+}
 
 function emitWorldBookChanged(userId: string, id: string): void {
   const worldBook = getWorldBook(userId, id);
@@ -188,7 +305,6 @@ function rowToEntry(row: any): WorldBookEntry {
     prevent_recursion: !!row.prevent_recursion,
     exclude_recursion: !!row.exclude_recursion,
     delay_until_recursion: !!row.delay_until_recursion,
-    exclude_greeting: !!row.exclude_greeting,
     use_probability: !!row.use_probability,
     vectorized: !!row.vectorized,
     vector_index_status: vectorIndexStatus,
@@ -235,6 +351,192 @@ function cloneEntryExtensions(extensions: Record<string, any>): Record<string, a
   return JSON.parse(JSON.stringify(extensions || {}));
 }
 
+// --- H12: Entity extension namespaces ---
+
+export type EntityExtensionEntity = "world_book_entry" | "character" | "preset";
+
+export interface EntityExtensionNamespaceResult {
+  entity: EntityExtensionEntity;
+  id: string;
+  namespace: string;
+  value: unknown;
+  extensions: Record<string, unknown>;
+}
+
+export const ENTITY_EXTENSION_NAMESPACE_CODES = [
+  "INVALID_NAMESPACE",
+  "HOST_MANAGED_NAMESPACE",
+  "NAMESPACE_TOO_LARGE",
+] as const;
+
+export type EntityExtensionNamespaceErrorCode = (typeof ENTITY_EXTENSION_NAMESPACE_CODES)[number];
+
+export class EntityExtensionNamespaceError extends Error {
+  readonly code: EntityExtensionNamespaceErrorCode;
+
+  constructor(code: EntityExtensionNamespaceErrorCode, message: string) {
+    super(message);
+    this.name = "EntityExtensionNamespaceError";
+    this.code = code;
+  }
+}
+
+const ENTITY_EXTENSION_NAMESPACE_PATTERN = /^_?[a-z][a-z0-9_]*$/;
+const ENTITY_EXTENSION_NAMESPACE_MAX_BYTES = 2 * 1024 * 1024;
+const HOST_MANAGED_ENTRY_NAMESPACE_KEYS = new Set<string>([
+  ...ENTRY_OUTLET_NAME_KEYS,
+  ...ENTRY_WI_MARKER_KEYS,
+  ...ENTRY_WI_MARKER_SIDE_KEYS,
+]);
+
+interface EntityNamespaceTarget {
+  table: "world_book_entries" | "characters" | "presets";
+  column: "extensions" | "metadata";
+  selectSql: string;
+  ownerPredicate: string;
+}
+
+function entityNamespaceTarget(entity: EntityExtensionEntity): EntityNamespaceTarget {
+  switch (entity) {
+    case "world_book_entry":
+      return {
+        table: "world_book_entries",
+        column: "extensions",
+        selectSql:
+          "SELECT e.extensions AS bag FROM world_book_entries e JOIN world_books w ON e.world_book_id = w.id WHERE e.id = ? AND w.user_id = ?",
+        ownerPredicate:
+          "EXISTS (SELECT 1 FROM world_books w WHERE w.id = world_book_entries.world_book_id AND w.user_id = ?)",
+      };
+    case "character":
+      return {
+        table: "characters",
+        column: "extensions",
+        selectSql: "SELECT extensions AS bag FROM characters WHERE id = ? AND user_id = ?",
+        ownerPredicate: "user_id = ?",
+      };
+    case "preset":
+      return {
+        table: "presets",
+        column: "metadata",
+        selectSql: "SELECT metadata AS bag FROM presets WHERE id = ? AND user_id = ?",
+        ownerPredicate: "user_id = ?",
+      };
+    default:
+      throw new EntityExtensionNamespaceError(
+        "INVALID_NAMESPACE",
+        `Unsupported extension entity ${String(entity)}`,
+      );
+  }
+}
+
+function parseStoredExtensionBag(raw: unknown): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch {
+    throw new EntityExtensionNamespaceError(
+      "INVALID_NAMESPACE",
+      "Stored extension metadata is not valid JSON",
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new EntityExtensionNamespaceError(
+      "INVALID_NAMESPACE",
+      "Stored extension metadata must be a JSON object",
+    );
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function serializeExtensionNamespaceValue(value: unknown): string {
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    serialized = undefined;
+  }
+  if (serialized === undefined) {
+    throw new EntityExtensionNamespaceError(
+      "INVALID_NAMESPACE",
+      "Extension namespace value must be JSON-serializable",
+    );
+  }
+  if (new TextEncoder().encode(serialized).byteLength > ENTITY_EXTENSION_NAMESPACE_MAX_BYTES) {
+    throw new EntityExtensionNamespaceError(
+      "NAMESPACE_TOO_LARGE",
+      "Extension namespace value exceeds the 2 MiB serialized UTF-8 limit",
+    );
+  }
+  return serialized;
+}
+
+function validateExtensionNamespace(namespace: string): void {
+  if (HOST_MANAGED_ENTRY_NAMESPACE_KEYS.has(namespace)) {
+    throw new EntityExtensionNamespaceError(
+      "HOST_MANAGED_NAMESPACE",
+      `Extension namespace ${JSON.stringify(namespace)} is managed by the host`,
+    );
+  }
+  if (!ENTITY_EXTENSION_NAMESPACE_PATTERN.test(namespace)) {
+    throw new EntityExtensionNamespaceError(
+      "INVALID_NAMESPACE",
+      `Extension namespace ${JSON.stringify(namespace)} must match ${ENTITY_EXTENSION_NAMESPACE_PATTERN}`,
+    );
+  }
+}
+
+/**
+ * Merge or delete one extension namespace without treating derived metadata as
+ * a user edit. The JSON mutation stays inside the transaction so sibling
+ * namespaces survive concurrent writers; ownership is repeated on the UPDATE.
+ */
+export function setEntityExtensionNamespace(
+  userId: string,
+  entity: EntityExtensionEntity,
+  entityId: string,
+  namespace: string,
+  value: unknown,
+): EntityExtensionNamespaceResult | null {
+  const target = entityNamespaceTarget(entity);
+  const db = getDb();
+
+  return db.transaction((): EntityExtensionNamespaceResult | null => {
+    const row = db.query(target.selectSql).get(entityId, userId) as { bag?: unknown } | null;
+    if (!row) return null;
+
+    validateExtensionNamespace(namespace);
+    const serialized = value === null ? null : serializeExtensionNamespaceValue(value);
+    // Validate malformed existing bags before issuing any write. SQLite's JSON
+    // functions also fail closed for malformed JSON, but this gives callers a
+    // stable service error and prevents a silent blob replacement.
+    parseStoredExtensionBag(row.bag);
+    const path = `$.${namespace}`;
+    const query = serialized === null
+      ? `UPDATE ${target.table}
+         SET ${target.column} = json_remove(${target.column}, ?)
+         WHERE id = ? AND ${target.ownerPredicate}`
+      : `UPDATE ${target.table}
+         SET ${target.column} = json_set(${target.column}, ?, json(?))
+         WHERE id = ? AND ${target.ownerPredicate}`;
+    const result = serialized === null
+      ? db.query(query).run(path, entityId, userId)
+      : db.query(query).run(path, serialized, entityId, userId);
+    if (result.changes === 0) return null;
+
+    const updatedRow = db.query(target.selectSql).get(entityId, userId) as { bag?: unknown } | null;
+    if (!updatedRow) return null;
+    const extensions = parseStoredExtensionBag(updatedRow.bag);
+    if (serialized === null) delete extensions[namespace];
+    return {
+      entity,
+      id: entityId,
+      namespace,
+      value: serialized === null ? null : extensions[namespace],
+      extensions,
+    };
+  })();
+}
+
 function normalizeKeywordList(values: string[]): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
@@ -245,6 +547,56 @@ function normalizeKeywordList(values: string[]): string[] {
     normalized.push(trimmed);
   }
   return normalized;
+}
+
+function buildSparseEntryMutation(
+  entry: WorldBookEntry,
+  input: Partial<CreateWorldBookEntryInput>,
+): { fields: string[]; values: SQLQueryBindings[]; resetsVectorIndex: boolean } {
+  const fields: string[] = [];
+  const values: SQLQueryBindings[] = [];
+  const jsonArrayFields = ["key", "keysecondary"] as const;
+  for (const field of jsonArrayFields) {
+    if (input[field] !== undefined) {
+      fields.push(`${field} = ?`);
+      values.push(JSON.stringify(input[field]));
+    }
+  }
+  const stringFields = ["content", "comment", "role", "group_name", "automation_id"] as const;
+  for (const field of stringFields) {
+    if (input[field] !== undefined) {
+      fields.push(`${field} = ?`);
+      values.push(input[field] ?? null);
+    }
+  }
+  const intFields = ["position", "depth", "order_value", "group_weight", "probability", "scan_depth", "priority", "sticky", "cooldown", "delay", "selective_logic"] as const;
+  for (const field of intFields) {
+    if (input[field] !== undefined) {
+      fields.push(`${field} = ?`);
+      values.push(input[field] ?? null);
+    }
+  }
+  const boolFields = ["selective", "constant", "disabled", "group_override", "case_sensitive", "match_whole_words", "use_regex", "prevent_recursion", "exclude_recursion", "delay_until_recursion", "use_probability", "vectorized"] as const;
+  for (const field of boolFields) {
+    if (input[field] !== undefined) {
+      fields.push(`${field} = ?`);
+      values.push(input[field] ? 1 : 0);
+    }
+  }
+  if (input.extensions !== undefined || input.outlet_name !== undefined || input.wi_marker !== undefined || input.wi_marker_side !== undefined) {
+    fields.push("extensions = ?");
+    values.push(buildStoredEntryExtensions(
+      input.extensions ?? entry.extensions,
+      input.outlet_name !== undefined ? input.outlet_name : entry.outlet_name,
+      input.wi_marker !== undefined ? input.wi_marker : entry.wi_marker,
+      input.wi_marker_side !== undefined ? input.wi_marker_side : entry.wi_marker_side,
+    ));
+  }
+  return {
+    fields,
+    values,
+    resetsVectorIndex: shouldResetVectorIndex(input as UpdateWorldBookEntryInput),
+  };
 }
 
 function importExtensionRecord(raw: any): Record<string, any> {
@@ -346,7 +698,6 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
     "constant", "case_sensitive", "caseSensitive", "match_whole_words", "matchWholeWords",
     "group", "group_name", "group_override", "groupOverride",
     "group_weight", "groupWeight", "probability", "scan_depth", "scanDepth",
-    "exclude_greeting", "excludeGreeting",
     "automation_id", "automationId", "selectiveLogic", "selective_logic",
     "useProbability", "use_probability", "use_regex", "useRegex",
     "prevent_recursion", "preventRecursion", "exclude_recursion", "excludeRecursion",
@@ -382,7 +733,6 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
     group_weight: importValue(raw, ext, "group_weight", "groupWeight") ?? 100,
     probability: importValue(raw, ext, "probability") ?? 100,
     scan_depth: importValue(raw, ext, "scan_depth", "scanDepth") ?? undefined,
-    exclude_greeting: importValue(raw, ext, "exclude_greeting", "excludeGreeting") ?? false,
     automation_id: importValue(raw, ext, "automation_id", "automationId") || undefined,
     selective_logic: importValue(raw, ext, "selectiveLogic", "selective_logic") ?? 0,
     use_probability: importValue(raw, ext, "useProbability", "use_probability") ?? true,
@@ -450,6 +800,7 @@ export function materializeCharacterBookEntriesForRuntime(
       vector_index_status: "not_enabled",
       vector_indexed_at: null,
       vector_index_error: null,
+      revision: 1,
       extensions: cloneEntryExtensions(input.extensions || {}),
       created_at: 0,
       updated_at: 0,
@@ -890,7 +1241,8 @@ export function setWorldBookSemanticActivation(
            END,
            vector_indexed_at = NULL,
            vector_index_error = NULL,
-           updated_at = ?
+           updated_at = ?,
+           revision = revision + 1
        WHERE world_book_id = ?
          AND length(trim(content)) > 0`
     ).run(now, worldBookId).changes;
@@ -901,7 +1253,8 @@ export function setWorldBookSemanticActivation(
            vector_index_status = 'not_enabled',
            vector_indexed_at = NULL,
            vector_index_error = NULL,
-           updated_at = ?
+           updated_at = ?,
+           revision = revision + 1
        WHERE world_book_id = ?`
     ).run(now, worldBookId).changes;
   }
@@ -974,7 +1327,8 @@ export function convertToVectorized(
           vector_index_status = 'pending',
           vector_indexed_at = NULL,
           vector_index_error = NULL,
-          updated_at = ?
+          updated_at = ?,
+          revision = revision + 1
       WHERE world_book_id = ?
         AND constant = 0
         AND disabled = 0
@@ -1169,13 +1523,12 @@ export function createEntry(
         id, world_book_id, uid, key, keysecondary, content, comment,
         position, depth, role, order_value, selective, constant, disabled,
         group_name, group_override, group_weight, probability, scan_depth,
-        exclude_greeting,
         case_sensitive, match_whole_words, automation_id,
         use_regex, prevent_recursion, exclude_recursion, delay_until_recursion,
         priority, sticky, cooldown, delay, selective_logic, use_probability,
         vectorized, vector_index_status, vector_indexed_at, vector_index_error,
         extensions, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id, worldBookId, uid,
@@ -1195,7 +1548,6 @@ export function createEntry(
       input.group_weight ?? 100,
       input.probability ?? 100,
       input.scan_depth ?? null,
-      input.exclude_greeting ? 1 : 0,
       input.case_sensitive ? 1 : 0,
       input.match_whole_words ? 1 : 0,
       input.automation_id || null,
@@ -1227,11 +1579,12 @@ export function createEntry(
 }
 
 export function updateEntry(userId: string, id: string, input: UpdateWorldBookEntryInput): WorldBookEntry | null {
+  const expectedRevision = readExpectedRevision(input);
   const existing = getEntry(userId, id);
   if (!existing) return null;
 
   const fields: string[] = [];
-  const values: any[] = [];
+  const values: SQLQueryBindings[] = [];
 
   const jsonArrayFields = ["key", "keysecondary"] as const;
   for (const f of jsonArrayFields) {
@@ -1248,7 +1601,7 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
     if (input[f] !== undefined) { fields.push(`${f} = ?`); values.push(input[f]); }
   }
 
-  const boolFields = ["selective", "constant", "disabled", "group_override", "case_sensitive", "match_whole_words", "use_regex", "prevent_recursion", "exclude_recursion", "delay_until_recursion", "exclude_greeting", "use_probability", "vectorized"] as const;
+  const boolFields = ["selective", "constant", "disabled", "group_override", "case_sensitive", "match_whole_words", "use_regex", "prevent_recursion", "exclude_recursion", "delay_until_recursion", "use_probability", "vectorized"] as const;
   for (const f of boolFields) {
     if (input[f] !== undefined) { fields.push(`${f} = ?`); values.push(input[f] ? 1 : 0); }
   }
@@ -1282,14 +1635,36 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
     values.push(vectorIndexState.vector_index_error);
   }
 
-  if (fields.length === 0) return existing;
+  if (fields.length === 0) {
+    assertEntryExpectedRevision(existing, expectedRevision);
+    return existing;
+  }
 
-  fields.push("updated_at = ?");
-  values.push(Math.floor(Date.now() / 1000));
+  const now = Math.floor(Date.now() / 1000);
+  fields.push("updated_at = ?", "revision = revision + 1");
+  values.push(now);
+
+  const where = ["id = ?"];
   values.push(id);
+  if (expectedRevision !== undefined) {
+    where.push("revision = ?");
+    values.push(expectedRevision);
+  }
 
-  getDb().query(`UPDATE world_book_entries SET ${fields.join(", ")} WHERE id = ?`).run(...values);
-  touchWorldBook(existing.world_book_id, values[values.length - 2]);
+  const changes = getDb()
+    .query(`UPDATE world_book_entries SET ${fields.join(", ")} WHERE ${where.join(" AND ")}`)
+    .run(...values)
+    .changes;
+  if (changes === 0) {
+    const current = getEntry(userId, id);
+    if (!current) return null;
+    if (expectedRevision !== undefined) {
+      throwEntryRevisionConflict(id, expectedRevision, current);
+    }
+    return null;
+  }
+
+  touchWorldBook(existing.world_book_id, now);
   const updated = getEntry(userId, id)!;
   if (!updated.vectorized) {
     deleteWorldBookVectorsAndMaybeRequeue(userId, updated, false);
@@ -1302,18 +1677,43 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   return updated;
 }
 
-export async function deleteEntry(userId: string, id: string): Promise<boolean> {
+export async function deleteEntry(
+  userId: string,
+  id: string,
+  expectedRevision?: number,
+): Promise<boolean> {
+  const parsedExpectedRevision = parseExpectedRevision(
+    expectedRevision,
+    expectedRevision !== undefined,
+  );
   // Verify the entry belongs to a world book owned by this user
   const entry = getEntry(userId, id);
   if (!entry) return false;
+  assertEntryExpectedRevision(entry, parsedExpectedRevision);
 
   const deleted = await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(
     userId,
     [id],
     () => {
-      const removed = getDb().query("DELETE FROM world_book_entries WHERE id = ?").run(id).changes > 0;
-      if (removed) touchWorldBook(entry.world_book_id);
-      return removed;
+      const result = parsedExpectedRevision !== undefined
+        ? getDb()
+          .query("DELETE FROM world_book_entries WHERE id = ? AND revision = ?")
+          .run(id, parsedExpectedRevision)
+        : getDb()
+          .query("DELETE FROM world_book_entries WHERE id = ?")
+          .run(id);
+      const removed = result.changes > 0;
+      if (!removed) {
+        if (parsedExpectedRevision !== undefined) {
+          const current = getEntry(userId, id);
+          if (current) {
+            throwEntryRevisionConflict(id, parsedExpectedRevision, current);
+          }
+        }
+        return false;
+      }
+      touchWorldBook(entry.world_book_id);
+      return true;
     },
   );
   if (deleted) {
@@ -1325,6 +1725,8 @@ export async function deleteEntry(userId: string, id: string): Promise<boolean> 
 export function duplicateEntry(userId: string, entryId: string, input?: DuplicateWorldBookEntryInput): WorldBookEntry | null {
   const existing = getEntry(userId, entryId);
   if (!existing) return null;
+  const expectedRevision = input ? readExpectedRevision(input) : undefined;
+  assertEntryExpectedRevision(existing, expectedRevision);
 
   const targetBookId = input?.target_book_id || existing.world_book_id;
   const targetBook = getWorldBook(userId, targetBookId);
@@ -1354,7 +1756,6 @@ export function duplicateEntry(userId: string, entryId: string, input?: Duplicat
     group_weight: existing.group_weight,
     probability: existing.probability,
     scan_depth: existing.scan_depth ?? undefined,
-    exclude_greeting: existing.exclude_greeting,
     case_sensitive: existing.case_sensitive,
     match_whole_words: existing.match_whole_words,
     automation_id: existing.automation_id || undefined,
@@ -1373,7 +1774,16 @@ export function duplicateEntry(userId: string, entryId: string, input?: Duplicat
   });
 }
 
-export function reorderEntries(userId: string, worldBookId: string, orderedIds: string[]): boolean {
+export function reorderEntries(
+  userId: string,
+  worldBookId: string,
+  orderedIds: string[],
+  expectedRevisions?: Record<string, number>,
+): boolean {
+  const parsedExpectedRevisions = parseExpectedRevisions(
+    expectedRevisions,
+    expectedRevisions !== undefined,
+  );
   const book = getWorldBook(userId, worldBookId);
   if (!book) return false;
   const uniqueIds = [...new Set(orderedIds)];
@@ -1384,6 +1794,11 @@ export function reorderEntries(userId: string, worldBookId: string, orderedIds: 
   const entryMap = new Map(entries.map((entry) => [entry.id, entry]));
   if (uniqueIds.some((id) => !entryMap.has(id))) return false;
 
+  for (const entryId of uniqueIds) {
+    const entry = entryMap.get(entryId)!;
+    assertEntryExpectedRevision(entry, expectedRevisionFor(parsedExpectedRevisions, entryId));
+  }
+
   const currentValues = entries.map((entry) => entry.order_value).sort((a, b) => a - b);
   const strictlyIncreasing = currentValues.every((value, index) => index === 0 || value > currentValues[index - 1]);
   const normalizedValues = strictlyIncreasing
@@ -1393,9 +1808,24 @@ export function reorderEntries(userId: string, worldBookId: string, orderedIds: 
   const db = getDb();
 
   db.transaction(() => {
-    const stmt = db.query("UPDATE world_book_entries SET order_value = ?, updated_at = ? WHERE id = ? AND world_book_id = ?");
+    const unconditional = db.query(
+      "UPDATE world_book_entries SET order_value = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND world_book_id = ?",
+    );
+    const conditional = db.query(
+      "UPDATE world_book_entries SET order_value = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND world_book_id = ? AND revision = ?",
+    );
     uniqueIds.forEach((entryId, index) => {
-      stmt.run(normalizedValues[index], now, entryId, worldBookId);
+      const expected = expectedRevisionFor(parsedExpectedRevisions, entryId);
+      const changes = expected === undefined
+        ? unconditional.run(normalizedValues[index], now, entryId, worldBookId).changes
+        : conditional.run(normalizedValues[index], now, entryId, worldBookId, expected).changes;
+      if (changes === 0 && expected !== undefined) {
+        const current = readEntryById(userId, entryId);
+        if (current !== null) {
+          throwEntryRevisionConflict(entryId, expected, current);
+        }
+        throw new Error("One or more entries were not found in this world book");
+      }
     });
     touchWorldBook(worldBookId, now);
   })();
@@ -1409,6 +1839,7 @@ export async function bulkOperateEntries(
   worldBookId: string,
   input: WorldBookEntryBulkActionInput,
 ): Promise<WorldBookEntryBulkActionResult | null> {
+  const expectedRevisions = readExpectedRevisions(input);
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
 
@@ -1423,14 +1854,52 @@ export async function bulkOperateEntries(
   }
 
   const orderedEntries = uniqueIds.map((id) => entries.find((entry) => entry.id === id)!);
+  for (const entry of orderedEntries) {
+    assertEntryExpectedRevision(entry, expectedRevisionFor(expectedRevisions, entry.id));
+  }
+
   const now = Math.floor(Date.now() / 1000);
   const db = getDb();
+
+  const runConditionalMutation = (
+    entryId: string,
+    sql: string,
+    params: SQLQueryBindings[],
+  ): void => {
+    const expected = expectedRevisionFor(expectedRevisions, entryId);
+    const where = expected === undefined
+      ? "id = ? AND world_book_id = ?"
+      : "id = ? AND world_book_id = ? AND revision = ?";
+    const values = expected === undefined
+      ? [...params, entryId, worldBookId]
+      : [...params, entryId, worldBookId, expected];
+    const changes = db.query(`${sql} WHERE ${where}`).run(...values).changes;
+    if (changes === 0 && expected !== undefined) {
+      const current = readEntryById(userId, entryId);
+      if (current !== null) {
+        throwEntryRevisionConflict(entryId, expected, current);
+      }
+      throw new Error("One or more entries were not found in this world book");
+    }
+  };
 
   if (input.action === "delete") {
     await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(userId, uniqueIds, () => {
       db.transaction(() => {
-        const stmt = db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?");
-        uniqueIds.forEach((entryId) => stmt.run(entryId, worldBookId));
+        for (const entryId of uniqueIds) {
+          const expected = expectedRevisionFor(expectedRevisions, entryId);
+          const result = expected === undefined
+            ? db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?").run(entryId, worldBookId)
+            : db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ? AND revision = ?")
+              .run(entryId, worldBookId, expected);
+          if (result.changes === 0 && expected !== undefined) {
+            const current = readEntryById(userId, entryId);
+            if (current !== null) {
+              throwEntryRevisionConflict(entryId, expected, current);
+            }
+            throw new Error("One or more entries were not found in this world book");
+          }
+        }
         touchWorldBook(worldBookId, now);
       })();
     });
@@ -1445,18 +1914,13 @@ export async function bulkOperateEntries(
     }
 
     db.transaction(() => {
-      const stmt = db.query(
-        `UPDATE world_book_entries
-         SET world_book_id = ?, updated_at = ?, vector_index_status = ?, vector_indexed_at = NULL, vector_index_error = NULL
-         WHERE id = ? AND world_book_id = ?`
-      );
       orderedEntries.forEach((entry) => {
-        stmt.run(
-          targetBook.id,
-          now,
-          desiredWorldBookVectorIndexStatus(entry),
+        runConditionalMutation(
           entry.id,
-          worldBookId,
+          `UPDATE world_book_entries
+           SET world_book_id = ?, updated_at = ?, revision = revision + 1,
+               vector_index_status = ?, vector_indexed_at = NULL, vector_index_error = NULL`,
+          [targetBook.id, now, desiredWorldBookVectorIndexStatus(entry)],
         );
       });
       touchWorldBook(worldBookId, now);
@@ -1474,11 +1938,14 @@ export async function bulkOperateEntries(
     const direction = input.direction === "desc" ? "desc" : "asc";
     const start = input.start != null ? Math.trunc(input.start) : orderedEntries[0]?.order_value ?? 0;
     db.transaction(() => {
-      const stmt = db.query("UPDATE world_book_entries SET order_value = ?, updated_at = ? WHERE id = ? AND world_book_id = ?");
       orderedEntries.forEach((entry, index) => {
         const delta = step * index;
         const nextValue = direction === "desc" ? start - delta : start + delta;
-        stmt.run(nextValue, now, entry.id, worldBookId);
+        runConditionalMutation(
+          entry.id,
+          "UPDATE world_book_entries SET order_value = ?, updated_at = ?, revision = revision + 1",
+          [nextValue, now],
+        );
       });
       touchWorldBook(worldBookId, now);
     })();
@@ -1493,11 +1960,6 @@ export async function bulkOperateEntries(
     }
     const target = input.target === "secondary" ? "secondary" : "primary";
     db.transaction(() => {
-      const stmt = db.query(
-        `UPDATE world_book_entries
-         SET key = ?, keysecondary = ?, updated_at = ?
-         WHERE id = ? AND world_book_id = ?`
-      );
       orderedEntries.forEach((entry) => {
         const nextPrimary = target === "primary"
           ? normalizeKeywordList([...entry.key, keyword])
@@ -1505,7 +1967,12 @@ export async function bulkOperateEntries(
         const nextSecondary = target === "secondary"
           ? normalizeKeywordList([...entry.keysecondary, keyword])
           : normalizeKeywordList(entry.keysecondary);
-        stmt.run(JSON.stringify(nextPrimary), JSON.stringify(nextSecondary), now, entry.id, worldBookId);
+        runConditionalMutation(
+          entry.id,
+          `UPDATE world_book_entries
+           SET key = ?, keysecondary = ?, updated_at = ?, revision = revision + 1`,
+          [JSON.stringify(nextPrimary), JSON.stringify(nextSecondary), now],
+        );
       });
       touchWorldBook(worldBookId, now);
     })();
@@ -1526,11 +1993,12 @@ export async function bulkOperateEntries(
     }
     const depth = position === 4 && Number.isFinite(input.depth) ? Math.trunc(input.depth!) : 4;
     db.transaction(() => {
-      const stmt = db.query(
-        "UPDATE world_book_entries SET position = ?, depth = ?, updated_at = ? WHERE id = ? AND world_book_id = ?",
-      );
-      uniqueIds.forEach((entryId) => {
-        stmt.run(position, position === 4 ? depth : orderedEntries.find((e) => e.id === entryId)!.depth, now, entryId, worldBookId);
+      orderedEntries.forEach((entry) => {
+        runConditionalMutation(
+          entry.id,
+          "UPDATE world_book_entries SET position = ?, depth = ?, updated_at = ?, revision = revision + 1",
+          [position, position === 4 ? depth : entry.depth, now],
+        );
       });
       touchWorldBook(worldBookId, now);
     })();
@@ -1538,21 +2006,127 @@ export async function bulkOperateEntries(
     return { action: input.action, affected: uniqueIds.length };
   }
 
-  if (input.action === "set_activation") {
-    if (input.activation !== "trigger" && input.activation !== "constant" && input.activation !== "vector") {
+  if (input.action === "set_priority" || input.action === "set_depth" || input.action === "set_enabled") {
+    const field = input.action === "set_priority" ? "priority" : input.action === "set_depth" ? "depth" : "disabled";
+    const value = input.action === "set_priority"
+      ? input.priority
+      : input.action === "set_depth"
+        ? input.depth
+        : (input.enabled ? 0 : 1);
+    if (!Number.isSafeInteger(value)) throw new Error(`${field} must be a safe integer`);
+    db.transaction(() => {
+      orderedEntries.forEach((entry) => {
+        runConditionalMutation(
+          entry.id,
+          `UPDATE world_book_entries SET ${field} = ?, updated_at = ?, revision = revision + 1`,
+          [value, now],
+        );
+      });
+      touchWorldBook(worldBookId, now);
+    })();
+    emitWorldBookChanged(userId, worldBookId);
+    return { action: input.action, affected: uniqueIds.length };
+  }
+
+  if (input.action === "set_fields") {
+    if (!input.fields || typeof input.fields !== "object" || Array.isArray(input.fields)) {
+      throw new Error("fields must be an object");
+    }
+    const mutations = orderedEntries.map((entry) => ({
+      entry,
+      ...buildSparseEntryMutation(entry, input.fields),
+    }));
+    if (mutations.some((mutation) => mutation.fields.length === 0)) {
+      throw new Error("fields must contain at least one supported field");
+    }
+    db.transaction(() => {
+      for (const mutation of mutations) {
+        runConditionalMutation(
+          mutation.entry.id,
+          `UPDATE world_book_entries SET ${mutation.fields.join(", ")}, updated_at = ?, revision = revision + 1`,
+          [...mutation.values, now],
+        );
+      }
+      touchWorldBook(worldBookId, now);
+    })();
+
+    for (const mutation of mutations) {
+      const updated = getEntry(userId, mutation.entry.id);
+      if (!updated) continue;
+      if (!updated.vectorized) {
+        deleteWorldBookVectorsAndMaybeRequeue(userId, updated, false);
+      } else if (mutation.resetsVectorIndex) {
+        deleteWorldBookVectorsAndMaybeRequeue(userId, updated, true);
+      } else if (updated.vector_index_status !== "indexed" && isWorldBookEntryVectorEligible(updated)) {
+        vectorizationQueue.queueWorldBookEntryVectorization(userId, updated.id);
+      }
+    }
+    emitWorldBookChanged(userId, worldBookId);
+    return { action: input.action, affected: uniqueIds.length };
+  }
+
+  if (input.action === "copy") {
+    const targetBook = getWorldBook(userId, input.target_book_id);
+    if (!targetBook) throw new Error("Target world book not found");
+    const copied: WorldBookEntry[] = [];
+    db.transaction(() => {
+      for (const entry of orderedEntries) {
+        const next = createEntry(userId, targetBook.id, {
+          outlet_name: entry.outlet_name,
+          wi_marker: entry.wi_marker,
+          wi_marker_side: entry.wi_marker_side,
+          key: [...entry.key],
+          keysecondary: [...entry.keysecondary],
+          content: entry.content,
+          comment: entry.comment ? `${entry.comment} (Copy)` : "Copy",
+          position: entry.position,
+          depth: entry.depth,
+          role: entry.role || undefined,
+          order_value: entry.order_value,
+          selective: entry.selective,
+          constant: entry.constant,
+          disabled: entry.disabled,
+          group_name: entry.group_name,
+          group_override: entry.group_override,
+          group_weight: entry.group_weight,
+          probability: entry.probability,
+          scan_depth: entry.scan_depth ?? undefined,
+          case_sensitive: entry.case_sensitive,
+          match_whole_words: entry.match_whole_words,
+          automation_id: entry.automation_id || undefined,
+          use_regex: entry.use_regex,
+          prevent_recursion: entry.prevent_recursion,
+          exclude_recursion: entry.exclude_recursion,
+          delay_until_recursion: entry.delay_until_recursion,
+          priority: entry.priority,
+          sticky: entry.sticky,
+          cooldown: entry.cooldown,
+          delay: entry.delay,
+          selective_logic: entry.selective_logic,
+          use_probability: entry.use_probability,
+          vectorized: entry.vectorized,
+          extensions: cloneEntryExtensions(entry.extensions),
+        }, { emitEvent: false });
+        if (!next) throw new Error("Unable to copy entry");
+        copied.push(next);
+      }
+    })();
+    for (const entry of copied) emitWorldBookEntryChanged(userId, entry.id);
+    emitWorldBookChanged(userId, targetBook.id);
+    return { action: input.action, affected: copied.length, target_book_id: targetBook.id };
+  }
+
+  if (input.action === "set_activation" || input.action === "set_trigger") {
+    const activation = input.action === "set_trigger" ? "trigger" : input.activation;
+    if (activation !== "trigger" && activation !== "constant" && activation !== "vector") {
       throw new Error("activation must be trigger, constant, or vector");
     }
 
-    const nextConstant = input.activation === "constant";
-    const nextVectorized = input.activation === "vector";
+    const nextConstant = activation === "constant";
+    const nextVectorized = activation === "vector";
     const entriesChangingVectorization = orderedEntries.filter((entry) => entry.vectorized !== nextVectorized);
 
     db.transaction(() => {
-      const stmt = db.query(
-        `UPDATE world_book_entries
-         SET constant = ?, vectorized = ?, vector_index_status = ?, vector_indexed_at = ?, vector_index_error = ?, updated_at = ?
-         WHERE id = ? AND world_book_id = ?`,
-      );
       orderedEntries.forEach((entry) => {
         const vectorIndexState = entry.vectorized === nextVectorized
           ? {
@@ -1565,15 +2139,19 @@ export async function bulkOperateEntries(
               disabled: entry.disabled,
               content: entry.content,
             });
-        stmt.run(
-          nextConstant ? 1 : 0,
-          nextVectorized ? 1 : 0,
-          vectorIndexState.vector_index_status,
-          vectorIndexState.vector_indexed_at,
-          vectorIndexState.vector_index_error,
-          now,
+        runConditionalMutation(
           entry.id,
-          worldBookId,
+          `UPDATE world_book_entries
+           SET constant = ?, vectorized = ?, vector_index_status = ?, vector_indexed_at = ?,
+               vector_index_error = ?, updated_at = ?, revision = revision + 1`,
+          [
+            nextConstant ? 1 : 0,
+            nextVectorized ? 1 : 0,
+            vectorIndexState.vector_index_status,
+            vectorIndexState.vector_indexed_at,
+            vectorIndexState.vector_index_error,
+            now,
+          ],
         );
       });
       touchWorldBook(worldBookId, now);
@@ -1675,13 +2253,12 @@ function bulkInsertEntries(
       id, world_book_id, uid, key, keysecondary, content, comment,
       position, depth, role, order_value, selective, constant, disabled,
       group_name, group_override, group_weight, probability, scan_depth,
-      exclude_greeting,
       case_sensitive, match_whole_words, automation_id,
       use_regex, prevent_recursion, exclude_recursion, delay_until_recursion,
       priority, sticky, cooldown, delay, selective_logic, use_probability,
       vectorized, vector_index_status, vector_indexed_at, vector_index_error,
       extensions, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
   let aborted = false;
@@ -1729,7 +2306,6 @@ function bulkInsertEntries(
           input.group_weight ?? 100,
           input.probability ?? 100,
           input.scan_depth ?? null,
-          input.exclude_greeting ? 1 : 0,
           input.case_sensitive ? 1 : 0,
           input.match_whole_words ? 1 : 0,
           input.automation_id || null,
@@ -1958,7 +2534,6 @@ function entryToCharacterBookSpec(entry: WorldBookEntry, index: number): Record<
     group_weight: entry.group_weight,
     probability: entry.probability,
     scan_depth: entry.scan_depth,
-    exclude_greeting: entry.exclude_greeting,
     automation_id: entry.automation_id,
     vectorized: entry.vectorized,
     uid: entry.uid,
@@ -2022,7 +2597,6 @@ function exportSillyTavern(book: WorldBook, entries: WorldBookEntry[]): Record<s
           group_weight: entry.group_weight,
           probability: entry.probability,
           scan_depth: entry.scan_depth,
-          exclude_greeting: entry.exclude_greeting,
           automation_id: entry.automation_id,
           selectiveLogic: entry.selective_logic,
           useProbability: entry.use_probability,

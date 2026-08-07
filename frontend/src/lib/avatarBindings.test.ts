@@ -15,6 +15,7 @@ function character(): Character {
     mes_example: '',
     creator: '',
     creator_notes: '',
+    library_scope: 'mine',
     system_prompt: '',
     post_history_instructions: '',
     folder: '',

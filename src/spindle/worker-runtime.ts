@@ -124,6 +124,26 @@ type TokenCountResult = {
   approximate: boolean;
 };
 
+type TokenCountBatchResult = TokenCountResult & { index: number };
+
+type SpindleBatchJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | SpindleBatchJsonValue[]
+  | { [key: string]: SpindleBatchJsonValue };
+
+type SpindleBatchOperation = {
+  domain: string;
+  op: string;
+  args: SpindleBatchJsonValue;
+};
+
+type SpindleBatchResult =
+  | { ok: true; result: SpindleBatchJsonValue }
+  | { ok: false; error: string };
+
 type PromptBlockCategoryGroup = {
   categoryBlock: PromptBlock | null;
   children: PromptBlock[];
@@ -337,6 +357,31 @@ type RuntimeWorkerToHost =
       userId?: string;
     }
   | {
+      type: "tokens_count_text_batch";
+      requestId: string;
+      texts: string[];
+      model?: string;
+      modelSource?: TokenModelSource;
+      userId?: string;
+    }
+  | {
+      type: "spindle_batch";
+      requestId: string;
+      ops: SpindleBatchOperation[];
+      options?: { expected_revisions?: Record<string, number> };
+      userId?: string;
+    }
+  | {
+      type: "world_books_entry_set_extension";
+      requestId: string;
+      entity: "world_book_entry" | "character" | "preset";
+      entityId: string;
+      entryId?: string;
+      namespace: string;
+      value: SpindleBatchJsonValue | null;
+      userId?: string;
+    }
+  | {
       type: "tokens_count_messages";
       requestId: string;
       messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
@@ -547,11 +592,34 @@ type RuntimeHostToWorker =
 type ImageGenStreamEvent = ImageGenStreamEventDTO;
 type ImageGenStreamInput = ImageGenStreamRequestDTO;
 
+type RuntimeWorldBookEntryDTO = WorldBookEntryDTO & { revision: number };
+type RuntimeWorldBookEntryUpdateDTO = WorldBookEntryUpdateDTO & { expected_revision?: number };
+type RuntimeEntityExtensionEntity = "world_book_entry" | "character" | "preset";
+type RuntimeEntityExtensionsAPI = {
+  setNamespace(
+    entity: RuntimeEntityExtensionEntity,
+    entityId: string,
+    namespace: string,
+    value: SpindleBatchJsonValue | null,
+    userId?: string,
+  ): Promise<SpindleBatchJsonValue>;
+};
+type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
+  entries: {
+    list(worldBookId: string, options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: RuntimeWorldBookEntryDTO[]; total: number }>;
+    get(entryId: string, userId?: string): Promise<RuntimeWorldBookEntryDTO | null>;
+    create(worldBookId: string, input: WorldBookEntryCreateDTO, userId?: string): Promise<RuntimeWorldBookEntryDTO>;
+    update(entryId: string, input: RuntimeWorldBookEntryUpdateDTO, userId?: string): Promise<RuntimeWorldBookEntryDTO>;
+    delete(entryId: string, userId?: string): Promise<boolean>;
+    setExtension(entryId: string, namespace: string, value: SpindleBatchJsonValue | null, userId?: string): Promise<SpindleBatchJsonValue>;
+  };
+};
+
 // `presets` is replaced wholesale (not intersected) because the local
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"> & {
   /** Read-only Lumia DLC catalog. Public extension types expose this as `spindle.dlc`. */
   dlc: {
     getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog>;
@@ -566,6 +634,12 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen"> & {
     }): Promise<any>;
   };
   assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
+  batch(
+    ops: SpindleBatchOperation[],
+    options?: { expected_revisions?: Record<string, number>; userId?: string },
+  ): Promise<SpindleBatchResult[]>;
+  world_books: RuntimeWorldBooksAPI;
+  entityExtensions: RuntimeEntityExtensionsAPI;
   imageGen: SpindleAPI["imageGen"] & {
     /**
      * Generate through a provider that explicitly supports WebSocket preview
@@ -585,7 +659,6 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen"> & {
       chatId: string;
       messageId?: string;
       content: string;
-      isUser: boolean;
       extra?: Record<string, unknown>;
       origin: "create" | "update" | "swipe_add" | "swipe_update" | "render";
       swipeIndex?: number;
@@ -664,7 +737,6 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen"> & {
       enabled?: readonly string[];
       forced?: readonly string[];
       mutated?: ReadonlyArray<{ id: string; content?: string }>;
-      captured?: readonly string[];
     } | void>,
     priority?: number
   ): void;
@@ -699,6 +771,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen"> & {
   };
   tokens: {
     countText(text: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult>;
+    countTextBatch(texts: string[], options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountBatchResult[]>;
     countMessages(
       messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
       options?: { model?: string; modelSource?: TokenModelSource; userId?: string }
@@ -1355,6 +1428,17 @@ const spindleApi: RuntimeSpindleAPI = {
 
   assemble(input, userId?: string) {
     return requestAssembly(input, userId);
+  },
+
+  async batch(
+    ops: SpindleBatchOperation[],
+    options?: { expected_revisions?: Record<string, number>; userId?: string },
+  ): Promise<SpindleBatchResult[]> {
+    assertMutationAllowed("spindle.batch()");
+    const requestId = crypto.randomUUID();
+    const { userId, ...batchOptions } = options || {};
+    const result = await request({ type: "spindle_batch", requestId, ops, options: batchOptions, userId });
+    return result as SpindleBatchResult[];
   },
 
   registerTool(tool): void {
@@ -2022,6 +2106,21 @@ const spindleApi: RuntimeSpindleAPI = {
       });
       return result as TokenCountResult;
     },
+    async countTextBatch(
+      texts: string[],
+      options?: { model?: string; modelSource?: TokenModelSource; userId?: string }
+    ): Promise<TokenCountBatchResult[]> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "tokens_count_text_batch",
+        requestId,
+        texts,
+        model: options?.model,
+        modelSource: options?.modelSource,
+        userId: options?.userId,
+      });
+      return result as TokenCountBatchResult[];
+    },
     async countMessages(
       messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
       options?: { model?: string; modelSource?: TokenModelSource; userId?: string }
@@ -2579,7 +2678,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as boolean;
     },
     entries: {
-      async list(worldBookId: string, options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: WorldBookEntryDTO[]; total: number }> {
+      async list(worldBookId: string, options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: RuntimeWorldBookEntryDTO[]; total: number }> {
         const requestId = crypto.randomUUID();
         const result = await request({
           type: "world_book_entries_list",
@@ -2589,24 +2688,43 @@ const spindleApi: RuntimeSpindleAPI = {
           offset: options?.offset,
           userId: options?.userId,
         });
-        return result as { data: WorldBookEntryDTO[]; total: number };
+        return result as { data: RuntimeWorldBookEntryDTO[]; total: number };
       },
-      async get(entryId: string, userId?: string): Promise<WorldBookEntryDTO | null> {
+      async get(entryId: string, userId?: string): Promise<RuntimeWorldBookEntryDTO | null> {
         const requestId = crypto.randomUUID();
         const result = await request({ type: "world_book_entries_get", requestId, entryId, userId });
-        return result as WorldBookEntryDTO | null;
+        return result as RuntimeWorldBookEntryDTO | null;
       },
-      async create(worldBookId: string, input: WorldBookEntryCreateDTO, userId?: string): Promise<WorldBookEntryDTO> {
+      async create(worldBookId: string, input: WorldBookEntryCreateDTO, userId?: string): Promise<RuntimeWorldBookEntryDTO> {
         assertMutationAllowed("spindle.world_books.entries.create()");
         const requestId = crypto.randomUUID();
         const result = await request({ type: "world_book_entries_create", requestId, worldBookId, input, userId });
-        return result as WorldBookEntryDTO;
+        return result as RuntimeWorldBookEntryDTO;
       },
-      async update(entryId: string, input: WorldBookEntryUpdateDTO, userId?: string): Promise<WorldBookEntryDTO> {
+      async update(entryId: string, input: RuntimeWorldBookEntryUpdateDTO, userId?: string): Promise<RuntimeWorldBookEntryDTO> {
         assertMutationAllowed("spindle.world_books.entries.update()");
         const requestId = crypto.randomUUID();
         const result = await request({ type: "world_book_entries_update", requestId, entryId, input, userId });
-        return result as WorldBookEntryDTO;
+        return result as RuntimeWorldBookEntryDTO;
+      },
+      async setExtension(
+        entryId: string,
+        namespace: string,
+        value: SpindleBatchJsonValue | null,
+        userId?: string,
+      ): Promise<SpindleBatchJsonValue> {
+        assertMutationAllowed("spindle.world_books.entries.setExtension()");
+        const requestId = crypto.randomUUID();
+        const result = await request({
+          type: "world_books_entry_set_extension",
+          requestId,
+          entity: "world_book_entry",
+          entityId: entryId,
+          namespace,
+          value,
+          userId,
+        });
+        return result as SpindleBatchJsonValue;
       },
       async delete(entryId: string, userId?: string): Promise<boolean> {
         assertMutationAllowed("spindle.world_books.entries.delete()");
@@ -2647,6 +2765,29 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "world_books_deactivate_global", requestId, worldBookId, userId });
       return result as string[];
+    },
+  },
+
+  entityExtensions: {
+    async setNamespace(
+      entity: RuntimeEntityExtensionEntity,
+      entityId: string,
+      namespace: string,
+      value: SpindleBatchJsonValue | null,
+      userId?: string,
+    ): Promise<SpindleBatchJsonValue> {
+      assertMutationAllowed("spindle.entityExtensions.setNamespace()");
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "world_books_entry_set_extension",
+        requestId,
+        entity,
+        entityId,
+        namespace,
+        value,
+        userId,
+      });
+      return result as SpindleBatchJsonValue;
     },
   },
 
@@ -3444,14 +3585,12 @@ const spindleApi: RuntimeSpindleAPI = {
       title?: string;
       value?: string;
       placeholder?: string;
-      editorRequestId?: string;
       userId?: string;
     }): Promise<{ text: string; cancelled: boolean }> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "text_editor_open",
         requestId,
-        editorRequestId: options?.editorRequestId,
         title: options?.title,
         value: options?.value,
         placeholder: options?.placeholder,
@@ -3459,14 +3598,9 @@ const spindleApi: RuntimeSpindleAPI = {
       } as any);
       return result as { text: string; cancelled: boolean };
     },
-    async close(editorRequestId: string, userId?: string): Promise<void> {
-      const requestId = crypto.randomUUID();
-      await request({
-        type: "text_editor_close",
-        requestId,
-        editorRequestId,
-        userId,
-      } as any);
+    async close(_editorRequestId: string, _userId?: string): Promise<void> {
+      // The current host transport only exposes user-settled editor results;
+      // unknown close identities are intentionally accepted as no-ops.
     },
   },
 
@@ -3542,11 +3676,7 @@ const spindleApi: RuntimeSpindleAPI = {
     });
   },
 
-  contracts: Object.freeze({
-    preAssemblyGenerationContext: 1,
-    worldInfoActivationCapture: 1,
-    worldInfoRuntimePlacement: 1,
-  }),
+  contracts: Object.freeze({ preAssemblyGenerationContext: 1 }),
 
   registerContextHandler(
     handler: (context: unknown) => Promise<unknown>,

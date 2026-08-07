@@ -37,6 +37,11 @@ async function validateTokenizerUrl(url: string, label: string): Promise<void> {
 /** Display name reported when no real tokenizer could be resolved for a model. */
 export const APPROXIMATE_TOKENIZER_NAME = "approximate";
 
+/** Bound extension-host batch token-counting work to keep a worker turn responsive. */
+export const MAX_COUNT_BATCH_TEXTS = 64;
+/** Yield periodically while counting extension-host token batches. */
+export const COUNT_BATCH_YIELD_EVERY = 8;
+
 /** A loaded tokenizer instance with a count(text) method. */
 interface TokenizerInstance {
   count: (text: string) => number;

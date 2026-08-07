@@ -27,3 +27,14 @@
 .row {
   box-sizing: border-box;
 }
+
+.geometryProbe {
+  position: fixed;
+  inset: 0 auto auto 0;
+  width: calc(var(--character-card-min-width, 200px) + var(--character-card-gap, 20px));
+  height: var(--character-card-height, 1px);
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+  contain: strict;
+}
