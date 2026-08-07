@@ -26,7 +26,8 @@ import { getCharacterAvatarUrl } from '@/lib/avatarUrls'
 import { hostIntentEventName } from '@/lib/spindle/host-intent-registry'
 import { DEFAULT_PORTRAIT_DOCK_SETTINGS } from '@/lib/uiProductivityDefaults'
 import { useStore } from '@/store'
-import type { FloatingAvatarState, PortraitDockSettings, SurfaceRectPrefs } from '@/types/store'
+import { canPersistPortraitDockInitialization } from '@/store/slices/settings'
+import type { FloatingAvatarState, PortraitDockSettings, SettingsWriteSource, SurfaceRectPrefs } from '@/types/store'
 import styles from './PortraitDock.module.css'
 
 const VIEWPORT_PAD = 12
@@ -273,7 +274,7 @@ export default function PortraitDock({ mobile = false, extensionOwned = false }:
   const ratio = resolvePortraitRatio(naturalSize)
   const isFloating = settings.dockSide === 'floating'
 
-  const commitRect = useCallback((next: SurfaceRectPrefs) => {
+  const commitRect = useCallback((next: SurfaceRectPrefs, source: SettingsWriteSource) => {
     if (!floatingAvatar) return
     let rect = next
     let dockSide = settings.dockSide
@@ -291,7 +292,8 @@ export default function PortraitDock({ mobile = false, extensionOwned = false }:
     updateFloatingAvatar(rect)
     if (!settings.rememberSizePosition && dockSide === settings.dockSide) return
 
-    setSetting('portraitDockSettings', { ...settings, rect, dockSide })
+    if (source !== 'user-interaction') return
+    setSetting('portraitDockSettings', { ...settings, rect, dockSide }, source)
   }, [floatingAvatar, mobile, setSetting, settings, updateFloatingAvatar])
 
   const sourceRect = useMemo(() => {
@@ -312,9 +314,10 @@ export default function PortraitDock({ mobile = false, extensionOwned = false }:
     aspectRatio: ratio,
   })
 
-  const updateSettings = useCallback((partial: Partial<PortraitDockSettings>) => {
-    setSetting('portraitDockSettings', { ...settings, ...partial })
-  }, [setSetting, settings])
+  const updateSettings = useCallback((partial: Partial<PortraitDockSettings>, source: SettingsWriteSource = 'user-interaction') => {
+    if (source !== 'user-interaction' && !canPersistPortraitDockInitialization(fullSettingsLoaded)) return
+    setSetting('portraitDockSettings', { ...settings, ...partial }, source)
+  }, [fullSettingsLoaded, setSetting, settings])
 
   const closePortraitDock = useCallback(() => {
     manualPreviewRef.current = null
@@ -348,7 +351,7 @@ export default function PortraitDock({ mobile = false, extensionOwned = false }:
         open: true,
         rect,
         lastPortrait: { imageUrl, displayName },
-      })
+      }, 'state-sync')
       event.preventDefault()
     }
 
@@ -507,11 +510,28 @@ export default function PortraitDock({ mobile = false, extensionOwned = false }:
         || settings.lastPortrait?.displayName !== character.name
         || !settings.open
       ) {
+        if (!canPersistPortraitDockInitialization(fullSettingsLoaded)) {
+          console.debug('[PortraitDockTrace]', {
+            at: new Date().toISOString(),
+            stage: 'settings:bootstrap-write-skipped',
+            source: 'portrait-dock-init',
+            reason: 'full-settings-not-hydrated',
+            settingsLoaded,
+            fullSettingsLoaded,
+            beforeDockSide: settings.dockSide,
+            afterDockSide: settings.dockSide,
+            beforeOpen: settings.open,
+            afterOpen: true,
+            lastPortraitChanged: settings.lastPortrait?.imageUrl !== imageUrl
+              || settings.lastPortrait?.displayName !== character.name,
+          })
+          return
+        }
         setSetting('portraitDockSettings', {
           ...settings,
           open: true,
           lastPortrait: { imageUrl, displayName: character.name },
-        })
+        }, 'portrait-dock-init')
       }
     } else {
       setChatPortraitAvailable(false)
@@ -521,9 +541,11 @@ export default function PortraitDock({ mobile = false, extensionOwned = false }:
     activeChatAvatarId,
     activeChatId,
     characters,
+    fullSettingsLoaded,
     floatingAvatar,
     openFloatingAvatar,
     setSetting,
+    settingsLoaded,
     settings,
     updateFloatingAvatar,
   ])

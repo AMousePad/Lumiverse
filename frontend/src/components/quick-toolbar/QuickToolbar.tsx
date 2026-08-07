@@ -43,7 +43,7 @@ import {
 import { isSurfaceActive, type ToolbarUiState } from '@/lib/quickToolbarToggle'
 import { canMoveWithinFiltered, filterActionIds } from '@/lib/toolbarActionSearch'
 import { useStore } from '@/store'
-import type { QuickToolbarDensity, SurfaceRectPrefs } from '@/types/store'
+import type { QuickToolbarDensity, SettingsWriteSource, SurfaceRectPrefs } from '@/types/store'
 import styles from './QuickToolbar.module.css'
 import QuickToolbarCustomizeModal from './QuickToolbarCustomizeModal'
 import { useQuickToolbarActions, type ToolbarAction } from './useQuickToolbarActions'
@@ -185,7 +185,7 @@ export function QuickToolbar() {
     [naturalWidth, naturalHeight],
   )
 
-  const handleCommit = useCallback((next: SurfaceRectPrefs) => {
+  const handleCommit = useCallback((next: SurfaceRectPrefs, source: SettingsWriteSource) => {
     const mode = dragModeRef.current
     dragModeRef.current = null
     // A-S6: the hook also commits on every *window* resize (`keepInViewport`).
@@ -198,6 +198,7 @@ export function QuickToolbar() {
     // A resize pins the size of the orientation being resized and nothing else,
     // so the other orientation keeps whatever it had — including its auto
     // sentinel. A move writes the shared position only.
+    if (source !== 'user-interaction') return
     updateSettings(pinsSize
       ? withToolbarRect(persisted, orientation, next)
       : withToolbarPosition(persisted, next))

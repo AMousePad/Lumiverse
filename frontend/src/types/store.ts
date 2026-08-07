@@ -717,7 +717,7 @@ export interface SettingsSlice {
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
-  setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K]) => void
+  setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K], source?: SettingsWriteSource) => void
   setTheme: (theme: ThemeConfig | null) => void
   setCharacterThemeOverlay: (overlay: CharacterThemeOverlay | null) => void
   setCustomCSS: (css: string) => void
@@ -736,6 +736,18 @@ export interface SettingsSlice {
   updateSavedTheme: (id: string) => Promise<void>
   loadSettings: () => Promise<void>
 }
+
+export type SettingsWriteSource =
+  | 'user'
+  | 'user-interaction'
+  | 'portrait-dock-init'
+  | 'automatic-sync'
+  | 'state-sync'
+  | 'suite-normalization'
+  | 'suite-reconciliation'
+  | 'host-load'
+  | 'compatibility'
+  | 'unknown'
 
 import type { ThemeConfig } from './theme'
 export type { ThemeConfig } from './theme'

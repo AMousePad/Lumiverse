@@ -6,6 +6,7 @@ import { settingsApi } from '@/api/settings'
 import { createGenerationSlice } from './generation'
 import {
   createSettingsSlice,
+  canPersistPortraitDockInitialization,
   flushSettingsNow,
   resetSettingsPersistence,
   shouldReloadSettingsAfterUpdate,
@@ -108,5 +109,108 @@ describe('portrait dock persistence', () => {
     expect(shouldReloadSettingsAfterUpdate({ keys: ['portraitDockSettings', privateKey] })).toBe(false)
     expect(shouldReloadSettingsAfterUpdate({ keys: ['portraitDockSettings', privateKey] })).toBe(true)
     expect(shouldReloadSettingsAfterUpdate({ keys: ['theme'] })).toBe(true)
+  })
+
+  test('delayed hydration keeps persisted portrait state when automatic initialization is guarded', async () => {
+    const first = store()
+    const saved = {
+      ...first.portraitDockSettings,
+      open: false,
+      dockSide: 'left' as const,
+      rect: { x: 24, y: 48, width: 284, height: 412 },
+    }
+    const rows = new Map<string, unknown>([
+      ['portraitDockSettings', saved],
+      ['spindle:lumiverse_suite:portrait_dock:portraitDockSettings', saved],
+    ])
+    let release!: () => void
+    const delayed = new Promise<void>((resolve) => { release = resolve })
+    const puts: Record<string, unknown>[] = []
+    settingsApi.getAll = async () => {
+      await delayed
+      return [...rows].map(([key, value]) => ({ key, value, updated_at: 1 }))
+    }
+    settingsApi.putMany = async values => {
+      puts.push(values)
+      return []
+    }
+
+    const restored = store()
+    const loading = restored.loadSettings()
+    expect(restored.fullSettingsLoaded).toBe(false)
+    expect(canPersistPortraitDockInitialization(restored.fullSettingsLoaded)).toBe(false)
+
+    // The normal PortraitDock startup effect derives runtime open state here,
+    // but the readiness guard prevents it from calling setSetting.
+    release()
+    await loading
+    await flushSettingsNow()
+
+    expect(restored.portraitDockSettings).toEqual(saved)
+    expect(puts).toEqual([])
+  })
+
+  test('a genuine user edit during a delayed load still wins over the stale server snapshot', async () => {
+    const first = store()
+    const saved = {
+      ...first.portraitDockSettings,
+      dockSide: 'left' as const,
+      rect: { x: 24, y: 48, width: 284, height: 412 },
+    }
+    const rows = new Map<string, unknown>([['portraitDockSettings', saved]])
+    let release!: () => void
+    const delayed = new Promise<void>((resolve) => { release = resolve })
+    settingsApi.getAll = async () => {
+      await delayed
+      return [...rows].map(([key, value]) => ({ key, value, updated_at: 1 }))
+    }
+    settingsApi.putMany = async values => {
+      for (const [key, value] of Object.entries(values)) rows.set(key, value)
+      return []
+    }
+
+    const restored = store()
+    const loading = restored.loadSettings()
+    const userEdit = {
+      ...restored.portraitDockSettings,
+      dockSide: 'right' as const,
+      rect: { x: 96, y: 64, width: 320, height: 460 },
+    }
+    restored.setSetting('portraitDockSettings', userEdit, 'user')
+    release()
+    await loading
+
+    expect(restored.portraitDockSettings).toEqual(userEdit)
+  })
+
+  test('a semantic no-op does not queue a persistence revision', async () => {
+    const restored = store()
+    let puts = 0
+    settingsApi.putMany = async () => {
+      puts += 1
+      return []
+    }
+
+    restored.setSetting('portraitDockSettings', structuredClone(restored.portraitDockSettings), 'portrait-dock-init')
+    await flushSettingsNow()
+
+    expect(puts).toBe(0)
+  })
+
+  test('skips automatic pre-hydration writes but preserves an explicit interaction', async () => {
+    const restored = store()
+    const automatic = { ...restored.portraitDockSettings, dockSide: 'right' as const, rememberSizePosition: false }
+    restored.setSetting('portraitDockSettings', automatic, 'automatic-sync')
+    await flushSettingsNow()
+    expect(restored.portraitDockSettings).toEqual(automatic)
+
+    let puts = 0
+    settingsApi.putMany = async values => {
+      puts += 1
+      return Object.entries(values).map(([key, value]) => ({ key, value, updated_at: 1 }))
+    }
+    restored.setSetting('portraitDockSettings', { ...automatic, dockSide: 'left' }, 'user-interaction')
+    await flushSettingsNow()
+    expect(puts).toBe(1)
   })
 })

@@ -25,6 +25,7 @@ type SurfaceSettingsApi = {
   readonly core: {
     get<T>(key: string): T | undefined
     watch<T>(key: string, listener: (value: T) => void): () => void
+    isReady?(): boolean
   }
 }
 
@@ -51,16 +52,9 @@ function sameValue(left: unknown, right: unknown): boolean {
   try { return JSON.stringify(left) === JSON.stringify(right) } catch { return false }
 }
 
-let settingsTraceSequence = 0
-
 function traceSettings(stage: string, data: Record<string, unknown>): void {
-  settingsTraceSequence += 1
-  console.debug('[SuiteSettingsTrace]', {
-    seq: settingsTraceSequence,
-    at: new Date().toISOString(),
-    stage,
-    ...data,
-  })
+  void stage
+  void data
 }
 
 function portraitDockSummary(value: unknown): Record<string, unknown> | undefined {
@@ -370,13 +364,20 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
         // fallback read, which can race a freshly persisted canonical value.
       } else {
         const needsPrivateRepair = !sameValue(saved, normalized)
+        const hostReady = settingsApi.core.isReady?.() ?? true
         traceSettings('module:legacy-repair-decision', {
           moduleId: options.id,
           needsPrivateRepair,
+          hostReady,
         })
-        if (needsPrivateRepair) {
+        // A legacy fallback repair made from a pre-hydration default can
+        // overwrite the user's canonical value before the host GET finishes.
+        // The next canonical/legacy watch will reconcile it after readiness.
+        if (needsPrivateRepair && hostReady) {
           await settingsApi.set(options.settingsKey, normalized)
           traceSettings('module:legacy-repair-committed', { moduleId: options.id })
+        } else if (needsPrivateRepair) {
+          traceSettings('module:legacy-repair-deferred', { moduleId: options.id })
         }
         stopLegacyWatch = settingsApi.watch<unknown>(options.settingsKey, value => {
           if (!running || canonicalSettingsSeen) return

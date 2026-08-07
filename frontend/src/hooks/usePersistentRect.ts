@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { getUiScale, layoutViewportSize, renderedPxToLayoutPx, toLayoutSize } from '@/lib/uiScale'
 import { clampRectToBounds, compensateRotatedAnchor, resizeRectFromHandle, toLocalDelta, type RotatedResizeHandle } from '@/lib/rotatedRectMath'
-import type { SurfaceRectPrefs } from '@/types/store'
+import type { SettingsWriteSource, SurfaceRectPrefs } from '@/types/store'
 export interface RectBounds { minWidth: number; minHeight: number; maxWidth?: number; maxHeight?: number }
 export interface RectStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export interface LayoutViewport { width: number; height: number }
-export interface UsePersistentRectOptions { rect: SurfaceRectPrefs; bounds: RectBounds; onCommit: (rect: SurfaceRectPrefs) => void; snapToEdge?: boolean; preserveAspectRatio?: boolean; aspectRatio?: number; persistGeometry?: string; storage?: RectStorage | null; rotationDeg?: number; mobile?: boolean }
+export interface UsePersistentRectOptions { rect: SurfaceRectPrefs; bounds: RectBounds; onCommit: (rect: SurfaceRectPrefs, source: SettingsWriteSource) => void; snapToEdge?: boolean; preserveAspectRatio?: boolean; aspectRatio?: number; persistGeometry?: string; storage?: RectStorage | null; rotationDeg?: number; mobile?: boolean }
 export type DragMode = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 const fallback = { width: 1920, height: 1080 }
 const finite = (value: unknown, fallbackValue = 0) => typeof value === 'number' && Number.isFinite(value) ? value : fallbackValue
@@ -27,9 +27,9 @@ export function usePersistentRect(options: UsePersistentRectOptions) {
   useEffect(() => { latest.current = draft }, [draft])
   useEffect(() => { if (initial.current) { save(initial.current); initial.current = undefined } }, [save])
   useEffect(() => { if (drag.current) return; const next = clampSurfaceRect(rect, bounds); if (!same(next, latest.current) && !same(rect, latest.current)) { latest.current = next; setDraft(next) } }, [bounds, rect])
-  const commit = useCallback((next: SurfaceRectPrefs) => { let value = clampSurfaceRect(next, config.current.bounds); if (config.current.snapToEdge) { const vw = viewportBox().width; if (value.x <= 24) value = { ...value, x: 0 }; else if (vw - value.x - value.width <= 24) value = { ...value, x: Math.max(0, vw - value.width) } } latest.current = value; setDraft(value); save(value); config.current.onCommit(value) }, [save])
+  const commit = useCallback((next: SurfaceRectPrefs, source: SettingsWriteSource = 'automatic-sync') => { let value = clampSurfaceRect(next, config.current.bounds); if (config.current.snapToEdge) { const vw = viewportBox().width; if (value.x <= 24) value = { ...value, x: 0 }; else if (vw - value.x - value.width <= 24) value = { ...value, x: Math.max(0, vw - value.width) } } latest.current = value; setDraft(value); save(value); config.current.onCommit(value, source) }, [save])
   const move = useCallback((event: PointerEvent) => { const active = drag.current; if (!active) return; const scale = getUiScale(), dx = renderedPxToLayoutPx(event.clientX - active.x, scale), dy = renderedPxToLayoutPx(event.clientY - active.y, scale); let next: SurfaceRectPrefs; if (active.mode === 'move') next = { ...active.rect, x: active.rect.x + dx, y: active.rect.y + dy }; else { const local = toLocalDelta(dx, dy, config.current.rotationDeg); next = clampSurfaceRect(compensateRotatedAnchor(active.rect, resizeSurfaceRect(active.rect, active.mode as RotatedResizeHandle, local.dx, local.dy, config.current.bounds, config.current.preserveAspectRatio, config.current.aspectRatio), active.mode as RotatedResizeHandle, config.current.rotationDeg) as SurfaceRectPrefs, config.current.bounds) } latest.current = next; setDraft(next) }, [])
-  const stop = useCallback(() => { if (!drag.current) return; drag.current = null; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); window.removeEventListener('pointercancel', stop); commit(latest.current) }, [commit, move])
+  const stop = useCallback(() => { if (!drag.current) return; drag.current = null; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); window.removeEventListener('pointercancel', stop); commit(latest.current, 'user-interaction') }, [commit, move])
   const startDrag = useCallback((mode: DragMode, event: ReactPointerEvent) => { event.preventDefault(); stop(); drag.current = { mode, x: event.clientX, y: event.clientY, rect: latest.current }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); window.addEventListener('pointercancel', stop) }, [move, stop])
   useEffect(() => () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); window.removeEventListener('pointercancel', stop) }, [move, stop])
   return useMemo(() => ({ rect: draft, setRect: commit, startDrag }), [commit, draft, startDrag])

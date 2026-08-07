@@ -18,6 +18,8 @@ export interface SettingsPersistence {
 export interface CoreSettingsReader {
   get(key: string): unknown
   subscribe(key: string, handler: (value: unknown) => void): () => void
+  /** True once the host has merged the authoritative settings snapshot. */
+  isReady?: () => boolean
 }
 
 export interface SettingsUpdatedEvent {
@@ -55,6 +57,7 @@ export interface SpindleSettingsAPI {
     get<T>(key: string): T | undefined
     watch<T>(key: string, callback: (value: T) => void): () => void
     list(): Array<{ key: string; permission: string | null }>
+    isReady(): boolean
   }
 }
 
@@ -344,6 +347,9 @@ export function createSettingsBridge(options: SettingsBridgeOptions): SpindleSet
       list(): Array<{ key: string; permission: string | null }> {
         assertActive()
         return options.coreSettingKeys.map(({ key, permission }) => ({ key, permission }))
+      },
+      isReady(): boolean {
+        return options.core.isReady?.() ?? true
       },
     },
     dispose,

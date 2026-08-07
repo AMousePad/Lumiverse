@@ -172,7 +172,7 @@ export default function ProductivitySettings() {
     const current = (useStore.getState() as any)[key] ?? PRODUCTIVITY_DEFAULTS[key]
     const next = bindProductivitySetting(current, patch)
     useStore.setState({ [key]: next } as any)
-    persistKey(key, next)
+    persistKey(key, next, 'user-interaction')
   }
   const renderColor = (key: ProductivitySettingKey, field: string, label: string, fallback: string) => {
     const id = settingId(key, field)

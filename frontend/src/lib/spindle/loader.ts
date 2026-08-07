@@ -658,6 +658,7 @@ async function doLoadFrontendExtension(
           handler(next)
         })
       },
+      isReady: () => Boolean((useStore.getState() as unknown as { fullSettingsLoaded?: boolean }).fullSettingsLoaded),
     },
     persistence: {
       async get(key) {

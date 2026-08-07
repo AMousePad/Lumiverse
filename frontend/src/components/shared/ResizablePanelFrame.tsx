@@ -1,8 +1,8 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { usePersistentRect, type RectBounds } from '@/hooks/usePersistentRect'
-import type { SurfaceRectPrefs } from '@/types/store'
+import type { SettingsWriteSource, SurfaceRectPrefs } from '@/types/store'
 import styles from './ResizablePanelFrame.module.css'
-export interface ResizablePanelFrameProps { rect: SurfaceRectPrefs; bounds: RectBounds; onCommit: (rect: SurfaceRectPrefs) => void; title?: ReactNode; toolbar?: ReactNode; children: ReactNode; className?: string; snapToEdge?: boolean; preserveAspectRatio?: boolean; aspectRatio?: number; persistGeometry?: string; showHeader?: boolean; resizable?: boolean; 'aria-label'?: string }
+export interface ResizablePanelFrameProps { rect: SurfaceRectPrefs; bounds: RectBounds; onCommit: (rect: SurfaceRectPrefs, source: SettingsWriteSource) => void; title?: ReactNode; toolbar?: ReactNode; children: ReactNode; className?: string; snapToEdge?: boolean; preserveAspectRatio?: boolean; aspectRatio?: number; persistGeometry?: string; showHeader?: boolean; resizable?: boolean; 'aria-label'?: string }
 const handles = ['n','s','e','w','ne','nw','se','sw'] as const
 export function ResizablePanelFrame({ rect, bounds, onCommit, title, toolbar, children, className, snapToEdge, preserveAspectRatio, aspectRatio, persistGeometry, showHeader = true, resizable = true, 'aria-label': ariaLabel }: ResizablePanelFrameProps) {
   const state = usePersistentRect({ rect, bounds, onCommit, snapToEdge, preserveAspectRatio, aspectRatio, persistGeometry })

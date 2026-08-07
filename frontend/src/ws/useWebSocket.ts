@@ -1269,38 +1269,9 @@ export function useWebSocket() {
       // writes to the settings table. Skip if this tab has pending writes to
       // avoid overwriting in-flight local changes with stale DB values.
       wsClient.on(EventType.SETTINGS_UPDATED, (payload: unknown) => {
-        const keys = settingsUpdateKeys(payload)
-        const before = useStore.getState()
-        const beforePortraitDock = before.portraitDockSettings
         const reload = shouldReloadSettingsAfterUpdate(payload)
-        console.debug('[SettingsTrace]', {
-          at: new Date().toISOString(),
-          stage: 'websocket:SETTINGS_UPDATED',
-          keys,
-          payloadShape: payload && typeof payload === 'object' && !Array.isArray(payload)
-            ? Object.keys(payload)
-            : typeof payload,
-          reload,
-          unsavedBeforeDecision: hasUnsavedSettings(),
-          portraitDockBefore: {
-            open: beforePortraitDock?.open,
-            dockSide: beforePortraitDock?.dockSide,
-            rect: beforePortraitDock?.rect,
-          },
-        })
         if (reload) {
           store.getState().loadSettings()
-          const after = useStore.getState().portraitDockSettings
-          console.debug('[SettingsTrace]', {
-            at: new Date().toISOString(),
-            stage: 'websocket:loadSettings:triggered',
-            keys,
-            portraitDockAfterTrigger: {
-              open: after?.open,
-              dockSide: after?.dockSide,
-              rect: after?.rect,
-            },
-          })
         }
       }),
 

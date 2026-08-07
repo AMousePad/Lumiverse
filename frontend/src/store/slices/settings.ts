@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand'
-import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings } from '@/types/store'
+import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
@@ -173,8 +173,6 @@ let localSettingsRevision = 0
 const localSettingRevisions = new Map<string, number>()
 let persistenceScope: string | null = null
 let lastCommittedSettingsKeys = new Set<string>()
-let settingsTraceSequence = 0
-
 type SettingsTraceData = Record<string, unknown>
 
 function portraitDockTraceSummary(value: unknown): Record<string, unknown> | undefined {
@@ -197,13 +195,13 @@ function portraitDockTraceSummary(value: unknown): Record<string, unknown> | und
 }
 
 function traceSettings(stage: string, data: SettingsTraceData = {}): void {
-  settingsTraceSequence += 1
-  console.debug('[SettingsTrace]', {
-    seq: settingsTraceSequence,
-    at: new Date().toISOString(),
-    stage,
-    ...data,
-  })
+  void stage
+  void data
+}
+
+/** Automatic component reconciliation must not dirty provisional settings. */
+export function canPersistPortraitDockInitialization(fullSettingsLoaded: boolean): boolean {
+  return fullSettingsLoaded
 }
 
 function bridgeStorageKey(key: string): string {
@@ -277,7 +275,7 @@ function hasNewerLocalSetting(key: string, revisionAtLoadStart: number): boolean
   return (localSettingRevisions.get(key) ?? 0) > revisionAtLoadStart
 }
 
-export function persistKey(key: string, value: any) {
+export function persistKey(key: string, value: any, source: SettingsWriteSource = 'unknown') {
   const revision = ++localSettingsRevision
   localSettingRevisions.set(key, revision)
   dirtyKeys.set(key, value)
@@ -287,6 +285,7 @@ export function persistKey(key: string, value: any) {
   }
   traceSettings('persistKey:queued', {
     key,
+    source,
     revision,
     fallbackKeys,
     dirtyKeys: [...dirtyKeys.keys()],
@@ -773,17 +772,45 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       return { wallpaper }
     }),
 
-  setSetting: (key, value) => {
+  setSetting: (key, value, source: SettingsWriteSource = 'user') => {
     const previous = (get() as unknown as Record<string, unknown>)[key as string]
+    const changed = !pendingValuesMatch(previous, value)
     traceSettings('setSetting', {
       key: key as string,
-      changed: !pendingValuesMatch(previous, value),
+      source,
+      changed,
+      fullSettingsLoaded: get().fullSettingsLoaded,
       portraitDockBefore: key === 'portraitDockSettings' ? portraitDockTraceSummary(previous) : undefined,
       portraitDockAfter: key === 'portraitDockSettings' ? portraitDockTraceSummary(value) : undefined,
     })
+    // No-op writes must not create a newer local revision. Besides avoiding
+    // needless PUTs, this keeps an automatic bootstrap observation from
+    // winning the load-generation merge solely because its object identity
+    // changed.
+    if (!changed) return
     set({ [key]: value } as any)
     if (DATA_KEYS.has(key as string)) {
-      persistKey(key as string, value)
+      // Runtime synchronization and migration may observe the default store
+      // before the authoritative GET completes. They must not create a local
+      // revision that makes the server snapshot look stale. Explicit UI
+      // interaction remains allowed during hydration and retains precedence.
+      const automatic = source === 'automatic-sync'
+        || source === 'state-sync'
+        || source === 'portrait-dock-init'
+        || source === 'suite-normalization'
+        || source === 'suite-reconciliation'
+        || source === 'host-load'
+        || source === 'compatibility'
+      if (!automatic || get().fullSettingsLoaded) {
+        persistKey(key as string, value, source)
+      } else {
+        traceSettings('setSetting:pre-hydration-skip', {
+          key: key as string,
+          source,
+          fullSettingsLoaded: get().fullSettingsLoaded,
+          portraitDock: key === 'portraitDockSettings' ? portraitDockTraceSummary(value) : undefined,
+        })
+      }
     }
   },
 
@@ -1139,6 +1166,23 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
             .filter((key) => DATA_KEYS.has(key) && hasNewerLocalSetting(key, localRevisionAtLoadStart)),
           portraitDockBefore: portraitDockTraceSummary(get().portraitDockSettings),
           portraitDockIncoming: portraitDockTraceSummary(patch.portraitDockSettings),
+          portraitDockServerDockSide: portraitDockTraceSummary(
+            rows.find((row) => row.key === 'portraitDockSettings')?.value,
+          )?.dockSide,
+          portraitDockServerDefaultDockSide: portraitDockTraceSummary(
+            rows.find((row) => row.key === 'portraitDockSettings')?.value,
+          )?.defaultDockSide,
+          portraitDockServerRememberSizePosition: portraitDockTraceSummary(
+            rows.find((row) => row.key === 'portraitDockSettings')?.value,
+          )?.rememberSizePosition,
+          portraitDockLocalDockSide: get().portraitDockSettings.dockSide,
+          portraitDockLocalDefaultDockSide: get().portraitDockSettings.defaultDockSide,
+          portraitDockLocalRememberSizePosition: get().portraitDockSettings.rememberSizePosition,
+          portraitDockIncomingDockSide: portraitDockTraceSummary(patch.portraitDockSettings)?.dockSide,
+          portraitDockIncomingDefaultDockSide: portraitDockTraceSummary(patch.portraitDockSettings)?.defaultDockSide,
+          portraitDockIncomingRememberSizePosition: portraitDockTraceSummary(patch.portraitDockSettings)?.rememberSizePosition,
+          portraitDockRevisionAtLoadStart: localRevisionAtLoadStart,
+          portraitDockCurrentRevision: localSettingRevisions.get('portraitDockSettings') ?? 0,
         })
         set(patch as any)
         traceSettings('loadSettings:merged', {
