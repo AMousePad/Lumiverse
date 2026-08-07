@@ -1,11 +1,12 @@
 import type { StateCreator } from 'zustand'
-import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings } from '@/types/store'
+import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
 import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/lib/loom/preset-selection-coordinator'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
+import { PRODUCTIVITY_DEFAULTS, migrateProductivitySetting } from '@/lib/uiProductivityDefaults'
 import { createSettingsLoadGenerationGuard } from './settings-load-generation'
 import {
   deriveReorderArgs,
@@ -25,9 +26,10 @@ export const REASONING_DEFAULTS: ReasoningSettings = {
 }
 
 /** Keys that represent persisted data (not functions) */
-const DATA_KEYS: ReadonlySet<string> = new Set([
+export const DATA_KEYS: ReadonlySet<string> = new Set([
   'landingPageChatsDisplayed',
   'landingPageLayoutMode',
+  'landingPageActiveTab',
   'landingHiddenCharacterIds',
   'charactersPerPage',
   'personasPerPage',
@@ -135,6 +137,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'chatHeadsCustomCompletionSound',
   'spindleSettings',
   'voiceSettings',
+  ...Object.keys(PRODUCTIVITY_DEFAULTS),
 ])
 
 // ── Debounced batch persistence ──────────────────────────────────────────
@@ -143,6 +146,23 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
 const FLUSH_DELAY = 1_500
 const PENDING_SETTINGS_KEY = '__lumiverse_pending_settings'
 const PENDING_IMAGE_GENERATION_PATCH_KEY = '__lumiverse_pending_image_generation_patch'
+/**
+ * Productivity controls are host-owned canonical settings. The suite reads
+ * these namespaced rows only when running against a host that cannot expose
+ * the canonical blobs through ctx.settings.core, so keep that compatibility
+ * copy in lockstep without making extension storage authoritative.
+ */
+const PRODUCTIVITY_PRIVATE_FALLBACKS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  quickToolbarSettings: ['spindle:lumiverse_suite:quick_toolbar:quickToolbarSettings'],
+  connectionsPickerSettings: ['spindle:lumiverse_suite:connections_picker:connectionsPickerSettings'],
+  loreIndicatorSettings: ['spindle:lumiverse_suite:lore_indicator:loreIndicatorSettings'],
+  homepageCharacterLibrarySettings: [
+    'spindle:lumiverse_suite:homepage_library:homepageLibrarySettings',
+    'spindle:lumiverse_suite:character_display:homepageSettings',
+  ],
+  characterTabDisplaySettings: ['spindle:lumiverse_suite:character_display:characterTabSettings'],
+  portraitDockSettings: ['spindle:lumiverse_suite:portrait_dock:portraitDockSettings'],
+})
 const dirtyKeys = new Map<string, any>()
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let flushInFlight = false
@@ -152,6 +172,37 @@ let persistenceGeneration = 0
 let localSettingsRevision = 0
 const localSettingRevisions = new Map<string, number>()
 let persistenceScope: string | null = null
+let lastCommittedSettingsKeys = new Set<string>()
+type SettingsTraceData = Record<string, unknown>
+
+function portraitDockTraceSummary(value: unknown): Record<string, unknown> | undefined {
+  if (!isPlainObject(value)) return undefined
+  const rect = isPlainObject(value.rect) ? value.rect : undefined
+  return {
+    open: value.open,
+    dockSide: value.dockSide,
+    defaultDockSide: value.defaultDockSide,
+    rememberSizePosition: value.rememberSizePosition,
+    pinned: value.pinned,
+    aspectRatioLocked: value.aspectRatioLocked,
+    rect: rect ? {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    } : undefined,
+  }
+}
+
+function traceSettings(stage: string, data: SettingsTraceData = {}): void {
+  void stage
+  void data
+}
+
+/** Automatic component reconciliation must not dirty provisional settings. */
+export function canPersistPortraitDockInitialization(fullSettingsLoaded: boolean): boolean {
+  return fullSettingsLoaded
+}
 
 function bridgeStorageKey(key: string): string {
   return persistenceScope ? `${key}:${persistenceScope}` : key
@@ -168,15 +219,27 @@ const settingsLoadGeneration = createSettingsLoadGenerationGuard()
 function persistBatch(batch: Record<string, any>): Promise<void> {
   const generation = persistenceGeneration
   flushInFlight = true
+  traceSettings('persistBatch:start', {
+    generation,
+    keys: Object.keys(batch),
+    portraitDock: portraitDockTraceSummary(batch.portraitDockSettings),
+  })
   const request = settingsApi.putMany(batch).then(() => {
     if (generation === persistenceGeneration) {
+      lastCommittedSettingsKeys = new Set(Object.keys(batch))
       clearPendingSettings(batch)
       if (Object.prototype.hasOwnProperty.call(batch, 'imageGeneration')) {
         clearPendingImageGenerationPatch()
       }
+      traceSettings('persistBatch:committed', {
+        generation,
+        keys: Object.keys(batch),
+        ownUpdateKeys: [...lastCommittedSettingsKeys],
+      })
     }
   }).catch((err) => {
     if (generation !== persistenceGeneration) return
+    traceSettings('persistBatch:failed', { generation, keys: Object.keys(batch) })
     console.error('[settings] Batch persist failed, re-queuing:', err)
     // Re-queue failed keys so the next flush retries them.
     for (const [k, v] of Object.entries(batch)) {
@@ -212,11 +275,50 @@ function hasNewerLocalSetting(key: string, revisionAtLoadStart: number): boolean
   return (localSettingRevisions.get(key) ?? 0) > revisionAtLoadStart
 }
 
-export function persistKey(key: string, value: any) {
-  localSettingRevisions.set(key, ++localSettingsRevision)
+export function persistKey(key: string, value: any, source: SettingsWriteSource = 'unknown') {
+  const revision = ++localSettingsRevision
+  localSettingRevisions.set(key, revision)
   dirtyKeys.set(key, value)
+  const fallbackKeys = PRODUCTIVITY_PRIVATE_FALLBACKS[key] ?? []
+  for (const fallbackKey of fallbackKeys) {
+    dirtyKeys.set(fallbackKey, value)
+  }
+  traceSettings('persistKey:queued', {
+    key,
+    source,
+    revision,
+    fallbackKeys,
+    dirtyKeys: [...dirtyKeys.keys()],
+    portraitDock: key === 'portraitDockSettings' ? portraitDockTraceSummary(value) : undefined,
+  })
   updatePendingSetting(key, value)
   scheduleFlush()
+}
+
+function persistProductivityFallbacks(
+  settings: Record<string, unknown>,
+  persistedValues: ReadonlyMap<string, unknown>,
+): void {
+  let queued = false
+  for (const [key, value] of Object.entries(settings)) {
+    for (const fallbackKey of PRODUCTIVITY_PRIVATE_FALLBACKS[key] ?? []) {
+      // A settings reload must be read-only once the compatibility row already
+      // matches its canonical source. Re-writing matching rows turns every
+      // SETTINGS_UPDATED echo into another reload and persistence cycle.
+      const matches = pendingValuesMatch(persistedValues.get(fallbackKey), value)
+      traceSettings('compatibility:compare', {
+        canonicalKey: key,
+        fallbackKey,
+        matches,
+        action: matches ? 'skip' : 'queue',
+        portraitDock: key === 'portraitDockSettings' ? portraitDockTraceSummary(value) : undefined,
+      })
+      if (matches) continue
+      dirtyKeys.set(fallbackKey, value)
+      queued = true
+    }
+  }
+  if (queued) scheduleFlush()
 }
 
 /**
@@ -404,6 +506,45 @@ export function hasUnsavedSettings(): boolean {
   return dirtyKeys.size > 0 || flushInFlight || activeFlushPromise !== null
 }
 
+export function consumeOwnSettingsUpdate(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false
+  const event = payload as { key?: unknown; keys?: unknown }
+  const keys = typeof event.key === 'string'
+    ? [event.key]
+    : Array.isArray(event.keys) && event.keys.every((key): key is string => typeof key === 'string')
+      ? event.keys
+      : []
+  if (keys.length === 0 || !keys.every(key => lastCommittedSettingsKeys.has(key))) return false
+  for (const key of keys) lastCommittedSettingsKeys.delete(key)
+  return true
+}
+
+/** Whether a SETTINGS_UPDATED event requires a settings reload in this tab. */
+export function shouldReloadSettingsAfterUpdate(payload: unknown): boolean {
+  const unsaved = hasUnsavedSettings()
+  const ownUpdate = consumeOwnSettingsUpdate(payload)
+  const reload = !unsaved && !ownUpdate
+  traceSettings('serverUpdate:decision', {
+    keys: settingsUpdateKeys(payload),
+    unsaved,
+    ownUpdate,
+    reload,
+    dirtyKeys: [...dirtyKeys.keys()],
+    flushInFlight,
+    ownUpdateKeysRemaining: [...lastCommittedSettingsKeys],
+  })
+  return reload
+}
+
+export function settingsUpdateKeys(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return []
+  const event = payload as { key?: unknown; keys?: unknown }
+  if (typeof event.key === 'string') return [event.key]
+  return Array.isArray(event.keys) && event.keys.every((key): key is string => typeof key === 'string')
+    ? [...event.keys]
+    : []
+}
+
 /**
  * Remove a direct-write's matching dirty value without discarding a newer
  * debounced edit that was queued while the request was in flight.
@@ -440,6 +581,7 @@ export function resetSettingsPersistence(): void {
   flushInFlight = false
   activeFlushPromise = null
   activeFlushBatch = null
+  lastCommittedSettingsKeys.clear()
   persistenceScope = null
 }
 
@@ -550,7 +692,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     interceptorTimeoutMs: 10_000,
     dockPanelDesktopSide: 'right',
     infoLoggingEnabled: true,
-    extensionUpdateToastDisabled: {},
   },
   voiceSettings: {
     sttProvider: 'webspeech' as const,
@@ -572,6 +713,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     },
     narrationVoice: null,
   },
+  ...({ landingPageActiveTab: 'characters', ...PRODUCTIVITY_DEFAULTS } as any),
 
   connectionsOrder: normalizeConnectionsOrder(),
 
@@ -603,18 +745,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     if (settings.drawerSettings && typeof settings.drawerSettings === 'object') {
       patch.drawerSettings = { ...get().drawerSettings, ...settings.drawerSettings }
     }
-    if (settings.spindleSettings && typeof settings.spindleSettings === 'object') {
-      const current = get().spindleSettings
-      const disabled = settings.spindleSettings.extensionUpdateToastDisabled
-      patch.spindleSettings = {
-        ...current,
-        ...settings.spindleSettings,
-        extensionUpdateToastDisabled:
-          disabled && typeof disabled === 'object' && !Array.isArray(disabled)
-            ? { ...disabled }
-            : current.extensionUpdateToastDisabled,
-      }
-    }
     if (settings.connectionsOrder && typeof settings.connectionsOrder === 'object') {
       patch.connectionsOrder = normalizeConnectionsOrder(settings.connectionsOrder)
     }
@@ -642,10 +772,45 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       return { wallpaper }
     }),
 
-  setSetting: (key, value) => {
+  setSetting: (key, value, source: SettingsWriteSource = 'user') => {
+    const previous = (get() as unknown as Record<string, unknown>)[key as string]
+    const changed = !pendingValuesMatch(previous, value)
+    traceSettings('setSetting', {
+      key: key as string,
+      source,
+      changed,
+      fullSettingsLoaded: get().fullSettingsLoaded,
+      portraitDockBefore: key === 'portraitDockSettings' ? portraitDockTraceSummary(previous) : undefined,
+      portraitDockAfter: key === 'portraitDockSettings' ? portraitDockTraceSummary(value) : undefined,
+    })
+    // No-op writes must not create a newer local revision. Besides avoiding
+    // needless PUTs, this keeps an automatic bootstrap observation from
+    // winning the load-generation merge solely because its object identity
+    // changed.
+    if (!changed) return
     set({ [key]: value } as any)
     if (DATA_KEYS.has(key as string)) {
-      persistKey(key as string, value)
+      // Runtime synchronization and migration may observe the default store
+      // before the authoritative GET completes. They must not create a local
+      // revision that makes the server snapshot look stale. Explicit UI
+      // interaction remains allowed during hydration and retains precedence.
+      const automatic = source === 'automatic-sync'
+        || source === 'state-sync'
+        || source === 'portrait-dock-init'
+        || source === 'suite-normalization'
+        || source === 'suite-reconciliation'
+        || source === 'host-load'
+        || source === 'compatibility'
+      if (!automatic || get().fullSettingsLoaded) {
+        persistKey(key as string, value, source)
+      } else {
+        traceSettings('setSetting:pre-hydration-skip', {
+          key: key as string,
+          source,
+          fullSettingsLoaded: get().fullSettingsLoaded,
+          portraitDock: key === 'portraitDockSettings' ? portraitDockTraceSummary(value) : undefined,
+        })
+      }
     }
   },
 
@@ -871,9 +1036,28 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     settingsSelectionAbort = selectionAbort
     let selection: PresetSelectionRequest | null = null
     const localRevisionAtLoadStart = localSettingsRevision
+    traceSettings('loadSettings:start', {
+      loadGeneration,
+      localRevisionAtLoadStart,
+      unsaved: hasUnsavedSettings(),
+      dirtyKeys: [...dirtyKeys.keys()],
+      portraitDockBefore: portraitDockTraceSummary(get().portraitDockSettings),
+    })
     try {
       selection = beginActiveLoomPresetSelection({ signal: selectionAbort.signal })
       const rows = await settingsApi.getAll()
+      traceSettings('loadSettings:rows', {
+        loadGeneration,
+        current: isCurrentLoad(),
+        rowCount: rows.length,
+        keys: rows.map((row) => row.key),
+        canonicalPortraitDock: portraitDockTraceSummary(
+          rows.find((row) => row.key === 'portraitDockSettings')?.value,
+        ),
+        compatibilityPortraitDock: portraitDockTraceSummary(
+          rows.find((row) => row.key === PRODUCTIVITY_PRIVATE_FALLBACKS.portraitDockSettings?.[0])?.value,
+        ),
+      })
       if (!isCurrentLoad()) return
       const patch: Record<string, any> = {}
       const defaults = get()
@@ -897,9 +1081,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           !DATA_KEYS.has(row.key)
           || hasNewerLocalSetting(row.key, localRevisionAtLoadStart)
         ) continue
-        const storedValue = row.key === 'imageGeneration'
-          ? migrateStoredImageGeneration(row.value)
-          : row.value
+          const storedValue = row.key === 'imageGeneration'
+            ? migrateStoredImageGeneration(row.value)
+            : migrateProductivitySetting(row.key, row.value)
         patch[row.key] = mergeStoredSetting((defaults as any)[row.key], storedValue)
       }
 
@@ -914,7 +1098,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           ) continue
           const pendingValue = k === 'imageGeneration'
             ? migrateStoredImageGeneration(v)
-            : v
+            : migrateProductivitySetting(k, v)
           patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], pendingValue)
         }
       }
@@ -974,7 +1158,37 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       if (!isCurrentLoad()) return
       delete patch.activeLoomPresetId
       if (Object.keys(patch).length > 0) {
+        traceSettings('loadSettings:merge', {
+          loadGeneration,
+          keys: Object.keys(patch),
+          skippedNewerLocalKeys: rows
+            .map((row) => row.key)
+            .filter((key) => DATA_KEYS.has(key) && hasNewerLocalSetting(key, localRevisionAtLoadStart)),
+          portraitDockBefore: portraitDockTraceSummary(get().portraitDockSettings),
+          portraitDockIncoming: portraitDockTraceSummary(patch.portraitDockSettings),
+          portraitDockServerDockSide: portraitDockTraceSummary(
+            rows.find((row) => row.key === 'portraitDockSettings')?.value,
+          )?.dockSide,
+          portraitDockServerDefaultDockSide: portraitDockTraceSummary(
+            rows.find((row) => row.key === 'portraitDockSettings')?.value,
+          )?.defaultDockSide,
+          portraitDockServerRememberSizePosition: portraitDockTraceSummary(
+            rows.find((row) => row.key === 'portraitDockSettings')?.value,
+          )?.rememberSizePosition,
+          portraitDockLocalDockSide: get().portraitDockSettings.dockSide,
+          portraitDockLocalDefaultDockSide: get().portraitDockSettings.defaultDockSide,
+          portraitDockLocalRememberSizePosition: get().portraitDockSettings.rememberSizePosition,
+          portraitDockIncomingDockSide: portraitDockTraceSummary(patch.portraitDockSettings)?.dockSide,
+          portraitDockIncomingDefaultDockSide: portraitDockTraceSummary(patch.portraitDockSettings)?.defaultDockSide,
+          portraitDockIncomingRememberSizePosition: portraitDockTraceSummary(patch.portraitDockSettings)?.rememberSizePosition,
+          portraitDockRevisionAtLoadStart: localRevisionAtLoadStart,
+          portraitDockCurrentRevision: localSettingRevisions.get('portraitDockSettings') ?? 0,
+        })
         set(patch as any)
+        traceSettings('loadSettings:merged', {
+          loadGeneration,
+          portraitDockAfter: portraitDockTraceSummary(get().portraitDockSettings),
+        })
         if (!isCurrentLoad()) return
       }
       if (requestedActiveLoomPresetId !== undefined && selection) {
@@ -1023,6 +1237,14 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // image-generation row still waits for profile reconciliation when needed.
       if (!isCurrentLoad()) return
       set({ fullSettingsLoaded: true })
+      traceSettings('loadSettings:hydrated', {
+        loadGeneration,
+        pendingKeys: pendingKeys ? Object.keys(pendingKeys) : [],
+        portraitDock: portraitDockTraceSummary(get().portraitDockSettings),
+      })
+      // Compatibility rows are repaired only after canonical hydration has
+      // completed; they are never allowed to race or lead the initial load.
+      persistProductivityFallbacks(patch, new Map(rows.map((row) => [row.key, row.value])))
       if (pendingKeys) {
         for (const [key, value] of Object.entries(pendingKeys)) {
           if (!DATA_KEYS.has(key) || key === 'imageGeneration') continue
@@ -1046,6 +1268,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       }
     } catch (err) {
       if (isCurrentLoad()) {
+        traceSettings('loadSettings:failed', { loadGeneration })
         console.error('[settings] Failed to load settings:', err)
       }
     } finally {
@@ -1055,6 +1278,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       }
       if (isCurrentLoad()) {
         set({ settingsLoaded: true })
+        traceSettings('loadSettings:finished', {
+          loadGeneration,
+          fullSettingsLoaded: get().fullSettingsLoaded,
+          portraitDock: portraitDockTraceSummary(get().portraitDockSettings),
+        })
       }
     }
   },

@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom'
 import { Copy, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square, Anchor } from 'lucide-react'
 import { IconGitFork } from '@tabler/icons-react'
 import { useStore } from '@/store'
+import { requestHostIntent } from '@/lib/hostIntents'
 import { useLongPress } from '@/hooks/useLongPress'
 import { useMessagePlayback } from '@/hooks/useMessagePlayback'
 import useSwipeAction from '@/hooks/useSwipeAction'
@@ -351,7 +352,12 @@ export default function MinimalMessageDefault({
       <div
         className={styles.avatar}
         style={fullAvatarUrl ? { cursor: 'pointer' } : undefined}
-        onClick={fullAvatarUrl ? (e) => { e.stopPropagation(); openFloatingAvatar(fullAvatarUrl, displayName) } : undefined}
+        onClick={fullAvatarUrl ? (e) => {
+          e.stopPropagation()
+          if (!requestHostIntent('image-preview', { imageUrl: fullAvatarUrl, caption: displayName, source: 'minimal-message-avatar' })) {
+            openFloatingAvatar(fullAvatarUrl, displayName)
+          }
+        } : undefined}
       >
         <LazyImage
           src={displayAvatarUrl}

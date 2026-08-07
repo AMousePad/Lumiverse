@@ -87,7 +87,23 @@ import {
   subscribeLiveRoot,
   type LiveRootPermission,
 } from './live-root-registry'
+import {
+  getHostSurfaceRenderer,
+  hostSurfacePermission,
+  listHostSurfaces,
+  validateHostSurfaceEventPayload,
+  validateHostSurfaceProps,
+  type HostSurfaceJsonValue,
+  type HostSurfaceProps,
+  type HostSurfaceRenderContext,
+  type HostSurfaceRenderer,
+  type SpindleHostSurfaceHandle,
+  type SpindleHostSurfaceInfo,
+  type HostSurfaceEventHandler,
+  type HostSurfaceUnsubscribe,
+} from './host-surface-registry'
 import { scheduleMicrotask } from '@/lib/schedule-microtask'
+import { RouterContextBridge } from '@/lib/router-bridge'
 
 // Spindle bridge components expose imperative handles by mutating the bridge
 // object passed from the extension runtime. This is an intentional escape hatch
@@ -509,6 +525,7 @@ function buildHandle<TOptions, TValue>(
   target: HTMLElement,
   mount: MountResult<TOptions, TValue>,
   requiredPermission: LiveRootPermission,
+  afterDestroy?: () => void,
 ): SpindleMountedComponent<TOptions> & { getValue(): TValue } & Omit<BridgeAPI<TOptions, TValue>, 'update' | 'getValue'> {
   const generation = currentGeneration(extensionId)
   const ownerRecord = getPlacementRootRecord(extensionId, target, generation)
@@ -536,6 +553,7 @@ function buildHandle<TOptions, TValue>(
     }
     tracked.portalNodes.clear()
     tracked.portalNodeStates.clear()
+    try { afterDestroy?.() } catch { /* no-op */ }
     untrack(extensionId, tracked)
   }
   tracked = {
@@ -1460,6 +1478,49 @@ function Slot({ el }: { el: HTMLElement }) {
   return <div ref={ref} />
 }
 
+function HostSurfaceBridge({
+  initial,
+  bridge,
+  renderer,
+  context,
+  invalidate,
+}: {
+  initial: Record<string, unknown>
+  bridge: BridgeAPI<HostSurfaceProps, void>
+  renderer: HostSurfaceRenderer
+  context: HostSurfaceRenderContext
+  invalidate(): void
+}): ReactElement {
+  const [props, setProps] = useState(initial)
+
+  useLayoutEffect(() => {
+    bridge.update = (nextProps) => setProps(nextProps as Record<string, unknown>)
+    bridge.invalidate = invalidate
+    return () => {
+      bridge.update = () => {}
+      bridge.invalidate = undefined
+    }
+  }, [bridge, invalidate])
+
+  return renderer(props, context)
+}
+
+export interface SpindleComponentsHelperOptions {
+  /** The loader owns the live grant cache; absent means fail closed. */
+  hasPermission?: (permission: string) => boolean
+}
+
+export interface SpindleHostSurfaceComponentsHelper {
+  mountHostSurface(
+    target: SpindleComponentTarget,
+    surfaceId: string,
+    props?: HostSurfaceProps,
+  ): SpindleHostSurfaceHandle
+  listHostSurfaces(): readonly SpindleHostSurfaceInfo[]
+}
+
+export type SpindleComponentsHelperWithHostSurfaces = SpindleComponentsHelper & SpindleHostSurfaceComponentsHelper
+
 // ── Public factory ────────────────────────────────────────────────────────
 
 export function createComponentsHelper(
@@ -1467,9 +1528,103 @@ export function createComponentsHelper(
   identifier: string,
   getMacroCatalogForExtension: () => Promise<unknown>,
   generationOverride?: number,
-): SpindleComponentsHelper {
+  options: SpindleComponentsHelperOptions = {},
+): SpindleComponentsHelperWithHostSurfaces {
   const generation = generationOverride ?? currentGeneration(extensionId)
   if (generationOverride !== undefined) extensionGenerations.set(extensionId, generationOverride)
+
+  function mountHostSurface(
+    target: SpindleComponentTarget,
+    surfaceId: string,
+    props: HostSurfaceProps = {},
+  ): SpindleHostSurfaceHandle {
+    const permission = hostSurfacePermission(surfaceId)
+    if (permission !== null && !(options.hasPermission?.(permission) ?? false)) {
+      throw new Error(`PERMISSION_DENIED:${permission} — ${surfaceId} requires the ${permission} permission`)
+    }
+    const renderer = getHostSurfaceRenderer(surfaceId)
+    if (!renderer) throw new Error(`HOST_SURFACE_UNAVAILABLE:${surfaceId}`)
+
+    const el = resolveTarget(extensionId, target, generation)
+    const validatedProps = validateHostSurfaceProps(surfaceId, props)
+    const id = nextId(extensionId, `host-surface:${surfaceId}`)
+    const listeners = new Map<string, Set<HostSurfaceEventHandler>>()
+    let active = true
+    const invalidate = () => {
+      active = false
+      listeners.clear()
+    }
+    const emit = (event: string, payload: HostSurfaceJsonValue): void => {
+      if (!active) return
+      const validatedPayload = validateHostSurfaceEventPayload(payload)
+      for (const handler of [...(listeners.get(event) ?? [])]) {
+        try { handler(validatedPayload) } catch { /* observer isolation */ }
+      }
+    }
+    const context: HostSurfaceRenderContext = { extensionId, emit }
+    // A host anchor may intentionally carry multiple surfaces (for example,
+    // the Connections launcher and panel). Give each surface its own React
+    // root so a later mount cannot clear an earlier one.
+    const surfaceRoot = document.createElement('div')
+    surfaceRoot.setAttribute('data-spindle-host-surface', surfaceId)
+    el.append(surfaceRoot)
+    const mount = mountBridge<HostSurfaceProps, void>(surfaceRoot, (bridge) => (
+      <RouterContextBridge>
+        <HostSurfaceBridge
+          initial={validatedProps}
+          bridge={bridge}
+          renderer={renderer}
+          context={context}
+          invalidate={invalidate}
+        />
+      </RouterContextBridge>
+    ))
+    const requiredPermission = permission === 'world_books'
+      ? permission
+      : componentPermissionForTarget(extensionId, el, generation)
+    try {
+      const base = buildHandle(
+        extensionId,
+        id,
+        el,
+        mount,
+        requiredPermission,
+        () => surfaceRoot.remove(),
+      )
+
+      return {
+        update(nextProps) {
+          if (!active) throw new Error(`HOST_SURFACE_DESTROYED:${surfaceId}`)
+          base.update(validateHostSurfaceProps(surfaceId, nextProps))
+        },
+        destroy() {
+          if (!active) return
+          invalidate()
+          base.destroy()
+        },
+        on(event, handler): HostSurfaceUnsubscribe {
+          if (!active) throw new Error(`HOST_SURFACE_DESTROYED:${surfaceId}`)
+          if (typeof event !== 'string' || event.length === 0 || event.length > 128) {
+            throw new Error('HOST_SURFACE_EVENT_INVALID:event name')
+          }
+          if (typeof handler !== 'function') throw new Error('HOST_SURFACE_EVENT_INVALID:handler')
+          const handlers = listeners.get(event) ?? new Set<HostSurfaceEventHandler>()
+          handlers.add(handler)
+          listeners.set(event, handlers)
+          let subscribed = true
+          return () => {
+            if (!subscribed) return
+            subscribed = false
+            handlers.delete(handler)
+            if (handlers.size === 0) listeners.delete(event)
+          }
+        },
+      }
+    } catch (error) {
+      try { surfaceRoot.remove() } catch { /* no-op */ }
+      throw error
+    }
+  }
   function mountText(target: SpindleComponentTarget, options?: SpindleTextInputOptions): SpindleTextInputHandle {
     const el = resolveTarget(extensionId, target, generation)
     const id = nextId(extensionId, 'text-input')
@@ -1650,6 +1805,8 @@ export function createComponentsHelper(
     mountPagination,
     mountCloseButton,
     mountLoomBlockEditor,
+    mountHostSurface,
+    listHostSurfaces: () => [...listHostSurfaces()],
   }
 }
 

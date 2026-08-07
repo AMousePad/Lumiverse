@@ -1,22 +1,47 @@
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import type { Character, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
+import type { Character, CharacterLibraryScope, CharacterPreview, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as filesSvc from "./files.service";
 import * as imagesSvc from "./images.service";
 import { deleteRegexScriptsByCharacterId } from "./regex-scripts.service";
 import { deleteAutoManagedCharacterWorldBooks } from "./world-books.service";
+import { getCharacterWorldBookIds } from "../utils/character-world-books";
+
+export class InvalidCharacterLibraryScopeError extends Error {
+  readonly code = "INVALID_CHARACTER_LIBRARY_SCOPE" as const;
+  constructor(readonly value: unknown) { super('Character library scope must be exactly "mine" or "shared"'); this.name = "InvalidCharacterLibraryScopeError"; }
+}
+
+export function normalizeCharacterLibraryScope(scope: unknown): CharacterLibraryScope {
+  if (scope === undefined) return "mine";
+  if (scope === "mine" || scope === "shared") return scope;
+  throw new InvalidCharacterLibraryScopeError(scope);
+}
+
+function explicitCharacterInputScope(input: { library_scope?: unknown; extensions?: Record<string, any> }): CharacterLibraryScope | undefined {
+  const direct = input.library_scope === undefined ? undefined : normalizeCharacterLibraryScope(input.library_scope);
+  const mirrorValue = input.extensions && Object.prototype.hasOwnProperty.call(input.extensions, "_lumiverse_library_scope") ? input.extensions._lumiverse_library_scope : undefined;
+  const mirror = mirrorValue === undefined ? undefined : normalizeCharacterLibraryScope(mirrorValue);
+  if (direct !== undefined && mirror !== undefined && direct !== mirror) throw new InvalidCharacterLibraryScopeError({ library_scope: direct, _lumiverse_library_scope: mirror });
+  return direct ?? mirror;
+}
+
+function canonicalCharacterExtensions(extensions: Record<string, any> | undefined, scope: CharacterLibraryScope): Record<string, any> {
+  return { ...(extensions || {}), _lumiverse_library_scope: scope };
+}
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
-const SUMMARY_COLUMNS = `c.id, c.name, c.creator, c.folder, c.tags, c.image_id, c.created_at, c.updated_at,
+const SUMMARY_COLUMNS = `c.id, c.library_scope, c.name, c.creator, c.folder, c.tags, c.image_id, c.created_at, c.updated_at,
   (json_array_length(c.alternate_greetings) > 0) as has_alternate_greetings`;
 
 function rowToSummary(row: any): CharacterSummary {
   return {
     id: row.id,
+    library_scope: normalizeCharacterLibraryScope(row.library_scope),
     name: row.name,
     creator: row.creator,
     folder: row.folder || "",
@@ -78,6 +103,8 @@ export interface SummaryQueryOptions {
   favoriteIds?: string[];
   filterMode?: "all" | "favorites" | "non-favorites";
   seed?: number;
+  scope?: CharacterLibraryScope;
+  chatId?: string;
 }
 
 const UUID_HEX_SQL = "LOWER(REPLACE(c.id, '-', ''))";
@@ -156,6 +183,7 @@ export function listCharacterSummaries(
 ): PaginatedResult<CharacterSummary> {
   const db = getDb();
   const { search, tags, excludeTags, sort, direction = "desc", favoriteIds, filterMode = "all", seed } = options;
+  const scope = options.scope === undefined ? undefined : normalizeCharacterLibraryScope(options.scope);
 
   if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
     return {
@@ -173,6 +201,11 @@ export function listCharacterSummaries(
 
   const whereClauses: string[] = ["c.user_id = ?", "c.deleting = 0"];
   const whereParams: any[] = [userId];
+  if (scope) { whereClauses.push("c.library_scope = ?"); whereParams.push(scope); }
+  if (options.chatId) {
+    whereClauses.push(`EXISTS (SELECT 1 FROM chats chat_filter WHERE chat_filter.id = ? AND chat_filter.user_id = ? AND (chat_filter.character_id = c.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(chat_filter.metadata, '$.character_ids'), '[]')) participant WHERE participant.value = c.id)))`);
+    whereParams.push(options.chatId, userId);
+  }
 
   // FTS5 (trigram) search — falls back to LIKE for 1–2 char queries that
   // trigram cannot match (common for 2-char CJK names like 魔王).
@@ -264,6 +297,7 @@ function listCharacterSummariesDiscover(
   const nowSeconds = Math.floor(Date.now() / 1000);
   const shuffleSeed = normalizeShuffleSeed(options.seed);
   const { search, tags, excludeTags, favoriteIds, filterMode = "all" } = options;
+  const scope = options.scope === undefined ? undefined : normalizeCharacterLibraryScope(options.scope);
 
   if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
     return {
@@ -276,6 +310,11 @@ function listCharacterSummariesDiscover(
 
   const whereClauses: string[] = ["c.user_id = ?", "c.deleting = 0"];
   const whereParams: any[] = [userId];
+  if (scope) { whereClauses.push("c.library_scope = ?"); whereParams.push(scope); }
+  if (options.chatId) {
+    whereClauses.push(`EXISTS (SELECT 1 FROM chats chat_filter WHERE chat_filter.id = ? AND chat_filter.user_id = ? AND (chat_filter.character_id = c.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(chat_filter.metadata, '$.character_ids'), '[]')) participant WHERE participant.value = c.id)))`);
+    whereParams.push(options.chatId, userId);
+  }
 
   let extraJoin = "";
   if (search) {
@@ -547,14 +586,16 @@ function sanitizePerspectiveLayerInputs(inputs: unknown): LandingPerspectiveLaye
 
 function rowToCharacter(row: any): Character {
   const { deleting: _deleting, ...rest } = row;
+  const libraryScope = normalizeCharacterLibraryScope(row.library_scope);
   return {
     ...rest,
+    library_scope: libraryScope,
     avatar_path: row.avatar_path || null,
     image_id: row.image_id || null,
     folder: row.folder || "",
     tags: JSON.parse(row.tags),
     alternate_greetings: JSON.parse(row.alternate_greetings),
-    extensions: JSON.parse(row.extensions),
+    extensions: canonicalCharacterExtensions(JSON.parse(row.extensions), libraryScope),
   };
 }
 
@@ -748,6 +789,36 @@ export function getCharacter(userId: string, id: string): Character | null {
   return rowToCharacter(row);
 }
 
+export function getCharacterPreview(userId: string, id: string): CharacterPreview | null {
+  const character = getCharacter(userId, id);
+  if (!character) return null;
+  const summary: CharacterSummary = rowToSummary({
+    id: character.id,
+    library_scope: character.library_scope,
+    name: character.name,
+    creator: character.creator,
+    folder: character.folder,
+    tags: JSON.stringify(character.tags),
+    image_id: character.image_id,
+    created_at: character.created_at,
+    updated_at: character.updated_at,
+    has_alternate_greetings: character.alternate_greetings.length > 0,
+  });
+  const bookIds = getCharacterWorldBookIds(character.extensions);
+  const lorebooks = bookIds.length === 0 ? [] : getDb().query(
+    `SELECT id, name FROM world_books WHERE user_id = ? AND id IN (${bookIds.map(() => "?").join(",")})`
+  ).all(userId, ...bookIds) as Array<{ id: string; name: string }>;
+  const chat = getDb().query(`
+    SELECT c.id, c.name, c.updated_at,
+      (SELECT substr(content, 1, 280) FROM messages WHERE chat_id = c.id ORDER BY index_in_chat DESC LIMIT 1) AS last_message_preview
+    FROM chats c
+    WHERE c.user_id = ? AND c.character_id = ? AND COALESCE(json_extract(c.metadata, '$.group'), 0) != 1
+    ORDER BY (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) DESC, c.updated_at DESC LIMIT 1
+  `).get(userId, id) as { id: string; name: string; updated_at: number; last_message_preview: string | null } | null;
+  const lastChat = chat ? { ...chat, name: chat.name || "", last_message_preview: chat.last_message_preview || "" } : null;
+  return { character: summary, lorebooks, last_chat: lastChat, open_chat_id: lastChat?.id ?? null };
+}
+
 /**
  * Batch-load multiple characters by ID in a single query.
  */
@@ -766,19 +837,21 @@ export function createCharacter(userId: string, input: CreateCharacterInput): Ch
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const createdAt = input.created_at ?? now;
-  const extensions = { ...(input.extensions || {}) };
+  const libraryScope = explicitCharacterInputScope(input) ?? "mine";
+  const extensions = canonicalCharacterExtensions(input.extensions, libraryScope);
   delete extensions.avatar_crop_image_id;
   delete extensions.original_image_id;
 
   getDb()
     .query(
-      `INSERT INTO characters (id, user_id, name, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, tags, alternate_greetings, extensions, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO characters (id, user_id, name, library_scope, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, tags, alternate_greetings, extensions, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
       userId,
       input.name,
+      libraryScope,
       input.description || "",
       input.personality || "",
       input.scenario || "",
@@ -830,12 +903,18 @@ export function updateCharacter(userId: string, id: string, input: UpdateCharact
     values.push(input.folder.trim());
   }
 
-  const jsonFields = ["tags", "alternate_greetings", "extensions"] as const;
+  const explicitScope = explicitCharacterInputScope(input);
+  if (explicitScope !== undefined) { fields.push("library_scope = ?"); values.push(explicitScope); }
+  const jsonFields = ["tags", "alternate_greetings"] as const;
   for (const field of jsonFields) {
     if (input[field] !== undefined) {
       fields.push(`${field} = ?`);
       values.push(JSON.stringify(input[field]));
     }
+  }
+  if (input.extensions !== undefined || explicitScope !== undefined) {
+    const scope = explicitScope ?? existing.library_scope ?? "mine";
+    fields.push("extensions = ?"); values.push(JSON.stringify(canonicalCharacterExtensions(input.extensions ?? existing.extensions, scope)));
   }
 
   if (fields.length === 0) return existing;
@@ -1113,13 +1192,14 @@ export function duplicateCharacter(userId: string, id: string): Character | null
 
   getDb()
     .query(
-      `INSERT INTO characters (id, user_id, name, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, folder, avatar_path, image_id, tags, alternate_greetings, extensions, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       `INSERT INTO characters (id, user_id, name, library_scope, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, folder, avatar_path, image_id, tags, alternate_greetings, extensions, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       newId,
       userId,
       `${existing.name} (Copy)`,
+      existing.library_scope ?? "mine",
       existing.description,
       existing.personality,
       existing.scenario,

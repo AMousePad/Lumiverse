@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import DOMPurify from 'dompurify'
+import { actionIcon } from './InputBarExtensionActions.icons'
 import styles from './InputArea.module.css'
 
 interface InputBarExtensionActionsProps {
@@ -54,6 +55,7 @@ export default function InputBarExtensionActions({ onClose }: InputBarExtensionA
                     dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(action.iconSvg) }}
                   />
                 )}
+                {!action.iconUrl && !action.iconSvg && actionIcon(action.iconName)}
                 <span className={styles.personaNameGroup}>
                   <span>{action.label}</span>
                   {action.subtitle && <span className={styles.personaTitle}>{action.subtitle}</span>}

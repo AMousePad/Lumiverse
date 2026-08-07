@@ -1,7 +1,15 @@
 import type { WorldBookEntry } from "../types/world-book";
 import type { WorldInfoCache } from "../types/world-book";
 import type { Message } from "../types/message";
-import { WorldInfoMatcher, makeScanState, type ScanState } from "./world-info-matcher.service";
+import {
+  projectActivationProvenance,
+  type ActivationProvenance,
+} from "../spindle/activation-provenance";
+import {
+  WorldInfoMatcher,
+  makeScanState,
+  type ScanState,
+} from "./world-info-matcher.service";
 
 /**
  * Per-entry sticky/cooldown/delay tracking state, stored in chat.metadata.wi_state.
@@ -125,23 +133,18 @@ export function primeWorldInfoActivationScanCache(
   cache.messageSignature = undefined;
   cache.baseStates.clear();
   const settings = normalizeWorldInfoSettings(settingsInput);
-  const views = entryViews.map((entries) =>
-    conditionalEntriesForScan(entries, settings)
-  );
+  const views = entryViews.map((entries) => conditionalEntriesForScan(entries, settings));
   const union = new Map<string, WorldBookEntry>();
-  const unionSignatures = new Map<string, string>();
+  const signatures = new Map<string, string>();
   for (const entries of views) {
     for (const entry of entries) {
       const signature = scanEntrySignature(entry);
-      const existingSignature = unionSignatures.get(entry.uid);
-      if (
-        existingSignature !== undefined &&
-        existingSignature !== signature
-      ) {
+      const existing = signatures.get(entry.uid);
+      if (existing !== undefined && existing !== signature) {
         cache.plan = undefined;
         return;
       }
-      unionSignatures.set(entry.uid, signature);
+      signatures.set(entry.uid, signature);
       if (!union.has(entry.uid)) union.set(entry.uid, entry);
     }
   }
@@ -169,6 +172,8 @@ export interface ActivationResult {
   activatedEntries: WorldBookEntry[];
   wiState: WiState;
   stats: ActivationStats;
+  activationProvenanceById: Map<string, ActivationProvenance>;
+  firstTriggeredForBookById: Map<string, boolean>;
 }
 
 export interface FinalizedWorldInfoEntries {
@@ -202,6 +207,20 @@ interface CachedActivationResult {
 
 const wiActivationCache = new Map<string, CachedActivationResult>();
 
+function cloneActivationProvenance(value: ActivationProvenance): ActivationProvenance {
+  const clone = projectActivationProvenance(value);
+  if (!clone) throw new Error("Invalid activation provenance in cache");
+  return clone;
+}
+
+function cloneActivationProvenanceMap(
+  source: ReadonlyMap<string, ActivationProvenance>,
+): Map<string, ActivationProvenance> {
+  return new Map(
+    [...source].map(([id, provenance]) => [id, cloneActivationProvenance(provenance)] as const),
+  );
+}
+
 function pruneWiActivationCache(now = Date.now()): void {
   for (const [key, cached] of wiActivationCache) {
     if (now - cached.cachedAt > WI_ACTIVATION_CACHE_TTL_MS) {
@@ -220,24 +239,15 @@ function conditionalEntriesForScan(
   entries: readonly WorldBookEntry[],
   settings: WorldInfoSettings,
 ): WorldBookEntry[] {
-  return entries.filter(
-    (entry) =>
-      !entry.disabled &&
-      !entry.constant &&
-      (settings.minPriority === 0 || entry.priority >= settings.minPriority),
-  );
+  return entries.filter((entry) =>
+    !entry.disabled && !entry.constant &&
+    (settings.minPriority === 0 || entry.priority >= settings.minPriority));
 }
 
 function computeMessageSignature(messages: readonly Message[]): string {
   const hasher = new Bun.CryptoHasher("sha256");
   for (const message of messages) {
-    hasher.update(
-      JSON.stringify({
-        id: message.id,
-        content: message.content,
-        greeting: message.extra?.greeting === true,
-      }),
-    );
+    hasher.update(JSON.stringify({ id: message.id, content: message.content }));
     hasher.update("\0");
   }
   return hasher.digest("hex");
@@ -245,12 +255,11 @@ function computeMessageSignature(messages: readonly Message[]): string {
 
 function computeWiActivationCacheKey(input: ActivationInput): string {
   const entries = input.entries;
+  const messages = input.messages;
   const wiState = input.wiState;
   const settings = normalizeWorldInfoSettings(input.settings);
-  const messages = input.messages;
-  const hasher = new Bun.CryptoHasher("sha256");
-  for (const e of entries) {
-    hasher.update(JSON.stringify({
+  const entrySig = entries
+    .map((e) => JSON.stringify({
       id: e.id,
       uid: e.uid,
       world_book_id: e.world_book_id,
@@ -269,7 +278,6 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
       group_weight: e.group_weight,
       probability: e.probability,
       scan_depth: e.scan_depth,
-      exclude_greeting: e.exclude_greeting,
       case_sensitive: e.case_sensitive,
       match_whole_words: e.match_whole_words,
       use_regex: e.use_regex,
@@ -283,23 +291,9 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
       selective_logic: e.selective_logic,
       use_probability: e.use_probability,
       vectorized: e.vectorized,
-    }));
-    hasher.update("\0");
-  }
-  for (const entry of entries) {
-    const content = input.selectionContentByEntryId?.get(entry.id);
-    if (content !== undefined && content !== entry.content) {
-      hasher.update(JSON.stringify([entry.id, content]));
-      hasher.update("\0");
-    }
-  }
-  const readsMessages = entries.some(
-    (entry) =>
-      !entry.disabled &&
-      !entry.constant &&
-      entry.key.length > 0 &&
-      (settings.minPriority === 0 || entry.priority >= settings.minPriority),
-  );
+    }))
+    .join("|");
+  const readsMessages = conditionalEntriesForScan(entries, settings).some((entry) => entry.key.length > 0);
   let msgSig = "";
   if (readsMessages) {
     msgSig = input.scanCache?.messageSignature ?? "";
@@ -308,12 +302,10 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
       if (input.scanCache) input.scanCache.messageSignature = msgSig;
     }
   }
-  hasher.update(msgSig);
-  hasher.update("\0");
-  hasher.update(JSON.stringify(wiState));
-  hasher.update("\0");
-  hasher.update(JSON.stringify(settings));
-  return hasher.digest("hex");
+  const stateSig = JSON.stringify(wiState);
+  const settingsSig = JSON.stringify(settings);
+  const selectionSig = JSON.stringify([...input.selectionContentByEntryId ?? []]);
+  return `${entrySig}::${msgSig}::${stateSig}::${settingsSig}::${selectionSig}`;
 }
 
 function bindWorldInfoActivationScanCache(
@@ -343,6 +335,8 @@ function getCachedActivationResult(cacheKey: string): ActivationResult | null {
   return {
     ...cached.result,
     wiState: deepCloneWiState(cached.result.wiState),
+    activationProvenanceById: cloneActivationProvenanceMap(cached.result.activationProvenanceById),
+    firstTriggeredForBookById: new Map(cached.result.firstTriggeredForBookById),
   };
 }
 
@@ -352,6 +346,8 @@ function setCachedActivationResult(cacheKey: string, result: ActivationResult): 
     result: {
       ...result,
       wiState: deepCloneWiState(result.wiState),
+      activationProvenanceById: cloneActivationProvenanceMap(result.activationProvenanceById),
+      firstTriggeredForBookById: new Map(result.firstTriggeredForBookById),
     },
     cachedAt: Date.now(),
   });
@@ -366,9 +362,7 @@ function setCachedActivationResult(cacheKey: string, result: ActivationResult): 
  * budget enforcement → bucket by position.
  */
 export function activateWorldInfo(input: ActivationInput): ActivationResult {
-  if (input.scanCache) {
-    bindWorldInfoActivationScanCache(input.scanCache, input.messages);
-  }
+  if (input.scanCache) bindWorldInfoActivationScanCache(input.scanCache, input.messages);
   const cacheKey = input.random ? null : computeWiActivationCacheKey(input);
   const cached = cacheKey ? getCachedActivationResult(cacheKey) : null;
   if (cached) return cached;
@@ -408,6 +402,14 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
 
   // 3. Evaluate conditional entries
   const activated: WorldBookEntry[] = [...constants];
+  const activationProvenanceById = new Map<string, ActivationProvenance>();
+  const firstTriggeredForBookById = new Map<string, boolean>();
+  const triggeredBooks = new Set<string>();
+  for (const entry of constants) {
+    activationProvenanceById.set(entry.id, { origin: "constant" });
+    firstTriggeredForBookById.set(entry.id, !triggeredBooks.has(entry.world_book_id));
+    triggeredBooks.add(entry.world_book_id);
+  }
 
   const blockedByCooldown = new Set<string>();
   const matchedThisTurn = new Set<string>();
@@ -430,7 +432,8 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
   const recursionPassesUsed = runAhoCorasickPasses({
     conditional, constants, messages, settings, wiState,
     activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
-    maxPasses, scanCache: input.scanCache, random: input.random ?? Math.random,
+    maxPasses, activationProvenanceById, firstTriggeredForBookById, triggeredBooks,
+    scanCache: input.scanCache, random: input.random ?? Math.random,
   });
 
   for (const entry of conditional) {
@@ -450,6 +453,9 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
       state.stickyLeft--;
       state.active = true;
       activated.push(entry);
+      activationProvenanceById.set(entry.id, { origin: "sticky" });
+      firstTriggeredForBookById.set(entry.id, !triggeredBooks.has(entry.world_book_id));
+      triggeredBooks.add(entry.world_book_id);
       // When sticky expires, start cooldown
       if (state.stickyLeft === 0 && entry.cooldown > 0) {
         state.cooldownLeft = entry.cooldown;
@@ -477,7 +483,27 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     queryPreview: "",
   };
 
-  const result: ActivationResult = { cache: finalized.cache, activatedEntries: finalized.activatedEntries, wiState, stats };
+  const survivingIds = new Set(finalized.activatedEntries.map((entry) => entry.id));
+  for (const id of [...activationProvenanceById.keys()]) {
+    if (!survivingIds.has(id)) activationProvenanceById.delete(id);
+  }
+  const finalFirstTriggeredForBookById = new Map<string, boolean>();
+  const survivingBooks = new Set<string>();
+  for (const entry of finalized.activatedEntries) {
+    finalFirstTriggeredForBookById.set(
+      entry.id,
+      !survivingBooks.has(entry.world_book_id),
+    );
+    survivingBooks.add(entry.world_book_id);
+  }
+  const result: ActivationResult = {
+    cache: finalized.cache,
+    activatedEntries: finalized.activatedEntries,
+    wiState,
+    stats,
+    activationProvenanceById,
+    firstTriggeredForBookById: finalFirstTriggeredForBookById,
+  };
   if (cacheKey) setCachedActivationResult(cacheKey, result);
   return result;
 }
@@ -493,10 +519,7 @@ export function finalizeActivatedWorldInfoEntries(
     ? [...entries]
     : applyWorldInfoGroupLogic([...entries], options.random);
   const insertableEntries = afterGroups.filter((entry) =>
-    hasMeaningfulWorldInfoContent({
-      content: selectionContentFor(entry, options.selectionContentByEntryId),
-    }),
-  );
+    hasMeaningfulWorldInfoContent({ content: selectionContentFor(entry, options.selectionContentByEntryId) }));
 
   if (!options.preserveOrder) {
     insertableEntries.sort((a, b) => {
@@ -508,23 +531,16 @@ export function finalizeActivatedWorldInfoEntries(
   }
 
   const activatedBeforeBudget = insertableEntries.length;
-  const activatedEntries = enforceBudget(
-    insertableEntries,
-    settings,
-    options.selectionContentByEntryId,
-  );
+  const activatedEntries = enforceBudget(insertableEntries, settings, options.selectionContentByEntryId);
   const evictedByBudget = activatedBeforeBudget - activatedEntries.length;
 
   return {
-    cache: materializeWorldInfoCache(activatedEntries),
+    cache: bucketByPosition(activatedEntries),
     activatedEntries,
     activatedBeforeBudget,
     activatedAfterBudget: activatedEntries.length,
     evictedByBudget,
-    estimatedTokens: estimateTokens(
-      activatedEntries,
-      options.selectionContentByEntryId,
-    ),
+    estimatedTokens: estimateTokens(activatedEntries, options.selectionContentByEntryId),
   };
 }
 
@@ -533,7 +549,7 @@ export function finalizeActivatedWorldInfoEntries(
 // ---------------------------------------------------------------------------
 
 /** Rough token estimate: chars / 4 is a reasonable heuristic for English text. */
-function estimateEntryTokens(content: string): number {
+export function estimateWorldInfoEntryTokens(content: string): number {
   return Math.ceil(content.length / 4);
 }
 
@@ -551,7 +567,7 @@ function estimateTokens(
   let total = 0;
   for (const e of entries) {
     const content = selectionContentFor(e, selectionContentByEntryId);
-    if (content) total += estimateEntryTokens(content);
+    if (content) total += estimateWorldInfoEntryTokens(content);
   }
   return total;
 }
@@ -590,7 +606,7 @@ function enforceBudget(
     for (const e of result) {
       if (e.constant) {
         const content = selectionContentFor(e, selectionContentByEntryId);
-        totalTokens += content ? estimateEntryTokens(content) : 0;
+        totalTokens += content ? estimateWorldInfoEntryTokens(content) : 0;
         kept.push(e);
       }
     }
@@ -599,7 +615,7 @@ function enforceBudget(
     for (const e of result) {
       if (e.constant) continue;
       const content = selectionContentFor(e, selectionContentByEntryId);
-      const tokens = content ? estimateEntryTokens(content) : 0;
+      const tokens = content ? estimateWorldInfoEntryTokens(content) : 0;
       if (totalTokens + tokens > settings.maxTokenBudget) continue;
       totalTokens += tokens;
       kept.push(e);
@@ -627,24 +643,56 @@ interface AhoCorasickPassArgs {
   matchedThisTurn: Set<string>;
   delayIncremented: Set<string>;
   maxPasses: number;
+  activationProvenanceById: Map<string, ActivationProvenance>;
+  firstTriggeredForBookById: Map<string, boolean>;
+  triggeredBooks: Set<string>;
   scanCache?: WorldInfoActivationScanCache;
   random: () => number;
 }
 
-function cloneScanState(
+function keywordProvenance(
+  entry: WorldBookEntry,
+  activationPass: number,
   state: ScanState,
-  include?: ReadonlySet<string>,
-): ScanState {
+): ActivationProvenance {
+  const primaryIndexes = state.primaryHits.get(entry.uid) ?? new Set<number>();
+  const secondaryIndexes = state.secondaryHits.get(entry.uid) ?? new Set<number>();
+  const exactMatches = state.exactMatches.get(entry.uid) ?? [];
+  const exact = exactMatches[0];
+  const source = exactMatches.length === 1 && exact
+    ? exact.source.kind === "message"
+      ? {
+          kind: "message" as const,
+          messageId: exact.source.messageId,
+          messageOffset: exact.source.messageOffset,
+          start: exact.start,
+          end: exact.end,
+        }
+      : {
+          kind: "recursive_entry" as const,
+          entryId: exact.source.entryId,
+          start: exact.start,
+          end: exact.end,
+        }
+    : { kind: "mixed_or_unavailable" as const };
+  return {
+    origin: "keyword",
+    activationPass,
+    matchedPrimaryKeys: [...primaryIndexes].sort((a, b) => a - b).map((index) => entry.key[index]).filter((key): key is string => typeof key === "string"),
+    matchedSecondaryKeys: [...secondaryIndexes].sort((a, b) => a - b).map((index) => entry.keysecondary[index]).filter((key): key is string => typeof key === "string"),
+    ...(exact ? { exactMatch: { configuredPattern: exact.configuredPattern, source } } : {}),
+  };
+}
+
+function cloneScanState(state: ScanState, include?: ReadonlySet<string>): ScanState {
   const selected = <T>(entries: Iterable<[string, T]>): Array<[string, T]> =>
     [...entries].filter(([uid]) => !include || include.has(uid));
   return {
-    primaryHits: new Map(
-      selected(state.primaryHits).map(([uid, hits]) => [uid, new Set(hits)]),
-    ),
-    secondaryHits: new Map(
-      selected(state.secondaryHits).map(([uid, hits]) => [uid, new Set(hits)]),
-    ),
+    primaryHits: new Map(selected(state.primaryHits).map(([uid, hits]) => [uid, new Set(hits)])),
+    secondaryHits: new Map(selected(state.secondaryHits).map(([uid, hits]) => [uid, new Set(hits)])),
     regexCache: new Map(),
+    exactMatches: new Map(selected(state.exactMatches).map(([uid, matches]) =>
+      [uid, matches.map((match) => ({ ...match, source: { ...match.source } }))])),
   };
 }
 
@@ -666,7 +714,6 @@ function scanEntryCacheValue(entry: WorldBookEntry): object {
     key: entry.key,
     keysecondary: entry.keysecondary,
     scan_depth: entry.scan_depth,
-    exclude_greeting: entry.exclude_greeting,
     case_sensitive: entry.case_sensitive,
     match_whole_words: entry.match_whole_words,
     use_regex: entry.use_regex,
@@ -684,48 +731,31 @@ function scanBaseState(
   settings: WorldInfoSettings,
 ): ScanState {
   const state = makeScanState();
-  // Pass 0 base: scan messages once per unique effective scan_depth.
-  // Pre-compute scan text per depth key and memoize so entries sharing the
-  // same effective depth don't rebuild the same concatenated string.
-  const depthBuckets = new Map<string, { scope: Set<string>; excludeGreeting: boolean; depth: number | null }>();
-  const depthKey = (d: number | null, excludeGreeting: boolean) =>
-    `${excludeGreeting ? "without-greeting" : "all-messages"}:${d === null ? "all" : String(d)}`;
-  let needsGreetingExcludedScan = false;
-  for (const e of conditional) {
-    if (e.key.length === 0) continue;
-    const d = e.scan_depth ?? settings.globalScanDepth;
-    needsGreetingExcludedScan ||= e.exclude_greeting;
-    const k = depthKey(d, e.exclude_greeting);
-    let bucket = depthBuckets.get(k);
-    if (!bucket) {
-      bucket = { scope: new Set(), excludeGreeting: e.exclude_greeting, depth: d };
-      depthBuckets.set(k, bucket);
-    }
-    bucket.scope.add(e.uid);
+  const depthBuckets = new Map<string, Set<string>>();
+  const depthKey = (depth: number | null) => (depth === null ? "all" : String(depth));
+  for (const entry of conditional) {
+    if (entry.key.length === 0) continue;
+    const key = depthKey(entry.scan_depth ?? settings.globalScanDepth);
+    let scope = depthBuckets.get(key);
+    if (!scope) { scope = new Set(); depthBuckets.set(key, scope); }
+    scope.add(entry.uid);
   }
-  const messagesWithoutGreeting = needsGreetingExcludedScan
-    ? messages.filter((message) => message.extra?.greeting !== true)
-    : messages;
-  const scanTextCache = new Map<string, string>();
-  for (const [k, bucket] of depthBuckets) {
-    let text = scanTextCache.get(k);
-    if (text === undefined) {
-      text = buildScanText(
-        bucket.excludeGreeting ? messagesWithoutGreeting : messages,
-        bucket.depth,
-        "",
-      );
-      scanTextCache.set(k, text);
+  for (const [key, scope] of depthBuckets) {
+    const depth = key === "all" ? null : Number(key);
+    const selectedMessages = depth === null || depth <= 0 || depth >= messages.length
+      ? messages : messages.slice(-depth);
+    for (const message of selectedMessages) {
+      matcher.scanChunk(message.content, state, scope, {
+        kind: "message",
+        messageId: message.id,
+        messageOffset: message.index_in_chat,
+      });
     }
-    matcher.scanChunk(text, state, bucket.scope);
   }
   return state;
 }
 
-function materializeScanPlan(
-  cache: WorldInfoActivationScanCache,
-  messages: Message[],
-): void {
+function materializeScanPlan(cache: WorldInfoActivationScanCache, messages: Message[]): void {
   const plan = cache.plan;
   if (!plan) return;
   cache.plan = undefined;
@@ -733,12 +763,7 @@ function materializeScanPlan(
     forceCaseSensitive: plan.settings.forceCaseSensitive,
     forceMatchWholeWords: plan.settings.forceMatchWholeWords,
   });
-  const unionState = scanBaseState(
-    matcher,
-    plan.unionEntries,
-    messages,
-    plan.settings,
-  );
+  const unionState = scanBaseState(matcher, plan.unionEntries, messages, plan.settings);
   for (const entries of plan.views) {
     cache.baseStates.set(
       baseScanCacheKey(entries, plan.settings),
@@ -750,7 +775,8 @@ function materializeScanPlan(
 function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
   const { conditional, constants, messages, settings, wiState,
     activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
-    maxPasses, scanCache, random } = args;
+    maxPasses, activationProvenanceById, firstTriggeredForBookById, triggeredBooks,
+    scanCache, random } = args;
 
   const matcher = new WorldInfoMatcher(conditional, {
     forceCaseSensitive: settings.forceCaseSensitive,
@@ -758,27 +784,26 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
   });
   if (scanCache?.plan) materializeScanPlan(scanCache, messages);
   const scanKey = scanCache ? baseScanCacheKey(conditional, settings) : null;
-  const cachedBaseState =
-    scanKey === null ? undefined : scanCache?.baseStates.get(scanKey);
-  let state: ScanState;
-  if (cachedBaseState) {
-    state = cloneScanState(cachedBaseState);
-  } else {
-    state = scanBaseState(matcher, conditional, messages, settings);
-    if (scanKey !== null) {
-      scanCache?.baseStates.set(scanKey, cloneScanState(state));
-    }
-  }
+  const cachedBaseState = scanKey === null ? undefined : scanCache?.baseStates.get(scanKey);
+  const state = cachedBaseState
+    ? cloneScanState(cachedBaseState)
+    : scanBaseState(matcher, conditional, messages, settings);
+  if (!cachedBaseState && scanKey !== null) scanCache?.baseStates.set(scanKey, cloneScanState(state));
 
   let recursionPassesUsed = 0;
   let newContent = constants
     .filter((entry) => entry.content && !entry.prevent_recursion && !entry.vectorized)
-    .map((entry) => entry.content);
+    .map((entry) => ({ entryId: entry.id, content: entry.content }));
 
   for (let pass = 0; pass <= maxPasses; pass++) {
     if (pass > 0) {
       if (newContent.length === 0) break;
-      for (const chunk of newContent) matcher.scanChunk(chunk, state);
+      for (const chunk of newContent) {
+        matcher.scanChunk(chunk.content, state, undefined, {
+          kind: "recursive_entry",
+          entryId: chunk.entryId,
+        });
+      }
       newContent = [];
     }
 
@@ -816,10 +841,15 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
 
       activated.push(entry);
       activatedUids.add(entry.uid);
+      activationProvenanceById.set(entry.id, keywordProvenance(entry, pass, state));
+      firstTriggeredForBookById.set(entry.id, !triggeredBooks.has(entry.world_book_id));
+      triggeredBooks.add(entry.world_book_id);
       activatedThisPass = true;
       // "Prevent Further Recursion" — activated entry's content is not fed
       // back into the scanner for subsequent recursion passes.
-      if (entry.content && !entry.prevent_recursion && !entry.vectorized) newContent.push(entry.content);
+      if (entry.content && !entry.prevent_recursion && !entry.vectorized) {
+        newContent.push({ entryId: entry.id, content: entry.content });
+      }
     }
 
     if (activatedThisPass && pass > 0) recursionPassesUsed = pass;
@@ -846,32 +876,6 @@ function handleNoMatch(state: WiEntryState, entry: WorldBookEntry): void {
   if (entry.delay > 0) {
     state.delayCount = 0;
   }
-}
-
-function buildScanText(messages: Message[], scanDepth: number | null, recursionText = ""): string {
-  const base = scanDepth === null || scanDepth <= 0 || scanDepth >= messages.length
-    ? joinMessageContents(messages)
-    : joinMessageContents(messages.slice(-scanDepth));
-
-  if (!recursionText) return base;
-  if (!base) return recursionText;
-  return `${base}\n${recursionText}`;
-}
-
-/**
- * Join message content strings with newline separator. Avoids the intermediate
- * array allocation that `messages.map(m => m.content).join("\n")` would create
- * by building the result string directly in a single pass.
- */
-function joinMessageContents(messages: Message[]): string {
-  if (messages.length === 0) return "";
-  if (messages.length === 1) return messages[0].content;
-  let result = messages[0].content;
-  for (let i = 1; i < messages.length; i++) {
-    result += "\n";
-    result += messages[i].content;
-  }
-  return result;
 }
 
 /**
@@ -939,9 +943,7 @@ export function applyWorldInfoGroupLogic(
  *  4 = depth-based, 5 = EM before, 6 = EM after, 7 = at-marker,
  *  8 = outlet-only (excluded from all position buckets; surfaces only via {{outlet::name}})
  */
-export function materializeWorldInfoCache(
-  entries: WorldBookEntry[],
-): WorldInfoCache {
+function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
   const cache: WorldInfoCache = {
     before: [],
     after: [],
@@ -1014,6 +1016,11 @@ export function materializeWorldInfoCache(
     }
   }
   return cache;
+}
+
+/** Materialize an already-selected entry list into prompt insertion buckets. */
+export function materializeWorldInfoCache(entries: WorldBookEntry[]): WorldInfoCache {
+  return bucketByPosition(entries);
 }
 
 function hasMeaningfulWorldInfoContent(entry: Pick<WorldBookEntry, "content">): boolean {

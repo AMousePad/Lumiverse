@@ -6,7 +6,7 @@
  * an extension can navigate the user to (same set the Command Palette draws
  * from for built-in entries).
  *
- * Extension-registered drawer tabs are tracked separately per user in
+ * Extension-registered drawer and settings tabs are tracked separately per user in
  * {@link ./ui-frontend-state.service.ts}; they reach the backend via the
  * `SPINDLE_UI_REGISTRY_SYNC` WS message from the frontend.
  *
@@ -14,6 +14,8 @@
  *  - frontend/src/lib/drawer-tab-registry.tsx  (DRAWER_TABS)
  *  - frontend/src/lib/settings-tab-registry.tsx (SETTINGS_TABS)
  */
+
+import { getUserExtensionSettingsTabs, type SpindleUIExtensionSettingsTabEntry } from './ui-frontend-state.service';
 
 export type SpindleUIDrawerTabEntry = {
   id: string;
@@ -29,6 +31,7 @@ export type SpindleUISettingsTabEntry = {
   tabName: string;
   tabDescription: string;
   keywords: string[];
+  iconSvg?: string;
   /** When set, only users with this role (or higher) see the entry. */
   role?: "admin" | "owner";
 };
@@ -42,6 +45,7 @@ export const BUILT_IN_DRAWER_TABS: readonly SpindleUIDrawerTabEntry[] = [
   { id: "browser", shortName: "Browser", tabName: "Pack Browser", tabDescription: "Browse and manage content packs", keywords: ["packs", "content", "download", "browse", "browser", "install", "marketplace", "library", "search"] },
   { id: "characters", shortName: "Chars", tabName: "Characters", tabDescription: "Browse and manage your character cards", keywords: ["character", "list", "import", "card", "browse", "export", "png", "charx", "gallery", "switch", "select"] },
   { id: "personas", shortName: "Personas", tabName: "Personas", tabDescription: "Manage your user personas", keywords: ["persona", "identity", "user", "avatar", "name", "sender", "you", "addons"] },
+  { id: "multiplayer", shortName: "Multi", tabName: "Multiplayer", tabDescription: "Create and join multiplayer chat rooms", keywords: ["multiplayer", "room", "invite", "join", "peer", "shared", "collaborative"] },
   { id: "lorebook", shortName: "Lore", tabName: "Lorebook", tabDescription: "Edit world book and lorebook entries", keywords: ["lorebook", "world", "lore", "book", "entries", "worldbook", "world info", "wi", "keywords", "triggers", "knowledge"] },
   { id: "cortex", shortName: "Memory", tabName: "Memory Cortex", tabDescription: "View and manage memory cortex entries", keywords: ["memory", "cortex", "embeddings", "recall", "brain", "entities", "relationships", "salience", "vector", "long term", "ltcm", "facts"] },
   { id: "databank", shortName: "Data", tabName: "Databank", tabDescription: "Upload and manage reference documents for AI context", keywords: ["databank", "knowledge", "documents", "upload", "files", "bank", "reference", "data", "rag"] },
@@ -78,6 +82,7 @@ export const BUILT_IN_SETTINGS_TABS: readonly SpindleUISettingsTabEntry[] = [
   { id: "lumihub", shortName: "LumiHub", tabName: "LumiHub", tabDescription: "LumiHub cloud sync and sharing settings", keywords: ["lumihub", "cloud", "sync", "sharing", "online", "hub"] },
   { id: "dataPortability", shortName: "Data", tabName: "Data Portability", tabDescription: "Export your data or import a previously exported archive", keywords: ["data", "portability", "export", "import", "backup", "restore", "archive", "lvbak", "migrate"] },
   { id: "diagnostics", shortName: "Diagnostics", tabName: "Diagnostics", tabDescription: "System health, performance metrics, and debug info", keywords: ["diagnostics", "health", "performance", "debug", "info", "system", "status", "metrics"] },
+  { id: "ssoProviders", shortName: "SSO", tabName: "SSO Providers", tabDescription: "Configure single sign-on providers", keywords: ["sso", "single sign-on", "oauth", "oidc", "login", "identity"] },
   { id: "operator", shortName: "Operator", tabName: "Operator Panel", tabDescription: "Server management, updates, and restart controls", keywords: ["operator", "server", "restart", "update", "git", "branch", "logs", "admin"], role: "owner" },
   { id: "tokenizers", shortName: "Tokenizers", tabName: "Tokenizer Manager", tabDescription: "Manage and test tokenizer configurations", keywords: ["tokenizer", "tokens", "count", "encoding", "tiktoken", "bpe"], role: "admin" },
   { id: "users", shortName: "Users", tabName: "User Management", tabDescription: "Manage user accounts, roles, and permissions", keywords: ["users", "accounts", "roles", "permissions", "admin", "management"], role: "admin" },
@@ -85,13 +90,76 @@ export const BUILT_IN_SETTINGS_TABS: readonly SpindleUISettingsTabEntry[] = [
 ];
 
 /** Filter settings tabs by the user's role. */
-export function getVisibleSettingsTabs(userRole?: string | null): SpindleUISettingsTabEntry[] {
+function mergeKeywords(base: readonly string[], additions: readonly string[]): string[] {
+  const keywords = new Set(base);
+  for (const keyword of additions) keywords.add(keyword);
+  return [...keywords];
+}
+
+function extensionSettingsGroups(
+  tabs: readonly SpindleUIExtensionSettingsTabEntry[],
+): Map<string, SpindleUIExtensionSettingsTabEntry[]> {
+  const groups = new Map<string, SpindleUIExtensionSettingsTabEntry[]>();
+  for (const tab of tabs) {
+    const group = groups.get(tab.tabId) ?? [];
+    group.push(tab);
+    groups.set(tab.tabId, group);
+  }
+  for (const group of groups.values()) {
+    group.sort((left, right) => left.order - right.order || left.sequence - right.sequence || left.registrationId.localeCompare(right.registrationId));
+  }
+  return groups;
+}
+
+function dynamicSettingsTabOwner(
+  registrations: readonly SpindleUIExtensionSettingsTabEntry[],
+): SpindleUIExtensionSettingsTabEntry | undefined {
+  return [...registrations].sort((left, right) => left.sequence - right.sequence || left.registrationId.localeCompare(right.registrationId))[0];
+}
+
+export function getVisibleSettingsTabs(
+  userRole?: string | null,
+  userId?: string | null,
+): SpindleUISettingsTabEntry[] {
   const isOwner = userRole === "owner";
   const isAdmin = isOwner || userRole === "admin";
-  return BUILT_IN_SETTINGS_TABS.filter((tab) => {
+  const visibleCore = BUILT_IN_SETTINGS_TABS.filter((tab) => {
     if (!tab.role) return true;
     if (tab.role === "owner") return isOwner;
     if (tab.role === "admin") return isAdmin;
     return false;
   });
+
+  const allCoreById = new Map(BUILT_IN_SETTINGS_TABS.map((tab) => [tab.id, tab]));
+  const visibleCoreIds = new Set(visibleCore.map((tab) => tab.id));
+  const groups = extensionSettingsGroups(getUserExtensionSettingsTabs(userId));
+  const result: SpindleUISettingsTabEntry[] = visibleCore.map((tab) => {
+    const registrations = groups.get(tab.id);
+    if (!registrations?.length) return tab;
+    return {
+      ...tab,
+      // Core metadata and role stay authoritative; only search terms are additive.
+      keywords: mergeKeywords(tab.keywords, registrations.flatMap((entry) => entry.keywords ?? [])),
+    };
+  });
+
+  const dynamic = [...groups.entries()]
+    .filter(([tabId, registrations]) => !allCoreById.has(tabId) && registrations.length > 0)
+    .map(([tabId, registrations]) => ({ tabId, registrations, owner: dynamicSettingsTabOwner(registrations) }))
+    .filter((entry): entry is typeof entry & { owner: SpindleUIExtensionSettingsTabEntry } => !!entry.owner)
+    .sort((left, right) => left.owner.sequence - right.owner.sequence || left.tabId.localeCompare(right.tabId));
+
+  for (const { tabId, registrations, owner } of dynamic) {
+    if (!visibleCoreIds.has(tabId) && !allCoreById.has(tabId)) {
+      result.push({
+        id: tabId,
+        shortName: owner.shortName ?? owner.tabName ?? tabId,
+        tabName: owner.tabName ?? tabId,
+        tabDescription: owner.tabDescription ?? `Open ${owner.tabName ?? tabId} extension settings`,
+        iconSvg: owner.iconSvg,
+        keywords: mergeKeywords([], registrations.flatMap((entry) => entry.keywords ?? [])),
+      });
+    }
+  }
+  return result;
 }

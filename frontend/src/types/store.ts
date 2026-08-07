@@ -121,7 +121,6 @@ export interface StartupSettings {
   landingPageLayoutMode?: 'cards' | 'compact'
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
-  spindleSettings?: Partial<SpindleSettings>
   connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
 }
 
@@ -261,13 +260,10 @@ export interface UISlice {
   settingsScrollTarget: { extensionId?: string; nonce: number } | null
   portraitPanelOpen: boolean
   commandPaletteOpen: boolean
-
-  // Custom CSS editor dock
   customCSSDockOpen: boolean
   customCSSDockSize: number
   customCSSDockSide: 'left' | 'right'
   customCSSEditorSession: CustomCSSEditorSession
-
   toasts: Toast[]
   openModal: (name: string, props?: Record<string, any>) => void
   closeModal: () => void
@@ -354,8 +350,7 @@ export interface RegenFeedbackSettings {
  * - OpenRouter: none, minimal, low, medium, high, xhigh
  * - Google:     minimal, low, medium, high
  * - Anthropic:  low, medium, high, max
- * - NanoGPT:    none, minimal, low, medium, high, xhigh
- * - OpenAI/Custom: auto, low, medium, high, xhigh, max
+ * - NanoGPT:    none, minimal, low, medium, high
  * - Moonshot:   (toggle-only — no effort dropdown)
  * - Z.AI:       (toggle-only — no effort dropdown)
  * - Others:     auto, low, medium, high, max (generic)
@@ -478,6 +473,164 @@ export interface WorldBookEntryViewPreference {
   pageSize: WorldBookEntryPageSize
 }
 
+export type QuickToolbarVariant = 'v1-free' | 'v2-settings-adjacent'
+export type QuickToolbarDensity = 'comfortable' | 'compact'
+export type ToolbarOrientation = 'horizontal' | 'vertical'
+export type LoreIndicatorVariant = 'v2-compact' | 'v4-bottom-strip' | 'v5-command-palette'
+export type LoreIndicatorBookDisplay = 'grouped' | 'first-only' | 'markers'
+export type LoreIndicatorGroupBy = 'lorebook' | 'type' | 'none'
+export type ConnectionsPickerVariant = 'provider-tags' | 'split' | 'full'
+export type TriggerDisplayMode = 'words' | 'icons'
+
+export interface SurfaceSizePrefs {
+  width: number
+  height: number
+}
+
+export interface ConnectionProfileTag {
+  id: string
+  name: string
+  color: string
+  order: number
+}
+
+export interface QuickToolbarSettings {
+  enabled: boolean
+  variant: QuickToolbarVariant
+  visibleTabIds: string[]
+  iconOrder: string[]
+  iconSize: number
+  labelVisible: boolean
+  labelTextSize: number
+  scale: number
+  orientation: ToolbarOrientation
+  rotationDeg: number
+  opacity: number
+  snapToEdge: boolean
+  resizeHandlesEnabled: boolean
+  rect: SurfaceRectPrefs
+  verticalSize: SurfaceSizePrefs
+  rectVersion: number
+  modalRestoreHandle: boolean
+  v2IconSize: number
+  v2LabelTextSize: number
+  v2LabelVisible: boolean
+  v2Density: QuickToolbarDensity
+}
+
+export interface ConnectionsPickerSettings {
+  enabled: boolean
+  variant: ConnectionsPickerVariant
+  launcherEnabled: boolean
+  launcherIconSize: number
+  opacity: number
+  rect: SurfaceRectPrefs
+  positionInitialized: boolean
+  thumbnailSize: number
+  density: 'compact' | 'balanced' | 'spacious' | 'custom'
+  showFavorites: boolean
+  showRecent: boolean
+  showSearch: boolean
+  showModelMetadata: boolean
+  profileTags: ConnectionProfileTag[]
+  visibleTagIds: string[]
+  favoriteProfileIds: string[]
+  recentProfileIds: string[]
+  rowPadding: number
+  rowGap: number
+  sectionSpacing: number
+  columnWidths: Record<string, number>
+}
+
+export interface LoreIndicatorSettings {
+  enabled: boolean
+  variant: LoreIndicatorVariant
+  v2ActivationMode: 'hover' | 'click'
+  v2BookDisplay: LoreIndicatorBookDisplay
+  v5Keybind: string
+  visibleMetadata: string[]
+  iconSize: number
+  textSize: number
+  entryTypeAppearance: Record<'constant' | 'sticky' | 'keyword' | 'vector', { color: string; icon: string }>
+  v4Items: Array<{ id: string; visible: boolean; removed: boolean; mode: 'icon' | 'iconText'; order: number }>
+  v4Spacing: number
+  v4GroupBy: LoreIndicatorGroupBy
+  v4BookPreviewCount: number
+  v5ShowShortcutHints: boolean
+}
+
+export interface CharacterDisplaySettings {
+  thumbnailWidth: number
+  thumbnailHeight: number
+  density: 'compact' | 'balanced' | 'large' | 'custom'
+  footerMode: 'compact' | 'balanced' | 'spacious'
+  visibleMetadata: string[]
+  tagRows: number
+  viewMode: CharacterViewMode
+  defaultSort: CharacterSortField
+  defaultFilter: CharacterFilterTab
+}
+
+export interface HomepageCharacterLibrarySettings extends CharacterDisplaySettings {
+  enabled: boolean
+  maxVisibleTags: number
+  showNameBackground: boolean
+  panelWidth: number
+  panelImageHeight: number
+  panelPinned: boolean
+  lastSelectedCharacterId: string | null
+}
+
+export interface CharacterTabDisplaySettings extends CharacterDisplaySettings {
+  useHomepageSettings: boolean
+}
+
+export interface PortraitDockSettings {
+  enabled: boolean
+  openAtOriginalSize: boolean
+  rememberSizePosition: boolean
+  defaultDockSide: 'left' | 'right'
+  snapToEdge: boolean
+  hoverControls: boolean
+  hoverControlSize: number
+  defaultAspectRatioLock: boolean
+  minWidth: number
+  minHeight: number
+  maxWidth: number
+  maxHeight: number
+  rect: SurfaceRectPrefs
+  pinned: boolean
+  aspectRatioLocked: boolean
+  dockSide: 'left' | 'right' | 'floating'
+  open: boolean
+  lastPortrait: { imageUrl: string; displayName: string } | null
+}
+
+export interface LorebookEditorSettings {
+  defaultVariant: 'full' | 'half'
+  triggerDisplay: TriggerDisplayMode
+  halfButtonEnabled: boolean
+  loreIndicatorActionEnabled: boolean
+  allowSimultaneousEditors: boolean
+  halfEditorMode: 'docked' | 'floating'
+  fullRect: SurfaceRectPrefs
+  halfRect: SurfaceRectPrefs
+  minChatWidth: number
+  minEditorPaneWidth: number
+  halfEntriesPaneWidth: number
+  booksPaneWidth: number
+  entriesPaneWidth: number
+  inspectorPaneWidth: number
+  rowDensity: 'compact' | 'comfortable' | 'spacious'
+  visibleEntryMetadata: string[]
+  entryMetadataVersion?: number
+  tokenCountMode: 'live' | 'delayed' | 'manual'
+  tokenCountDelayMs: number
+  tokenPrefetchHover: boolean
+  tokenPrefetchHoverDelayMs: number
+  tokenCountAllEntries: boolean
+}
+
 // ---- Settings Slice ----
 export interface SettingsSlice {
   settingsLoaded: boolean
@@ -553,10 +706,18 @@ export interface SettingsSlice {
   spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
   connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>
+  landingPageActiveTab: 'chats' | 'characters'
+  quickToolbarSettings: QuickToolbarSettings
+  connectionsPickerSettings: ConnectionsPickerSettings
+  loreIndicatorSettings: LoreIndicatorSettings
+  homepageCharacterLibrarySettings: HomepageCharacterLibrarySettings
+  characterTabDisplaySettings: CharacterTabDisplaySettings
+  portraitDockSettings: PortraitDockSettings
+  lorebookEditorSettings: LorebookEditorSettings
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
-  setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K]) => void
+  setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K], source?: SettingsWriteSource) => void
   setTheme: (theme: ThemeConfig | null) => void
   setCharacterThemeOverlay: (overlay: CharacterThemeOverlay | null) => void
   setCustomCSS: (css: string) => void
@@ -575,6 +736,18 @@ export interface SettingsSlice {
   updateSavedTheme: (id: string) => Promise<void>
   loadSettings: () => Promise<void>
 }
+
+export type SettingsWriteSource =
+  | 'user'
+  | 'user-interaction'
+  | 'portrait-dock-init'
+  | 'automatic-sync'
+  | 'state-sync'
+  | 'suite-normalization'
+  | 'suite-reconciliation'
+  | 'host-load'
+  | 'compatibility'
+  | 'unknown'
 
 import type { ThemeConfig } from './theme'
 export type { ThemeConfig } from './theme'
@@ -598,8 +771,7 @@ export interface SpindleSettings {
   dockPanelDesktopSide: 'left' | 'right'
   /** Show routine Spindle lifecycle and WebSocket events in the browser console. */
   infoLoggingEnabled: boolean
-  /** Sparse identifier map. Missing/false means toast + badge; true means badge only. */
-  extensionUpdateToastDisabled: Record<string, boolean>
+  extensionUpdateToastDisabled: boolean
 }
 
 // ---- Loom Registry Entry ----
@@ -616,9 +788,9 @@ export interface PresetsSlice {
   activePresetId: string | null
   activeLoomPresetId: string | null
   loomRegistry: Record<string, LoomRegistryEntry>
+  setActiveLoomPreset: (id: string | null) => void
   setPresets: (presets: Record<string, Preset>) => void
   setActivePreset: (id: string | null) => void
-  setActiveLoomPreset: (id: string | null) => void
   setLoomRegistry: (registry: Record<string, LoomRegistryEntry>) => void
   /** Resolves the preset id that should drive generation. */
   getActivePresetForGeneration: () => string | null
@@ -946,7 +1118,6 @@ export interface BulkUpdateStatus {
 
 export interface SpindleSlice {
   extensions: ExtensionInfo[]
-  /** Manageable extensions whose tracked remote branch has a different HEAD. */
   extensionUpdates: import('./spindle-updates').ExtensionUpdateInfo[]
   /** Active theme overrides from Spindle extensions, keyed by extensionId */
   extensionThemeOverrides: Record<string, ExtensionThemeOverride>
@@ -966,8 +1137,8 @@ export interface SpindleSlice {
   pendingConfirm: PendingConfirmRequest | null
   pendingInputPrompt: PendingInputPromptRequest | null
   pendingContextMenu: PendingContextMenuRequest | null
-  loadExtensions: () => Promise<void>
   setExtensionUpdates: (updates: import('./spindle-updates').ExtensionUpdateInfo[]) => void
+  loadExtensions: () => Promise<void>
   installExtension: (githubUrl: string, branch?: string | null) => Promise<void>
   updateExtension: (id: string) => Promise<void>
   switchBranch: (id: string, branch: string) => Promise<void>
@@ -981,8 +1152,8 @@ export interface SpindleSlice {
   showPermissionRequest: (request: PendingPermissionRequest) => void
   resolvePermissionRequest: (id: string, approved: boolean) => Promise<void>
   openTextEditor: (request: PendingTextEditorRequest) => void
-  closeTextEditor: (requestId: string, text: string, cancelled: boolean) => void
   dismissTextEditor: (requestId: string) => void
+  closeTextEditor: (requestId: string, text: string, cancelled: boolean) => void
   openSpindleModal: (request: PendingModalRequest) => void
   closeSpindleModal: (requestId: string, dismissedBy: 'user' | 'extension' | 'cleanup') => void
   dismissSpindleModal: (requestId: string) => void
@@ -1072,6 +1243,16 @@ export interface WorldInfoSlice {
   /** Book id the Lorebook tab should select on next mount/visit (cross-component navigation). */
   pendingWorldBookEditId: string | null
   setPendingWorldBookEditId: (id: string | null) => void
+  /** Entry id to reveal after the requested book has been selected. */
+  pendingWorldBookEditEntryId: string | null
+  setPendingWorldBookEditEntryId: (id: string | null) => void
+  lorebookHalfEditor: {
+    open: boolean
+    bookId: string | null
+    entryId: string | null
+  }
+  openLorebookHalfEditor: (bookId?: string | null, entryId?: string | null) => void
+  closeLorebookHalfEditor: () => void
 }
 
 // Lumi Feedback Slice
@@ -1180,6 +1361,22 @@ export interface MultiplayerSlice {
 }
 
 // ---- Spindle Placement Slice ----
+/** A persisted rectangle in zoom-layer layout pixels. */
+export interface SurfaceRectPrefs {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Dimension constraints shared by host-managed floating placements. */
+export interface PlacementGeometryBounds {
+  minWidth: number
+  minHeight: number
+  maxWidth?: number
+  maxHeight?: number
+}
+
 import type {
   DrawerTabState,
   CharacterEditorTabState,
@@ -1190,12 +1387,16 @@ import type {
   AppMountState,
   InputBarActionState,
   ExtensionCommandState,
+  SettingsTabState,
+  ConnectionEditorTabState,
 } from '@/store/slices/spindle-placement'
 import type { SpindleTabLocation as TabLocation } from 'lumiverse-spindle-types'
 
 export interface SpindlePlacementSlice {
   drawerTabs: DrawerTabState[]
+  settingsTabs: SettingsTabState[]
   characterEditorTabs: CharacterEditorTabState[]
+  connectionEditorTabs: ConnectionEditorTabState[]
   presetEditorTabs: PresetEditorTabState[]
   presetEditorToolbarItems: PresetEditorToolbarItemState[]
   floatWidgets: FloatWidgetState[]
@@ -1214,9 +1415,17 @@ export interface SpindlePlacementSlice {
   unregisterDrawerTab: (tabId: string) => void
   updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'shortName' | 'badge'>>) => void
 
+  registerSettingsTab: (tab: SettingsTabState) => void
+  unregisterSettingsTab: (tabId: string) => void
+  updateSettingsTab: (tabId: string, updates: Partial<Pick<SettingsTabState, 'title'>>) => void
+
   registerCharacterEditorTab: (tab: CharacterEditorTabState) => void
   unregisterCharacterEditorTab: (tabId: string) => void
   updateCharacterEditorTab: (tabId: string, updates: Partial<Pick<CharacterEditorTabState, 'title'>>) => void
+
+  registerConnectionEditorTab: (tab: ConnectionEditorTabState) => void
+  unregisterConnectionEditorTab: (tabId: string) => void
+  updateConnectionEditorTab: (tabId: string, updates: Partial<Pick<ConnectionEditorTabState, 'title'>>) => void
 
   registerPresetEditorTab: (tab: PresetEditorTabState) => void
   unregisterPresetEditorTab: (tabId: string) => void
@@ -1228,11 +1437,16 @@ export interface SpindlePlacementSlice {
 
   registerFloatWidget: (widget: FloatWidgetState) => void
   unregisterFloatWidget: (widgetId: string) => void
-  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'width' | 'height' | 'visible' | 'desktopPoppedOut' | 'fullscreen' | 'preFullscreen'>>) => void
+  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'width' | 'height' | 'visible' | 'desktopPoppedOut' | 'fullscreen' | 'preFullscreen' | 'resizable' | 'bounds' | 'aspectLock' | 'persistGeometry' | 'mobileClamp'>>) => void
 
   registerDockPanel: (panel: DockPanelState) => void
   unregisterDockPanel: (panelId: string) => void
-  updateDockPanel: (panelId: string, updates: Partial<Pick<DockPanelState, 'title' | 'collapsed' | 'size'>>) => void
+  updateDockPanel: (panelId: string, updates: Partial<Pick<DockPanelState, 'title' | 'collapsed' | 'size' | 'minSize' | 'maxSize' | 'respectRequestedEdge' | 'persistGeometry'>>) => void
+
+  /** Host-owned, namespaced geometry cache used by H6 placement handles. */
+  persistedPlacementGeometry: Record<string, SurfaceRectPrefs>
+  setPersistedPlacementGeometry: (key: string, rect: SurfaceRectPrefs) => void
+  clearPersistedPlacementGeometry: (key: string) => void
 
   registerAppMount: (mount: AppMountState) => void
   unregisterAppMount: (mountId: string) => void
@@ -1478,6 +1692,7 @@ export interface OperatorSlice {
 export interface FloatingAvatarState {
   imageUrl: string
   displayName: string
+  owner: 'native' | 'portrait-dock'
   x: number
   y: number
   width: number
@@ -1486,7 +1701,7 @@ export interface FloatingAvatarState {
 
 export interface FloatingAvatarSlice {
   floatingAvatar: FloatingAvatarState | null
-  openFloatingAvatar: (imageUrl: string, displayName: string) => void
+  openFloatingAvatar: (imageUrl: string, displayName: string, owner?: FloatingAvatarState['owner']) => void
   updateFloatingAvatar: (partial: Partial<FloatingAvatarState>) => void
   closeFloatingAvatar: () => void
 }

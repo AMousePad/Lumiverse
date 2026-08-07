@@ -64,6 +64,8 @@ import {
   type RegexActionActivation,
 } from '@/lib/regex/actionBus'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
+import { composeChatSafeZones } from '@/lib/chatSurfaceLayout'
+import { renderedPxToLayoutPx } from '@/lib/uiScale'
 import { applyChatAppearance } from '@/lib/chatAppearance'
 import {
   getEffectivePromptVariableValues,
@@ -1297,7 +1299,9 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     const syncHiddenEditSafeZone = () => {
       const rootStyle = getComputedStyle(root)
       const keyboardInset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
-      parent.style.setProperty('--lcs-input-safe-zone', `${Math.max(16, Math.round(16 + keyboardInset))}px`)
+      const zones = composeChatSafeZones(16, 0, keyboardInset)
+      parent.style.setProperty('--lcs-composer-safe-zone', `${Math.round(zones.composerSafeZone)}px`)
+      parent.style.setProperty('--lcs-input-safe-zone', `${Math.round(zones.inputSafeZone)}px`)
     }
 
     const scheduleHiddenEditSafeZoneSync = () => {
@@ -1322,6 +1326,8 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       window.removeEventListener('resize', scheduleHiddenEditSafeZoneSync)
       window.visualViewport?.removeEventListener('resize', scheduleHiddenEditSafeZoneSync)
       window.visualViewport?.removeEventListener('scroll', scheduleHiddenEditSafeZoneSync)
+      parent.style.removeProperty('--lcs-composer-safe-zone')
+      parent.style.removeProperty('--lcs-input-safe-zone')
     }
   }, [hideForMobileEdit])
 
@@ -1334,9 +1340,22 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     if (!parent) return
     const root = document.documentElement
     const isIOSPwa = document.documentElement.hasAttribute('data-ios-pwa')
+    const loreMount = el.querySelector<HTMLElement>('[data-spindle-mount="chat_composer_above"]')
+
+    const measureLoreHeight = () => {
+      if (!loreMount) return 0
+      const children = Array.from(loreMount.children) as HTMLElement[]
+      if (children.length === 0) return Math.max(0, loreMount.offsetHeight)
+      return children.reduce((height, child) => {
+        const renderedHeight = renderedPxToLayoutPx(child.getBoundingClientRect().height)
+        return height + Math.max(0, renderedHeight, child.offsetHeight)
+      }, 0)
+    }
 
     const update = () => {
+      const loreHeight = measureLoreHeight()
       const h = el.offsetHeight
+      const composerHeight = Math.max(0, h - loreHeight) + 8
       // On iOS PWA, read --app-keyboard-inset-bottom directly instead of
       // getComputedStyle(el).bottom. The CSS `bottom` property transitions,
       // so the computed value may be mid-animation when the ResizeObserver
@@ -1349,11 +1368,14 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       } else {
         bottomOffset = parseFloat(getComputedStyle(el).bottom) || 12
       }
-      parent.style.setProperty('--lcs-input-safe-zone', `${h + bottomOffset + 8}px`)
+      const zones = composeChatSafeZones(composerHeight, loreHeight, bottomOffset)
+      parent.style.setProperty('--lcs-composer-safe-zone', `${zones.composerSafeZone}px`)
+      parent.style.setProperty('--lcs-input-safe-zone', `${zones.inputSafeZone}px`)
     }
 
     const ro = new ResizeObserver(update)
     ro.observe(el)
+    if (loreMount) ro.observe(loreMount)
     update()
 
     // On iOS PWA, the virtual keyboard changes `bottom` via CSS variable but
@@ -1367,22 +1389,20 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       vpFrame = requestAnimationFrame(update)
     }
     const rootObserver = new MutationObserver(onViewportResize)
-    if (isIOSPwa) {
-      rootObserver.observe(root, { attributes: true, attributeFilter: ['style'] })
-      window.addEventListener('resize', onViewportResize)
-      window.visualViewport?.addEventListener('resize', onViewportResize)
-      window.visualViewport?.addEventListener('scroll', onViewportResize)
-    }
+    rootObserver.observe(root, { attributes: true, attributeFilter: ['style'] })
+    window.addEventListener('resize', onViewportResize)
+    window.visualViewport?.addEventListener('resize', onViewportResize)
+    window.visualViewport?.addEventListener('scroll', onViewportResize)
 
     return () => {
       ro.disconnect()
       cancelAnimationFrame(vpFrame)
-      if (isIOSPwa) {
-        rootObserver.disconnect()
-        window.removeEventListener('resize', onViewportResize)
-        window.visualViewport?.removeEventListener('resize', onViewportResize)
-        window.visualViewport?.removeEventListener('scroll', onViewportResize)
-      }
+      rootObserver.disconnect()
+      window.removeEventListener('resize', onViewportResize)
+      window.visualViewport?.removeEventListener('resize', onViewportResize)
+      window.visualViewport?.removeEventListener('scroll', onViewportResize)
+      parent.style.removeProperty('--lcs-composer-safe-zone')
+      parent.style.removeProperty('--lcs-input-safe-zone')
     }
   }, [hideForMobileEdit])
 
@@ -2993,6 +3013,8 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
         />
       )}
 
+      <span data-spindle-mount="chat_composer_above" style={{ display: 'contents' }} />
+
       {/* Action bar */}
       <div data-spindle-mount="chat_toolbar">
         <div className={styles.actionBar}>
@@ -3042,6 +3064,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
           >
             <Link2 size={14} />
           </button>
+          <span data-spindle-mount="chat_actions" style={{ display: 'contents' }} />
           {hasAltFields && (() => {
             const selectionCount = activeAltSelectionCount
             const hasSelection = selectionCount > 0

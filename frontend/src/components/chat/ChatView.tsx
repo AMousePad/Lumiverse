@@ -23,6 +23,8 @@ import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import useEditKeyboard from '@/hooks/useEditKeyboard'
 import useIsMobile from '@/hooks/useIsMobile'
+import { chatLoreDockMode, chatTopDockMode } from '@/lib/chatSurfaceLayout'
+import { measureLayoutHeight } from '@/lib/uiScale'
 import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
@@ -62,6 +64,15 @@ const CHAT_CHROME_LEAVE_MS = 220
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+}
+
+function findExtensionChild(anchor: HTMLElement): Element | null {
+  for (const child of anchor.children) {
+    const marked = child.hasAttribute('data-spindle-extension-root') || child.hasAttribute('data-spindle-ext')
+    const hasMountedContent = child.children.length > 0 || Boolean(child.textContent?.trim())
+    if (marked && hasMountedContent) return child
+  }
+  return null
 }
 
 interface CortexRebuildStatus {
@@ -207,8 +218,27 @@ export default function ChatView() {
   const portraitPanelOpen = useStore((s) => s.portraitPanelOpen)
   const togglePortraitPanel = useStore((s) => s.togglePortraitPanel)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
+  const [portraitSurfaceOccupied, setPortraitSurfaceOccupied] = useState(false)
+  useEffect(() => {
+    const readOccupied = () => {
+      // The extension root can survive a ChatView transition while its new mount
+      // anchor is being committed. Looking beneath only the first side anchor can
+      // therefore miss the live owner and briefly restore the native dock. The
+      // host-surface marker is unique to the extension-owned Portrait Dock, so it
+      // is the ownership authority regardless of which current anchor contains it.
+      setPortraitSurfaceOccupied(Boolean(
+        document.querySelector('[data-spindle-host-surface="portrait_dock.workspace"]'),
+      ))
+    }
+    readOccupied()
+    const Observer = document.defaultView?.MutationObserver
+    if (!Observer) return undefined
+    const observer = new Observer(readOccupied)
+    observer.observe(document.body, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [])
   const isMobile = useIsMobile()
-  const portraitBackdropVisible = isMobile && portraitPanelOpen && portraitPanelSide !== 'none'
+  const portraitBackdropVisible = !portraitSurfaceOccupied && isMobile && portraitPanelOpen && portraitPanelSide !== 'none'
   const sceneBackground = useStore((s) => s.sceneBackground)
   const imageGeneration = useStore((s) => s.imageGeneration)
   const wallpaper = useStore((s) => s.wallpaper)
@@ -216,6 +246,10 @@ export default function ChatView() {
   const chatWidthMode = useStore((s) => s.chatWidthMode)
   const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const chatColumnInnerRef = useRef<HTMLDivElement>(null)
+  const chatColumnTopRef = useRef<HTMLDivElement>(null)
+  const chatTopDockRef = useRef<HTMLDivElement>(null)
+  const chatComposerAboveRef = useRef<HTMLSpanElement>(null)
   const wallpaperTransitionTimeouts = useRef<number[]>([])
   const chromeEnterTimerRef = useRef<number | null>(null)
   const chromeLeaveTimerRef = useRef<number | null>(null)
@@ -887,6 +921,82 @@ export default function ChatView() {
     }
   }, [bubbleDisableHover, bubbleHideAvatarBg, bubbleOpacity])
 
+  useLayoutEffect(() => {
+    const chatColumnInner = chatColumnInnerRef.current
+    const chatColumnTop = chatColumnTopRef.current
+    const chatTopDock = chatTopDockRef.current
+    if (!chatColumnInner || !chatColumnTop || !chatTopDock) return
+
+    const syncComposerAnchor = () => {
+      const composerAbove = chatColumnInner.querySelector<HTMLSpanElement>(
+        '[data-spindle-mount="chat_composer_above"]',
+      )
+      chatComposerAboveRef.current = composerAbove
+      return composerAbove
+    }
+
+    const syncOccupied = (anchor: HTMLElement) => {
+      const occupied = findExtensionChild(anchor) !== null
+      if (occupied) anchor.setAttribute('data-spindle-occupied', '')
+      else anchor.removeAttribute('data-spindle-occupied')
+    }
+
+    const syncDockRequest = (anchor: HTMLElement, resolve: (request: unknown) => string) => {
+      const request = resolve(findExtensionChild(anchor)?.getAttribute('data-dock-request') ?? null)
+      if (anchor.getAttribute('data-dock-request') !== request) anchor.setAttribute('data-dock-request', request)
+    }
+
+    const syncTopDockHeight = () => {
+      const height = findExtensionChild(chatTopDock) ? measureLayoutHeight(chatTopDock) : 0
+      chatColumnInner.style.setProperty('--lcs-top-dock-height', `${height}px`)
+    }
+
+    const sync = () => {
+      const composerAbove = syncComposerAnchor()
+      syncOccupied(chatColumnTop)
+      syncOccupied(chatTopDock)
+      if (composerAbove) syncOccupied(composerAbove)
+      syncDockRequest(chatColumnTop, chatTopDockMode)
+      syncDockRequest(chatTopDock, chatTopDockMode)
+      if (composerAbove) syncDockRequest(composerAbove, chatLoreDockMode)
+      syncTopDockHeight()
+    }
+
+    const mutationObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(sync)
+    mutationObserver?.observe(chatColumnInner, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-dock-request'],
+    })
+    mutationObserver?.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['style'],
+    })
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(syncTopDockHeight)
+    resizeObserver?.observe(chatTopDock)
+    window.addEventListener('resize', sync)
+    window.visualViewport?.addEventListener('resize', sync)
+    window.visualViewport?.addEventListener('scroll', sync)
+    sync()
+
+    return () => {
+      mutationObserver?.disconnect()
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', sync)
+      window.visualViewport?.removeEventListener('resize', sync)
+      window.visualViewport?.removeEventListener('scroll', sync)
+      chatColumnTop.removeAttribute('data-spindle-occupied')
+      chatTopDock.removeAttribute('data-spindle-occupied')
+      chatComposerAboveRef.current?.removeAttribute('data-spindle-occupied')
+      chatColumnTop.removeAttribute('data-dock-request')
+      chatTopDock.removeAttribute('data-dock-request')
+      chatComposerAboveRef.current?.removeAttribute('data-dock-request')
+      chatColumnInner.style.removeProperty('--lcs-top-dock-height')
+      chatComposerAboveRef.current = null
+    }
+  }, [chatId])
+
   if (!chatId) return null
 
   return (
@@ -927,9 +1037,9 @@ export default function ChatView() {
       />
       <div className={clsx(styles.wallpaperTransitionLayer, wallpaperTransitioning && !sceneBackground && styles.wallpaperTransitionLayerActive)} />
       <div className={styles.body} {...(chatWidthMode !== 'full' ? { 'data-chat-constrained': '' } : {})}>
-        {portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (
+        {!portraitSurfaceOccupied && portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (
           <div className={clsx(styles.portraitSide, styles.portraitSideLeft, portraitPanelOpen && styles.portraitSideOpen)}>
-            {!isMobile && <PortraitPanel side="left" />}
+            {!isMobile && !portraitSurfaceOccupied && <PortraitPanel side="left" />}
             <button
               type="button"
               className={clsx(styles.portraitTab, styles.portraitTabLeft, portraitPanelOpen && styles.portraitTabActive)}
@@ -941,7 +1051,7 @@ export default function ChatView() {
           </div>
         )}
 
-        <div className={styles.chatColumn}>
+        <div className={styles.chatColumn} data-lumiverse-surface="chat-column">
           {(spindleNotice || cortexNotice) && (
             <div className={styles.noticeDock} aria-live="polite" aria-atomic="true">
               {spindleNotice && (
@@ -973,13 +1083,16 @@ export default function ChatView() {
             </div>
           )}
           <div
+            ref={chatColumnInnerRef}
             className={styles.chatColumnInner}
+            data-lumiverse-surface="chat-column-inner"
             style={innerStyle}
             data-select-mode={messageSelectMode || undefined}
             data-chat-chrome-entering={chatChromeEntering || undefined}
             data-chat-chrome-leaving={(wallpaperTransitioning || chatChromeLeaving) || undefined}
           >
-            <div className={styles.chatToolbar}>
+            <div ref={chatColumnTopRef} data-spindle-mount="chat_column_top" />
+            <div ref={chatTopDockRef} className={styles.chatToolbar} data-spindle-mount="chat_top_dock" data-dock-request="floating">
               <button
                 type="button"
                 className={clsx(styles.toolbarBtn, messageSelectMode && styles.toolbarBtnActive)}
@@ -1008,11 +1121,12 @@ export default function ChatView() {
             <ScrollToBottom />
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
+            <div data-spindle-mount="chat_bottom_dock" data-dock-request="strip" />
             <InputArea chatId={chatId} onNavigateHome={handleNavigateHome} onOpenChatFind={openChatFind} />
           </div>
         </div>
 
-        {portraitPanelSide !== 'none' && portraitPanelSide === 'right' && (
+        {!portraitSurfaceOccupied && portraitPanelSide !== 'none' && portraitPanelSide === 'right' && (
           <div className={clsx(styles.portraitSide, styles.portraitSideRight, portraitPanelOpen && styles.portraitSideOpen)}>
             <button
               type="button"
@@ -1022,11 +1136,13 @@ export default function ChatView() {
             >
               <UserRound size={14} />
             </button>
-            {!isMobile && <PortraitPanel side="right" />}
+            {!isMobile && !portraitSurfaceOccupied && <PortraitPanel side="right" />}
           </div>
         )}
+        <div data-spindle-mount="lorebook_half_workspace" />
+        <div data-spindle-mount="chat_surface_side" />
       </div>
-      {isMobile && portraitPanelSide !== 'none' && (
+      {isMobile && !portraitSurfaceOccupied && portraitPanelSide !== 'none' && (
         <PortraitPanel
           side={portraitPanelSide}
           mobileDrawer

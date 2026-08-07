@@ -71,6 +71,7 @@ function makeEntry(partial: Partial<WorldBookEntry>): WorldBookEntry {
     created_at: 0,
     updated_at: 0,
     ...partial,
+    revision: partial.revision ?? 1,
   };
 }
 

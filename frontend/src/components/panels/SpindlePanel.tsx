@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
-import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal, Bell, BellOff } from 'lucide-react'
+import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal } from 'lucide-react'
 import { IconVersions } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
@@ -49,9 +49,6 @@ export default function SpindlePanel() {
   const openSettings = useStore((s) => s.openSettings)
   const user = useStore((s) => s.user)
   const spindlePrivileged = useStore((s) => s.spindlePrivileged)
-  const extensionUpdates = useStore((s) => s.extensionUpdates)
-  const spindleSettings = useStore((s) => s.spindleSettings)
-  const setSetting = useStore((s) => s.setSetting)
 
   const extensionOperationStatus = useStore((s) => s.extensionOperationStatus)
   const setOperationStatus = useStore((s) => s.setExtensionOperationStatus)
@@ -352,10 +349,6 @@ export default function SpindlePanel() {
   }))
   const extensionSortLabel = extensionSortOptions.find((option) => option.value === extensionSortMode)?.label
     ?? t('spindlePanel.sort.dateInstalled')
-  const extensionUpdatesById = useMemo(
-    () => new Map(extensionUpdates.map((update) => [update.extensionId, update])),
-    [extensionUpdates],
-  )
 
   const bulkUpdating = !!bulkUpdateStatus && !bulkUpdateStatus.done
   const bulkProcessed = bulkUpdateStatus
@@ -383,21 +376,6 @@ export default function SpindlePanel() {
       toast.error(msg, { title: t('spindlePanel.updateAll') })
     }
   }, [updateAllExtensions, t])
-
-  const handleUpdateToastToggle = useCallback((identifier: string) => {
-    const disabled = {
-      ...(spindleSettings.extensionUpdateToastDisabled ?? {}),
-    }
-    if (disabled[identifier] === true) {
-      delete disabled[identifier]
-    } else {
-      disabled[identifier] = true
-    }
-    setSetting('spindleSettings', {
-      ...spindleSettings,
-      extensionUpdateToastDisabled: disabled,
-    })
-  }, [setSetting, spindleSettings])
 
   const handleImportLocal = useCallback(async () => {
     setImportingLocal(true)
@@ -520,12 +498,6 @@ export default function SpindlePanel() {
                 const isNonDefaultBranch = extBranch && extBranch !== 'main' && extBranch !== 'master'
                 const canManage = isPrivileged || (installScope === 'user' && !!user?.id && installedBy === user.id)
                 const scopeLabel = installScope === 'user' ? t('spindlePanel.personal') : t('spindlePanel.operator')
-                const hasUpdate = extensionUpdatesById.has(ext.id)
-                const updateToastsEnabled =
-                  spindleSettings.extensionUpdateToastDisabled?.[ext.identifier] !== true
-                const updateAlertLabel = updateToastsEnabled
-                  ? t('spindlePanel.updateAlertsToastAndBadge')
-                  : t('spindlePanel.updateAlertsBadgeOnly')
 
                 return (
                   <>
@@ -556,21 +528,6 @@ export default function SpindlePanel() {
                 </div>
 
                 <div className={styles.extensionActions}>
-                  {canManage && (
-                    <button
-                      type="button"
-                      className={clsx(
-                        styles.updateNotificationBtn,
-                        updateToastsEnabled && styles.updateNotificationBtnActive,
-                      )}
-                      onClick={() => handleUpdateToastToggle(ext.identifier)}
-                      aria-pressed={updateToastsEnabled}
-                      aria-label={updateAlertLabel}
-                      title={updateAlertLabel}
-                    >
-                      {updateToastsEnabled ? <Bell size={13} /> : <BellOff size={13} />}
-                    </button>
-                  )}
                   <button
                     className={clsx(
                       styles.toggleBtn,
@@ -660,24 +617,14 @@ export default function SpindlePanel() {
                 <div className={styles.primaryActions}>
                   <button
                     type="button"
-                    className={clsx(
-                      styles.labeledBtn,
-                      hasUpdate && styles.updateAvailableBtn,
-                    )}
+                    className={styles.labeledBtn}
                     onClick={() => handleUpdate(ext)}
                     disabled={isExtBusy(ext.id) || !canManage}
-                    title={canManage
-                      ? (hasUpdate ? t('spindlePanel.updateAvailableHint') : t('spindlePanel.updateHint'))
-                      : t('spindlePanel.managedByOperator')}
+                    title={canManage ? t('spindlePanel.updateHint') : t('spindlePanel.managedByOperator')}
                   >
                     {extensionOperationStatus?.extensionId === ext.id && extensionOperationStatus.operation === 'updating'
                       ? <Spinner size={14} fast />
-                      : (
-                        <span className={styles.updateIconWrap}>
-                          <RefreshCw size={14} />
-                          {hasUpdate && <span className={styles.updateDot} aria-hidden="true" />}
-                        </span>
-                      )}
+                      : <RefreshCw size={14} />}
                     <span>{t('spindlePanel.update')}</span>
                   </button>
                   <button

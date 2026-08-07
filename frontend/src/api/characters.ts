@@ -1,7 +1,9 @@
-import { get, post, put, del, upload, uploadWithProgress, getBlob, BASE_URL } from './client'
+import { get, post, put, del, upload, uploadWithProgress, getBlob, BASE_URL, type RequestOptions } from './client'
 import { triggerBlobDownload } from '@/lib/downloads'
 import type {
   Character,
+  CharacterLibraryScope,
+  CharacterPreview,
   CharacterPerspectiveLayer,
   CharacterSummary,
   TagCount,
@@ -27,6 +29,8 @@ export interface SummaryParams {
   filter?: string
   favorite_ids?: string
   seed?: number
+  chat_id?: string
+  scope?: CharacterLibraryScope
 }
 
 export type CharacterPerspectiveLayerKind = 'background' | 'framing' | 'subject'
@@ -37,8 +41,14 @@ export const charactersApi = {
     return get<PaginatedResult<Character>>('/characters', params)
   },
 
-  listSummaries(params?: SummaryParams) {
-    return get<PaginatedResult<CharacterSummary>>('/characters/summary', params)
+  listSummaries(params?: SummaryParams, signal?: AbortSignal) {
+    const options: RequestOptions | undefined = signal === undefined ? undefined : { signal }
+    return get<PaginatedResult<CharacterSummary>>('/characters/summary', params, options)
+  },
+
+  getHomepagePreview(id: string, signal?: AbortSignal) {
+    const options: RequestOptions | undefined = signal === undefined ? undefined : { signal }
+    return get<CharacterPreview>(`/characters/${id}/homepage-preview`, undefined, options)
   },
 
   listTags() {

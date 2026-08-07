@@ -45,7 +45,29 @@ export interface STDataCounts {
   groupChatFiles: number;
   worldBooks: number;
   personas: number;
+  connections: number;
+  proxies: number;
 }
+
+export interface STConnectionProfile {
+  id?: string;
+  name?: string;
+  mode?: string;
+  api?: string;
+  model?: string;
+  proxy?: string;
+  preset?: string;
+  "api-url"?: string;
+  "secret-id"?: string;
+}
+
+export interface STProxy {
+  name?: string;
+  url?: string;
+  password?: string;
+}
+
+export type STSecrets = Record<string, Array<{ id?: string; value?: string; active?: boolean }>>;
 
 export interface WorldBookPayload {
   name: string;
@@ -362,6 +384,8 @@ export async function scanSTData(stDataDir: string, fs: FileSystem = defaultFs):
     groupChatFiles: 0,
     worldBooks: 0,
     personas: 0,
+    connections: 0,
+    proxies: 0,
   };
 
   const charsDir = fs.join(stDataDir, "characters");
@@ -418,10 +442,54 @@ export async function scanSTData(stDataDir: string, fs: FileSystem = defaultFs):
         ...Object.keys(pu.persona_descriptions || {}),
       ]);
       counts.personas = allKeys.size;
+      const profiles = settings?.extension_settings?.connectionManager?.profiles
+        ?? settings?.connectionManager?.profiles;
+      counts.connections = Array.isArray(profiles) ? profiles.length : 0;
+      counts.proxies = Array.isArray(settings?.proxies) ? settings.proxies.length : 0;
     } catch { /* ignore */ }
   }
 
   return counts;
+}
+
+/** Read ST connection-manager profiles without exposing or resolving secrets. */
+export async function readConnectionsFromDisk(stDataDir: string, fs: FileSystem = defaultFs): Promise<STConnectionProfile[]> {
+  const settingsPath = fs.join(stDataDir, "settings.json");
+  if (!(await fs.exists(settingsPath))) return [];
+  try {
+    const settings = JSON.parse(await fs.readText(settingsPath));
+    const profiles = settings?.extension_settings?.connectionManager?.profiles
+      ?? settings?.connectionManager?.profiles;
+    return Array.isArray(profiles) ? profiles.filter((profile): profile is STConnectionProfile => !!profile && typeof profile === "object") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Read ST reverse proxies. Passwords remain confined to the migration service. */
+export async function readProxiesFromDisk(stDataDir: string, fs: FileSystem = defaultFs): Promise<STProxy[]> {
+  const settingsPath = fs.join(stDataDir, "settings.json");
+  if (!(await fs.exists(settingsPath))) return [];
+  try {
+    const settings = JSON.parse(await fs.readText(settingsPath));
+    return Array.isArray(settings?.proxies)
+      ? settings.proxies.filter((proxy: unknown): proxy is STProxy => !!proxy && typeof proxy === "object")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Read ST secrets for in-process key resolution. Callers must never log or return this value. */
+export async function readSecretsFromDisk(stDataDir: string, fs: FileSystem = defaultFs): Promise<STSecrets> {
+  const secretsPath = fs.join(stDataDir, "secrets.json");
+  if (!(await fs.exists(secretsPath))) return {};
+  try {
+    const secrets = JSON.parse(await fs.readText(secretsPath));
+    return secrets && typeof secrets === "object" && !Array.isArray(secrets) ? secrets as STSecrets : {};
+  } catch {
+    return {};
+  }
 }
 
 export async function scanCharacterPNGs(charsDir: string, logger?: MigrationLogger, fs: FileSystem = defaultFs): Promise<ScanEntry[]> {

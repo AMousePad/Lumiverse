@@ -53,6 +53,7 @@ import {
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import useIsMobile from '@/hooks/useIsMobile'
+import { invalidateTokenCountsForEntry, useTokenCounts, useTokenCountSweep } from '@/hooks/useTokenCounts'
 import clsx from 'clsx'
 import { worldBooksApi } from '@/api/world-books'
 import { wsClient } from '@/ws/client'
@@ -62,7 +63,7 @@ import type {
   WorldBookEntryChangedPayload,
   WorldBookEntryDeletedPayload,
 } from '@/types/ws-events'
-import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
+import WorldBookEntryEditor, { type EntryEditorConflictState } from '@/components/shared/WorldBookEntryEditor'
 import WorldBookTokenReportModal from '@/components/panels/world-book/WorldBookTokenReportModal'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
@@ -80,9 +81,12 @@ import type {
   WorldBookEntrySortBy,
   WorldBookEntrySortDir,
   WorldBookEntryPageSize,
+  WorldBookEntryViewPreference,
 } from '@/types/store'
 import styles from './WorldBookEntriesSection.module.css'
 import { clearSearchOnEscape } from '@/lib/clearableSearch'
+import { classifyWorldBookEntryMutationError, type WorldBookEntryMutationIssue } from '@/lib/worldBookEntryConflict'
+import { estimateTokens } from '@/lib/tokenEstimate'
 
 const DEFAULT_PAGE_SIZE = 50 as const
 const CUSTOM_PAGE_SIZE = 200 as const
@@ -90,6 +94,62 @@ const ENTRY_FIELD_VISIBLE_TOP_GUTTER = 12
 const ENTRY_FIELD_KEYBOARD_GUTTER = 72
 const ENTRY_FIELD_REVEAL_THRESHOLD = 10
 const ENTRY_FIELD_FOCUS_SETTLE_DELAYS = [40, 180, 360, 520] as const
+const TOKEN_PREFETCH_DWELL_MS = 180
+
+export interface WorldBookEntriesSectionBookResetState {
+  entryPage: number
+  entrySearchFilter: string
+  mobileListOptionsOpen: boolean
+  selectedEntryId: string | null
+  showTokenReport: boolean
+  selectMode: boolean
+  selectedIds: string[]
+  contextMenu: null
+  typeMenu: null
+  positionMenu: null
+  bulkActionsMenu: null
+  activationState: null
+}
+
+export interface WorldBookEntriesSectionViewState extends WorldBookEntriesSectionBookResetState {
+  sortBy: WorldBookEntrySortBy
+  sortDir: WorldBookEntrySortDir
+  pageSize: WorldBookEntryPageSize
+}
+
+export function resolveWorldBookEntryViewPreference(
+  preference: WorldBookEntryViewPreference | undefined,
+): WorldBookEntryViewPreference {
+  return preference ?? {
+    sortBy: 'custom',
+    sortDir: 'asc',
+    pageSize: DEFAULT_PAGE_SIZE,
+  }
+}
+
+export function applyWorldBookEntryViewPreference(
+  state: WorldBookEntriesSectionViewState,
+  preference: WorldBookEntryViewPreference | undefined,
+): WorldBookEntriesSectionViewState {
+  return { ...state, ...resolveWorldBookEntryViewPreference(preference) }
+}
+
+export function getWorldBookEntriesSectionBookResetState(): WorldBookEntriesSectionBookResetState {
+  return {
+    entryPage: 1,
+    entrySearchFilter: '',
+    mobileListOptionsOpen: false,
+    selectedEntryId: null,
+    showTokenReport: false,
+    selectMode: false,
+    selectedIds: [],
+    contextMenu: null,
+    typeMenu: null,
+    positionMenu: null,
+    bulkActionsMenu: null,
+    activationState: null,
+  }
+}
 
 /** Ignore WORLD_BOOK_ENTRY_CHANGED echoes of our own writes for this long. */
 const SELF_ECHO_WINDOW_MS = 2_000
@@ -167,7 +227,71 @@ function useFormatEntryCount() {
   return useCallback((count: number) => t('entryCount', { count }), [t])
 }
 
+function EntryTokenCell({ bookId, entry, selected }: { bookId: string; entry: WorldBookEntry; selected: boolean }) {
+  const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entryEditor' })
+  const persistExactCount = useCallback(async (values: Readonly<Record<string, string | number | boolean>>) => {
+    for (const [namespace, value] of Object.entries(values)) {
+      await worldBooksApi.setEntryExtensionNamespace(bookId, entry.id, namespace, value)
+    }
+  }, [bookId, entry.id])
+  const { count, approximate, status, requestCount, cancel } = useTokenCounts({
+    persistExactCount,
+    entryId: entry.id,
+    content: entry.content,
+    extensions: entry.extensions,
+  })
+  const dwellTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const displayedCount = count ?? estimateTokens(entry.content)
+  const displayedApproximate = count == null || approximate
+
+  const clearDwell = useCallback(() => {
+    if (dwellTimer.current == null) return
+    clearTimeout(dwellTimer.current)
+    dwellTimer.current = null
+  }, [])
+  const schedulePrefetch = useCallback(() => {
+    clearDwell()
+    dwellTimer.current = setTimeout(() => {
+      dwellTimer.current = null
+      requestCount()
+    }, TOKEN_PREFETCH_DWELL_MS)
+  }, [clearDwell, requestCount])
+
+  useEffect(() => {
+    if (selected) requestCount()
+  }, [requestCount, selected])
+  useEffect(() => () => {
+    clearDwell()
+    cancel()
+  }, [cancel, clearDwell])
+
+  return (
+    <button
+      type="button"
+      className={clsx(styles.tokenCell, status === 'counting' && styles.tokenCellCounting)}
+      data-world-book-token-cell="true"
+      onClick={(event) => {
+        event.stopPropagation()
+        requestCount()
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onPointerEnter={schedulePrefetch}
+      onPointerLeave={clearDwell}
+      onFocus={schedulePrefetch}
+      onBlur={clearDwell}
+      disabled={!entry.content.length}
+      title={t('countTokensTitle')}
+      aria-label={t('tokenCount', { count: displayedCount.toLocaleString() })}
+    >
+      <Hash size={11} aria-hidden="true" />
+      <span>{displayedApproximate ? '~' : ''}{displayedCount.toLocaleString()}</span>
+    </button>
+  )
+}
+
 interface EntryRowProps {
+  bookId: string
+  editorDensity?: 'default' | 'compact'
   entry: WorldBookEntry
   expanded: boolean
   dragEnabled: boolean
@@ -180,6 +304,9 @@ interface EntryRowProps {
   onOpenMenu: (entryId: string, position: ContextMenuPos) => void
   onOpenTypeMenu: (entryId: string, position: ContextMenuPos) => void
   onOpenPositionMenu: (entryId: string, position: ContextMenuPos) => void
+  conflict?: EntryEditorConflictState
+  onRetryConflict?: () => void
+  onUseServerConflict?: () => void
 }
 
 interface EntryRowContentProps extends EntryRowProps {
@@ -190,6 +317,8 @@ interface EntryRowContentProps extends EntryRowProps {
 
 function EntryRowContent({
   entry,
+  bookId,
+  editorDensity,
   expanded,
   dragEnabled,
   selectMode,
@@ -201,6 +330,9 @@ function EntryRowContent({
   onOpenMenu,
   onOpenTypeMenu,
   onOpenPositionMenu,
+  conflict,
+  onRetryConflict,
+  onUseServerConflict,
   dragHandleAttributes,
   dragHandleListeners,
   isDragging,
@@ -224,6 +356,8 @@ function EntryRowContent({
           entry.disabled && styles.entryRowDisabled,
           selected && styles.entryRowSelected,
         )}
+        data-world-book-entry-row={entry.id}
+        data-world-book-entry-revision={entry.revision}
         onClick={selectMode ? onToggleSelect : onToggleExpand}
       >
         <div className={styles.entryHeader}>
@@ -307,6 +441,7 @@ function EntryRowContent({
               </div>
             </div>
 
+            <EntryTokenCell bookId={bookId} entry={entry} selected={selected || expanded} />
             <div className={styles.entryActions} {...controlWrapProps}>
             <button
               type="button"
@@ -336,9 +471,13 @@ function EntryRowContent({
 
       {expanded && (
         <WorldBookEntryEditor
+          density={editorDensity}
           entry={entry}
           onUpdate={onDebouncedUpdate}
           onImmediateUpdate={onUpdate}
+          conflict={conflict}
+          onRetryConflict={onRetryConflict}
+          onUseServerConflict={onUseServerConflict}
         />
       )}
     </div>
@@ -402,9 +541,15 @@ interface ActivationState {
   entryIds: string[]
 }
 
+interface EntryIntent {
+  updates: Record<string, any>
+  version: number
+}
+
 interface WorldBookEntriesSectionProps {
   books: WorldBook[]
   selectedBookId: string
+  editorDensity?: 'default' | 'compact'
   onRefreshVectorSummary?: (bookId: string) => Promise<void> | void
   scrollContainerRef?: { current: HTMLDivElement | null }
   paginationContainer?: HTMLDivElement | null
@@ -413,6 +558,7 @@ interface WorldBookEntriesSectionProps {
 export default function WorldBookEntriesSection({
   books,
   selectedBookId,
+  editorDensity,
   onRefreshVectorSummary,
   scrollContainerRef,
   paginationContainer,
@@ -423,10 +569,13 @@ export default function WorldBookEntriesSection({
   const labels = useWorldBookEntryLabels()
   const formatEntryCount = useFormatEntryCount()
   const worldBookEntryViewPrefs = useStore((s) => s.worldBookEntryViewPrefs)
+  const pendingWorldBookEditEntryId = useStore((s) => s.pendingWorldBookEditEntryId)
+  const setPendingWorldBookEditEntryId = useStore((s) => s.setPendingWorldBookEditEntryId)
   const setSetting = useStore((s) => s.setSetting)
   const isMobile = useIsMobile()
 
   const [entries, setEntries] = useState<WorldBookEntry[]>([])
+  useTokenCountSweep(entries)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [entryTotal, setEntryTotal] = useState(0)
   const [entryPage, setEntryPage] = useState(1)
@@ -459,8 +608,15 @@ export default function WorldBookEntriesSection({
   const [bulkDepth, setBulkDepth] = useState('4')
   const [showTokenReport, setShowTokenReport] = useState(false)
   const [pendingAction, setPendingAction] = useState(false)
+  const [entryConflicts, setEntryConflicts] = useState<Record<string, EntryEditorConflictState>>({})
+  const entryIntentsRef = useRef<Map<string, EntryIntent>>(new Map())
+  const retryOperationsRef = useRef<Map<string, () => Promise<void>>>(new Map())
+  const mountedRef = useRef(false)
+  const selectedBookIdRef = useRef(selectedBookId)
+  const requestGenerationRef = useRef(0)
   const entryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const sectionRef = useRef<HTMLDivElement>(null)
+  const entryListRef = useRef<HTMLDivElement>(null)
   const localScrollRef = useRef<HTMLDivElement>(null)
   const focusedEntryFieldRef = useRef<HTMLElement | null>(null)
   const focusRevealFrameRef = useRef(0)
@@ -469,6 +625,34 @@ export default function WorldBookEntriesSection({
   const activeScrollRef = scrollContainerRef ?? localScrollRef
   const usesSharedScroll = scrollContainerRef != null
   useScrollGate(activeScrollRef)
+
+  const clearEntryTimers = useCallback(() => {
+    for (const timer of Object.values(entryTimers.current)) clearTimeout(timer)
+    entryTimers.current = {}
+  }, [])
+
+  useEffect(() => {
+    mountedRef.current = true
+    const retryOperations = retryOperationsRef.current
+    const entryIntents = entryIntentsRef.current
+    return () => {
+      mountedRef.current = false
+      requestGenerationRef.current += 1
+      clearEntryTimers()
+      clearTimeout(liveRefetchTimer.current)
+      retryOperations.clear()
+      entryIntents.clear()
+    }
+  }, [clearEntryTimers])
+
+  useEffect(() => {
+    selectedBookIdRef.current = selectedBookId
+    requestGenerationRef.current += 1
+    clearEntryTimers()
+    retryOperationsRef.current.clear()
+    entryIntentsRef.current.clear()
+    setEntryConflicts({})
+  }, [clearEntryTimers, selectedBookId])
 
   const clearFocusRevealTimers = useCallback(() => {
     for (const timer of focusRevealTimersRef.current) {
@@ -583,6 +767,88 @@ export default function WorldBookEntriesSection({
   )
   const allSelected = entries.length > 0 && selectedIds.length === entries.length
   const selectedCount = selectedIds.length
+  const expectedRevisionsFor = useCallback((entryIds: string[]) => (
+    Object.fromEntries(
+      entryIds
+        .map((id) => entriesRef.current.find((entry) => entry.id === id))
+        .filter((entry): entry is WorldBookEntry => Boolean(entry))
+        .map((entry) => [entry.id, entry.revision]),
+    )
+  ), [])
+  const recordMutationIssue = useCallback((
+    entryIds: string[],
+    error: unknown,
+    retry: () => Promise<void>,
+    bookId: string,
+    generation: number,
+  ) => {
+    const issue: WorldBookEntryMutationIssue | null = classifyWorldBookEntryMutationError(error)
+    if (!issue || !mountedRef.current || selectedBookIdRef.current !== bookId || requestGenerationRef.current !== generation) return false
+    const currentById = issue.kind === 'conflict'
+      ? new Map(issue.payload.conflicts.map((conflict) => [conflict.id, conflict.current]))
+      : new Map<string, WorldBookEntry | null>()
+    const affectedIds = issue.kind === 'conflict' && issue.payload.conflicts.length > 0
+      ? issue.payload.conflicts.map((conflict) => conflict.id)
+      : entryIds
+    setEntries((current) => current.map((entry) => {
+      const server = currentById.get(entry.id)
+      if (!server) return entry
+      return { ...entry, revision: server.revision }
+    }))
+    setEntryConflicts((current) => {
+      const next = { ...current }
+      for (const id of affectedIds) {
+        const server = currentById.get(id)
+        next[id] = issue.kind === 'conflict'
+          ? { kind: 'conflict', current: server ?? null }
+          : { kind: 'malformed-precondition', message: issue.payload.message }
+        retryOperationsRef.current.set(id, retry)
+      }
+      return next
+    })
+    setSelectedEntryId((current) => current ?? affectedIds[0] ?? null)
+    return true
+  }, [])
+
+  const retryConflict = useCallback((entryId: string) => {
+    const retry = retryOperationsRef.current.get(entryId)
+    if (!retry) return
+    const bookId = selectedBookIdRef.current
+    const generation = requestGenerationRef.current
+    const operationIds = Array.from(retryOperationsRef.current.entries())
+      .filter(([, operation]) => operation === retry)
+      .map(([id]) => id)
+    setEntryConflicts((current) => {
+      const next = { ...current }
+      for (const id of operationIds) delete next[id]
+      return next
+    })
+    void retry().then(() => {
+      for (const id of operationIds) {
+        if (retryOperationsRef.current.get(id) === retry) retryOperationsRef.current.delete(id)
+      }
+    }).catch((error) => {
+      const classified = recordMutationIssue(operationIds, error, retry, bookId, generation)
+      if (!classified) liveRefetchRef.current()
+    })
+  }, [recordMutationIssue])
+
+  const acceptServerConflict = useCallback((entryId: string) => {
+    const conflict = entryConflicts[entryId]
+    const server = conflict?.current
+    if (server) {
+      setEntries((current) => current.map((entry) => (entry.id === entryId ? server : entry)))
+    } else if (conflict?.kind === 'conflict') {
+      setEntries((current) => current.filter((entry) => entry.id !== entryId))
+    }
+    entryIntentsRef.current.delete(entryId)
+    retryOperationsRef.current.delete(entryId)
+    setEntryConflicts((current) => {
+      const next = { ...current }
+      delete next[entryId]
+      return next
+    })
+  }, [entryConflicts])
   const dragUnavailableReason = useMemo(() => {
     if (entrySortBy !== 'custom') return null
     if (entrySearchFilter.trim()) return te('clearSearchDrag')
@@ -650,10 +916,10 @@ export default function WorldBookEntriesSection({
     nextPageSize: WorldBookEntryPageSize,
     opts?: { silent?: boolean },
   ) => {
-    // Silent loads (live-sync refetches) skip the loading flash so they don't
-    // momentarily unmount an expanded entry editor and drop in-progress text.
+    const requestGeneration = requestGenerationRef.current
+    const isCurrent = () => mountedRef.current && selectedBookIdRef.current === bookId && requestGenerationRef.current === requestGeneration
     const silent = opts?.silent ?? false
-    if (!silent) setLoadingEntries(true)
+    if (!silent && isCurrent()) setLoadingEntries(true)
     try {
       const res = nextPageSize === 'all'
         ? await fetchAllEntries(bookId, sortBy, sortDir, search)
@@ -664,39 +930,54 @@ export default function WorldBookEntriesSection({
             sort_dir: sortBy === 'custom' ? 'asc' : sortDir,
             search: search || undefined,
           })
-      setEntries(res.data)
+      let nextEntries = res.data
+      const pendingEntryId = useStore.getState().pendingWorldBookEditEntryId
+      if (pendingEntryId && !nextEntries.some((entry) => entry.id === pendingEntryId)) {
+        try {
+          const pendingEntry = await worldBooksApi.getEntry(bookId, pendingEntryId)
+          nextEntries = [pendingEntry, ...nextEntries]
+        } catch {
+          if (isCurrent()) useStore.getState().setPendingWorldBookEditEntryId(null)
+        }
+      }
+      if (!isCurrent()) return
+      setEntries(nextEntries)
       setEntryTotal(res.total)
       const totalPages = nextPageSize === 'all' ? 1 : Math.max(1, Math.ceil(res.total / nextPageSize))
-      if (page > totalPages) {
-        setEntryPage(totalPages)
-      }
+      if (page > totalPages) setEntryPage(totalPages)
     } finally {
-      if (!silent) setLoadingEntries(false)
+      if (!silent && isCurrent()) setLoadingEntries(false)
     }
   }, [fetchAllEntries])
 
+  const selectedBookViewPreference = worldBookEntryViewPrefs[selectedBookId]
+  const resolvedSelectedBookViewPreference = useMemo(
+    () => resolveWorldBookEntryViewPreference(selectedBookViewPreference),
+    [selectedBookViewPreference],
+  )
+
   useEffect(() => {
-    const pref = worldBookEntryViewPrefs[selectedBookId] || {
-      sortBy: 'custom' as const,
-      sortDir: 'asc' as const,
-      pageSize: DEFAULT_PAGE_SIZE,
-    }
+    const pref = resolvedSelectedBookViewPreference
     setEntrySortBy(pref.sortBy)
     setEntrySortDir(pref.sortDir)
     setEntryPageSize(pref.pageSize || DEFAULT_PAGE_SIZE)
-    setEntryPage(1)
-    setEntrySearchFilter('')
-    setMobileListOptionsOpen(false)
-    setSelectedEntryId(null)
-    setShowTokenReport(false)
-    setSelectMode(false)
-    setSelectedIds([])
-    setContextMenu(null)
-    setTypeMenu(null)
-    setPositionMenu(null)
-    setBulkActionsMenu(null)
-    setActivationState(null)
-  }, [selectedBookId, worldBookEntryViewPrefs])
+  }, [selectedBookId, resolvedSelectedBookViewPreference])
+
+  useEffect(() => {
+    const reset = getWorldBookEntriesSectionBookResetState()
+    setEntryPage(reset.entryPage)
+    setEntrySearchFilter(reset.entrySearchFilter)
+    setMobileListOptionsOpen(reset.mobileListOptionsOpen)
+    setSelectedEntryId(reset.selectedEntryId)
+    setShowTokenReport(reset.showTokenReport)
+    setSelectMode(reset.selectMode)
+    setSelectedIds(reset.selectedIds)
+    setContextMenu(reset.contextMenu)
+    setTypeMenu(reset.typeMenu)
+    setPositionMenu(reset.positionMenu)
+    setBulkActionsMenu(reset.bulkActionsMenu)
+    setActivationState(reset.activationState)
+  }, [selectedBookId])
 
   useEffect(() => {
     if (!selectedBookId) return
@@ -739,6 +1020,7 @@ export default function WorldBookEntriesSection({
     }
     const offEntryChanged = wsClient.on(EventType.WORLD_BOOK_ENTRY_CHANGED, (p: WorldBookEntryChangedPayload) => {
       if (!p?.entry || p.worldBookId !== selectedBookId || isSelfEcho(p.id)) return
+      invalidateTokenCountsForEntry(p.id)
       if (!entriesRef.current.some((e) => e.id === p.id)) {
         scheduleLiveRefetch()
         return
@@ -747,6 +1029,7 @@ export default function WorldBookEntriesSection({
     })
     const offEntryDeleted = wsClient.on(EventType.WORLD_BOOK_ENTRY_DELETED, (p: WorldBookEntryDeletedPayload) => {
       if (!p?.id || p.worldBookId !== selectedBookId) return
+      invalidateTokenCountsForEntry(p.id)
       if (!entriesRef.current.some((e) => e.id === p.id)) return
       setEntries((cur) => cur.filter((e) => e.id !== p.id))
       setEntryTotal((tot) => Math.max(0, tot - 1))
@@ -769,37 +1052,87 @@ export default function WorldBookEntriesSection({
     setSelectedIds((current) => current.filter((id) => entries.some((entry) => entry.id === id)))
   }, [entries])
 
+  useEffect(() => {
+    if (!pendingWorldBookEditEntryId) return
+    if (!entries.some((entry) => entry.id === pendingWorldBookEditEntryId)) return
+    setSelectedEntryId(pendingWorldBookEditEntryId)
+    setPendingWorldBookEditEntryId(null)
+  }, [entries, pendingWorldBookEditEntryId, setPendingWorldBookEditEntryId])
+
+  useEffect(() => {
+    if (!selectedEntryId) return
+    const element = entryListRef.current?.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(selectedEntryId)}"]`)
+    element?.scrollIntoView({ block: 'nearest' })
+  }, [selectedEntryId])
+
   const refetchCurrentPage = useCallback(async () => {
     await loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, entrySearchFilter.trim(), entryPageSize)
   }, [selectedBookId, entryPage, entrySortBy, entrySortDir, entrySearchFilter, entryPageSize, loadEntries])
 
+  const persistEntryUpdate = useCallback(async (entryId: string, intent: EntryIntent) => {
+    const generation = requestGenerationRef.current
+    const expected_revision = entriesRef.current.find((entry) => entry.id === entryId)?.revision
+    try {
+      const updated = await worldBooksApi.updateEntry(selectedBookId, entryId, {
+        ...intent.updates,
+        ...(expected_revision === undefined ? {} : { expected_revision }),
+      })
+      if (!mountedRef.current || selectedBookIdRef.current !== selectedBookId || requestGenerationRef.current !== generation) return
+      if (entryIntentsRef.current.get(entryId) !== intent) {
+        setEntries((current) => current.map((entry) => (
+          entry.id === entryId ? { ...entry, revision: updated.revision } : entry
+        )))
+        return
+      }
+      entryIntentsRef.current.delete(entryId)
+      setEntryConflicts((current) => {
+        const next = { ...current }
+        delete next[entryId]
+        return next
+      })
+      if (Object.prototype.hasOwnProperty.call(intent.updates, 'content')) invalidateTokenCountsForEntry(entryId)
+      setEntries((current) => current.map((entry) => (entry.id === entryId ? updated : entry)))
+      await refreshVectorSummary()
+    } catch (error) {
+      if (!mountedRef.current || selectedBookIdRef.current !== selectedBookId || requestGenerationRef.current !== generation) return
+      if (entryIntentsRef.current.get(entryId) !== intent) return
+      const classified = recordMutationIssue([entryId], error, () => persistEntryUpdate(entryId, intent), selectedBookId, generation)
+      if (!classified) void refetchCurrentPage()
+    }
+  }, [recordMutationIssue, refetchCurrentPage, refreshVectorSummary, selectedBookId])
+
   const updateEntry = useCallback((entryId: string, updates: Record<string, any>) => {
+    if (Object.prototype.hasOwnProperty.call(updates, 'content')) invalidateTokenCountsForEntry(entryId)
+    const previous = entryIntentsRef.current.get(entryId)
+    const intent: EntryIntent = {
+      updates: { ...previous?.updates, ...updates },
+      version: (previous?.version ?? 0) + 1,
+    }
+    entryIntentsRef.current.set(entryId, intent)
     setEntries((current) => current.map((entry) => (entry.id === entryId ? { ...entry, ...updates } : entry)))
     recentLocalWrites.current.set(entryId, Date.now())
-    void worldBooksApi.updateEntry(selectedBookId, entryId, updates)
-      .then(async () => {
-        await refreshVectorSummary()
-      })
-      .catch(() => {
-        void refetchCurrentPage()
-      })
-  }, [selectedBookId, refreshVectorSummary, refetchCurrentPage])
+    void persistEntryUpdate(entryId, intent)
+  }, [persistEntryUpdate])
 
   const debouncedUpdateEntry = useCallback((entryId: string, updates: Record<string, any>) => {
+    if (Object.prototype.hasOwnProperty.call(updates, 'content')) invalidateTokenCountsForEntry(entryId)
+    const previous = entryIntentsRef.current.get(entryId)
+    const intent: EntryIntent = {
+      updates: { ...previous?.updates, ...updates },
+      version: (previous?.version ?? 0) + 1,
+    }
+    entryIntentsRef.current.set(entryId, intent)
     setEntries((current) => current.map((entry) => (entry.id === entryId ? { ...entry, ...updates } : entry)))
     recentLocalWrites.current.set(entryId, Date.now())
     const key = `${entryId}:${Object.keys(updates).sort().join(',')}`
     clearTimeout(entryTimers.current[key])
     entryTimers.current[key] = setTimeout(() => {
-      void worldBooksApi.updateEntry(selectedBookId, entryId, updates)
-        .then(async () => {
-          await refreshVectorSummary()
-        })
-        .catch(() => {
-          void refetchCurrentPage()
-        })
+      delete entryTimers.current[key]
+      if (mountedRef.current && selectedBookIdRef.current === selectedBookId && entryIntentsRef.current.get(entryId) === intent) {
+        void persistEntryUpdate(entryId, intent)
+      }
     }, 400)
-  }, [selectedBookId, refreshVectorSummary, refetchCurrentPage])
+  }, [persistEntryUpdate, selectedBookId])
 
   const handleCreateEntry = useCallback(async () => {
     const entry = await worldBooksApi.createEntry(selectedBookId, {
@@ -815,25 +1148,50 @@ export default function WorldBookEntriesSection({
   }, [selectedBookId, entrySortBy, entrySortDir, entrySearchFilter, entryPageSize, loadEntries, refreshVectorSummary, t])
 
   const handleDeleteEntries = useCallback(async (entryIds: string[]) => {
-    if (entryIds.length === 1) {
-      await worldBooksApi.deleteEntry(selectedBookId, entryIds[0])
-    } else {
-      await worldBooksApi.bulkEntryAction(selectedBookId, { action: 'delete', entry_ids: entryIds })
+    entryIds.forEach(invalidateTokenCountsForEntry)
+    const generation = requestGenerationRef.current
+    try {
+      if (entryIds.length === 1) {
+        await worldBooksApi.deleteEntry(selectedBookId, entryIds[0], expectedRevisionsFor(entryIds)[entryIds[0]])
+      } else {
+        await worldBooksApi.bulkEntryAction(selectedBookId, { action: 'delete', entry_ids: entryIds, expected_revisions: expectedRevisionsFor(entryIds) })
+      }
+      setSelectedEntryId((current) => (current && entryIds.includes(current) ? null : current))
+      setSelectedIds((current) => current.filter((id) => !entryIds.includes(id)))
+      await refetchCurrentPage()
+      await refreshVectorSummary()
+    } catch (error) {
+      const classified = recordMutationIssue(entryIds, error, async () => {
+        const revisions = expectedRevisionsFor(entryIds)
+        if (entryIds.length === 1) await worldBooksApi.deleteEntry(selectedBookId, entryIds[0], revisions[entryIds[0]])
+        else await worldBooksApi.bulkEntryAction(selectedBookId, { action: 'delete', entry_ids: entryIds, expected_revisions: revisions })
+        await refetchCurrentPage()
+      }, selectedBookId, generation)
+      if (!classified) void refetchCurrentPage()
     }
-    setSelectedEntryId((current) => (current && entryIds.includes(current) ? null : current))
-    setSelectedIds((current) => current.filter((id) => !entryIds.includes(id)))
-    await refetchCurrentPage()
-    await refreshVectorSummary()
-  }, [selectedBookId, refetchCurrentPage, refreshVectorSummary])
+  }, [expectedRevisionsFor, recordMutationIssue, refetchCurrentPage, refreshVectorSummary, selectedBookId])
 
   const handleDuplicateHere = useCallback(async (entryId: string) => {
-    await worldBooksApi.duplicateEntry(selectedBookId, entryId)
-    await refetchCurrentPage()
-    await refreshVectorSummary()
-  }, [selectedBookId, refetchCurrentPage, refreshVectorSummary])
+    const generation = requestGenerationRef.current
+    const expected_revision = entriesRef.current.find((entry) => entry.id === entryId)?.revision
+    try {
+      await worldBooksApi.duplicateEntry(selectedBookId, entryId, expected_revision === undefined ? {} : { expected_revision })
+      await refetchCurrentPage()
+      await refreshVectorSummary()
+    } catch (error) {
+      const classified = recordMutationIssue([entryId], error, async () => {
+        const revision = entriesRef.current.find((entry) => entry.id === entryId)?.revision
+        await worldBooksApi.duplicateEntry(selectedBookId, entryId, revision === undefined ? {} : { expected_revision: revision })
+        await refetchCurrentPage()
+      }, selectedBookId, generation)
+      if (!classified) void refetchCurrentPage()
+    }
+  }, [recordMutationIssue, refetchCurrentPage, refreshVectorSummary, selectedBookId])
+
 
   const handleMoveOrCopy = useCallback(async () => {
     if (!moveCopyState || !moveTargetBookId) return
+    const generation = requestGenerationRef.current
     setPendingAction(true)
     try {
       if (moveCopyState.mode === 'move') {
@@ -841,29 +1199,47 @@ export default function WorldBookEntriesSection({
           action: 'move',
           entry_ids: moveCopyState.entryIds,
           target_book_id: moveTargetBookId,
+          expected_revisions: expectedRevisionsFor(moveCopyState.entryIds),
         })
         setSelectedIds((current) => current.filter((id) => !moveCopyState.entryIds.includes(id)))
       } else {
-        await Promise.all(moveCopyState.entryIds.map((entryId) =>
-          worldBooksApi.duplicateEntry(selectedBookId, entryId, { target_book_id: moveTargetBookId })
-        ))
+        await worldBooksApi.bulkEntryAction(selectedBookId, {
+          action: 'copy',
+          entry_ids: moveCopyState.entryIds,
+          target_book_id: moveTargetBookId,
+          expected_revisions: expectedRevisionsFor(moveCopyState.entryIds),
+        })
       }
       setMoveCopyState(null)
       setMoveTargetBookId('')
       await refetchCurrentPage()
       await refreshVectorSummary()
+    } catch (error) {
+      const ids = moveCopyState.entryIds
+      const classified = recordMutationIssue(ids, error, async () => {
+        await worldBooksApi.bulkEntryAction(selectedBookId, {
+          action: moveCopyState.mode,
+          entry_ids: ids,
+          target_book_id: moveTargetBookId,
+          expected_revisions: expectedRevisionsFor(ids),
+        })
+        await refetchCurrentPage()
+      }, selectedBookId, generation)
+      if (!classified) void refetchCurrentPage()
     } finally {
       setPendingAction(false)
     }
-  }, [moveCopyState, moveTargetBookId, selectedBookId, refetchCurrentPage, refreshVectorSummary])
+  }, [expectedRevisionsFor, moveCopyState, moveTargetBookId, recordMutationIssue, selectedBookId, refetchCurrentPage, refreshVectorSummary])
 
   const handleBulkRenumber = useCallback(async () => {
     if (!renumberState) return
+    const generation = requestGenerationRef.current
     setPendingAction(true)
     try {
       const payload: WorldBookEntryBulkActionInput = {
         action: 'renumber',
         entry_ids: renumberState.entryIds,
+        expected_revisions: expectedRevisionsFor(renumberState.entryIds),
         step: Math.max(1, parseInt(renumberStep, 10) || 1),
         direction: renumberDirection,
       }
@@ -876,18 +1252,31 @@ export default function WorldBookEntriesSection({
       setRenumberStep('1')
       setRenumberDirection('asc')
       await refetchCurrentPage()
+    } catch (error) {
+      const ids = renumberState.entryIds
+      const classified = recordMutationIssue(ids, error, async () => {
+        await worldBooksApi.bulkEntryAction(selectedBookId, {
+          action: 'renumber', entry_ids: ids, expected_revisions: expectedRevisionsFor(ids),
+          step: Math.max(1, parseInt(renumberStep, 10) || 1), direction: renumberDirection,
+          ...(renumberStart.trim() ? { start: parseInt(renumberStart, 10) } : {}),
+        })
+        await refetchCurrentPage()
+      }, selectedBookId, generation)
+      if (!classified) void refetchCurrentPage()
     } finally {
       setPendingAction(false)
     }
-  }, [renumberDirection, renumberStart, renumberState, renumberStep, selectedBookId, refetchCurrentPage])
+  }, [expectedRevisionsFor, recordMutationIssue, renumberDirection, renumberStart, renumberState, renumberStep, selectedBookId, refetchCurrentPage])
 
   const handleBulkKeyword = useCallback(async () => {
     if (!keywordState || !keywordValue.trim()) return
+    const generation = requestGenerationRef.current
     setPendingAction(true)
     try {
       await worldBooksApi.bulkEntryAction(selectedBookId, {
         action: 'add_keyword',
         entry_ids: keywordState.entryIds,
+        expected_revisions: expectedRevisionsFor(keywordState.entryIds),
         keyword: keywordValue.trim(),
         target: keywordTarget,
       })
@@ -896,18 +1285,30 @@ export default function WorldBookEntriesSection({
       setKeywordTarget('primary')
       await refetchCurrentPage()
       await refreshVectorSummary()
+    } catch (error) {
+      const ids = keywordState.entryIds
+      const classified = recordMutationIssue(ids, error, async () => {
+        await worldBooksApi.bulkEntryAction(selectedBookId, {
+          action: 'add_keyword', entry_ids: ids, expected_revisions: expectedRevisionsFor(ids),
+          keyword: keywordValue.trim(), target: keywordTarget,
+        })
+        await refetchCurrentPage()
+      }, selectedBookId, generation)
+      if (!classified) void refetchCurrentPage()
     } finally {
       setPendingAction(false)
     }
-  }, [keywordState, keywordValue, keywordTarget, selectedBookId, refetchCurrentPage, refreshVectorSummary])
+  }, [expectedRevisionsFor, keywordState, keywordValue, keywordTarget, recordMutationIssue, selectedBookId, refetchCurrentPage, refreshVectorSummary])
 
   const handleBulkSetPosition = useCallback(async () => {
     if (!positionState) return
+    const generation = requestGenerationRef.current
     setPendingAction(true)
     try {
       const payload: WorldBookEntryBulkActionInput = {
         action: 'set_position',
         entry_ids: positionState.entryIds,
+        expected_revisions: expectedRevisionsFor(positionState.entryIds),
         position: bulkPosition,
         ...(bulkPosition === 4 ? { depth: Math.max(0, parseInt(bulkDepth, 10) || 4) } : {}),
       }
@@ -916,28 +1317,50 @@ export default function WorldBookEntriesSection({
       setBulkPosition(0)
       setBulkDepth('4')
       await refetchCurrentPage()
+    } catch (error) {
+      const ids = positionState.entryIds
+      const classified = recordMutationIssue(ids, error, async () => {
+        await worldBooksApi.bulkEntryAction(selectedBookId, {
+          action: 'set_position', entry_ids: ids, expected_revisions: expectedRevisionsFor(ids),
+          position: bulkPosition, ...(bulkPosition === 4 ? { depth: Math.max(0, parseInt(bulkDepth, 10) || 4) } : {}),
+        })
+        await refetchCurrentPage()
+      }, selectedBookId, generation)
+      if (!classified) void refetchCurrentPage()
     } finally {
       setPendingAction(false)
     }
-  }, [positionState, bulkPosition, bulkDepth, selectedBookId, refetchCurrentPage])
+  }, [expectedRevisionsFor, positionState, bulkPosition, bulkDepth, recordMutationIssue, selectedBookId, refetchCurrentPage])
 
   const handleBulkSetActivation = useCallback(async () => {
     if (!activationState) return
+    const generation = requestGenerationRef.current
     setPendingAction(true)
     try {
       await worldBooksApi.bulkEntryAction(selectedBookId, {
         action: 'set_activation',
         entry_ids: activationState.entryIds,
         activation: bulkActivation,
+        expected_revisions: expectedRevisionsFor(activationState.entryIds),
       })
       setActivationState(null)
       setBulkActivation('trigger')
       await refetchCurrentPage()
       await refreshVectorSummary()
+    } catch (error) {
+      const ids = activationState.entryIds
+      const classified = recordMutationIssue(ids, error, async () => {
+        await worldBooksApi.bulkEntryAction(selectedBookId, {
+          action: 'set_activation', entry_ids: ids, activation: bulkActivation,
+          expected_revisions: expectedRevisionsFor(ids),
+        })
+        await refetchCurrentPage()
+      }, selectedBookId, generation)
+      if (!classified) void refetchCurrentPage()
     } finally {
       setPendingAction(false)
     }
-  }, [activationState, bulkActivation, selectedBookId, refetchCurrentPage, refreshVectorSummary])
+  }, [activationState, bulkActivation, expectedRevisionsFor, recordMutationIssue, selectedBookId, refetchCurrentPage, refreshVectorSummary])
 
   const handleToggleSelect = useCallback((entryId: string) => {
     setSelectedIds((current) => (
@@ -993,18 +1416,31 @@ export default function WorldBookEntriesSection({
   const handleDragEnd = useCallback(async ({ active, over }: DragEndEvent) => {
     setActiveDragId(null)
     if (!dragEnabled || !over || active.id === over.id) return
+    const generation = requestGenerationRef.current
     const oldIndex = entries.findIndex((entry) => entry.id === active.id)
     const newIndex = entries.findIndex((entry) => entry.id === over.id)
     if (oldIndex < 0 || newIndex < 0) return
     const nextEntries = arrayMove(entries, oldIndex, newIndex)
     setEntries(nextEntries)
+    const orderedIds = nextEntries.map((entry) => entry.id)
     try {
-      await worldBooksApi.reorderEntries(selectedBookId, { ordered_ids: nextEntries.map((entry) => entry.id) })
+      await worldBooksApi.reorderEntries(selectedBookId, {
+        ordered_ids: orderedIds,
+        expected_revisions: expectedRevisionsFor(orderedIds),
+      })
       await refetchCurrentPage()
-    } catch {
-      await refetchCurrentPage()
+    } catch (error) {
+      const classified = recordMutationIssue(orderedIds, error, async () => {
+        setEntries(nextEntries)
+        await worldBooksApi.reorderEntries(selectedBookId, {
+          ordered_ids: orderedIds,
+          expected_revisions: expectedRevisionsFor(orderedIds),
+        })
+        await refetchCurrentPage()
+      }, selectedBookId, generation)
+      if (!classified) await refetchCurrentPage()
     }
-  }, [dragEnabled, entries, selectedBookId, refetchCurrentPage])
+  }, [dragEnabled, entries, expectedRevisionsFor, recordMutationIssue, selectedBookId, refetchCurrentPage])
 
   const selectedEntry = contextMenu ? entries.find((entry) => entry.id === contextMenu.entryId) ?? null : null
   const selectedTypeEntry = typeMenu ? entries.find((entry) => entry.id === typeMenu.entryId) ?? null : null
@@ -1156,6 +1592,7 @@ export default function WorldBookEntriesSection({
         usesSharedScroll ? styles.sectionSharedScroll : styles.sectionStandaloneScroll,
         isMobile && styles.sectionMobile,
       )}
+      data-world-book-entries-book-id={selectedBookId ?? undefined}
     >
       <div className={clsx(styles.entryListHeader, isMobile && styles.entryListHeaderMobile)}>
         <span className={styles.entryListTitle}>{te('entriesTitle', { count: entryTotal })}</span>
@@ -1364,7 +1801,7 @@ export default function WorldBookEntriesSection({
                 ref={usesSharedScroll ? undefined : localScrollRef}
                 className={clsx(styles.entryScroll, usesSharedScroll && styles.entryScrollShared)}
               >
-                <div className={styles.entryList}>
+                <div ref={entryListRef} className={styles.entryList}>
                   {entries.length === 0 ? (
                     <div className={styles.emptyState}>
                       {entrySearchFilter.trim() ? te('noMatch') : te('empty')}
@@ -1378,6 +1815,8 @@ export default function WorldBookEntriesSection({
                         className={styles.entryListItem}
                       >
                         <EntryRow
+                          bookId={selectedBookId}
+                          editorDensity={editorDensity}
                           entry={entry}
                           expanded={selectedEntryId === entry.id}
                           dragEnabled={dragEnabled}
@@ -1390,6 +1829,9 @@ export default function WorldBookEntriesSection({
                           onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
                           onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
                           onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
+                          conflict={entryConflicts[entry.id]}
+                          onRetryConflict={() => retryConflict(entry.id)}
+                          onUseServerConflict={() => acceptServerConflict(entry.id)}
                         />
                       </div>
                     ))
@@ -1400,6 +1842,8 @@ export default function WorldBookEntriesSection({
             <DragOverlay dropAnimation={null}>
               {activeDragEntry && (
                 <EntryRowContent
+                  bookId={selectedBookId}
+                  editorDensity={editorDensity}
                   entry={activeDragEntry}
                   expanded={selectedEntryId === activeDragEntry.id}
                   dragEnabled={dragEnabled}
@@ -1412,6 +1856,9 @@ export default function WorldBookEntriesSection({
                   onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
                   onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
                   onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
+                  conflict={entryConflicts[activeDragEntry.id]}
+                  onRetryConflict={() => retryConflict(activeDragEntry.id)}
+                  onUseServerConflict={() => acceptServerConflict(activeDragEntry.id)}
                   isDragging
                 />
               )}

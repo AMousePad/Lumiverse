@@ -5,8 +5,10 @@ import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/p
 import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
-import { hasUnsavedSettings } from '@/store/slices/settings'
+import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
+import { hasUnsavedSettings, settingsUpdateKeys, shouldReloadSettingsAfterUpdate } from '@/store/slices/settings'
 import { routeBackendMessage, routeFrontendProcessEvent, loadFrontendExtension } from '@/lib/spindle/loader'
+import { applyHostAction, type HostActionRuntime } from '@/lib/spindle/host-actions'
 import { spindleApi } from '@/api/spindle'
 import { messagesApi } from '@/api/chats'
 import { multiplayerApi } from '@/api/multiplayer'
@@ -24,7 +26,6 @@ import {
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration, requestStreamGapRecovery } from '@/lib/generation-recovery'
 import { checkForBundleUpdate } from '@/lib/swUpdater'
-import { hasPendingChatAppearance } from '@/lib/chatAppearance'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
@@ -56,17 +57,12 @@ import type {
   RoomPresencePayload,
   SystemSmartAlertPayload,
 } from '@/types/ws-events'
-import type { Message } from '@/types/api'
+import type { ConnectionProfile, Message } from '@/types/api'
 import type { ChatHeadStatus } from '@/types/store'
 import type { RoomStateView } from '@/types/multiplayer'
 import type { CouncilToolResult } from 'lumiverse-spindle-types'
 import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
 import { playNotificationPing } from '@/lib/notificationAudio'
-import {
-  extensionUpdateFingerprint,
-  pruneAnnouncedExtensionUpdates,
-  selectToastableExtensionUpdates,
-} from '@/lib/spindle/update-notifications'
 
 const LOCAL_STREAM_PLACEHOLDER_PREFIX = '__stream_placeholder_'
 const LOCAL_REGEN_PLACEHOLDER_PREFIX = '__regen_placeholder_'
@@ -80,8 +76,27 @@ function isLocalStreamPlaceholderId(id: string | null | undefined) {
 
 const MAX_TOAST_ERROR_LENGTH = 800
 const MULTIPLAYER_CHAT_HEAD_PREFIX = 'mp-room:'
-const EXTENSION_UPDATE_STARTUP_RETRY_MS = 1_000
-const EXTENSION_UPDATE_STARTUP_RETRY_MAX_MS = 5_000
+
+/**
+ * The websocket bridge receives already-authorized UI navigation requests from
+ * the backend. Keep their execution on the same fail-closed host-action
+ * switch used by frontend surface invocations instead of maintaining a second
+ * navigation implementation here.
+ */
+const spindleUiActionRuntime: HostActionRuntime = {
+  openDrawer: (id) => useStore.getState().openDrawer(id),
+  closeDrawer: () => useStore.getState().closeDrawer(),
+  openSettings: (id) => useStore.getState().openSettings(id),
+  closeSettings: () => useStore.getState().closeSettings(),
+  openCommandPalette: () => useStore.getState().openCommandPalette(),
+  closeCommandPalette: () => useStore.getState().closeCommandPalette(),
+  runCommand: () => { throw new Error('HOST_ACTION_UNMAPPED:command') },
+  navigate: () => { throw new Error('HOST_ACTION_UNMAPPED:route') },
+  setEditingCharacterId: () => { throw new Error('HOST_ACTION_UNMAPPED:modal') },
+  openWorldBookEditor: () => { throw new Error('HOST_ACTION_UNMAPPED:modal') },
+  invokeInputBarAction: () => { throw new Error('HOST_ACTION_UNMAPPED:input_bar_action') },
+  invokeExtensionCommand: () => { throw new Error('HOST_ACTION_UNMAPPED:ext_command') },
+}
 
 const LIVE_GENERATION_HEAD_STATUSES = new Set<ChatHeadStatus>([
   'assembling',
@@ -405,12 +420,10 @@ export function useWebSocket() {
   const store = useStore
   const isAuthenticated = useStore((s) => s.isAuthenticated)
   const userRole = useStore((s) => s.user?.role)
-  const settingsLoaded = useStore((s) => s.settingsLoaded)
   const activeChatId = useStore((s) => s.activeChatId)
   const spindleInfoLoggingEnabled = useStore((s) => s.spindleSettings.infoLoggingEnabled)
   const lastExtensionSyncAtRef = useRef(0)
   const lastOperatorUpdateToastKeyRef = useRef<string | null>(null)
-  const announcedExtensionUpdatesRef = useRef<Set<string>>(new Set())
   // Set only after a confirmed healthy session drops. The following verified
   // reconnect then gets one prompt service-worker update check, which catches
   // bundles rebuilt while the server was unavailable.
@@ -469,98 +482,6 @@ export function useWebSocket() {
       window.clearInterval(interval)
     }
   }, [isAuthenticated, store, userRole])
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      announcedExtensionUpdatesRef.current = new Set()
-      return
-    }
-
-    let cancelled = false
-    let startupRetryTimer: number | null = null
-    let startupRetryDelay = EXTENSION_UPDATE_STARTUP_RETRY_MS
-    let initialSnapshotComplete = false
-
-    function scheduleStartupRetry() {
-      if (cancelled || startupRetryTimer !== null) return
-      const delay = startupRetryDelay
-      startupRetryTimer = window.setTimeout(() => {
-        startupRetryTimer = null
-        startupRetryDelay = Math.min(
-          startupRetryDelay * 2,
-          EXTENSION_UPDATE_STARTUP_RETRY_MAX_MS,
-        )
-        void syncExtensionUpdates()
-      }, delay)
-    }
-
-    async function syncExtensionUpdates() {
-      try {
-        const snapshot = await spindleApi.getUpdates()
-        if (cancelled) return
-
-        store.getState().setExtensionUpdates(snapshot.updates)
-        if (snapshot.checkedAt === null || snapshot.checking) {
-          scheduleStartupRetry()
-          return
-        }
-        initialSnapshotComplete = true
-        startupRetryDelay = EXTENSION_UPDATE_STARTUP_RETRY_MS
-        if (!settingsLoaded) return
-
-        const announced = pruneAnnouncedExtensionUpdates(
-          announcedExtensionUpdatesRef.current,
-          snapshot.updates,
-        )
-        const newToastable = selectToastableExtensionUpdates(
-          snapshot.updates,
-          store.getState().spindleSettings.extensionUpdateToastDisabled,
-          announced,
-        )
-        announcedExtensionUpdatesRef.current = announced
-        if (newToastable.length === 0) return
-
-        for (const update of newToastable) {
-          announcedExtensionUpdatesRef.current.add(extensionUpdateFingerprint(update))
-        }
-
-        const shownNames = newToastable.slice(0, 3).map((update) => update.name)
-        const remaining = newToastable.length - shownNames.length
-        const suffix = shownNames.length > 0
-          ? `: ${shownNames.join(', ')}${remaining > 0 ? ` +${remaining}` : ''}`
-          : ''
-        toast.info(
-          i18n.t('common.toast.extensionUpdatesAvailable', {
-            count: newToastable.length,
-            suffix,
-          }),
-          {
-            title: i18n.t('common.toast.extensionUpdateTitle'),
-            duration: 8000,
-            action: {
-              label: i18n.t('common.toast.viewExtensions'),
-              onClick: () => {
-                const state = store.getState()
-                state.closeSettings()
-                state.openDrawer('spindle')
-              },
-            },
-          },
-        )
-      } catch {
-        if (!initialSnapshotComplete) scheduleStartupRetry()
-      }
-    }
-
-    void syncExtensionUpdates()
-    const interval = window.setInterval(syncExtensionUpdates, 30_000)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-      if (startupRetryTimer !== null) window.clearTimeout(startupRetryTimer)
-    }
-  }, [isAuthenticated, settingsLoaded, store])
 
   useEffect(() => {
     if (!isAuthenticated) return
@@ -699,11 +620,11 @@ export function useWebSocket() {
 
         if (payload.chat) {
           state.setActiveChatName(payload.chat.name ?? null)
-          if (!hasPendingChatAppearance(changedChatId)) {
-            state.setActiveChatMetadata(payload.chat.metadata ?? null)
-          }
+          state.setActiveChatMetadata(payload.chat.metadata ?? null)
           const wallpaper = payload.chat.metadata?.wallpaper as import('@/types/store').WallpaperRef | undefined
           state.setActiveChatWallpaper(wallpaper?.image_id ? wallpaper : null)
+          const avatarOverride = payload.chat.metadata?.active_avatar_id as string | undefined
+          state.setActiveChatAvatarId(avatarOverride || null)
         }
 
         const changedFields = payload.changedFields
@@ -1315,14 +1236,14 @@ export function useWebSocket() {
         // onopen with an empty payload, and once when the backend's CONNECTED
         // message arrives (carrying the user role). Only the second one means
         // auth has been verified server-side — gate auth-sync on `role`.
-        if (payload?.role) {
+        if (shouldSyncExtensionsAfterConnected(payload)) {
           store.getState().reconcileRole(payload.role)
           store.getState().setWsAuthSynced(true)
           // Immediately verify round-trip so the overlay can dismiss without
           // waiting up to 30s for the next scheduled ping.
           wsClient.forcePing()
+          syncExtensions(true)
         }
-        syncExtensions(true)
 
         // Re-sync settings on every WS (re)connect. Covers two cases:
         // 1. Page refresh: the old page's keepalive flush may have landed after
@@ -1347,8 +1268,9 @@ export function useWebSocket() {
       // Re-sync settings when another tab (or the old page's keepalive flush)
       // writes to the settings table. Skip if this tab has pending writes to
       // avoid overwriting in-flight local changes with stale DB values.
-      wsClient.on(EventType.SETTINGS_UPDATED, () => {
-        if (!hasUnsavedSettings()) {
+      wsClient.on(EventType.SETTINGS_UPDATED, (payload: unknown) => {
+        const reload = shouldReloadSettingsAfterUpdate(payload)
+        if (reload) {
           store.getState().loadSettings()
         }
       }),
@@ -1468,17 +1390,7 @@ export function useWebSocket() {
           payload.operation,
           payload.name ?? null
         )
-        if (payload.operation === 'disabled' && payload.extensionId) {
-          const state = useStore.getState()
-          state.setExtensionUpdates(
-            state.extensionUpdates.filter((update) => update.extensionId !== payload.extensionId),
-          )
-        }
         if (payload.operation === 'updated' && payload.extensionId) {
-          const state = useStore.getState()
-          state.setExtensionUpdates(
-            state.extensionUpdates.filter((update) => update.extensionId !== payload.extensionId),
-          )
           // Force a list refresh so the status dot reflects the post-restart state
           syncExtensions(true)
           const ext = useStore.getState().extensions.find((e) => e.id === payload.extensionId)
@@ -1518,11 +1430,6 @@ export function useWebSocket() {
 
       wsClient.on(EventType.SPINDLE_BULK_UPDATE_COMPLETE, (payload: { total: number; updated: number; failed: number; errors: Array<{ id: string; name: string; error: string }> }) => {
         const { total, updated, failed, errors } = payload
-        const failedIds = new Set(errors.map((error) => error.id))
-        const currentState = useStore.getState()
-        currentState.setExtensionUpdates(
-          currentState.extensionUpdates.filter((update) => failedIds.has(update.extensionId)),
-        )
         useStore.getState().setBulkUpdateStatus({
           total,
           completed: updated,
@@ -1587,10 +1494,6 @@ export function useWebSocket() {
 
       wsClient.on(EventType.SPINDLE_TEXT_EDITOR_OPEN, (payload: { requestId: string; extensionId: string; title: string; value: string; placeholder: string }) => {
         store.getState().openTextEditor(payload)
-      }),
-
-      wsClient.on(EventType.SPINDLE_TEXT_EDITOR_RESULT, (payload: { requestId: string }) => {
-        store.getState().dismissTextEditor(payload.requestId)
       }),
 
       wsClient.on(EventType.SPINDLE_MODAL_OPEN, (payload: any) => {
@@ -1698,26 +1601,44 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.SPINDLE_UI_NAVIGATE, (payload: { extensionId: string; extensionName: string; action: 'open_drawer_tab' | 'close_drawer' | 'open_settings' | 'close_settings' | 'open_command_palette' | 'close_command_palette'; tabId?: string; viewId?: string }) => {
-        const s = store.getState()
-        switch (payload.action) {
-          case 'open_drawer_tab':
-            if (payload.tabId) s.openDrawer(payload.tabId)
-            break
-          case 'close_drawer':
-            s.closeDrawer()
-            break
-          case 'open_settings':
-            s.openSettings(payload.viewId)
-            break
-          case 'close_settings':
-            s.closeSettings()
-            break
-          case 'open_command_palette':
-            s.openCommandPalette()
-            break
-          case 'close_command_palette':
-            s.closeCommandPalette()
-            break
+        try {
+          switch (payload.action) {
+            case 'open_drawer_tab':
+              applyHostAction({ kind: 'drawer_tab', id: payload.tabId ?? '' }, undefined, spindleUiActionRuntime)
+              break
+            case 'open_settings':
+              applyHostAction({ kind: 'settings_tab', id: payload.viewId ?? '' }, undefined, spindleUiActionRuntime)
+              break
+            case 'close_drawer':
+              spindleUiActionRuntime.closeDrawer()
+              break
+            case 'close_settings':
+              spindleUiActionRuntime.closeSettings()
+              break
+            case 'open_command_palette':
+              spindleUiActionRuntime.openCommandPalette()
+              break
+            case 'close_command_palette':
+              spindleUiActionRuntime.closeCommandPalette()
+              break
+          }
+        } catch (error) {
+          console.warn('[Spindle] rejected UI navigation event', error)
+        }
+      }),
+
+      // Connection mutations can originate in another tab, an OAuth callback,
+      // or a preset operation. Reconcile them through the same store setters
+      // used by the native manager, while avoiding duplicate rows when the
+      // initiating tab already applied the REST response locally.
+      wsClient.on(EventType.CONNECTION_PROFILE_LOADED, (payload: { id?: string; profile?: ConnectionProfile }) => {
+        const profile = payload?.profile
+        if (!profile || typeof profile.id !== 'string' || !profile.id) return
+        const state = store.getState()
+        if (state.profiles.some((candidate) => candidate.id === profile.id)) {
+          state.updateProfile(profile.id, profile)
+        } else {
+          state.addProfile(profile)
         }
       }),
 

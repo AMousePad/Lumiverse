@@ -354,6 +354,15 @@ export interface ActivatedWorldInfoEntry {
   bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
   bookName?: string;
+  activationType?: "constant" | "sticky" | "keyword" | "vector";
+  estimatedTokens?: number;
+  activationOrder?: number;
+  priority?: number;
+  position?: number;
+  depth?: number;
+  preventRecursion?: boolean;
+  activationProvenance?: ActivationProvenance;
+  firstTriggeredForBook?: boolean;
 }
 
 export interface MemoryStats {
@@ -538,3 +547,5 @@ export interface AssemblyBreakdownEntry {
   /** Human-readable extension attribution for injected prompt blocks. */
   extensionName?: string;
 }
+import type { ActivationProvenance } from "../spindle/activation-provenance";
+export type { ActivationProvenance, ActivationTraceEntry } from "../spindle/activation-provenance";

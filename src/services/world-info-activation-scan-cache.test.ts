@@ -54,6 +54,7 @@ function entry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
     created_at: 0,
     updated_at: 0,
     ...overrides,
+    revision: overrides.revision ?? 1,
   };
 }
 
@@ -113,6 +114,8 @@ function differingViews(prefix: string): {
       uid: `${prefix}-${name}`,
       comment: name,
       ...overrides,
+      exclude_greeting: overrides.exclude_greeting ?? false,
+      revision: overrides.revision ?? 1,
     });
   const regexDeep = make("regex-deep", {
     key: ["^old code\\d+"],

@@ -18,6 +18,44 @@ interface PatternMeta {
   role: "primary" | "secondary";
   wholeWord: boolean;
   patternLen: number;
+  configuredPattern: string;
+}
+
+interface FoldedText {
+  text: string;
+  originalStartByFoldedIndex: number[];
+  originalEndByFoldedIndex: number[];
+}
+
+function foldWithOriginalOffsets(value: string): FoldedText {
+  let text = "";
+  const originalStartByFoldedIndex: number[] = [];
+  const originalEndByFoldedIndex: number[] = [];
+
+  for (let originalIndex = 0; originalIndex < value.length;) {
+    const codePoint = value.codePointAt(originalIndex)!;
+    const originalWidth = codePoint > 0xffff ? 2 : 1;
+    const foldedCodePoint = value.slice(originalIndex, originalIndex + originalWidth).toLowerCase();
+    text += foldedCodePoint;
+    for (let foldedIndex = 0; foldedIndex < foldedCodePoint.length; foldedIndex++) {
+      originalStartByFoldedIndex.push(originalIndex);
+      originalEndByFoldedIndex.push(originalIndex + originalWidth);
+    }
+    originalIndex += originalWidth;
+  }
+
+  return { text, originalStartByFoldedIndex, originalEndByFoldedIndex };
+}
+
+export type WorldInfoMatchSource =
+  | { kind: "message"; messageId: string; messageOffset: number }
+  | { kind: "recursive_entry"; entryId: string };
+
+export interface WorldInfoExactMatch {
+  configuredPattern: string;
+  source: WorldInfoMatchSource;
+  start: number;
+  end: number;
 }
 
 export interface WorldInfoMatcherOptions {
@@ -91,15 +129,31 @@ function verifyWordBoundary(text: string, start: number, end: number): boolean {
   return true;
 }
 
+function* runAutomaton(ac: Automaton, text: string): Generator<{ id: number; end: number }> {
+  if (ac.empty) return;
+  const nodes = ac.nodes;
+  let state = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    while (state !== 0 && !nodes[state].next.has(c)) state = nodes[state].fail;
+    const nxt = nodes[state].next.get(c);
+    state = nxt !== undefined ? nxt : 0;
+    if (nodes[state].out.length) {
+      for (const id of nodes[state].out) yield { id, end: i };
+    }
+  }
+}
+
 /** Accumulated hit state across recursion passes. Hits are keyed by entry uid. */
 export interface ScanState {
   primaryHits: Map<string, Set<number>>;    // uid -> primary key indices that matched
   secondaryHits: Map<string, Set<number>>;  // uid -> secondary key indices that matched
   regexCache: Map<string, RegExp | null>;
+  exactMatches: Map<string, WorldInfoExactMatch[]>;
 }
 
 export function makeScanState(): ScanState {
-  return { primaryHits: new Map(), secondaryHits: new Map(), regexCache: new Map() };
+  return { primaryHits: new Map(), secondaryHits: new Map(), regexCache: new Map(), exactMatches: new Map() };
 }
 
 /**
@@ -137,13 +191,14 @@ export class WorldInfoMatcher {
         for (let i = 0; i < keys.length; i++) {
           const k = keys[i];
           if (!k) continue;
-          const text = caseSensitive ? k : k.toLowerCase();
+          const text = caseSensitive ? k : foldWithOriginalOffsets(k).text;
           sink.push({
             text,
             meta: {
               entryUid: e.uid, keyIndex: i, role,
               wholeWord: matchWholeWords,
               patternLen: text.length,
+              configuredPattern: k,
             },
           });
         }
@@ -160,82 +215,83 @@ export class WorldInfoMatcher {
   /** Scan a text chunk and merge hits into `state`. If `scope` is provided,
    *  only entries whose uid is in the set receive hits — used to honor
    *  per-entry `scan_depth` without scanning the same text multiple times. */
-  scanChunk(chunk: string, state: ScanState, scope?: Set<string>): void {
+  scanChunk(
+    chunk: string,
+    state: ScanState,
+    scope?: Set<string>,
+    source?: WorldInfoMatchSource,
+  ): void {
     if (!chunk) return;
 
-    const runAC = (ac: Automaton, text: string) => {
-      if (ac.empty) return;
-      const active = new Uint8Array(ac.meta.length);
-      let remaining = 0;
-      for (let id = 0; id < ac.meta.length; id++) {
-        const meta = ac.meta[id];
-        if (scope && !scope.has(meta.entryUid)) continue;
-        const bucket =
-          meta.role === "primary" ? state.primaryHits : state.secondaryHits;
-        if (bucket.get(meta.entryUid)?.has(meta.keyIndex)) continue;
-        active[id] = 1;
-        remaining++;
-      }
-      if (remaining === 0) return;
-
-      const nodes = ac.nodes;
-      const activeOutputs: Array<number[] | undefined> = new Array(nodes.length);
-      let nodeIndex = 0;
-      for (let end = 0; end < text.length; end++) {
-        const code = text.charCodeAt(end);
-        while (
-          nodeIndex !== 0 &&
-          !nodes[nodeIndex].next.has(code)
-        ) {
-          nodeIndex = nodes[nodeIndex].fail;
+    const runAC = (ac: Automaton, text: string, offsets?: FoldedText) => {
+      for (const { id, end } of runAutomaton(ac, text)) {
+        const m = ac.meta[id];
+        if (scope && !scope.has(m.entryUid)) continue;
+        const foldedStart = end - m.patternLen + 1;
+        const foldedEnd = end + 1;
+        const originalStart = offsets
+          ? offsets.originalStartByFoldedIndex[foldedStart]
+          : foldedStart;
+        const originalEnd = offsets
+          ? offsets.originalEndByFoldedIndex[foldedEnd - 1]
+          : foldedEnd;
+        if (m.wholeWord) {
+          const boundaryText = offsets ? chunk : text;
+          if (!verifyWordBoundary(boundaryText, originalStart, originalEnd - 1)) continue;
         }
-        const next = nodes[nodeIndex].next.get(code);
-        nodeIndex = next !== undefined ? next : 0;
-
-        let outputs = activeOutputs[nodeIndex];
-        if (outputs === undefined) {
-          outputs = nodes[nodeIndex].out.filter((id) => active[id] === 1);
-          activeOutputs[nodeIndex] = outputs;
-        }
-        if (outputs.length === 0) continue;
-
-        let pending = 0;
-        for (const id of outputs) {
-          if (active[id] === 0) continue;
-          const meta = ac.meta[id];
-          if (meta.wholeWord) {
-            const start = end - meta.patternLen + 1;
-            if (!verifyWordBoundary(text, start, end)) {
-              outputs[pending++] = id;
-              continue;
-            }
-          }
-          this.recordHit(state, meta);
-          active[id] = 0;
-          remaining--;
-        }
-        outputs.length = pending;
-        if (remaining === 0) return;
+        this.recordHit(state, m, source, originalStart, originalEnd);
       }
     };
 
     runAC(this.casedAC, chunk);
-    if (!this.uncasedAC.empty) runAC(this.uncasedAC, chunk.toLowerCase());
+    if (!this.uncasedAC.empty) {
+      const folded = foldWithOriginalOffsets(chunk);
+      runAC(this.uncasedAC, folded.text, folded);
+    }
 
     for (const entry of this.regexEntries) {
       if (scope && !scope.has(entry.uid)) continue;
-      this.scanRegexEntry(entry, chunk, state);
+      this.scanRegexEntry(entry, chunk, state, source);
     }
   }
 
-  private recordHit(state: ScanState, m: PatternMeta) {
+  private recordHit(
+    state: ScanState,
+    m: PatternMeta,
+    source?: WorldInfoMatchSource,
+    start?: number,
+    end?: number,
+  ) {
     const bucket = m.role === "primary" ? state.primaryHits : state.secondaryHits;
     let set = bucket.get(m.entryUid);
     if (!set) { set = new Set(); bucket.set(m.entryUid, set); }
     set.add(m.keyIndex);
+    if (source && start !== undefined && end !== undefined) {
+      const matches = state.exactMatches.get(m.entryUid) ?? [];
+      const duplicate = matches.some((match) => {
+        if (match.configuredPattern !== m.configuredPattern || match.start !== start || match.end !== end) return false;
+        if (match.source.kind !== source.kind) return false;
+        if (match.source.kind === "message" && source.kind === "message") {
+          return match.source.messageId === source.messageId && match.source.messageOffset === source.messageOffset;
+        }
+        if (match.source.kind === "recursive_entry" && source.kind === "recursive_entry") {
+          return match.source.entryId === source.entryId;
+        }
+        return false;
+      });
+      if (!duplicate) {
+        matches.push({ configuredPattern: m.configuredPattern, source, start, end });
+        state.exactMatches.set(m.entryUid, matches);
+      }
+    }
   }
 
-  private scanRegexEntry(entry: WorldBookEntry, text: string, state: ScanState) {
+  private scanRegexEntry(
+    entry: WorldBookEntry,
+    text: string,
+    state: ScanState,
+    source?: WorldInfoMatchSource,
+  ) {
     const flags = this.forceCaseSensitive || entry.case_sensitive ? "g" : "gi";
     const wholeWord = (this.forceMatchWholeWords || entry.match_whole_words) && !entry.use_regex;
     const run = (keys: string[], role: "primary" | "secondary") => {
@@ -253,11 +309,13 @@ export class WorldInfoMatcher {
         }
         if (!regex) continue;
         regex.lastIndex = 0;
-        if (regex.test(text)) {
+        regex.lastIndex = 0;
+        const match = regex.exec(text);
+        if (match) {
           this.recordHit(state, {
             entryUid: entry.uid, keyIndex: i, role,
-            wholeWord: false, patternLen: 0,
-          });
+            wholeWord: false, patternLen: 0, configuredPattern: k,
+          }, source, match.index, match.index + match[0].length);
         }
       }
     };

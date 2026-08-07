@@ -1,0 +1,141 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runMigrations } from "./migrate";
+
+const MIGRATION_099 = "099_character_library_scope.sql";
+const MIGRATION_099_SQL = `ALTER TABLE characters ADD COLUMN library_scope TEXT NOT NULL DEFAULT 'mine' CHECK(library_scope IN ('mine', 'shared'));
+
+CREATE INDEX idx_characters_user_library_scope
+  ON characters(user_id, library_scope);
+
+CREATE INDEX idx_characters_user_library_scope_updated
+  ON characters(user_id, library_scope, updated_at DESC);
+`;
+const INDEX_SCOPE = "idx_characters_user_library_scope";
+const INDEX_SCOPE_UPDATED = "idx_characters_user_library_scope_updated";
+
+type CharacterColumn = {
+  name: string;
+  type: string;
+  notnull: number;
+  dflt_value: string | null;
+};
+
+type IndexColumn = {
+  seqno: number;
+  name: string | null;
+  desc: number;
+  key: number;
+};
+
+let temporaryMigrationDirs: string[] = [];
+
+function makeMigrationDir(): string {
+  const directory = mkdtempSync(join(tmpdir(), "lumiverse-migrate-099-test-"));
+  temporaryMigrationDirs.push(directory);
+  return directory;
+}
+
+function installMigration(directory: string): void {
+  writeFileSync(join(directory, MIGRATION_099), MIGRATION_099_SQL);
+}
+
+function libraryScopeColumn(db: Database): CharacterColumn | null {
+  const columns = db.query("PRAGMA table_info('characters')").all() as CharacterColumn[];
+  const column = columns.find((candidate) => candidate.name === "library_scope");
+  return column
+    ? {
+        name: column.name,
+        type: column.type,
+        notnull: column.notnull,
+        dflt_value: column.dflt_value,
+      }
+    : null;
+}
+
+function indexColumns(db: Database, indexName: string): Array<Pick<IndexColumn, "seqno" | "name" | "desc">> {
+  const columns = db.query(`PRAGMA index_xinfo('${indexName}')`).all() as IndexColumn[];
+  return columns
+    .filter((column) => column.key === 1)
+    .map(({ seqno, name, desc }) => ({ seqno, name, desc }));
+}
+
+afterEach(() => {
+  for (const directory of temporaryMigrationDirs) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  temporaryMigrationDirs = [];
+});
+
+describe("099 character library scope migration", () => {
+  test("keeps the canonical migration identity and body", async () => {
+    expect(MIGRATION_099).toBe("099_character_library_scope.sql");
+    const sql = await Bun.file(join(import.meta.dir, "migrations", MIGRATION_099)).text();
+    expect(sql.replaceAll("\r\n", "\n")).toBe(MIGRATION_099_SQL);
+  });
+
+  test("excludes 099 from the baseline and applies it once after bootstrap", async () => {
+    const db = new Database(":memory:");
+    const migrationsDir = makeMigrationDir();
+    try {
+      await runMigrations(db, migrationsDir);
+
+      expect(
+        (db.query("PRAGMA table_info('characters')").all() as Array<{ name: string }>).some(
+          (column) => column.name === "library_scope",
+        ),
+      ).toBe(false);
+      expect(
+        db.query("SELECT COUNT(*) AS count FROM _migrations WHERE name = ?").get(MIGRATION_099),
+      ).toEqual({ count: 0 });
+
+      db.run("INSERT INTO characters (id, name) VALUES ('existing', 'Existing')");
+      installMigration(migrationsDir);
+      await runMigrations(db, migrationsDir);
+
+      expect(db.query("SELECT library_scope FROM characters WHERE id = 'existing'").get()).toEqual({
+        library_scope: "mine",
+      });
+      expect(libraryScopeColumn(db)).toEqual({
+        name: "library_scope",
+        type: "TEXT",
+        notnull: 1,
+        dflt_value: "'mine'",
+      });
+
+      const indexNames = (db.query("PRAGMA index_list('characters')").all() as Array<{ name: string }>).map(
+        (index) => index.name,
+      );
+      expect(indexNames).toEqual(expect.arrayContaining([INDEX_SCOPE, INDEX_SCOPE_UPDATED]));
+      expect(indexColumns(db, INDEX_SCOPE)).toEqual([
+        { seqno: 0, name: "user_id", desc: 0 },
+        { seqno: 1, name: "library_scope", desc: 0 },
+      ]);
+      expect(indexColumns(db, INDEX_SCOPE_UPDATED)).toEqual([
+        { seqno: 0, name: "user_id", desc: 0 },
+        { seqno: 1, name: "library_scope", desc: 0 },
+        { seqno: 2, name: "updated_at", desc: 1 },
+      ]);
+
+      db.run(
+        "INSERT INTO characters (id, name, library_scope) VALUES ('shared', 'Shared', 'shared')",
+      );
+      expect(db.query("SELECT library_scope FROM characters WHERE id = 'shared'").get()).toEqual({
+        library_scope: "shared",
+      });
+      expect(() =>
+        db.run("INSERT INTO characters (id, name, library_scope) VALUES ('invalid', 'Invalid', 'invalid')"),
+      ).toThrow();
+
+      await runMigrations(db, migrationsDir);
+      expect(
+        db.query("SELECT COUNT(*) AS count FROM _migrations WHERE name = ?").get(MIGRATION_099),
+      ).toEqual({ count: 1 });
+    } finally {
+      db.close();
+    }
+  });
+});

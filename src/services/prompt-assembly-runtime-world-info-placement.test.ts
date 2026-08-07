@@ -77,6 +77,7 @@ function entry(id: string, orderValue: number): WorldBookEntry {
     vector_index_status: "not_enabled",
     vector_indexed_at: null,
     vector_index_error: null,
+    revision: 1,
     extensions: {},
     created_at: 0,
     updated_at: 0,

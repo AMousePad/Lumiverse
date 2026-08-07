@@ -1,4 +1,4 @@
-import { get, post, put, del } from './client'
+import { get, post, put, del, type RequestOptions } from './client'
 
 export interface TokenizerConfig {
   id: string
@@ -150,8 +150,18 @@ export const tokenizersApi = {
   test(tokenizerId: string, text: string) {
     return post<TokenizerTestResult>('/tokenizers/test', { tokenizer_id: tokenizerId, text })
   },
-  countForModel(modelId: string, text: string) {
-    return post<{ token_count: number | null; char_count: number }>('/tokenizers/count', { model_id: modelId, text })
+  countForModel(modelId: string, text: string, options?: RequestOptions) {
+    return post<{ token_count: number | null; char_count: number }>(
+      '/tokenizers/count',
+      { model_id: modelId, text },
+      options,
+    )
+  },
+  countForModelBatch(modelId: string, texts: string[]) {
+    return post<{ results: Array<{ token_count: number | null; char_count: number }> }>('/tokenizers/count-batch', {
+      model_id: modelId,
+      texts,
+    })
   },
 
   // Patterns

@@ -4,6 +4,7 @@ import { useScrollGate } from '@/hooks/useScrollGate'
 import { getCharacterAvatarLargeUrl, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { prefetchImages } from '@/lib/imageDecodeCache'
 import { measureLayoutHeight } from '@/lib/uiScale'
+import { readLayoutVar } from '@/lib/layoutVars'
 import CharacterCard from './CharacterCard'
 import type { Character, CharacterSummary } from '@/types/api'
 import styles from './CharacterGrid.module.css'
@@ -28,15 +29,15 @@ const MOBILE_GAP = 12
 const MOBILE_MAX_COLUMNS = 2
 const PREFETCH_ROWS = 6
 
-function getGap(width: number): number {
-  return width <= MOBILE_BREAKPOINT ? MOBILE_GAP : GAP
+function getGap(width: number, desktopGap = GAP): number {
+  return width <= MOBILE_BREAKPOINT ? MOBILE_GAP : desktopGap
 }
 
-function getColumnCount(width: number): number {
+function getColumnCount(width: number, desktopMinWidth = MIN_COL_WIDTH, desktopGap = GAP): number {
   if (width <= 0) return 1
   const mobile = width <= MOBILE_BREAKPOINT
-  const minWidth = mobile ? MIN_CARD_WIDTH : MIN_COL_WIDTH
-  const gap = getGap(width)
+  const minWidth = mobile ? MIN_CARD_WIDTH : desktopMinWidth
+  const gap = mobile ? MOBILE_GAP : desktopGap
   // The row has horizontal padding totalling `gap`, so the cards and the
   // gaps between them must fit inside `width - gap`.
   const cols = Math.max(1, Math.floor(width / (minWidth + gap)))
@@ -55,43 +56,67 @@ export default function CharacterGrid({
   onToggleBatch,
 }: CharacterGridProps) {
   const parentRef = useRef<HTMLDivElement>(null)
+  const geometryProbeRef = useRef<HTMLDivElement>(null)
   useScrollGate(parentRef)
   const [columns, setColumns] = useState(singleColumn ? 1 : 2)
   const [containerWidth, setContainerWidth] = useState(400)
+  const [layoutMetrics, setLayoutMetrics] = useState({
+    minWidth: MIN_COL_WIDTH,
+    gap: GAP,
+    height: 0,
+  })
 
   // O(1) lookups instead of O(n) includes() per card
   const favSet = useMemo(() => new Set(favorites), [favorites])
   const batchSet = useMemo(() => new Set(batchSelected), [batchSelected])
 
-  // Observe container width to calculate columns
+  // Observe container and probe geometry so CSS variable changes trigger a
+  // fresh layout calculation even when the container itself does not resize.
   useEffect(() => {
     const el = parentRef.current
     if (!el) return
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width ?? el.clientWidth
-      setContainerWidth(width)
-      if (singleColumn) {
-        setColumns(1)
-      } else {
-        setColumns(getColumnCount(width))
-      }
-    })
+
+    const syncLayout = (entries: ResizeObserverEntry[] = []) => {
+      const containerEntry = entries.find((entry) => entry.target === el)
+      const measuredWidth = containerEntry?.contentRect.width ?? el.clientWidth
+      const width = Number.isFinite(measuredWidth) && measuredWidth >= 0 ? measuredWidth : 0
+      const layoutElement = geometryProbeRef.current ?? el
+      const rawMinWidth = readLayoutVar(layoutElement, '--character-card-min-width', MIN_COL_WIDTH)
+      const minWidth = Number.isFinite(rawMinWidth) && rawMinWidth > 0 ? rawMinWidth : MIN_COL_WIDTH
+      const rawGap = readLayoutVar(layoutElement, '--character-card-gap', GAP)
+      const gap = Number.isFinite(rawGap) && rawGap > 0 ? rawGap : GAP
+      const rawHeight = readLayoutVar(layoutElement, '--character-card-height', 0)
+      const height = Number.isFinite(rawHeight) && rawHeight > 0 ? rawHeight : 0
+
+      setContainerWidth((current) => (current === width ? current : width))
+      setLayoutMetrics((current) => {
+        if (current.minWidth === minWidth && current.gap === gap && current.height === height) {
+          return current
+        }
+        return { minWidth, gap, height }
+      })
+
+      const nextColumns = singleColumn ? 1 : getColumnCount(width, minWidth, gap)
+      setColumns((current) => (current === nextColumns ? current : nextColumns))
+    }
+
+    syncLayout()
+    const observer = new ResizeObserver(syncLayout)
     observer.observe(el)
+    const geometryProbe = geometryProbeRef.current
+    if (geometryProbe) observer.observe(geometryProbe)
     return () => observer.disconnect()
   }, [singleColumn])
 
   // Compute row height from actual column width: card is 3:4 aspect (matching
   // landing page cards). Info section overlays the image bottom, so no extra
-  // height is added.
-  const gap = getGap(containerWidth)
+  // height is added when no desktop card-height variable is published.
+  const gap = getGap(containerWidth, layoutMetrics.gap)
   const colWidth = Math.max(1, (containerWidth - gap * columns) / columns)
-  const rowHeight = Math.ceil(colWidth * (4 / 3)) + gap
-  // Every expanded folder is a flex item. Giving its virtualized viewport a
-  // width-aware minimum prevents multiple open folders from sharing the
-  // available height down to unusable slivers. Include paddingStart so the
-  // first complete card row remains visible on desktop and mobile.
-  const minimumViewportHeight = rowHeight + gap
-
+  const rowHeight =
+    containerWidth > MOBILE_BREAKPOINT && layoutMetrics.height > 0
+      ? layoutMetrics.height + gap
+      : Math.ceil(colWidth * (4 / 3)) + gap
   const rowCount = Math.ceil(characters.length / columns)
 
   const virtualizer = useVirtualizer({
@@ -141,11 +166,8 @@ export default function CharacterGrid({
   if (characters.length === 0) return null
 
   return (
-    <div
-      ref={parentRef}
-      className={styles.scrollContainer}
-      style={{ minHeight: minimumViewportHeight }}
-    >
+    <div ref={parentRef} className={styles.scrollContainer}>
+      <div ref={geometryProbeRef} className={styles.geometryProbe} aria-hidden="true" />
       <div
         style={{
           height: virtualizer.getTotalSize(),
