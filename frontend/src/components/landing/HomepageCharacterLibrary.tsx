@@ -404,75 +404,77 @@ export function HomepageCharacterLibrary() {
               </button>
               <button type="button" title="Close preview" onClick={closePanel}><X size={16} /></button>
             </div>
-            <div
-              className={styles.previewImageFrame}
-              style={{ '--preview-image-url': `url("${selectedAvatarUrl}")` } as CSSProperties}
-            >
-              <img
-                src={selectedAvatarUrl}
-                alt={selectedCharacter.name}
-              />
-            </div>
-            <label className={styles.imageHeightControl}>
-              <span>Image H</span>
-              <input
-                type="range"
-                min={HOMEPAGE_PANEL_IMAGE_HEIGHT_MIN}
-                max={HOMEPAGE_PANEL_IMAGE_HEIGHT_MAX}
-                value={panelImageHeight}
-                onChange={(event) => setLiveImageHeight(
-                  clampHomepagePanelImageHeight(Number(event.target.value)),
-                )}
-                onPointerUp={commitImageHeight}
-                onKeyUp={commitImageHeight}
-                onBlur={commitImageHeight}
-              />
-              <span>{panelImageHeight}px</span>
-            </label>
-            <div className={styles.previewHeader}>
-              <div>
-                <h3>{selectedCharacter.name}</h3>
-                {selectedCharacter.creator && <p>{selectedCharacter.creator}</p>}
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={<Edit3 size={14} />}
-                className={styles.editBtn}
-                title="Edit character"
-                onClick={() => editCharacter(selectedCharacter.id)}
+            <div className={styles.previewBody}>
+              <div
+                className={styles.previewImageFrame}
+                style={{ '--preview-image-url': `url("${selectedAvatarUrl}")` } as CSSProperties}
               >
-                Edit
-              </Button>
-            </div>
-            <div className={styles.previewTags}>
-              {selectedCharacter.has_alternate_greetings && <span><Star size={12} /> Alt greetings</span>}
-              {selectedTagSummary.visibleTags.map((tag) => (
-                <span key={tag} className={styles.previewTag} style={tagColorStyle(tag)}>{tag}</span>
-              ))}
-              {selectedTagSummary.hiddenTagCount > 0 && <span>+{selectedTagSummary.hiddenTagCount}</span>}
-            </div>
-            {previewLoading && <div className={styles.state}>Loading preview...</div>}
-            {!previewLoading && preview && (
-              <>
-                <div className={styles.previewSection}>
-                  <h4><BookOpen size={14} /> Lorebooks</h4>
-                  {preview.lorebooks.length > 0
-                    ? <div className={styles.lorebooks}>{preview.lorebooks.map((book) => (
-                      <button key={book.id} type="button" onClick={() => openModal('worldBookEditor', { bookId: book.id })}>
-                        {book.name}
-                      </button>
-                    ))}</div>
-                    : <p>No attached lorebooks</p>}
+                <img
+                  src={selectedAvatarUrl}
+                  alt={selectedCharacter.name}
+                />
+              </div>
+              <label className={styles.imageHeightControl}>
+                <span>Image H</span>
+                <input
+                  type="range"
+                  min={HOMEPAGE_PANEL_IMAGE_HEIGHT_MIN}
+                  max={HOMEPAGE_PANEL_IMAGE_HEIGHT_MAX}
+                  value={panelImageHeight}
+                  onChange={(event) => setLiveImageHeight(
+                    clampHomepagePanelImageHeight(Number(event.target.value)),
+                  )}
+                  onPointerUp={commitImageHeight}
+                  onKeyUp={commitImageHeight}
+                  onBlur={commitImageHeight}
+                />
+                <span>{panelImageHeight}px</span>
+              </label>
+              <div className={styles.previewHeader}>
+                <div>
+                  <h3>{selectedCharacter.name}</h3>
+                  {selectedCharacter.creator && <p>{selectedCharacter.creator}</p>}
                 </div>
-                <div className={styles.previewSection}>
-                  <h4><MessageSquare size={14} /> Last chat</h4>
-                  {preview.last_chat
-                    ? <div className={styles.lastChat}><strong>{preview.last_chat.name || selectedCharacter.name}</strong><p>{preview.last_chat.last_message_preview || 'No messages yet'}</p></div>
-                    : <p>No existing chat</p>}
-                </div>
-              </>
-            )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Edit3 size={14} />}
+                  className={styles.editBtn}
+                  title="Edit character"
+                  onClick={() => editCharacter(selectedCharacter.id)}
+                >
+                  Edit
+                </Button>
+              </div>
+              <div className={styles.previewTags}>
+                {selectedCharacter.has_alternate_greetings && <span><Star size={12} /> Alt greetings</span>}
+                {selectedTagSummary.visibleTags.map((tag) => (
+                  <span key={tag} className={styles.previewTag} style={tagColorStyle(tag)}>{tag}</span>
+                ))}
+                {selectedTagSummary.hiddenTagCount > 0 && <span>+{selectedTagSummary.hiddenTagCount}</span>}
+              </div>
+              {previewLoading && <div className={styles.state}>Loading preview...</div>}
+              {!previewLoading && preview && (
+                <>
+                  <div className={styles.previewSection}>
+                    <h4><BookOpen size={14} /> Lorebooks</h4>
+                    {preview.lorebooks.length > 0
+                      ? <div className={styles.lorebooks}>{preview.lorebooks.map((book) => (
+                        <button key={book.id} type="button" onClick={() => openModal('worldBookEditor', { bookId: book.id })}>
+                          {book.name}
+                        </button>
+                      ))}</div>
+                      : <p>No attached lorebooks</p>}
+                  </div>
+                  <div className={styles.previewSection}>
+                    <h4><MessageSquare size={14} /> Last chat</h4>
+                    {preview.last_chat
+                      ? <div className={styles.lastChat}><strong>{preview.last_chat.name || selectedCharacter.name}</strong><p>{preview.last_chat.last_message_preview || 'No messages yet'}</p></div>
+                      : <p>No existing chat</p>}
+                  </div>
+                </>
+              )}
+            </div>
             <Button
               variant="primary"
               icon={<MessageSquare size={15} />}
