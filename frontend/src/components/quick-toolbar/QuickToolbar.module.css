@@ -1172,18 +1172,18 @@
 }
 
 @media (max-width: 760px) {
-  /* Auto-fit across the narrow viewport: `left` + `right` win, and the toolbar
-     takes whatever height its content needs. */
+  /* Auto-fit across the narrow viewport's safe rectangle: `left` + `right`
+     win, and the toolbar takes whatever height its content needs. */
   .rootFree {
-    left: 12px !important;
-    right: 12px;
-    top: 12px !important;
+    left: calc(env(safe-area-inset-left, 0px) + 12px) !important;
+    right: calc(env(safe-area-inset-right, 0px) + 12px);
+    top: calc(var(--app-interactive-safe-top, env(safe-area-inset-top, 0px)) + 12px) !important;
     width: auto !important;
     height: auto !important;
   }
 
   .toolbar {
-    max-width: calc(100vw - 24px);
+    max-width: calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 24px);
   }
 
   /* Narrow viewports open the Customize Toolbar modal instead of this popover. */
