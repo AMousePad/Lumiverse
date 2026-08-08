@@ -29,6 +29,7 @@ export const REASONING_DEFAULTS: ReasoningSettings = {
 export const DATA_KEYS: ReadonlySet<string> = new Set([
   'landingPageChatsDisplayed',
   'landingPageLayoutMode',
+  'landingPageGalleryWidth',
   'landingPageActiveTab',
   'landingHiddenCharacterIds',
   'charactersPerPage',
@@ -595,6 +596,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   fullSettingsLoaded: false,
   landingPageChatsDisplayed: 12,
   landingPageLayoutMode: 'cards',
+  landingPageGalleryWidth: 'compact',
   landingHiddenCharacterIds: [],
   charactersPerPage: 50,
   personasPerPage: 24,
@@ -738,6 +740,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
     if (settings.landingPageLayoutMode === 'cards' || settings.landingPageLayoutMode === 'compact') {
       patch.landingPageLayoutMode = settings.landingPageLayoutMode
+    }
+    if (settings.landingPageGalleryWidth === 'compact' || settings.landingPageGalleryWidth === 'expanded') {
+      patch.landingPageGalleryWidth = settings.landingPageGalleryWidth
     }
     if (settings.wallpaper && typeof settings.wallpaper === 'object') {
       patch.wallpaper = { ...settings.wallpaper }

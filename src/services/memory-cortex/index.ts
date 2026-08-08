@@ -2889,6 +2889,7 @@ function findPrefixMatch(np: string, characterNames: string[]): string | null {
  *   - "known as X", "also known as X", "aka X", "nicknamed X"
  *   - "called X", "goes by X", "referred to as X", "titled X"
  *   - Quoted nicknames in description text
+ *   - Card-style fields such as "Nickname: X" and "Aliases: X, Y"
  *
  * Usage: call once per character/persona during chunk processing setup,
  * pass the merged map to processChunk as `descriptionAliases`.
@@ -3006,7 +3007,7 @@ export function extractDescriptionAliases(
     // Pattern 1: Verb-based with quoted name.
     // Handles verb + optional pronoun + quoted name patterns
     // Optional pronoun object (him/her/them/me/it) + space between verb and quote.
-    const quotedPatterns = /(?:known as|also known as|aka|nicknamed|called|goes by|referred to as|titled|call(?:s|ed)?)\s+(?:(?:him|her|them|me|it)\s+)?["'""\u201C\u2018]([^"'""'\u201D\u2019]{2,50})["'""\u201D\u2019]/gi;
+    const quotedPatterns = /(?:known as|also known as|aka|nicknamed|nickname(?:\s+(?:is|was))?|alias(?:\s+(?:is|was))?|moniker(?:\s+(?:is|was))?|called|goes by|referred to as|titled)\s+(?:(?:him|her|them|me|it)\s+)?["'""\u201C\u2018]([^"'""'\u201D\u2019]{2,50})["'""\u201D\u2019]/gi;
     let match;
     while ((match = quotedPatterns.exec(desc)) !== null) {
       addAlias(aliases, match[1], canonicalName);
@@ -3017,9 +3018,30 @@ export function extractDescriptionAliases(
     // Note: NO `i` flag — the capture group MUST match actual uppercase to avoid
     // grabbing lowercase words like "him" or "among" as aliases.
     // Keywords use [Xx] alternation for first-letter case insensitivity instead.
-    const unquotedPatterns = /(?:[Kk]nown as|[Aa]lso known as|[Aa]ka|[Nn]icknamed|[Cc]alled|[Gg]oes by|[Rr]eferred to as|[Tt]itled)\s+(?:[Tt]he\s+)?([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+){0,4})/g;
+    const unquotedPatterns = /(?:[Kk]nown as|[Aa]lso known as|[Aa]ka|[Nn]icknamed|[Nn]ickname\s+(?:is|was)|[Aa]lias\s+(?:is|was)|[Mm]oniker\s+(?:is|was)|[Cc]alled|[Gg]oes by|[Rr]eferred to as|[Tt]itled)\s+(?:[Tt]he\s+)?([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+){0,4})/g;
     while ((match = unquotedPatterns.exec(desc)) !== null) {
       addAlias(aliases, match[1], canonicalName);
+    }
+
+    // Pattern 2b: common structured card fields. Character cards often keep
+    // aliases in a compact profile section instead of prose, e.g.
+    // "Nickname: Lia" or "**Aliases:** Lia, The Nightingale". These are
+    // authoritative declarations, so thread every plausible value into the
+    // same alias map that is supplied to the sidecar and arbiter.
+    const aliasFieldPatterns = /(?:^|[\r\n])\s*(?:[-*\u2022]\s*)?(?:\*{1,2}|_)?\s*(?:nicknames?|aliases?|aka|also known as|monikers?|epithets?)\s*(?::\s*(?:\*{1,2}|_)?|(?:\*{1,2}|_)?\s*(?:=|[-\u2013\u2014]))\s*([^\r\n]+)/gi;
+    while ((match = aliasFieldPatterns.exec(desc)) !== null) {
+      const value = match[1].trim();
+      // Read quoted values separately, then retain any unquoted entries in a
+      // mixed list such as `Aliases: "The Nightingale", Voss`.
+      const quotedPattern = /["'\u201C\u2018]([^"'\u201D\u2019]{2,50})["'\u201D\u2019]/g;
+      const quoted = [...value.matchAll(quotedPattern)]
+        .map((quotedMatch) => quotedMatch[1]);
+      const unquotedRemainder = value.replace(quotedPattern, "");
+      const candidates = [
+        ...quoted,
+        ...unquotedRemainder.split(/\s*(?:,|;|\/|\||\bor\b|\band\b)\s*/i),
+      ];
+      for (const candidate of candidates) addAlias(aliases, candidate, canonicalName);
     }
 
     // Pattern 3: parenthetical aliases — "Name (Alias)", "Name (Alias1, Alias2)"

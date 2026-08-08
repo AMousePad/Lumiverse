@@ -119,6 +119,7 @@ export interface StartupSettings {
   theme?: ThemeConfig | null
   landingPageChatsDisplayed?: number
   landingPageLayoutMode?: 'cards' | 'compact'
+  landingPageGalleryWidth?: 'compact' | 'expanded'
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
   connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
@@ -638,6 +639,8 @@ export interface SettingsSlice {
   fullSettingsLoaded: boolean
   landingPageChatsDisplayed: number
   landingPageLayoutMode: 'cards' | 'compact'
+  /** Keeps the landing gallery comfortable on wide screens unless expanded by the user. */
+  landingPageGalleryWidth: 'compact' | 'expanded'
   landingHiddenCharacterIds: string[]
   charactersPerPage: number
   personasPerPage: number

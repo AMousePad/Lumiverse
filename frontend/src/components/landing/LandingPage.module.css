@@ -111,6 +111,12 @@
   box-sizing: border-box;
 }
 
+/* Default to a readable desktop measure. The user can opt into the expanded
+   gallery from the chats toolbar when they want to use a wide display. */
+.contentExpanded {
+  max-width: none;
+}
+
 /* Header */
 .header {
   display: flex;
@@ -133,9 +139,6 @@
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
-  /* Keep the primary view switch aligned to the viewport edge even when the
-     landing content is centered inside its 1400px desktop max-width. */
-  margin-left: calc((min(100vw, 1400px) - 100vw) / 2);
 }
 
 .landingSearch {
@@ -170,13 +173,16 @@
   outline: none;
 }
 
+.galleryWidthBtnActive {
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-010);
+}
+
 .logo {
   display: flex;
   align-items: center;
   gap: 14px;
-  /* Match the viewport-aligned tab group below when desktop content is
-     constrained by the landing page's max width. */
-  margin-left: calc((min(100vw, 1400px) - 100vw) / 2);
 }
 
 .headerActions {

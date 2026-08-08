@@ -1,6 +1,10 @@
 {
   "groupChat": "Group Chat",
   "active": "Active",
+  "galleryWidth": {
+    "compact": "Use compact gallery width",
+    "expanded": "Expand gallery to full width"
+  },
   "account": "Account",
   "subtitle": {
     "chooseGroupThreads": "Choose from group threads",

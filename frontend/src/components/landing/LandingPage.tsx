@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
 import { useVirtualizer, type VirtualItem, type Virtualizer } from '@tanstack/react-virtual'
-import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass, EyeOff, Star, Pencil, Copy, GitBranch } from 'lucide-react'
+import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass, EyeOff, Star, Pencil, Copy, GitBranch, Maximize2, Minimize2 } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi, messagesApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
@@ -978,6 +978,7 @@ export default function LandingPage() {
   const navigate = useNavigate()
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const landingPageLayoutMode = useStore((s) => s.landingPageLayoutMode)
+  const landingPageGalleryWidth = useStore((s) => s.landingPageGalleryWidth)
   const favorites = useStore((s) => s.favorites)
   const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
   const settingsLoaded = useStore((s) => s.settingsLoaded)
@@ -1046,6 +1047,7 @@ export default function LandingPage() {
   const tempChatMenuOpenedAt = useRef(0)
   const chatNavigationTimerRef = useRef<number | null>(null)
   const fetchSequenceRef = useRef(0)
+  const loadingMoreRef = useRef(false)
 
   const profiles = useStore((s) => s.profiles)
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -1311,7 +1313,12 @@ export default function LandingPage() {
   }, [debouncedSearchQuery, landingPageChatsDisplayed, recentChatQuery, settingsLoaded, sortDirection, sortField])
 
   const loadMore = useCallback(async () => {
-    if (loadingMore || items.length >= total) return
+    // Intersection observers may deliver multiple entries during a grid
+    // resize (or while reconnecting after a column-count change). Use a ref
+    // so those synchronous deliveries cannot request the same page twice
+    // before React has rendered `loadingMore`.
+    if (loadingMoreRef.current || items.length >= total) return
+    loadingMoreRef.current = true
     const requestSequence = fetchSequenceRef.current
     setLoadingMore(true)
     try {
@@ -1326,9 +1333,10 @@ export default function LandingPage() {
     } catch (err: any) {
       console.error('[Lumiverse] Error loading more chats:', err)
     } finally {
+      loadingMoreRef.current = false
       setLoadingMore(false)
     }
-  }, [loadingMore, items.length, total, landingPageChatsDisplayed, recentChatQuery])
+  }, [items.length, total, landingPageChatsDisplayed, recentChatQuery])
 
   useEffect(() => {
     fetchChats()
@@ -1348,12 +1356,15 @@ export default function LandingPage() {
       ([entry]) => {
         if (entry.isIntersecting) loadMore()
       },
-      { rootMargin: '200px' }
+      // The landing page scrolls inside `.container`, not the window. Using
+      // that container as the root lets the sentinel be re-evaluated when a
+      // resize changes the virtual grid's height.
+      { root: scrollRef.current, rootMargin: '200px' }
     )
 
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [items.length, total, loading, loadMore])
+  }, [items.length, total, loading, loadMore, mainWidth])
 
   const navigateToChat = useCallback((chatId: string) => {
     if (chatNavigationTimerRef.current !== null) return
@@ -1685,7 +1696,7 @@ export default function LandingPage() {
       )}
 
       <motion.div
-        className={styles.content}
+        className={clsx(styles.content, landingPageGalleryWidth === 'expanded' && styles.contentExpanded)}
         data-component="LandingPageCharacters"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -1835,6 +1846,18 @@ export default function LandingPage() {
             aria-label={t('hiddenFromHome.title')}
           >
             <EyeOff size={15} strokeWidth={1.5} />
+          </button>
+          <button
+            type="button"
+            className={clsx(styles.hiddenManagerBtn, landingPageGalleryWidth === 'expanded' && styles.galleryWidthBtnActive)}
+            onClick={() => setSetting('landingPageGalleryWidth', landingPageGalleryWidth === 'expanded' ? 'compact' : 'expanded')}
+            title={landingPageGalleryWidth === 'expanded' ? t('galleryWidth.compact') : t('galleryWidth.expanded')}
+            aria-label={landingPageGalleryWidth === 'expanded' ? t('galleryWidth.compact') : t('galleryWidth.expanded')}
+            aria-pressed={landingPageGalleryWidth === 'expanded'}
+          >
+            {landingPageGalleryWidth === 'expanded'
+              ? <Minimize2 size={15} strokeWidth={1.5} />
+              : <Maximize2 size={15} strokeWidth={1.5} />}
           </button>
           </>}
         </div>

@@ -195,6 +195,10 @@
       "cards": "卡片",
       "compactList": "緊湊列表",
       "layoutHelper": "在卡片畫廊與更緊湊的自適應最近聊天列表之間切換。",
+      "galleryWidth": "最近聊天畫廊寬度",
+      "compact": "緊湊",
+      "expanded": "擴展",
+      "galleryWidthHelper": "在桌面端保持舒適的閱讀寬度，或將最近聊天畫廊擴展至整個視窗。",
       "batchSize": "首頁每批聊天數量"
     }
   },

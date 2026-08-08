@@ -101,6 +101,7 @@ interface StartupSettings {
   theme?: unknown;
   landingPageChatsDisplayed?: number;
   landingPageLayoutMode?: "cards" | "compact";
+  landingPageGalleryWidth?: "compact" | "expanded";
   wallpaper?: unknown;
   drawerSettings?: unknown;
   spindleSettings?: unknown;
@@ -123,6 +124,7 @@ const STARTUP_SETTINGS_KEYS = [
   "theme",
   "landingPageChatsDisplayed",
   "landingPageLayoutMode",
+  "landingPageGalleryWidth",
   "wallpaper",
   "drawerSettings",
   "spindleSettings",
@@ -240,6 +242,11 @@ function getStartupSettings(userId: string): StartupSettings {
   const landingPageLayoutMode = rows.get("landingPageLayoutMode");
   if (landingPageLayoutMode === "cards" || landingPageLayoutMode === "compact") {
     startupSettings.landingPageLayoutMode = landingPageLayoutMode;
+  }
+
+  const landingPageGalleryWidth = rows.get("landingPageGalleryWidth");
+  if (landingPageGalleryWidth === "compact" || landingPageGalleryWidth === "expanded") {
+    startupSettings.landingPageGalleryWidth = landingPageGalleryWidth;
   }
 
   if (rows.has("wallpaper")) {

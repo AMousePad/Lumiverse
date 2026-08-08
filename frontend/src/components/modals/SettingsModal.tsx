@@ -323,6 +323,7 @@ function DisplaySettings() {
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const landingPageLayoutMode = useStore((s) => s.landingPageLayoutMode)
+  const landingPageGalleryWidth = useStore((s) => s.landingPageGalleryWidth)
   const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
   const toastPosition = useStore((s) => s.toastPosition)
   const chatHeadsEnabled = useStore((s) => s.chatHeadsEnabled)
@@ -608,6 +609,25 @@ function DisplaySettings() {
         </div>
         <p className={styles.helperText} style={{ marginTop: 8 }}>
           {t('display.landing.layoutHelper')}
+        </p>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>{t('display.landing.galleryWidth')}</label>
+        <div className={styles.segmented}>
+          {(['compact', 'expanded'] as const).map((width) => (
+            <button
+              key={width}
+              type="button"
+              className={clsx(styles.segmentedBtn, landingPageGalleryWidth === width && styles.segmentedBtnActive)}
+              onClick={() => setSetting('landingPageGalleryWidth', width)}
+            >
+              {t(`display.landing.${width}`)}
+            </button>
+          ))}
+        </div>
+        <p className={styles.helperText} style={{ marginTop: 8 }}>
+          {t('display.landing.galleryWidthHelper')}
         </p>
       </div>
 

@@ -87,6 +87,7 @@ type StoreState = {
   landingPageActiveTab?: unknown
   landingPageChatsDisplayed: number
   landingPageLayoutMode: 'cards' | 'compact'
+  landingPageGalleryWidth: 'compact' | 'expanded'
   homepageCharacterLibrarySettings: Record<string, unknown>
   favorites: string[]
   landingHiddenCharacterIds: string[]
@@ -159,6 +160,9 @@ function createStoreState(landingPageActiveTab: unknown = 'characters', enabled 
     if (key === 'landingPageActiveTab') {
       storeState = { ...storeState, landingPageActiveTab: value }
     }
+    if (key === 'landingPageGalleryWidth') {
+      storeState = { ...storeState, landingPageGalleryWidth: value as 'compact' | 'expanded' }
+    }
     if (key === 'homepageCharacterLibrarySettings' && value && typeof value === 'object') {
       storeState = {
         ...storeState,
@@ -171,6 +175,7 @@ function createStoreState(landingPageActiveTab: unknown = 'characters', enabled 
     landingPageActiveTab,
     landingPageChatsDisplayed: 12,
     landingPageLayoutMode: 'cards',
+    landingPageGalleryWidth: 'compact',
     homepageCharacterLibrarySettings: defaultHomepageSettings(enabled),
     favorites: [],
     landingHiddenCharacterIds: [],
@@ -298,6 +303,8 @@ mock.module('lucide-react', () => ({
   Pencil: Icon,
   Copy: Icon,
   GitBranch: Icon,
+  Maximize2: Icon,
+  Minimize2: Icon,
   BookOpen: Icon,
   Edit3: Icon,
   Pin: Icon,
@@ -334,7 +341,10 @@ mock.module('./HomepageCharacterLibrary.module.css', () => ({
 const TestObserverInstances: TestIntersectionObserver[] = []
 class TestIntersectionObserver {
   private disconnected = false
-  constructor(private readonly callback: IntersectionObserverCallback) {
+  constructor(
+    private readonly callback: IntersectionObserverCallback,
+    readonly options: IntersectionObserverInit = {},
+  ) {
     TestObserverInstances.push(this)
   }
   observe() {}
@@ -362,6 +372,20 @@ function summary(id: string, name: string, library_scope: 'mine' | 'shared' = 'm
     updated_at: 1,
     has_alternate_greetings: false,
     library_scope,
+  }
+}
+
+function recentChat(id: string, name: string) {
+  return {
+    ...summary(id, name),
+    latest_chat_id: `chat-${id}`,
+    latest_chat_name: 'Recent chat',
+    character_id: id,
+    character_name: name,
+    character_image_id: null,
+    updated_at: 1,
+    is_group: false,
+    chat_count: 1,
   }
 }
 
@@ -479,6 +503,51 @@ afterEach(async () => {
 })
 
 describe('LandingPage character library', () => {
+  test('uses the landing scroller for resized gallery pagination and de-duplicates observer entries', async () => {
+    storeState = createStoreState('chats', false)
+    const nextPage = createDeferred<SummaryPage>()
+    listRecentGrouped
+      .mockResolvedValueOnce(page([recentChat('character-1', 'Ava')], 2))
+      .mockReturnValueOnce(nextPage.promise)
+    listTags.mockResolvedValue([])
+    getHomepagePreview.mockResolvedValue(null)
+
+    const host = await mountLanding()
+    await flush()
+
+    const observer = TestObserverInstances.at(-1)
+    expect(observer?.options.root).toBe(host.querySelector('[data-component="LandingPage"]'))
+
+    await act(async () => {
+      observer?.trigger()
+      observer?.trigger()
+      await Promise.resolve()
+    })
+    expect(listRecentGrouped).toHaveBeenCalledTimes(2)
+
+    await settleDeferred(nextPage, page([recentChat('character-2', 'Bea')], 2))
+    expect(listRecentGrouped).toHaveBeenCalledTimes(2)
+  })
+
+  test('keeps the recent-chat gallery compact by default and can expand it', async () => {
+    storeState = createStoreState('chats', false)
+    listRecentGrouped.mockResolvedValue(page([]))
+    listTags.mockResolvedValue([])
+    getHomepagePreview.mockResolvedValue(null)
+
+    const host = await mountLanding()
+    await flush()
+
+    const widthButton = host.querySelector<HTMLButtonElement>('[aria-label="Expand gallery to full width"]')
+    expect(widthButton?.getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => widthButton?.click())
+
+    expect(storeState.landingPageGalleryWidth).toBe('expanded')
+    expect(storeState.setSetting).toHaveBeenLastCalledWith('landingPageGalleryWidth', 'expanded')
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Use compact gallery width"]')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
   test('shows only native Chats before and after the suite surface is disabled', async () => {
     storeState = createStoreState('characters')
     listRecentGrouped.mockResolvedValue(page([]))
