@@ -14,10 +14,10 @@ function touchesRuntimeConfig(input: Record<string, unknown>): boolean {
 }
 
 /** List MCP servers (paginated) */
-app.get("/", (c) => {
+app.get("/", async (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
-  return c.json(svc.listServers(userId, pagination));
+  return c.json(await svc.listServersForApi(userId, pagination));
 });
 
 /** Create MCP server */
@@ -61,11 +61,11 @@ app.get("/status", (c) => {
 });
 
 /** Get MCP server by ID */
-app.get("/:id", (c) => {
+app.get("/:id", async (c) => {
   const userId = c.get("userId");
   const server = svc.getServer(userId, c.req.param("id"));
   if (!server) return c.json({ error: "Not found" }, 404);
-  return c.json(server);
+  return c.json(await svc.withReadableMcpSecretStatus(userId, server));
 });
 
 /** Update MCP server */
@@ -101,14 +101,14 @@ app.put("/:id", async (c) => {
 
   if (!server.is_enabled) {
     await manager.disconnect(userId, server.id);
-    return c.json(server);
+    return c.json(await svc.withReadableMcpSecretStatus(userId, server));
   }
 
   if (wasConnected && touchesRuntimeConfig(body)) {
     await manager.reconnect(userId, server);
   }
 
-  return c.json(server);
+  return c.json(await svc.withReadableMcpSecretStatus(userId, server));
 });
 
 /** Delete MCP server */

@@ -115,12 +115,16 @@ function embeddingProviderSecretKey(provider: EmbeddingProvider): string {
   return `${EMBEDDING_SECRET_KEY}_${provider}`;
 }
 
-async function getEmbeddingSecret(userId: string, provider: EmbeddingProvider): Promise<string | null> {
+async function readEmbeddingSecret(
+  userId: string,
+  provider: EmbeddingProvider,
+  readSecret: (userId: string, key: string) => Promise<string | null>,
+): Promise<string | null> {
   const scopedKey = embeddingProviderSecretKey(provider);
-  const scoped = await secretsSvc.getSecret(userId, scopedKey);
+  const scoped = await readSecret(userId, scopedKey);
   if (scoped && scoped.length > 0) return scoped;
 
-  const legacy = await secretsSvc.getSecret(userId, EMBEDDING_SECRET_KEY);
+  const legacy = await readSecret(userId, EMBEDDING_SECRET_KEY);
   if (!legacy || legacy.length === 0) return null;
 
   await secretsSvc.putSecret(userId, scopedKey, legacy);
@@ -128,8 +132,12 @@ async function getEmbeddingSecret(userId: string, provider: EmbeddingProvider): 
   return legacy;
 }
 
+async function getEmbeddingSecret(userId: string, provider: EmbeddingProvider): Promise<string | null> {
+  return readEmbeddingSecret(userId, provider, secretsSvc.getSecret);
+}
+
 async function hasEmbeddingSecret(userId: string, provider: EmbeddingProvider): Promise<boolean> {
-  const secret = await getEmbeddingSecret(userId, provider);
+  const secret = await readEmbeddingSecret(userId, provider, secretsSvc.getSecretForStatus);
   return !!secret && secret.length > 0;
 }
 
@@ -2612,6 +2620,7 @@ async function commitWorldBookVectorWritesIfCurrent(
 export const __test__ = {
   collectWorldBookHitsByUniqueSource,
   collapseWorldBookHitsBySource,
+  hasEmbeddingSecret,
   worldBookSourceExclusionFilters,
   commitWorldBookVectorWritesIfCurrent,
   coordinateWorldBookVectorAndSourceDelete,
