@@ -561,6 +561,97 @@ describe("regex performance reporting", () => {
     expect(updated && typeof updated !== "string" ? updated.metadata.regex_performance : undefined).toBeUndefined();
   });
 
+  test("clears a display warning after a fast run of the same script version", () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Recovered Display Script",
+      find_regex: "one",
+    });
+    expect(typeof created).not.toBe("string");
+
+    const script = created as Exclude<typeof created, string>;
+    reportRegexScriptPerformance(USER_ID, script.id, {
+      elapsedMs: 5200,
+      source: "display_client",
+    });
+
+    const result = reportRegexScriptPerformance(USER_ID, script.id, {
+      elapsedMs: 20,
+      source: "display_client",
+    });
+
+    expect(result.cleared).toBe(true);
+    expect(result.script?.metadata?.regex_performance).toBeUndefined();
+  });
+
+  test("does not clear a warning from a different execution source", () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Prompt Slow Script",
+      find_regex: "one",
+    });
+    expect(typeof created).not.toBe("string");
+
+    const script = created as Exclude<typeof created, string>;
+    reportRegexScriptPerformance(USER_ID, script.id, {
+      elapsedMs: 5200,
+      source: "prompt_backend",
+    });
+
+    const result = reportRegexScriptPerformance(USER_ID, script.id, {
+      elapsedMs: 20,
+      source: "display_client",
+    });
+
+    expect(result.cleared).toBe(false);
+    expect(result.script?.metadata?.regex_performance?.source).toBe("prompt_backend");
+  });
+
+  test("allows either display execution path to clear a display warning", () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Backend Display Script",
+      find_regex: "one",
+    });
+    expect(typeof created).not.toBe("string");
+
+    const script = created as Exclude<typeof created, string>;
+    reportRegexScriptPerformance(USER_ID, script.id, {
+      elapsedMs: 5200,
+      source: "display_backend",
+    });
+
+    const result = reportRegexScriptPerformance(USER_ID, script.id, {
+      elapsedMs: 20,
+      source: "display_client",
+    });
+
+    expect(result.cleared).toBe(true);
+  });
+
+  test("clears a matching backend warning after a fast backend execution", async () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Recovered Prompt Script",
+      find_regex: "one",
+    });
+    expect(typeof created).not.toBe("string");
+
+    const script = created as Exclude<typeof created, string>;
+    reportRegexScriptPerformance(USER_ID, script.id, {
+      elapsedMs: 5200,
+      source: "prompt_backend",
+    });
+
+    await applyRegexScripts(
+      "one",
+      [mustGetScript(script.id)],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { source: "prompt_backend" },
+    );
+
+    expect(mustGetScript(script.id).metadata.regex_performance).toBeUndefined();
+  });
+
   test("accepts the full JS regex flag set d/g/i/m/s/u/v/y", () => {
     for (const flag of ["d", "g", "i", "m", "s", "u", "v", "y"]) {
       const created = createRegexScript(USER_ID, {

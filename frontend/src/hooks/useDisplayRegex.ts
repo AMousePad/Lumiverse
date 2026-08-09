@@ -80,6 +80,7 @@ const displayRegexCacheListeners = new Set<() => void>()
 let displayRegexGlobalCv = 0
 const displayRegexPerMessageCv = new Map<string, number>()
 const slowDisplayRegexToastKeys = new Set<string>()
+const recoveredDisplayRegexReportKeys = new Set<string>()
 const displayPreprocessQueues = new Map<string, PendingDisplayPreprocess[]>()
 const DISPLAY_PREPROCESS_BATCH_MAX = 64
 const DISPLAY_PREPROCESS_BATCH_DELAY_MS = 8
@@ -102,6 +103,9 @@ function formatElapsedMs(elapsedMs: number): string {
 
 function reportSlowDisplayRegex(script: RegexScript, elapsedMs: number, timedOut: boolean, thresholdMs: number): void {
   const versionKey = `${script.id}:${script.updated_at}`
+  // A newly slow run needs a later recovery report, even if this version had
+  // previously recovered during the current page session.
+  recoveredDisplayRegexReportKeys.delete(versionKey)
   if (!slowDisplayRegexToastKeys.has(versionKey)) {
     slowDisplayRegexToastKeys.add(versionKey)
     toast.warning(
@@ -118,6 +122,21 @@ function reportSlowDisplayRegex(script: RegexScript, elapsedMs: number, timedOut
     threshold_ms: thresholdMs,
     source: 'display_client',
   }).catch(() => {})
+}
+
+function reportRecoveredDisplayRegex(script: RegexScript, elapsedMs: number, thresholdMs: number): void {
+  const versionKey = `${script.id}:${script.updated_at}`
+  if (recoveredDisplayRegexReportKeys.has(versionKey)) return
+  recoveredDisplayRegexReportKeys.add(versionKey)
+
+  void regexApi.reportPerformance(script.id, {
+    elapsed_ms: elapsedMs,
+    threshold_ms: thresholdMs,
+    source: 'display_client',
+  }).catch(() => {
+    // Keep retrying on a future render if this recovery report was not saved.
+    recoveredDisplayRegexReportKeys.delete(versionKey)
+  })
 }
 
 function fnv1a(s: string): string {
@@ -579,6 +598,7 @@ export function useDisplayRegex(
     displayPreprocessOpts,
   )
   const pendingSlowReportsRef = useRef<SlowRegexReport[]>([])
+  const pendingRecoveredReportsRef = useRef<SlowRegexReport[]>([])
 
   const displayOwned = !!activeChatId && isDisplayChatOwned(activeChatId)
   // When an extension owns display, regex runs on preprocessed content only.
@@ -758,8 +778,10 @@ export function useDisplayRegex(
   const fallbackContent = useMemo(
     () => {
       const slowReports: SlowRegexReport[] = []
+      const recoveredReports: SlowRegexReport[] = []
       if (displayScripts.length === 0 || regexGated) {
         pendingSlowReportsRef.current = slowReports
+        pendingRecoveredReportsRef.current = recoveredReports
         return content
       }
       const next = applyDisplayRegex(content, displayScripts, {
@@ -773,8 +795,11 @@ export function useDisplayRegex(
         ...(previousContent !== undefined ? { previousContent } : {}),
       }, ({ script, elapsedMs, timedOut, thresholdMs }) => {
         slowReports.push({ script, elapsedMs, timedOut, thresholdMs })
+      }, ({ script, elapsedMs, timedOut, thresholdMs }) => {
+        recoveredReports.push({ script, elapsedMs, timedOut, thresholdMs })
       })
       pendingSlowReportsRef.current = slowReports
+      pendingRecoveredReportsRef.current = recoveredReports
       return next
     },
     [content, displayScripts, isUser, depth, macroCtx, resolvedTemplates, dynamicMacros, messageIndex, previousContent, regexGated],
@@ -786,6 +811,15 @@ export function useDisplayRegex(
     pendingSlowReportsRef.current = []
     for (const report of reports) {
       reportSlowDisplayRegex(report.script, report.elapsedMs, report.timedOut, report.thresholdMs)
+    }
+  }, [fallbackContent])
+
+  useEffect(() => {
+    const reports = pendingRecoveredReportsRef.current
+    if (reports.length === 0) return
+    pendingRecoveredReportsRef.current = []
+    for (const report of reports) {
+      reportRecoveredDisplayRegex(report.script, report.elapsedMs, report.thresholdMs)
     }
   }, [fallbackContent])
 

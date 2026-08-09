@@ -416,6 +416,13 @@ function shouldReportSlowRegex(script: RegexScript, elapsedMs: number): boolean 
   return !current || current.version !== script.updated_at
 }
 
+function recoveryThresholdForRegex(script: RegexScript, elapsedMs: number): number | null {
+  const current = getRegexPerformanceMetadata(script)
+  if (!current || current.version !== script.updated_at) return null
+  if (current.source !== 'display_client' && current.source !== 'display_backend') return null
+  return elapsedMs < current.threshold_ms ? current.threshold_ms : null
+}
+
 function mapToRecord(map?: Map<string, string>): Record<string, string> | undefined {
   if (!map || map.size === 0) return undefined
   return Object.fromEntries(map.entries())
@@ -473,6 +480,7 @@ export function applyDisplayRegex(
   scripts: RegexScript[],
   context: ApplyDisplayRegexContext,
   onSlowRegex?: (report: SlowRegexReport) => void,
+  onRecoveredRegex?: (report: SlowRegexReport) => void,
 ): string {
   let result = content
 
@@ -584,6 +592,15 @@ export function applyDisplayRegex(
           elapsedMs,
           timedOut: false,
           thresholdMs: DISPLAY_SLOW_REGEX_WARNING_MS,
+        })
+      } else {
+        const recoveryThresholdMs = recoveryThresholdForRegex(script, elapsedMs)
+        if (recoveryThresholdMs === null) continue
+        onRecoveredRegex?.({
+          script,
+          elapsedMs,
+          timedOut: false,
+          thresholdMs: recoveryThresholdMs,
         })
       }
     } catch {

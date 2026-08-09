@@ -92,3 +92,34 @@ describe('carry-forward match replacement', () => {
     )).toBe('new\n<status>ready</status>')
   })
 })
+
+describe('display regex performance reporting', () => {
+  test('reports recovery for a fast run of a display flagged script', () => {
+    const recovered: Array<{ elapsedMs: number }> = []
+    applyDisplayRegex(
+      'one',
+      [script({
+        find_regex: 'one',
+        replace_string: 'two',
+        metadata: {
+          regex_performance: {
+            slow: true,
+            timed_out: false,
+            elapsed_ms: 7200,
+            threshold_ms: 5000,
+            detected_at: 0,
+            source: 'display_backend',
+            version: 0,
+            engine_version: 2,
+          },
+        },
+      })],
+      { isUser: false, depth: 0 },
+      undefined,
+      (report) => recovered.push({ elapsedMs: report.elapsedMs }),
+    )
+
+    expect(recovered).toHaveLength(1)
+    expect(recovered[0].elapsedMs).toBeLessThan(5000)
+  })
+})

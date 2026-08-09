@@ -62,6 +62,7 @@ export interface RegexPerformanceIssue {
 interface RegexPerformanceReportResult {
   script: RegexScript | null;
   newlyFlagged: boolean;
+  cleared: boolean;
 }
 
 interface ApplyRegexScriptOptions {
@@ -219,26 +220,56 @@ function shouldResetRegexPerformance(input: UpdateRegexScriptInput): boolean {
   ].some((key) => Object.prototype.hasOwnProperty.call(input, key));
 }
 
+function isDisplayPerformanceSource(source: RegexPerformanceSource): boolean {
+  return source === "display_client" || source === "display_backend";
+}
+
+function performanceSourcesMatch(existing: RegexPerformanceSource, current: RegexPerformanceSource): boolean {
+  return existing === current || (isDisplayPerformanceSource(existing) && isDisplayPerformanceSource(current));
+}
+
 export function reportRegexScriptPerformance(
   userId: string,
   id: string,
   issue: { elapsedMs: number; timedOut?: boolean; thresholdMs?: number; source?: RegexPerformanceSource },
 ): RegexPerformanceReportResult {
   const script = getRegexScript(userId, id);
-  if (!script) return { script: null, newlyFlagged: false };
+  if (!script) return { script: null, newlyFlagged: false, cleared: false };
 
   const thresholdMs = issue.thresholdMs ?? REGEX_SLOW_WARNING_MS;
   const timedOut = issue.timedOut === true;
-  if (!timedOut && issue.elapsedMs < thresholdMs) return { script, newlyFlagged: false };
-
+  const source = issue.source ?? "display_backend";
   const existing = getRegexPerformanceMetadata(script);
+  if (!timedOut && issue.elapsedMs < thresholdMs) {
+    // A display regex can be expensive only for particular message content or
+    // macro expansions. Clear a warning once that same execution path has
+    // completed quickly for the current saved script version. Display-client
+    // and display-backend executions are equivalent for this purpose, while
+    // prompt and response runs remain isolated from display warnings.
+    if (
+      existing &&
+      existing.version === script.updated_at &&
+      performanceSourcesMatch(existing.source, source) &&
+      existing.threshold_ms === thresholdMs
+    ) {
+      getDb().query("UPDATE regex_scripts SET metadata = ? WHERE id = ? AND user_id = ?").run(
+        JSON.stringify(withoutRegexPerformanceMetadata(script.metadata)),
+        id,
+        userId,
+      );
+      emitRegexChanged(userId, id);
+      return { script: getRegexScript(userId, id), newlyFlagged: false, cleared: true };
+    }
+    return { script, newlyFlagged: false, cleared: false };
+  }
+
   if (
     existing &&
     existing.version === script.updated_at &&
     existing.timed_out === timedOut &&
     existing.threshold_ms === thresholdMs
   ) {
-    return { script, newlyFlagged: false };
+    return { script, newlyFlagged: false, cleared: false };
   }
 
   const nextMetadata = {
@@ -249,7 +280,7 @@ export function reportRegexScriptPerformance(
       elapsed_ms: Math.max(0, Math.round(issue.elapsedMs)),
       threshold_ms: thresholdMs,
       detected_at: Math.floor(Date.now() / 1000),
-      source: issue.source ?? "display_backend",
+      source,
       version: script.updated_at,
       engine_version: REGEX_PERFORMANCE_ENGINE_VERSION,
     } satisfies RegexPerformanceMetadata,
@@ -261,7 +292,7 @@ export function reportRegexScriptPerformance(
     userId,
   );
   emitRegexChanged(userId, id);
-  return { script: getRegexScript(userId, id), newlyFlagged: true };
+  return { script: getRegexScript(userId, id), newlyFlagged: true, cleared: false };
 }
 
 function resolveCreateDisabledState(input: CreateRegexScriptInput, activePresetId: string | null): boolean {
@@ -1536,6 +1567,21 @@ export async function applyRegexScripts(
           source: options?.source ?? "display_backend",
           newlyFlagged: flagged.newlyFlagged,
         });
+      } else {
+        const existingPerformance = getRegexPerformanceMetadata(script);
+        const source = options?.source ?? "display_backend";
+        if (
+          existingPerformance &&
+          existingPerformance.version === script.updated_at &&
+          performanceSourcesMatch(existingPerformance.source, source) &&
+          elapsedMs < existingPerformance.threshold_ms
+        ) {
+          reportRegexScriptPerformance(script.user_id, script.id, {
+            elapsedMs,
+            thresholdMs: existingPerformance.threshold_ms,
+            source,
+          });
+        }
       }
     } catch (e) {
       if (options?.outFingerprint) options.outFingerprint.cacheable = false;
