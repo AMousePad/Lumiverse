@@ -9,6 +9,7 @@
   position: sticky;
   top: -12px;
   z-index: 4;
+  isolation: isolate;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
@@ -17,11 +18,28 @@
   background:
     linear-gradient(
       180deg,
-      color-mix(in srgb, var(--lumiverse-bg-deep, var(--lumiverse-bg)) 92%, var(--lumiverse-primary) 8%) 0%,
-      color-mix(in srgb, var(--lumiverse-bg-deep, var(--lumiverse-bg)) 88%, var(--lumiverse-primary) 12%) 78%,
-      transparent 100%
+      color-mix(in srgb, var(--lumiverse-bg-deep, var(--lumiverse-bg)) 96%, var(--lumiverse-primary) 4%) 0%,
+      color-mix(in srgb, var(--lumiverse-bg-deep, var(--lumiverse-bg)) 94%, var(--lumiverse-primary) 6%) 62%,
+      color-mix(in srgb, var(--lumiverse-bg-deep, var(--lumiverse-bg)) 96%, var(--lumiverse-primary) 4%) 100%
     );
-  border-bottom: 1px solid var(--lumiverse-primary-015, rgba(255, 255, 255, 0.08));
+}
+
+/* Keep the tint behind the complete tab control, then blend it into the
+ * profile content without a hard divider. */
+.viewTabs::after {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  right: 0;
+  bottom: -48px;
+  left: 0;
+  height: 48px;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--lumiverse-bg-deep, var(--lumiverse-bg)) 96%, var(--lumiverse-primary) 4%) 0%,
+    transparent 100%
+  );
 }
 
 :global([data-glass]) .viewTabs {
@@ -29,6 +47,8 @@
 }
 
 .viewTab {
+  position: relative;
+  z-index: 1;
   appearance: none;
   border: 1px solid var(--lumiverse-primary-015, rgba(255, 255, 255, 0.08));
   background: color-mix(in srgb, var(--lumiverse-primary) 4%, transparent);
