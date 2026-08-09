@@ -95,6 +95,8 @@
     "expandEditor": "エディタを展開",
     "hideMacros": "マクロを非表示",
     "insertMacro": "マクロを挿入",
+    "previewMarkdown": "Markdown をプレビュー",
+    "editMarkdown": "Markdown を編集",
     "searchMacros": "マクロを検索..."
   },
   "spindle": {

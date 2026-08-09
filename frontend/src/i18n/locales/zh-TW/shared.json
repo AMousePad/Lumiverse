@@ -95,6 +95,8 @@
     "expandEditor": "展開編輯器",
     "hideMacros": "隱藏宏",
     "insertMacro": "插入宏",
+    "previewMarkdown": "預覽 Markdown",
+    "editMarkdown": "編輯 Markdown",
     "searchMacros": "搜索宏…"
   },
   "spindle": {

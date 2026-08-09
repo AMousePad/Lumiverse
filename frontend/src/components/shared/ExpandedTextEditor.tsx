@@ -16,10 +16,12 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
-import { Minimize2, Maximize2, Hash, Search, Replace as ReplaceIcon, ChevronUp, ChevronDown, X } from 'lucide-react'
+import { Minimize2, Maximize2, Hash, Search, Replace as ReplaceIcon, ChevronUp, ChevronDown, X, Eye, Pencil } from 'lucide-react'
 import { getMacroCatalog } from '@/api/macros'
 import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
+import MessageContent from '@/components/chat/MessageContent'
+import { useStore } from '@/store'
 import {
   findExpandedTextMatches,
   replaceAllExpandedTextMatches,
@@ -267,6 +269,9 @@ export default function ExpandedTextEditor({
   const lastScrolledMatchNavigationRequestRef = useRef(0)
   const macroSearchRef = useRef('')
   const showMacrosRef = useRef(false)
+  const showMarkdownPreviewRef = useRef(false)
+  const [showMarkdownPreview, setShowMarkdownPreview] = useState(false)
+  const previewUserName = useStore((state) => state.user?.name ?? state.user?.username ?? '')
   onCloseRef.current = onClose
 
   const [showMacros, setShowMacros] = useState(false)
@@ -286,6 +291,7 @@ export default function ExpandedTextEditor({
   findQueryRef.current = findQuery
   macroSearchRef.current = macroSearch
   showMacrosRef.current = showMacros
+  showMarkdownPreviewRef.current = showMarkdownPreview
 
   const findMatches = useMemo(
     () => findExpandedTextMatches(value, findQuery),
@@ -446,12 +452,12 @@ export default function ExpandedTextEditor({
     }
     if (!shouldRestoreSelectionRef.current || isComposingRef.current) return
     restoreSelection()
-  }, [initialCursorPos, restoreSelection, value])
+  }, [initialCursorPos, restoreSelection, showMarkdownPreview, value])
 
   useEffect(() => {
     const handleEditorShortcut = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'f') {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'f' && !showMarkdownPreviewRef.current) {
         e.preventDefault()
         e.stopPropagation()
         if (findModeRef.current === 'find') {
@@ -462,7 +468,7 @@ export default function ExpandedTextEditor({
         }
         return
       }
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'h') {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'h' && !showMarkdownPreviewRef.current) {
         e.preventDefault()
         e.stopPropagation()
         if (findModeRef.current === 'replace') {
@@ -588,6 +594,17 @@ export default function ExpandedTextEditor({
     else setFindMode(mode)
   }, [closeFindPanel, findMode])
 
+  const toggleMarkdownPreview = useCallback(() => {
+    if (showMarkdownPreview) {
+      shouldRestoreSelectionRef.current = true
+      shouldFocusSelectionRef.current = true
+    } else {
+      setShowMacros(false)
+      closeFindPanel()
+    }
+    setShowMarkdownPreview(!showMarkdownPreview)
+  }, [closeFindPanel, showMarkdownPreview])
+
   const hasMacros = resolvedMacros.length > 0
   const showHighlight = hasMacros || !!markdownOnly || !!findQuery
   const highlightNodes = useMemo(
@@ -605,7 +622,7 @@ export default function ExpandedTextEditor({
         <div className={s.headerContent}>
           <h3 className={s.title}>{title}</h3>
           <div className={s.toolbar}>
-            {!markdownOnly && (
+            {!markdownOnly && !showMarkdownPreview && (
               <button
                 className={s.toolbarBtn}
                 onClick={() => { if (!showMacros) loadMacros(); setShowMacros(!showMacros) }}
@@ -614,21 +631,34 @@ export default function ExpandedTextEditor({
                 <Hash size={12} /> {showMacros ? t('hideMacros') : t('insertMacro')}
               </button>
             )}
+            {!showMarkdownPreview && (
+              <>
+                <button
+                  className={`${s.toolbarBtn} ${findMode === 'find' ? s.toolbarBtnActive : ''}`}
+                  onClick={() => toggleFindPanel('find')}
+                  type="button"
+                  aria-expanded={findMode === 'find'}
+                >
+                  <Search size={12} /> {t('find')}
+                </button>
+                <button
+                  className={`${s.toolbarBtn} ${findMode === 'replace' ? s.toolbarBtnActive : ''}`}
+                  onClick={() => toggleFindPanel('replace')}
+                  type="button"
+                  aria-expanded={findMode === 'replace'}
+                >
+                  <ReplaceIcon size={12} /> {t('findAndReplace')}
+                </button>
+              </>
+            )}
             <button
-              className={`${s.toolbarBtn} ${findMode === 'find' ? s.toolbarBtnActive : ''}`}
-              onClick={() => toggleFindPanel('find')}
+              className={`${s.toolbarBtn} ${showMarkdownPreview ? s.toolbarBtnActive : ''}`}
+              onClick={toggleMarkdownPreview}
               type="button"
-              aria-expanded={findMode === 'find'}
+              aria-pressed={showMarkdownPreview}
             >
-              <Search size={12} /> {t('find')}
-            </button>
-            <button
-              className={`${s.toolbarBtn} ${findMode === 'replace' ? s.toolbarBtnActive : ''}`}
-              onClick={() => toggleFindPanel('replace')}
-              type="button"
-              aria-expanded={findMode === 'replace'}
-            >
-              <ReplaceIcon size={12} /> {t('findAndReplace')}
+              {showMarkdownPreview ? <Pencil size={12} /> : <Eye size={12} />}
+              {showMarkdownPreview ? t('editMarkdown') : t('previewMarkdown')}
             </button>
           </div>
         </div>
@@ -636,7 +666,7 @@ export default function ExpandedTextEditor({
           <Minimize2 size={18} />
         </button>
       </div>
-      {findMode && (
+      {findMode && !showMarkdownPreview && (
         <div className={s.findPanel}>
           <div className={s.findRow}>
             <Search size={13} className={s.findIcon} />
@@ -742,7 +772,7 @@ export default function ExpandedTextEditor({
         </div>
       )}
       <div className={s.body}>
-        {showMacros && (
+        {showMacros && !showMarkdownPreview && (
           <div className={s.macroSidebar}>
             <div className={s.macroSearch}>
               <div className={s.macroSearchInner}>
@@ -782,7 +812,16 @@ export default function ExpandedTextEditor({
           </div>
         )}
         <div className={s.editorArea}>
-          {showHighlight ? (
+          {showMarkdownPreview ? (
+            <div className={s.markdownPreview}>
+              <MessageContent
+                content={value}
+                isUser={false}
+                userName={previewUserName}
+                disableInterceptors
+              />
+            </div>
+          ) : showHighlight ? (
             <div className={s.highlightContainer}>
               <div className={s.highlightInner}>
                 <pre className={s.highlightPre} aria-hidden="true">{highlightNodes}{'\n'}</pre>

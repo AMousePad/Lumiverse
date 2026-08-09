@@ -95,6 +95,8 @@
     "expandEditor": "Agrandir l'éditeur",
     "hideMacros": "Masquer les macros",
     "insertMacro": "Insérer une macro",
+    "previewMarkdown": "Aperçu Markdown",
+    "editMarkdown": "Modifier le Markdown",
     "searchMacros": "Rechercher des macros..."
   },
   "spindle": {
