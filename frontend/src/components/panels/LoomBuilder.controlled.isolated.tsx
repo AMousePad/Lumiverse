@@ -63,6 +63,10 @@ const MockToggle = Object.assign(NullComponent, {
 
 
 const mainLoomState: Record<string, unknown> = {}
+const mainPresetProfilesState = {
+  isResolved: true,
+  resolvedPresetId: 'main-preset',
+}
 const mainStoreState = {
   presetEditorTabs: [],
   presetEditorToolbarItems: [],
@@ -107,8 +111,8 @@ mock.module('@/hooks/usePresetProfiles', () => ({
     characterBindingEnabled: false,
     activeSource: 'none',
     activeBinding: null,
-    resolvedPresetId: 'main-preset',
-    isResolved: true,
+    resolvedPresetId: mainPresetProfilesState.resolvedPresetId,
+    isResolved: mainPresetProfilesState.isResolved,
     isLoading: false,
     defaults: null,
     chatBinding: null,
@@ -146,7 +150,11 @@ mock.module('@/components/shared/RangeSlider', () => ({
   RangeSlider: NullComponent,
   LabeledRangeSlider: NullComponent,
 }))
-mock.module('@/components/shared/PromptVariablesModal', () => ({ PromptVariablesModal: NullComponent }))
+mock.module('@/components/shared/PromptVariablesModal', () => ({
+  PromptVariablesModal: ({ isOpen }: { isOpen: boolean }) => isOpen
+    ? createElement('div', { 'data-testid': 'prompt-variables-modal' })
+    : null,
+}))
 const MockVariablesEditor = ({
   variables,
   onChange,
@@ -229,8 +237,16 @@ function changedRoleBlock(role: PromptBlock['role'] = 'assistant'): PromptBlock 
   })
 }
 
-function configureMainLoomState(): void {
-  const mainBlock = block({ id: 'main-block', name: 'Main block' })
+function configureMainLoomState(withPromptVariable = false): void {
+  const mainBlock = block({
+    id: 'main-block',
+    name: 'Main block',
+    ...(withPromptVariable
+      ? { variables: [{ id: 'tone', name: 'tone', label: 'Tone', type: 'text' as const, defaultValue: 'warm' }] }
+      : {}),
+  })
+  mainPresetProfilesState.isResolved = true
+  mainPresetProfilesState.resolvedPresetId = 'main-preset'
   Object.assign(mainLoomState, {
     registry: { 'main-preset': { name: 'Main preset', blockCount: 1 } },
     activePresetId: 'main-preset',
@@ -492,6 +508,24 @@ describe('controlled Loom editor trust boundary', () => {
     flushSync(() => editButton!.click())
     expect(container.textContent).toContain('blockEditor.preview')
     expect(container.textContent).toContain('blockEditor.sealedBlockTitle')
+    unmountRoot(root)
+  })
+
+  test('opens prompt variables while the profile cache is still resolving', () => {
+    configureMainLoomState(true)
+    mainPresetProfilesState.isResolved = false
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    flushSync(() => root.render(createElement(LoomBuilder, { compact: true })))
+    mountedRoots.add(root)
+
+    const button = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((entry) => entry.textContent?.includes('actions.configureVariables'))
+    expect(button).toBeDefined()
+    expect(button?.disabled).toBe(false)
+    flushSync(() => button!.click())
+    expect(container.querySelector('[data-testid="prompt-variables-modal"]')).not.toBeNull()
     unmountRoot(root)
   })
 

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { getPreset, getPresetCacheRevision, getPresetRegistrySignature, updatePreset } from "./presets.service";
+import { deletePreset, getPreset, getPresetCacheRevision, getPresetRegistrySignature, reconcileActiveLoomPreset, updatePreset } from "./presets.service";
 import { PresetRevisionConflictError, type PromptBlock } from "../types/preset";
 import { addPromptBlockToStash, removePromptBlockFromStash } from "./prompt-stash.service";
+import * as settingsSvc from "./settings.service";
 
 function initPresetsTestDb(): void {
   closeDatabase();
@@ -27,6 +28,16 @@ function initPresetsTestDb(): void {
     updated_at INTEGER NOT NULL,
     user_id TEXT NOT NULL,
     PRIMARY KEY (key, user_id)
+  )`);
+  getDb().run(`CREATE TABLE connection_profiles (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    preset_id TEXT
+  )`);
+  getDb().run(`CREATE TABLE regex_scripts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    preset_id TEXT
   )`);
 }
 
@@ -174,6 +185,34 @@ describe("presets.service — ETag sources + row trim", () => {
 
     expect(getPreset("u1", "p1")?.name).toBe("newer");
     expect(getPreset("u1", "p1")?.cache_revision).toBe(1);
+  });
+});
+
+describe("presets.service — active preset recovery", () => {
+  test("repairs a legacy deleted selection during settings hydration", () => {
+    insertPreset({ id: "available", name: "Available", provider: "loom", user_id: "u1", updated_at: 100 });
+    settingsSvc.putSetting("u1", "activeLoomPresetId", "already-deleted");
+
+    expect(reconcileActiveLoomPreset("u1")).toBe("available");
+    expect(settingsSvc.getSetting("u1", "activeLoomPresetId")?.value).toBe("available");
+  });
+
+  test("replaces a deleted active preset with the most recently updated remaining Loom preset", () => {
+    insertPreset({ id: "deleted", name: "Deleted", provider: "loom", user_id: "u1", updated_at: 300 });
+    insertPreset({ id: "older", name: "Older", provider: "loom", user_id: "u1", updated_at: 100 });
+    insertPreset({ id: "recent", name: "Recent", provider: "loom", user_id: "u1", updated_at: 200 });
+    settingsSvc.putSetting("u1", "activeLoomPresetId", "deleted");
+
+    expect(deletePreset("u1", "deleted")).toBe(true);
+    expect(settingsSvc.getSetting("u1", "activeLoomPresetId")?.value).toBe("recent");
+  });
+
+  test("clears the active setting when the deleted preset was the final Loom preset", () => {
+    insertPreset({ id: "only", name: "Only", provider: "loom", user_id: "u1" });
+    settingsSvc.putSetting("u1", "activeLoomPresetId", "only");
+
+    expect(deletePreset("u1", "only")).toBe(true);
+    expect(settingsSvc.getSetting("u1", "activeLoomPresetId")?.value).toBeNull();
   });
 });
 

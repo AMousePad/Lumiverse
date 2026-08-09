@@ -184,6 +184,38 @@ export function countPresets(userId: string): number {
   return row?.count ?? 0;
 }
 
+const ACTIVE_LOOM_PRESET_SETTING = "activeLoomPresetId";
+
+/**
+ * Return the active Loom preset when it still exists, otherwise replace a
+ * stale selection with the most recently updated remaining Loom preset.
+ *
+ * Presets can be removed in another tab or on another device. Keeping this
+ * repair server-side means a refresh cannot restore a deleted id and send it
+ * back with the next generation request.
+ */
+export function reconcileActiveLoomPreset(userId: string): string | null {
+  const setting = settingsSvc.getSetting(userId, ACTIVE_LOOM_PRESET_SETTING);
+  const selectedId = typeof setting?.value === "string" && setting.value.trim()
+    ? setting.value
+    : null;
+
+  if (selectedId && getPreset(userId, selectedId)) return selectedId;
+  if (!selectedId) return null;
+
+  const replacement = getDb()
+    .query(
+      `SELECT id FROM presets
+       WHERE user_id = ? AND provider = 'loom'
+       ORDER BY updated_at DESC, created_at DESC, id ASC
+       LIMIT 1`,
+    )
+    .get(userId) as { id: string } | null;
+  const replacementId = replacement?.id ?? null;
+  settingsSvc.putSetting(userId, ACTIVE_LOOM_PRESET_SETTING, replacementId);
+  return replacementId;
+}
+
 /**
  * Find a preset previously installed from LumiHub by its hub preset id (stored in
  * metadata._lumiverse_lumihub_id). Used to update-in-place on re-install instead of
@@ -421,6 +453,11 @@ export function deletePreset(userId: string, id: string): boolean {
 
   const deleted = db.query("DELETE FROM presets WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
   if (!deleted) return false;
+
+  // Preserve a usable active selection for the next page load. This also
+  // repairs stale selections left behind by older versions that did not
+  // update the setting when a preset was removed.
+  reconcileActiveLoomPreset(userId);
 
   // Clean up preset_profile bindings (setting-keyed, no FK) that referenced
   // the now-deleted preset. Covers defaults, per-character, per-chat, and

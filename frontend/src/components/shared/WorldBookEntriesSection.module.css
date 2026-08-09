@@ -583,6 +583,36 @@
   flex-shrink: 0;
 }
 
+.tokenCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.tokenCell:hover:not(:disabled),
+.tokenCell:focus-visible {
+  background: var(--lumiverse-fill-medium, var(--lumiverse-fill-strong));
+  color: var(--lumiverse-text-muted);
+  outline: none;
+}
+
+.tokenCell:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.tokenCell svg {
+  flex-shrink: 0;
+}
+
 .entryActions {
   display: flex;
   align-items: center;

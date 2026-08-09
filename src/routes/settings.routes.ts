@@ -1,12 +1,17 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import * as svc from "../services/settings.service";
+import { reconcileActiveLoomPreset } from "../services/presets.service";
 import { InvalidSettingError } from "../services/settings.service";
 
 const app = new Hono();
 
 app.get("/", (c) => {
   const userId = c.get("userId");
+  // A preset may have been deleted from another session while this browser
+  // was closed. Repair the persisted selection before returning hydration
+  // settings so the client never restores a ghost preset id after refresh.
+  reconcileActiveLoomPreset(userId);
   return c.json(svc.getAllSettings(userId));
 });
 

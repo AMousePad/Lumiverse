@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  FileText,
   GripVertical,
   Hash,
   MoreVertical,
@@ -283,7 +284,7 @@ function EntryTokenCell({ bookId, entry, selected }: { bookId: string; entry: Wo
       title={t('countTokensTitle')}
       aria-label={t('tokenCount', { count: displayedCount.toLocaleString() })}
     >
-      <Hash size={11} aria-hidden="true" />
+      <FileText size={10} aria-hidden="true" />
       <span>{displayedApproximate ? '~' : ''}{displayedCount.toLocaleString()}</span>
     </button>
   )
@@ -438,10 +439,10 @@ function EntryRowContent({
                   <Hash size={10} aria-hidden="true" />
                   <span>{entry.order_value.toLocaleString()}</span>
                 </span>
+                <EntryTokenCell bookId={bookId} entry={entry} selected={selected || expanded} />
               </div>
             </div>
 
-            <EntryTokenCell bookId={bookId} entry={entry} selected={selected || expanded} />
             <div className={styles.entryActions} {...controlWrapProps}>
             <button
               type="button"

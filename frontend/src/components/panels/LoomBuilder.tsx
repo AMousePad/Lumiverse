@@ -1828,9 +1828,16 @@ export default function LoomBuilder({
   ), [activePreset?.id, activePreset?.promptVariables, activeBinding])
   const promptVariableScopeKey = `${activeSource}:${activeSourceId ?? 'none'}:${activePreset?.id ?? 'none'}`
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
+    // Do not make an already-open modal fail merely because a background
+    // profile read has not settled yet. In that case the user is editing the
+    // preset currently shown in Loom, so persist its base values.
+    if (!isResolved || resolvedPresetId !== activePreset?.id) {
+      await savePresetPromptVariableValues(values)
+      return
+    }
     const savedToProfile = await saveActivePromptVariableValues(values)
     if (!savedToProfile) await savePresetPromptVariableValues(values)
-  }, [saveActivePromptVariableValues, savePresetPromptVariableValues])
+  }, [activePreset?.id, isResolved, resolvedPresetId, saveActivePromptVariableValues, savePresetPromptVariableValues])
   const presetEditorTabs = __contextMeterStore((state) => state.presetEditorTabs)
   const presetEditorToolbarItems = __contextMeterStore((state) => state.presetEditorToolbarItems)
   const addToast = __contextMeterStore((s) => s.addToast)
@@ -2828,12 +2835,10 @@ export default function LoomBuilder({
             <button
               type="button"
               className={clsx(s.btn, s.variablesBtn)}
-              onClick={() => {
-                if (presetProfiles.isResolved && presetProfiles.resolvedPresetId === activePreset?.id) {
-                  setShowPromptVariablesModal(true)
-                }
-              }}
-              disabled={!presetProfiles.isResolved || presetProfiles.resolvedPresetId !== activePreset?.id}
+              // A cached profile lookup must not make this action inert. The
+              // input bar opens the same modal from the active preset; Loom
+              // uses base values if the scoped profile is still resolving.
+              onClick={() => setShowPromptVariablesModal(true)}
             >
               <Braces size={14} />
               <span>{lb('actions.configureVariables')}</span>

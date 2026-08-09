@@ -154,12 +154,13 @@ function useGenerationResource<T>(
   loaderRef.current = loader
 
   useEffect(() => {
+    const controllers = controllersRef.current
     mountedRef.current = true
     return () => {
       mountedRef.current = false
       generationRef.current += 1
-      for (const controller of controllersRef.current) controller.abort()
-      controllersRef.current.clear()
+      for (const controller of controllers) controller.abort()
+      controllers.clear()
     }
   }, [])
 
@@ -167,13 +168,14 @@ function useGenerationResource<T>(
     const generation = generationRef.current + 1
     generationRef.current = generation
     const controller = new AbortController()
-    controllersRef.current.add(controller)
+    const controllers = controllersRef.current
+    controllers.add(controller)
 
     if (!key) {
       setState({ value: null, loading: false, error: null })
       return () => {
         controller.abort()
-        controllersRef.current.delete(controller)
+        controllers.delete(controller)
         if (generationRef.current === generation) generationRef.current += 1
       }
     }
@@ -190,12 +192,12 @@ function useGenerationResource<T>(
         setState({ value: null, loading: false, error: isAbortError(error) ? null : errorMessage(error, 'Unable to load this surface') })
       })
       .finally(() => {
-        controllersRef.current.delete(controller)
+        controllers.delete(controller)
       })
 
     return () => {
       controller.abort()
-      controllersRef.current.delete(controller)
+      controllers.delete(controller)
       if (generationRef.current === generation) generationRef.current += 1
     }
   }, [key])
@@ -293,9 +295,11 @@ function useCharacterLibraryGrid(props: Record<string, unknown>) {
   const sortField = stringValue(props.sortField) ?? 'recent'
   const sortDirection = props.sortDirection === 'asc' ? 'asc' : 'desc'
   const search = stringValue(props.search)?.trim() ?? ''
-  const excludeTags = Array.isArray(props.excludeTags)
-    ? props.excludeTags.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
-    : []
+  const excludeTags = useMemo(() => (
+    Array.isArray(props.excludeTags)
+      ? props.excludeTags.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
+      : []
+  ), [props.excludeTags])
   const selectedCharacterId = stringValue(props.selectedCharacterId)
   const viewMode = stringValue(props.viewMode) ?? 'grid'
   const explicitCharacters = useMemo<CharacterSummary[] | null>(() => {
