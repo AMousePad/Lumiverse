@@ -1686,12 +1686,12 @@ export default function LandingPage() {
       {!hasGlobalWallpaper && (
         <>
           <div className={styles.bg}>
-            <div className={clsx(styles.bgGlow, styles.bgGlow1)} />
-            <div className={clsx(styles.bgGlow, styles.bgGlow2)} />
-            <div className={clsx(styles.bgGlow, styles.bgGlow3)} />
+            <div className={clsx(styles.bgGlow, styles.bgGlow1)} data-landing-background-glow />
+            <div className={clsx(styles.bgGlow, styles.bgGlow2)} data-landing-background-glow />
+            <div className={clsx(styles.bgGlow, styles.bgGlow3)} data-landing-background-glow />
           </div>
 
-          <div className={styles.grid} />
+          <div className={styles.grid} data-landing-background-grid />
         </>
       )}
 
