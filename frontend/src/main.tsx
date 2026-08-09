@@ -62,6 +62,9 @@ navigator.serviceWorker?.addEventListener('message', (event) => {
 // the no-keyboard baseline as a per-orientation max so a stuck reduced height
 // can never poison it.
 const hasVirtualKeyboard = navigator.maxTouchPoints > 0
+const isIOS =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 // Real soft keyboards are >150px tall in portrait, >100px in landscape. Treat
 // anything below this floor as an iOS viewport glitch (the stuck ~24px
 // residual), not a keyboard — prevents the input bar floating by a sliver.
@@ -268,6 +271,13 @@ const isStandalone =
 
 if (/^Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) {
   document.documentElement.setAttribute('data-platform', 'macos')
+}
+
+// iPadOS can identify itself as macOS, so use both the iOS user-agent and
+// touch-capable MacIntel checks. Mobile editor surfaces use this to reserve
+// only the status-bar area without shrinking their full-screen frame.
+if (isIOS) {
+  document.documentElement.setAttribute('data-ios', '')
 }
 
 // Mark the native dashboard WebView for desktop-specific behavior. Its macOS

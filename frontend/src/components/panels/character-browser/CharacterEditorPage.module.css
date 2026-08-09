@@ -1149,18 +1149,21 @@
 
 @media (max-width: 600px) {
   .backdrop {
-    box-sizing: border-box;
-    align-items: stretch;
-    padding-top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding: 0;
   }
 
   .modal {
-    width: calc(100vw / var(--lumiverse-ui-scale, 1));
-    max-width: none;
-    max-height: none;
-    height: calc(var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1))) - var(--app-interactive-safe-top, env(safe-area-inset-top, 0px)) - env(safe-area-inset-bottom, 0px));
+    max-width: 100%;
+    max-height: 100%;
+    height: 100%;
     border-radius: 0;
+  }
+
+  /* Keep the editor full-screen; only iOS needs clearance for its
+     status bar. Applying insets to the backdrop shrinks the modal on every
+     edge and leaves a visible gutter around it. */
+  :global(html[data-ios]) .modal {
+    padding-top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
   }
 
   .header {
