@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { handOffChatToExistingTab } from '@/lib/streamDeckHandoff'
+import { openChatInExistingLumiverseTab } from '@/lib/streamDeckHandoff'
 
 export default function StreamDeckHandoffPage() {
   const { chatId = '' } = useParams()
@@ -10,7 +10,7 @@ export default function StreamDeckHandoffPage() {
   useEffect(() => {
     let cancelled = false
 
-    void handOffChatToExistingTab(chatId).then(handled => {
+    void openChatInExistingLumiverseTab(chatId).then(handled => {
       if (cancelled) return
       if (!handled) {
         void navigate(`/chat/${encodeURIComponent(chatId)}`, { replace: true })

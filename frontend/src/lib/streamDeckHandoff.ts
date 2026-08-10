@@ -150,3 +150,29 @@ export function handOffChatToExistingTab(chatId: string, timeoutMs = 500): Promi
     publish({ type: 'open-chat', requestId, sourceTabId: getTabId(), chatId }, channel)
   })
 }
+
+async function handOffChatViaServiceWorker(chatId: string, timeoutMs = 500): Promise<boolean> {
+  const controller = navigator.serviceWorker?.controller
+  if (!controller) return false
+
+  return new Promise(resolve => {
+    const channel = new MessageChannel()
+    let settled = false
+    const finish = (handled: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      channel.port1.close()
+      resolve(handled)
+    }
+    const timer = window.setTimeout(() => finish(false), timeoutMs)
+    channel.port1.onmessage = event => finish(event.data?.handled === true)
+    controller.postMessage({ type: 'STREAM_DECK_OPEN_CHAT', chatId }, [channel.port2])
+  })
+}
+
+/** Prefer the service worker's WindowClient API, then use cross-tab messaging. */
+export async function openChatInExistingLumiverseTab(chatId: string): Promise<boolean> {
+  if (await handOffChatViaServiceWorker(chatId)) return true
+  return handOffChatToExistingTab(chatId)
+}

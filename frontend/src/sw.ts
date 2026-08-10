@@ -101,6 +101,44 @@ registerRoute(
   'PUT'
 )
 
+// ── Stream Deck tab handoff ─────────────────────────────────────────
+// A service worker can enumerate same-origin windows and navigate the chosen
+// client directly. This is more reliable than asking a background page to
+// focus itself, which browsers commonly reject without a browser user gesture.
+self.addEventListener('message', (event) => {
+  if (event.data?.type !== 'STREAM_DECK_OPEN_CHAT' || typeof event.data.chatId !== 'string') return
+
+  const reply = event.ports[0]
+  const sourceId = event.source && 'id' in event.source ? event.source.id : null
+  const path = `/chat/${encodeURIComponent(event.data.chatId)}`
+
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async clients => {
+    const existing = clients.find(client => {
+      if (client.id === sourceId) return false
+      try {
+        const url = new URL(client.url)
+        return url.origin === self.location.origin && !url.pathname.startsWith('/stream-deck/open/')
+      } catch {
+        return false
+      }
+    })
+
+    if (!existing) {
+      reply?.postMessage({ handled: false })
+      return
+    }
+
+    try {
+      const navigated = await existing.navigate(path)
+      if (!navigated) throw new Error('Existing client could not be navigated')
+      try { await navigated.focus() } catch {}
+      reply?.postMessage({ handled: true })
+    } catch {
+      reply?.postMessage({ handled: false })
+    }
+  }))
+})
+
 // ── Push notification handler ───────────────────────────────────────
 self.addEventListener('push', (event) => {
   if (!event.data) return
