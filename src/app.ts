@@ -62,6 +62,7 @@ import { themeAssetsRoutes } from "./routes/theme-assets.routes";
 import { notificationSoundsRoutes } from "./routes/notification-sounds.routes";
 import { bootstrapRoutes } from "./routes/bootstrap.routes";
 import { userDataRoutes } from "./routes/user-data.routes";
+import { streamDeckIntegrationRoutes, streamDeckManagementRoutes } from "./routes/stream-deck.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 import { rateLimit } from "./middleware/rate-limit";
@@ -440,6 +441,10 @@ app.get("/api/v1/image-gen/results/:id", async (c) => {
 });
 
 // Auth middleware — AFTER auth handler, BEFORE routes
+// Stream Deck uses dedicated, hashed, revocable tokens rather than browser
+// sessions. Keep this deliberately narrow and outside the general v1 API.
+app.route("/api/integrations/stream-deck/v1", streamDeckIntegrationRoutes);
+
 app.get("/api/v1/sso-providers/login-options", (c) => {
   return c.json(listSsoLoginOptions());
 });
@@ -508,6 +513,7 @@ app.route("/api/v1/web-search", webSearchRoutes);
 app.route("/api/v1/global-addons", globalAddonsRoutes);
 app.route("/api/v1/bootstrap", bootstrapRoutes);
 app.route("/api/v1/user-data", userDataRoutes);
+app.route("/api/v1/stream-deck", streamDeckManagementRoutes);
 
 // Issue single-use WS tickets (behind auth middleware)
 app.post("/api/v1/ws-ticket", (c) => {

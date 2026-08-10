@@ -4,6 +4,7 @@ import {
   Compass, Reply, HardDrive, Puzzle, Database, Hash, Activity,
   Globe, Bell, Import, Brain, Terminal, Volume2, Plug, Search, UserRound,
   PackageOpen, KeyRound,
+  Keyboard,
 } from 'lucide-react'
 import { useStore } from '@/store'
 import { joinExtensionSettingsTabs } from '@/lib/spindle/settings-tab-bridge'
@@ -247,6 +248,15 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'System health, performance metrics, and debug info',
     tabIcon: Activity,
     keywords: ['diagnostics', 'health', 'performance', 'debug', 'info', 'system', 'status', 'metrics'],
+    component: INLINE_SENTINEL,
+  },
+  {
+    id: 'streamDeck',
+    shortName: 'Stream Deck',
+    tabName: 'Stream Deck Integration',
+    tabDescription: 'Create and revoke restricted tokens for the Stream Deck plugin',
+    tabIcon: Keyboard,
+    keywords: ['stream deck', 'elgato', 'hardware', 'shortcut', 'integration token'],
     component: INLINE_SENTINEL,
   },
 

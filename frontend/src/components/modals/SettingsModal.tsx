@@ -53,6 +53,7 @@ import OperatorPanel from '@/components/settings/OperatorPanel'
 import VoiceSettings from '@/components/settings/VoiceSettings'
 import McpServerSettings from '@/components/settings/mcp-servers/McpServerSettings'
 import DataPortability from '@/components/settings/DataPortability'
+import StreamDeckSettings from '@/components/settings/StreamDeckSettings'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { getVisibleSettingsTabs, sectionAnchorId, SETTINGS_TABS } from '@/lib/settings-tab-registry'
@@ -273,6 +274,8 @@ function SettingsView({ view }: { view: string }) {
       coreContent = <DataPortability />; break
     case 'diagnostics':
       coreContent = <Diagnostics />; break
+    case 'streamDeck':
+      coreContent = <StreamDeckSettings />; break
     case 'migration':
       coreContent = <MigrationSettings />
       break
