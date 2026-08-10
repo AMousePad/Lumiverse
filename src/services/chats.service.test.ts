@@ -14,6 +14,7 @@ import {
   getMessage,
   getMessages,
   getPreviousSameRoleContent,
+  getTrailingVisibleUserMessageIds,
   listHiddenRecentChats,
   listRecentChats,
   listRecentChatsGrouped,
@@ -185,6 +186,32 @@ describe("previous same-role content", () => {
 
     expect(getPreviousSameRoleContent("u1", "chat", true, "user-1"))
       .toBe("hello");
+  });
+});
+
+describe("trailing visible user messages", () => {
+  test("skips hidden turns and stops at the latest visible assistant", () => {
+    seedChat("chat", "c1", "Chat", "{}", 1);
+    seedMessage("assistant", "chat", "reply", {}, { index: 0 });
+    seedMessage("user-1", "chat", "one", {}, { index: 1, isUser: true });
+    seedMessage("hidden-assistant", "chat", "draft", { hidden: true }, { index: 2 });
+    seedMessage("user-2", "chat", "two", {}, { index: 3, isUser: true });
+    seedMessage("hidden-user", "chat", "draft", { hidden: true }, { index: 4, isUser: true });
+
+    expect(getTrailingVisibleUserMessageIds("u1", "chat"))
+      .toEqual(["user-1", "user-2"]);
+    expect(getTrailingVisibleUserMessageIds("other-user", "chat")).toEqual([]);
+  });
+
+  test("paginates through long runs of hidden messages", () => {
+    seedChat("chat", "c1", "Chat", "{}", 1);
+    seedMessage("assistant", "chat", "reply", {}, { index: 0 });
+    seedMessage("user", "chat", "queued", {}, { index: 1, isUser: true });
+    for (let index = 2; index < 140; index++) {
+      seedMessage(`hidden-${index}`, "chat", "draft", { hidden: true }, { index });
+    }
+
+    expect(getTrailingVisibleUserMessageIds("u1", "chat")).toEqual(["user"]);
   });
 });
 

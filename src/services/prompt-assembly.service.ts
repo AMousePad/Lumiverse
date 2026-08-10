@@ -3078,7 +3078,6 @@ export async function assemblePrompt(
       }
 
       let historyCount = 0;
-      const historyParts: string[] = [];
       let chatHistoryYieldCounter = 0;
       for (const msg of effectiveMessages) {
         if (msg.extra?.hidden === true) continue;
@@ -3125,7 +3124,6 @@ export async function assemblePrompt(
             : null;
         const contentForPrompt = mpSpeaker ? `${mpSpeaker}: ${resolvedContent}` : resolvedContent;
 
-        historyParts.push(contentForPrompt);
         if (attachments.length > 0) {
           // Build multipart content: text + attachment parts. Skip the text part
           // when it's blank so strict providers (Anthropic et al) don't reject
@@ -3205,7 +3203,10 @@ export async function assemblePrompt(
         name: "Chat History",
         messageCount: historyCount,
         firstMessageIndex: firstChatIdx,
-        content: historyParts.join("\n"),
+        // Intentionally omit content. The assembled messages are the canonical
+        // history snapshot used for token counting and prompt inspection. A
+        // second joined copy made long-chat worker results and generation WS
+        // events grow by multiple megabytes without adding information.
       });
 
       // Append databank #mention context to the last user message
@@ -7540,10 +7541,19 @@ async function onelinerImpersonation(
 ): Promise<AssemblyResult> {
   const result: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
+  const contextAnchorMessageId =
+    typeof chat.metadata?.context_history_anchor_message_id === "string"
+      ? chat.metadata.context_history_anchor_message_id
+      : null;
+  const contextAnchorIndex = contextAnchorMessageId
+    ? messages.find(
+        (message) =>
+          message.id === contextAnchorMessageId && message.extra?.hidden !== true,
+      )?.index_in_chat
+    : undefined;
 
   // Chat history
   let messageCount = 0;
-  const historyParts: string[] = [];
   let impHistYieldCounter = 0;
   for (const msg of messages) {
     if (msg.extra?.hidden === true) continue;
@@ -7557,15 +7567,23 @@ async function onelinerImpersonation(
       (await evaluate(msg.content, macroEnv, registry)).text,
     );
     const resolvedContent = appendAssociativeRegexContext(visibleResolvedContent, msg);
-    result.push({ role, content: resolvedContent });
-    historyParts.push(resolvedContent);
+    result.push(
+      markAsChatHistory(
+        { role, content: resolvedContent },
+        {
+          id: msg.id,
+          index_in_chat: msg.index_in_chat,
+          metadata: msg.extra?.spindle_metadata,
+        },
+        contextAnchorIndex != null && msg.index_in_chat >= contextAnchorIndex,
+      ),
+    );
     messageCount++;
   }
   breakdown.push({
     type: "chat_history",
     name: "Chat History",
     messageCount,
-    content: historyParts.join("\n"),
   });
 
   // Impersonation prompt
@@ -7647,6 +7665,34 @@ async function onelinerImpersonation(
     connection?.model,
   );
 
+  // One-liner impersonation bypasses the normal preset-block assembly path,
+  // but it must obey the same context budget. Without this, a long chat was
+  // sent to the provider in full even though ordinary generation clipped it.
+  await yieldAndCheckAbort(ctx.signal);
+  const contextClipStats = await clipToContextBudget(
+    result,
+    connection?.model ?? null,
+    parameters.max_context_length as number | null | undefined,
+    parameters.max_tokens as number | null | undefined,
+    ctx.signal,
+  );
+  const historyEntry = breakdown.find((entry) => entry.type === "chat_history");
+  if (historyEntry) {
+    let firstMessageIndex = -1;
+    let retainedMessageCount = 0;
+    for (let index = 0; index < result.length; index++) {
+      if (!isChatHistoryMessage(result[index])) continue;
+      if (firstMessageIndex < 0) firstMessageIndex = index;
+      retainedMessageCount++;
+    }
+    historyEntry.firstMessageIndex =
+      firstMessageIndex >= 0 ? firstMessageIndex : undefined;
+    historyEntry.messageCount = retainedMessageCount;
+    if (contextClipStats.enabled && !contextClipStats.budgetInvalid) {
+      historyEntry.preCountedTokens = contextClipStats.chatHistoryTokensAfter;
+    }
+  }
+
   return {
     messages: result,
     breakdown,
@@ -7654,6 +7700,7 @@ async function onelinerImpersonation(
     trimIncompleteWords: preset?.prompts?.advancedSettings?.trimIncompleteWords === true,
     assistantPrefill,
     assistantReasoningPrefill,
+    contextClipStats,
     macroEnv,
   };
 }
@@ -7863,7 +7910,6 @@ async function legacyAssembly(
 
   const legacyFirstChatIdx = llmMessages.length;
   let legacyHistoryCount = 0;
-  const legacyHistoryParts: string[] = [];
   let legacyHistYieldCounter = 0;
   for (const m of messages) {
     if (m.extra?.hidden === true) continue;
@@ -7879,7 +7925,6 @@ async function legacyAssembly(
       continue;
     }
 
-    legacyHistoryParts.push(resolved);
     if (attachments.length > 0) {
       const parts: import("../llm/types").LlmMessagePart[] = [];
       if (resolved.trim().length > 0) {
@@ -7931,7 +7976,6 @@ async function legacyAssembly(
     type: "chat_history",
     name: "Chat History (legacy)",
     messageCount: legacyHistoryCount,
-    content: legacyHistoryParts.join("\n"),
   });
 
   // Merge consecutive user messages (queued messages) into single LLM turns

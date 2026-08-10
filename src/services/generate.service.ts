@@ -236,16 +236,7 @@ interface GenerationLifecycle {
 }
 
 function collectTrailingUserMessageIds(userId: string, chatId: string): string[] {
-  const messages = chatsSvc.getMessages(userId, chatId);
-  const trailing: string[] = [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message.extra?.hidden === true) continue;
-    if (!message.is_user) break;
-    trailing.push(message.id);
-  }
-  trailing.reverse();
-  return trailing;
+  return chatsSvc.getTrailingVisibleUserMessageIds(userId, chatId);
 }
 
 function injectConnectionMetadataFlags(
@@ -3307,7 +3298,6 @@ async function runGeneration(
       generationId,
       chatId,
       model,
-      breakdown: lifecycle.breakdown,
       targetMessageId: lifecycle.targetMessageId,
       targetSwipeId: lifecycle.streamingSwipeId,
       characterId: lifecycle.targetCharacterId,

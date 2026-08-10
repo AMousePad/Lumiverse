@@ -1955,6 +1955,7 @@ let _stmtMsgAll: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgCount: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgTail: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtMsgRolesBefore: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgGen = -1;
 
 function getMsgStmts() {
@@ -1965,18 +1966,64 @@ function getMsgStmts() {
     _stmtMsgCount = null;
     _stmtMsgTail = null;
     _stmtMsgById = null;
+    _stmtMsgRolesBefore = null;
     _stmtMsgGen = gen;
   }
   if (!_stmtMsgAll) _stmtMsgAll = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC");
   if (!_stmtMsgCount) _stmtMsgCount = db.query("SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ?");
   if (!_stmtMsgTail) _stmtMsgTail = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC LIMIT ?");
   if (!_stmtMsgById) _stmtMsgById = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.id = ? AND c.user_id = ?");
-  return { all: _stmtMsgAll, count: _stmtMsgCount, tail: _stmtMsgTail, byId: _stmtMsgById };
+  if (!_stmtMsgRolesBefore) _stmtMsgRolesBefore = db.query("SELECT m.id, m.index_in_chat, m.is_user, m.extra FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? AND m.index_in_chat < ? ORDER BY m.index_in_chat DESC LIMIT ?");
+  return { all: _stmtMsgAll, count: _stmtMsgCount, tail: _stmtMsgTail, byId: _stmtMsgById, rolesBefore: _stmtMsgRolesBefore };
 }
 
 export function getMessages(userId: string, chatId: string): Message[] {
   const rows = getMsgStmts().all.all(chatId, userId) as any[];
   return rows.map(rowToMessage);
+}
+
+/**
+ * Return the visible user messages at the end of a chat without hydrating the
+ * entire history (including swipe text and per-swipe metadata). Generation
+ * uses this on every normal send to remember which queued user turns were
+ * consumed by the eventual assistant response.
+ */
+export function getTrailingVisibleUserMessageIds(userId: string, chatId: string): string[] {
+  const pageSize = 128;
+  let beforeIndex = Number.MAX_SAFE_INTEGER;
+  const ids: string[] = [];
+
+  while (true) {
+    const rows = getMsgStmts().rolesBefore.all(
+      chatId,
+      userId,
+      beforeIndex,
+      pageSize,
+    ) as Array<{ id: string; index_in_chat: number; is_user: number; extra: string | null }>;
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      let hidden = false;
+      try {
+        const extra = JSON.parse(row.extra || "{}");
+        hidden = extra?.hidden === true;
+      } catch {
+        // Match rowToMessage's malformed-extra fallback: treat it as visible.
+      }
+      if (hidden) continue;
+      if (!row.is_user) {
+        ids.reverse();
+        return ids;
+      }
+      ids.push(row.id);
+    }
+
+    if (rows.length < pageSize) break;
+    beforeIndex = rows[rows.length - 1].index_in_chat;
+  }
+
+  ids.reverse();
+  return ids;
 }
 
 export function listMessages(userId: string, chatId: string, pagination: PaginationParams, opts?: { light?: boolean }): PaginatedResult<Message> {
