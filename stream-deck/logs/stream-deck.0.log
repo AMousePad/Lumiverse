@@ -1,0 +1,12 @@
+2026-08-10T18:19:49.162Z ERROR Process encountered uncaught exception 
+Error: Failed to read manifest.json as the file does not exist.
+    at Lazy.<anonymous> (C:\Users\Darran_2\Lumiverse\stream-deck\com.lumiverse.streamdeck.sdPlugin\bin\plugin.cjs:15863:11)
+    at get value (C:\Users\Darran_2\Lumiverse\stream-deck\com.lumiverse.streamdeck.sdPlugin\bin\plugin.cjs:4382:39)
+    at getManifest (C:\Users\Darran_2\Lumiverse\stream-deck\com.lumiverse.streamdeck.sdPlugin\bin\plugin.cjs:15891:19)
+    at Lazy.<anonymous> (C:\Users\Darran_2\Lumiverse\stream-deck\com.lumiverse.streamdeck.sdPlugin\bin\plugin.cjs:16767:32)
+    at get value (C:\Users\Darran_2\Lumiverse\stream-deck\com.lumiverse.streamdeck.sdPlugin\bin\plugin.cjs:4382:39)
+    at ActionService.registerAction (C:\Users\Darran_2\Lumiverse\stream-deck\com.lumiverse.streamdeck.sdPlugin\bin\plugin.cjs:16947:19)
+    at Object.<anonymous> (C:\Users\Darran_2\Lumiverse\stream-deck\com.lumiverse.streamdeck.sdPlugin\bin\plugin.cjs:17374:24)
+    at Module._compile (node:internal/modules/cjs/loader:1562:14)
+    at Object..js (node:internal/modules/cjs/loader:1699:10)
+    at Module.load (node:internal/modules/cjs/loader:1313:32)
