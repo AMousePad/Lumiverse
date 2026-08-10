@@ -19,6 +19,9 @@
       "UUID": "com.lumiverse.streamdeck.opencharacter",
       "Icon": "imgs/action",
       "PropertyInspectorPath": "ui/property-inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
       "States": [
         {
           "Image": "imgs/action",
@@ -36,7 +39,8 @@
   "Name": "Lumiverse",
   "Icon": "imgs/plugin",
   "Nodejs": {
-    "Version": "20"
+    "Version": "20",
+    "Debug": "enabled"
   },
   "OS": [
     {
@@ -54,5 +58,5 @@
     "MinimumVersion": "6.6"
   },
   "UUID": "com.lumiverse.streamdeck",
-  "Version": "0.1.0.7"
+  "Version": "0.1.0.11"
 }

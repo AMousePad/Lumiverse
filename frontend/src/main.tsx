@@ -10,6 +10,7 @@ import { rememberRegistration } from './lib/swUpdater'
 import { installPwaLifecycleDiagnostics } from './lib/pwaLifecycleDiagnostics'
 import { initializeSafeThemeMode } from './lib/safeThemeMode'
 import { router } from './router'
+import { installStreamDeckHandoffReceiver } from './lib/streamDeckHandoff'
 import ErrorBoundary from './components/shared/ErrorBoundary'
 import './theme/variables.css'
 import './theme/reset.css'
@@ -17,6 +18,7 @@ import './theme/global.css'
 
 installWindowOpenGuard()
 installPwaLifecycleDiagnostics()
+installStreamDeckHandoffReceiver(path => { void router.navigate(path) })
 
 let reloading = false
 

@@ -17331,10 +17331,10 @@ async function getCharacterImage(imageUrl) {
     headers: { Authorization: `Bearer ${settings2.token}` }
   });
   if (!response.ok) throw new Error(`Lumiverse image returned ${response.status}`);
-  const contentType = response.headers.get("content-type") || "image/webp";
-  const dataUrl = `data:${contentType};base64,${Buffer.from(await response.arrayBuffer()).toString("base64")}`;
-  imageCache.set(imageUrl, dataUrl);
-  return dataUrl;
+  const buffer = await response.arrayBuffer();
+  const image = `data:image/png;base64,${Buffer.from(buffer).toString("base64")}`;
+  imageCache.set(imageUrl, image);
+  return image;
 }
 async function getRecentChat(characterId) {
   const query = characterId ? `?characterId=${encodeURIComponent(characterId)}` : "";
@@ -17344,7 +17344,9 @@ async function openChat(characterId) {
   const chat = await getRecentChat(characterId);
   if (!chat) return false;
   const settings2 = await plugin_default.settings.getGlobalSettings();
-  await plugin_default.system.openUrl(`${normalizeServerUrl(settings2.serverUrl)}/chat/${encodeURIComponent(chat.id)}`);
+  await plugin_default.system.openUrl(
+    `${normalizeServerUrl(settings2.serverUrl)}/stream-deck/open/chat/${encodeURIComponent(chat.id)}`
+  );
   return true;
 }
 
@@ -17352,11 +17354,17 @@ async function openChat(characterId) {
 async function applyCharacterAppearance(action2, settings2) {
   if (settings2.characterImageUrl) {
     try {
-      await action2.setImage(await getCharacterImage(settings2.characterImageUrl));
+      plugin_default.logger.info("Loading selected character artwork");
+      const image = await getCharacterImage(settings2.characterImageUrl);
+      plugin_default.logger.info(`Applying character artwork (${image.length} characters)`);
+      await action2.setImage(image);
       await action2.setTitle("");
+      plugin_default.logger.info("Character artwork command sent");
       return;
     } catch (error40) {
       plugin_default.logger.error(`Failed to load character image: ${String(error40)}`);
+      await action2.showAlert();
+      return;
     }
   }
   await action2.setImage();
@@ -17381,13 +17389,16 @@ var _OpenCharacterChat_decorators, _init2, _a2;
 _OpenCharacterChat_decorators = [action({ UUID: "com.lumiverse.streamdeck.opencharacter" })];
 var OpenCharacterChat = class extends (_a2 = SingletonAction) {
   async onWillAppear(event) {
+    if (!event.action.isKey()) return;
     await applyCharacterAppearance(event.action, event.payload.settings);
   }
   async onDidReceiveSettings(event) {
+    if (!event.action.isKey()) return;
     await applyCharacterAppearance(event.action, event.payload.settings);
   }
   async onKeyDown(event) {
     try {
+      if (event.action.isKey()) await applyCharacterAppearance(event.action, event.payload.settings);
       const { characterId } = event.payload.settings;
       if (!characterId || !await openChat(characterId)) await event.action.showAlert();
     } catch (error40) {
@@ -17396,6 +17407,11 @@ var OpenCharacterChat = class extends (_a2 = SingletonAction) {
     }
   }
   async onSendToPlugin(event) {
+    if (event.payload.request === "selectCharacter" && event.payload.settings) {
+      await event.action.setSettings(event.payload.settings);
+      if (event.action.isKey()) await applyCharacterAppearance(event.action, event.payload.settings);
+      return;
+    }
     if (event.payload.request !== "characters") return;
     try {
       await plugin_default.ui.sendToPropertyInspector({ characters: await listCharacters() });

@@ -51,10 +51,10 @@ export async function getCharacterImage(imageUrl: string): Promise<string> {
     headers: { Authorization: `Bearer ${settings.token}` },
   });
   if (!response.ok) throw new Error(`Lumiverse image returned ${response.status}`);
-  const contentType = response.headers.get("content-type") || "image/webp";
-  const dataUrl = `data:${contentType};base64,${Buffer.from(await response.arrayBuffer()).toString("base64")}`;
-  imageCache.set(imageUrl, dataUrl);
-  return dataUrl;
+  const buffer = await response.arrayBuffer();
+  const image = `data:image/png;base64,${Buffer.from(buffer).toString("base64")}`;
+  imageCache.set(imageUrl, image);
+  return image;
 }
 
 export async function getRecentChat(characterId?: string): Promise<{ id: string } | null> {
@@ -66,6 +66,8 @@ export async function openChat(characterId?: string): Promise<boolean> {
   const chat = await getRecentChat(characterId);
   if (!chat) return false;
   const settings = await streamDeck.settings.getGlobalSettings<GlobalSettings>();
-  await streamDeck.system.openUrl(`${normalizeServerUrl(settings.serverUrl)}/chat/${encodeURIComponent(chat.id)}`);
+  await streamDeck.system.openUrl(
+    `${normalizeServerUrl(settings.serverUrl)}/stream-deck/open/chat/${encodeURIComponent(chat.id)}`,
+  );
   return true;
 }
