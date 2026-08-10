@@ -9,6 +9,8 @@ import type {
   HomepageCharacterLibrarySettings,
 } from '@/types/store'
 import { useStore } from '@/store'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/ws/events'
 import { resolveCharacterDisplaySettings } from '@/lib/characterDisplaySettings'
 import {
   applyCharacterPage,
@@ -120,6 +122,36 @@ export function useHomepageCharacterLibrary() {
     const timer = window.setTimeout(() => setDebouncedSearch(search), HOMEPAGE_SEARCH_DEBOUNCE_MS)
     return () => window.clearTimeout(timer)
   }, [search])
+
+  useEffect(() => {
+    if (!settings.enabled) return
+
+    const invalidate = () => {
+      // Both refs must be cleared: retryVersion reruns the fetch effect, and
+      // clearing queryKeyRef forces it to start again at offset 0.
+      settledQueryKeyRef.current = null
+      queryKeyRef.current = null
+      setRetryVersion((version) => version + 1)
+    }
+
+    const unsubscribers = [
+      wsClient.on(EventType.CHARACTER_CREATED, invalidate),
+      wsClient.on(EventType.CHARACTER_EDITED, invalidate),
+      wsClient.on(EventType.CHARACTER_DELETED, invalidate),
+    ]
+
+    if (resolved.query.sortField === 'recent') {
+      unsubscribers.push(
+        wsClient.on(EventType.MESSAGE_SENT, invalidate),
+        wsClient.on(EventType.CHAT_CREATED, invalidate),
+        wsClient.on(EventType.CHAT_CHANGED, invalidate),
+        wsClient.on(EventType.CHAT_DELETED, invalidate),
+        wsClient.on(EventType.CHAT_FORKED, invalidate),
+      )
+    }
+
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe())
+  }, [resolved.query.sortField, settings.enabled])
 
   useEffect(() => {
     if (!settings.enabled) return
