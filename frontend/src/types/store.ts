@@ -609,6 +609,7 @@ export interface PortraitDockSettings {
 
 export interface LorebookEditorSettings {
   defaultVariant: 'full' | 'half'
+  fullEditorLaunchMode: 'windowed' | 'fullscreen'
   triggerDisplay: TriggerDisplayMode
   halfButtonEnabled: boolean
   loreIndicatorActionEnabled: boolean

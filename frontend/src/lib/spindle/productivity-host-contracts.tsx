@@ -13,10 +13,10 @@ import { Waypoints } from 'lucide-react'
 import inputStyles from '@/components/chat/InputArea.module.css'
 import { ResizablePanelFrame } from '@/components/shared/ResizablePanelFrame'
 import {
-  centerEditorRect,
-  clampEditorRectToViewport,
   DEFAULT_MIN_EDITOR_PANE_WIDTH,
   FULL_EDITOR_MIN,
+  MOBILE_EDITOR_MAX_WIDTH,
+  resolveWindowedEditorRect,
 } from '@/lib/lorebookEditorGeometry'
 import { getUiScale } from '@/lib/uiScale'
 import modalStyles from '@/components/modals/WorldBookEditorModal.module.css'
@@ -224,17 +224,16 @@ function EnhancedLorebookWorkspaceSurface({
 }): ReactElement {
   const settings = useStore(store => store.lorebookEditorSettings)
   const setSetting = useStore(store => store.setSetting)
-  const [fullscreen, setFullscreen] = useState(false)
   const [viewport, setViewport] = useState(viewportRect)
+  const [fullscreen, setFullscreen] = useState(() => (
+    viewport.width <= MOBILE_EDITOR_MAX_WIDTH || settings.fullEditorLaunchMode === 'fullscreen'
+  ))
   const backdropPointerDownRef = useRef<EventTarget | null>(null)
   const close = useCallback(
     () => context.emit('command', workspaceCloseCommand(props, state, generation)),
     [context, generation, props, state],
   )
-  const [rect, setRect] = useState(() => centerEditorRect(
-    clampEditorRectToViewport(settings.fullRect, viewport),
-    viewport,
-  ))
+  const [rect, setRect] = useState(() => resolveWindowedEditorRect(settings.fullRect, viewport))
 
   useEffect(() => {
     const resize = () => setViewport(viewportRect())
@@ -244,10 +243,7 @@ function EnhancedLorebookWorkspaceSurface({
 
   useEffect(() => {
     if (fullscreen) return
-    setRect(centerEditorRect(
-      clampEditorRectToViewport(useStore.getState().lorebookEditorSettings.fullRect, viewport),
-      viewport,
-    ))
+    setRect(resolveWindowedEditorRect(useStore.getState().lorebookEditorSettings.fullRect, viewport))
   }, [fullscreen, viewport])
 
   useEffect(() => {
@@ -289,6 +285,7 @@ function EnhancedLorebookWorkspaceSurface({
         onCommit={(fullRect) => {
           if (fullscreen) return
           setRect(fullRect)
+          if (viewport.width <= MOBILE_EDITOR_MAX_WIDTH) return
           setSetting('lorebookEditorSettings', {
             ...useStore.getState().lorebookEditorSettings,
             fullRect,
@@ -296,7 +293,7 @@ function EnhancedLorebookWorkspaceSurface({
         }}
         showHeader={false}
         resizable={!fullscreen}
-        aria-label="Enhanced World Book Editor"
+        aria-label="Full-Screen Lorebook Editor"
         className={`${modalStyles.modal} ${fullscreen ? modalStyles.fullscreen : ''}`}
       >
         <LorebookEditorWorkspace
@@ -305,7 +302,15 @@ function EnhancedLorebookWorkspaceSurface({
           initialEntryId={state.entryId}
           onClose={close}
           fullscreen={fullscreen}
-          onToggleFullscreen={() => setFullscreen(current => !current)}
+          onToggleFullscreen={() => setFullscreen((current) => {
+            if (current) {
+              setRect(resolveWindowedEditorRect(
+                useStore.getState().lorebookEditorSettings.fullRect,
+                viewport,
+              ))
+            }
+            return !current
+          })}
         />
       </ResizablePanelFrame>
     </div>
