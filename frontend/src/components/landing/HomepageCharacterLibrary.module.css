@@ -153,6 +153,11 @@
   min-width: 0;
 }
 
+.grid > .state {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 /*
  * Infinite-scroll furniture. Both span the full grid row (`1 / -1`) so they never get
  * mistaken for a card slot and squeezed into the auto-fill track.
@@ -448,6 +453,11 @@
   cursor: pointer;
 }
 
+.previewControls button:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
 .previewImageFrame {
   position: relative;
   display: grid;
@@ -668,9 +678,19 @@
 }
 
 @media (max-width: 760px) {
-  .header,
+  .header {
+    grid-template-columns: 1fr;
+  }
+
   .body {
     grid-template-columns: 1fr;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .body[data-panel-open='true'] {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .header {
@@ -686,17 +706,89 @@
   }
 
   .library {
+    grid-template-columns: minmax(0, 1fr);
     padding: 12px;
     left: auto;
     width: 100%;
+    min-width: 0;
+    max-width: 100%;
     transform: none;
   }
 
-  .preview[data-pinned='true'] {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--character-grid-gap, 10px);
+  }
+
+  .previewControls {
     position: relative;
-    inset: auto;
-    width: 100%;
+    top: auto;
+    z-index: 10;
+  }
+
+  .previewControls button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .preview[data-pinned] {
+    position: fixed;
+    inset: calc(64px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
+    z-index: var(--z-homepage-preview-panel, 9990);
+    width: auto;
+    max-width: none;
     max-height: none;
+    background-color: var(--lumiverse-bg-deep, #0a0812);
+    overflow: hidden;
+    isolation: isolate;
+  }
+
+  .previewBackdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    border-radius: inherit;
+    pointer-events: none;
+  }
+
+  .previewBackdropGlow {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+  }
+
+  .previewBackdropViewportLayer {
+    position: absolute;
+    pointer-events: none;
+  }
+
+  .preview[data-pinned]::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: inherit;
+    pointer-events: none;
+    background-image: var(--homepage-preview-grid-image, none);
+    background-position: var(--homepage-preview-grid-position, 0 0);
+    background-size: var(--homepage-preview-grid-size, auto);
+    background-repeat: var(--homepage-preview-grid-repeat, repeat);
+    opacity: var(--homepage-preview-grid-opacity, 0);
+  }
+
+  .previewBody {
+    position: relative;
+    z-index: 2;
+  }
+
+  .resizeHandle {
+    display: none;
+  }
+
+  .imageFrame {
+    height: min(var(--character-image-height, 226px), 62vw);
+    min-height: min(var(--character-image-height, 226px), 62vw);
   }
 }
 

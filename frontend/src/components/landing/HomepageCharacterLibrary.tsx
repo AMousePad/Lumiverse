@@ -1,5 +1,5 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { BookOpen, Edit3, MessageSquare, Pin, PinOff, Search, Settings, Star, X } from 'lucide-react'
 import { getCharacterAvatarLargeUrlById } from '@/lib/avatarUrls'
 import { getTagColorVar } from '@/lib/tagColors'
@@ -42,6 +42,55 @@ const PROFILE_TAG_LIMIT = 8
  */
 function tagColorStyle(tag: string): CSSProperties {
   return { '--tag-rgb': getTagColorVar(tag) } as CSSProperties
+}
+
+function readPageBackground() {
+  const root = window.getComputedStyle(document.documentElement)
+  const rootRect = document.documentElement.getBoundingClientRect()
+  const bodyBefore = window.getComputedStyle(document.body, '::before')
+  const bodyAfter = window.getComputedStyle(document.body, '::after')
+  const gridElement = document.querySelector<HTMLElement>('[data-landing-background-grid]')
+  const grid = gridElement ? window.getComputedStyle(gridElement) : null
+  const glows = [...document.querySelectorAll<HTMLElement>('[data-landing-background-glow]')].map((element) => {
+    const style = window.getComputedStyle(element)
+    const rect = element.getBoundingClientRect()
+    return {
+      image: style.backgroundImage,
+      position: style.backgroundPosition,
+      size: style.backgroundSize,
+      repeat: style.backgroundRepeat,
+      opacity: style.opacity,
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    }
+  })
+  return {
+    viewportWidth: rootRect.width,
+    viewportHeight: rootRect.height,
+    base: {
+      color: root.backgroundColor,
+      image: root.backgroundImage,
+      position: root.backgroundPosition,
+      size: root.backgroundSize,
+      repeat: root.backgroundRepeat,
+    },
+    canvasLayers: [bodyBefore, bodyAfter].map((style) => ({
+      image: style.backgroundImage,
+      position: style.backgroundPosition,
+      size: style.backgroundSize,
+      repeat: style.backgroundRepeat,
+      opacity: style.opacity,
+      mixBlendMode: style.mixBlendMode as CSSProperties['mixBlendMode'],
+    })),
+    gridImage: grid?.backgroundImage ?? 'none',
+    gridPosition: grid?.backgroundPosition ?? '0 0',
+    gridSize: grid?.backgroundSize ?? 'auto',
+    gridRepeat: grid?.backgroundRepeat ?? 'repeat',
+    gridOpacity: grid?.display === 'none' ? '0' : (grid?.opacity ?? '0'),
+    glows,
+  }
 }
 
 interface LibraryCardProps {
@@ -157,16 +206,33 @@ export function HomepageCharacterLibrary() {
     setPanelWidth,
     setPanelImageHeight,
   } = useHomepageCharacterLibrary()
+  const selectedCharacterId = selectedCharacter?.id ?? null
 
   // Live drag values. Writing straight to the store on every pointermove queued a debounced
   // server write and re-rendered the whole library ~90 times a second; the store now only
   // sees the committed value on pointer-up.
   const [livePanelWidth, setLivePanelWidth] = useState<number | null>(null)
   const [liveImageHeight, setLiveImageHeight] = useState<number | null>(null)
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () => window.matchMedia('(max-width: 760px)').matches,
+  )
+  const [pageBackground, setPageBackground] = useState(readPageBackground)
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 760px)')
+    const updateViewport = () => setIsMobileViewport(query.matches)
+    query.addEventListener('change', updateViewport)
+    return () => query.removeEventListener('change', updateViewport)
+  }, [])
 
   // Infinite scroll. The sentinel is only mounted while there is another page to ask for,
   // so unmounting it is itself the "stop" signal — the observer below tears down with it.
   const sentinelRef = useRef<HTMLDivElement>(null)
+  const previewRef = useRef<HTMLElement>(null)
+  const closePreviewButtonRef = useRef<HTMLButtonElement>(null)
+  const previewReturnFocusRef = useRef<HTMLElement | null>(null)
+  const wasMobilePreviewOpenRef = useRef(false)
+  const [previewOrigin, setPreviewOrigin] = useState({ left: 0, top: 0, ready: false })
   const showSentinel = hasMore && characters.length > 0
   useEffect(() => {
     const sentinel = sentinelRef.current
@@ -185,6 +251,76 @@ export function HomepageCharacterLibrary() {
     // lands while the sentinel is still inside the root margin produces no new
     // intersection entry, and paging stalls until the user scrolls away and back.
   }, [characters.length, loadMore, loading, showSentinel])
+
+  const handleSelectCharacter = useCallback((id: string) => {
+    if (isMobileViewport && document.activeElement instanceof HTMLElement) {
+      previewReturnFocusRef.current = document.activeElement
+      setPageBackground(readPageBackground())
+    }
+    selectCharacter(id)
+  }, [isMobileViewport, selectCharacter])
+
+  useEffect(() => {
+    const mobilePreviewOpen = Boolean(
+      panelOpen
+      && selectedCharacterId
+      && isMobileViewport,
+    )
+
+    if (mobilePreviewOpen) {
+      wasMobilePreviewOpenRef.current = true
+      const frame = window.requestAnimationFrame(() => closePreviewButtonRef.current?.focus())
+      return () => window.cancelAnimationFrame(frame)
+    }
+
+    if (wasMobilePreviewOpenRef.current) {
+      wasMobilePreviewOpenRef.current = false
+      previewReturnFocusRef.current?.focus()
+      previewReturnFocusRef.current = null
+    }
+  }, [isMobileViewport, panelOpen, selectedCharacterId])
+
+  useLayoutEffect(() => {
+    if (!isMobileViewport || !panelOpen || !previewRef.current) return
+    const preview = previewRef.current
+    const updateOrigin = () => {
+      const rect = preview.getBoundingClientRect()
+      setPreviewOrigin({ left: rect.left, top: rect.top, ready: true })
+    }
+    updateOrigin()
+    const observer = new ResizeObserver(updateOrigin)
+    observer.observe(preview)
+    window.addEventListener('resize', updateOrigin)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateOrigin)
+    }
+  }, [isMobileViewport, panelOpen])
+
+  const handlePreviewKeyDown = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
+    if (isMobileViewport && event.key === 'Escape') {
+      event.preventDefault()
+      closePanel()
+      return
+    }
+
+    if (event.key !== 'Tab' || !isMobileViewport) return
+
+    const focusable = previewRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    )
+    if (!focusable?.length) return
+
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }, [closePanel, isMobileViewport])
 
   const panelWidth = livePanelWidth ?? settings.panelWidth
   const panelImageHeight = liveImageHeight
@@ -237,7 +373,6 @@ export function HomepageCharacterLibrary() {
     ? display.tagRows * 20 + Math.max(display.tagRows - 1, 0) * 4
     : 0
   const compactFooterMaxHeight = 44 + tagRowsMaxHeight
-  const selectedCharacterId = selectedCharacter?.id ?? null
   const selectedAvatarUrl = selectedCharacter
     ? getCharacterAvatarLargeUrlById(selectedCharacter.id, selectedCharacter.image_id)
     : ''
@@ -256,7 +391,7 @@ export function HomepageCharacterLibrary() {
       showTags={showTags}
       tagRows={display.tagRows}
       maxVisibleTags={maxVisibleTags}
-      onSelect={selectCharacter}
+      onSelect={handleSelectCharacter}
       onOpen={openCharacterChat}
     />
   )), [
@@ -265,7 +400,7 @@ export function HomepageCharacterLibrary() {
     display.tagRows,
     maxVisibleTags,
     openCharacterChat,
-    selectCharacter,
+    handleSelectCharacter,
     selectedCharacterId,
     showCreator,
     showNameBackground,
@@ -392,17 +527,86 @@ export function HomepageCharacterLibrary() {
         </div>
 
         {panelOpen && selectedCharacter && (
-          <aside className={styles.preview} data-pinned={settings.panelPinned}>
+          <aside
+            ref={previewRef}
+            className={styles.preview}
+            data-pinned={settings.panelPinned}
+            style={{
+              '--homepage-preview-grid-image': pageBackground.gridImage,
+              '--homepage-preview-grid-position': pageBackground.gridPosition,
+              '--homepage-preview-grid-size': pageBackground.gridSize,
+              '--homepage-preview-grid-repeat': pageBackground.gridRepeat,
+              '--homepage-preview-grid-opacity': pageBackground.gridOpacity,
+            } as CSSProperties}
+            role={isMobileViewport ? 'dialog' : undefined}
+            aria-modal={isMobileViewport || undefined}
+            aria-labelledby={isMobileViewport ? 'homepage-character-preview-title' : undefined}
+            onKeyDown={handlePreviewKeyDown}
+          >
+            {isMobileViewport && previewOrigin.ready && (
+              <div className={styles.previewBackdrop} aria-hidden="true">
+                <span
+                  className={styles.previewBackdropViewportLayer}
+                  style={{
+                    left: -previewOrigin.left,
+                    top: -previewOrigin.top,
+                    width: pageBackground.viewportWidth,
+                    height: pageBackground.viewportHeight,
+                    backgroundColor: pageBackground.base.color,
+                    backgroundImage: pageBackground.base.image,
+                    backgroundPosition: pageBackground.base.position,
+                    backgroundSize: pageBackground.base.size,
+                    backgroundRepeat: pageBackground.base.repeat,
+                  }}
+                />
+                {pageBackground.canvasLayers.map((layer, index) => (
+                  <span
+                    key={`canvas-${index}`}
+                    className={styles.previewBackdropViewportLayer}
+                    style={{
+                      left: -previewOrigin.left,
+                      top: -previewOrigin.top,
+                      width: pageBackground.viewportWidth,
+                      height: pageBackground.viewportHeight,
+                      backgroundImage: layer.image,
+                      backgroundPosition: layer.position,
+                      backgroundSize: layer.size,
+                      backgroundRepeat: layer.repeat,
+                      opacity: layer.opacity,
+                      mixBlendMode: layer.mixBlendMode,
+                    }}
+                  />
+                ))}
+                {pageBackground.glows.map((glow, index) => (
+                  <span
+                    key={index}
+                    className={styles.previewBackdropGlow}
+                    style={{
+                      left: glow.left - previewOrigin.left,
+                      top: glow.top - previewOrigin.top,
+                      width: glow.width,
+                      height: glow.height,
+                      backgroundImage: glow.image,
+                      backgroundPosition: glow.position,
+                      backgroundSize: glow.size,
+                      backgroundRepeat: glow.repeat,
+                      opacity: glow.opacity,
+                    }}
+                  />
+                ))}
+              </div>
+            )}
             <div className={styles.resizeHandle} onPointerDown={beginResize} aria-hidden="true" />
             <div className={styles.previewControls}>
               <button
                 type="button"
+                aria-label={settings.panelPinned ? 'Unpin preview' : 'Pin preview'}
                 title={settings.panelPinned ? 'Unpin preview' : 'Pin preview'}
                 onClick={() => setPanelPinned(!settings.panelPinned)}
               >
                 {settings.panelPinned ? <Pin size={15} /> : <PinOff size={15} />}
               </button>
-              <button type="button" title="Close preview" onClick={closePanel}><X size={16} /></button>
+              <button ref={closePreviewButtonRef} type="button" aria-label="Close preview" title="Close preview" onClick={closePanel}><X size={16} /></button>
             </div>
             <div className={styles.previewBody}>
               <div
@@ -432,7 +636,7 @@ export function HomepageCharacterLibrary() {
               </label>
               <div className={styles.previewHeader}>
                 <div>
-                  <h3>{selectedCharacter.name}</h3>
+                  <h3 id="homepage-character-preview-title">{selectedCharacter.name}</h3>
                   {selectedCharacter.creator && <p>{selectedCharacter.creator}</p>}
                 </div>
                 <Button
