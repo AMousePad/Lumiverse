@@ -578,8 +578,8 @@ export default function LorebookEditorWorkspace({
             <button
               type="button"
               onClick={() => onOpenFullEditor?.(selectedBookId, selectedEntryId)}
-              title="Open full editor"
-              aria-label="Open full editor"
+              title="Full-Screen Lorebook Editor"
+              aria-label="Full-Screen Lorebook Editor"
             >
               <ExternalLink size={14} />
             </button>
