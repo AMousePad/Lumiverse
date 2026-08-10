@@ -246,8 +246,8 @@ export async function getVectorStoreConfigForApi(): Promise<VectorStoreConfigWit
   } else {
     const ownerId = getFirstUserId();
     if (ownerId) {
-      qdrantHasApiKey = !!(await secretsSvc.getSecret(ownerId, QDRANT_API_KEY_SECRET));
-      milvusHasPassword = !!(await secretsSvc.getSecret(ownerId, MILVUS_PASSWORD_SECRET));
+      qdrantHasApiKey = !!(await secretsSvc.getSecretForStatus(ownerId, QDRANT_API_KEY_SECRET));
+      milvusHasPassword = !!(await secretsSvc.getSecretForStatus(ownerId, MILVUS_PASSWORD_SECRET));
     }
   }
   return { ...cfg, managedByEnv, qdrantHasApiKey, milvusHasPassword };

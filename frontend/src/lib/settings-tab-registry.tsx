@@ -7,6 +7,7 @@ import {
   Keyboard,
 } from 'lucide-react'
 import { useStore } from '@/store'
+import { joinExtensionSettingsTabs } from '@/lib/spindle/settings-tab-bridge'
 import { translateSettingsField, translateSettingsSectionTitle } from '@/lib/i18n/resolveLabel'
 import type { Command, CommandScope } from '@/lib/commands'
 
@@ -321,12 +322,14 @@ export function getVisibleSettingsTabs(userRole?: string): SettingsTabEntry[] {
   const isOwner = userRole === 'owner'
   const isAdmin = isOwner || userRole === 'admin'
 
-  return SETTINGS_TABS.filter((tab) => {
+  const visibleCoreTabs = SETTINGS_TABS.filter((tab) => {
     if (!tab.role) return true
     if (tab.role === 'owner') return isOwner
     if (tab.role === 'admin') return isAdmin
     return false
   })
+
+  return joinExtensionSettingsTabs(visibleCoreTabs, userRole, SETTINGS_TABS)
 }
 
 /**

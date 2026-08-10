@@ -107,6 +107,8 @@ export interface PromptBlock {
   categoryMode?: 'radio' | 'checkbox' | null
   variables?: PromptVariableDef[]
   placementBinding?: PromptBlockPlacementBinding
+  /** Stable identity of a user-owned stash entry shared across presets. */
+  stashId?: string
   /** When uploaded to LumiHub, content is extracted into a private sidecar block. */
   sealed?: boolean
   sealedKey?: string
@@ -148,6 +150,7 @@ export interface PromptBehavior {
 
 export interface CompletionSettings {
   assistantPrefill: string
+  reasoningPrefill?: string
   assistantImpersonation: string
   continuePrefill: boolean
   continuePostfix: string
@@ -164,6 +167,7 @@ export interface AdvancedSettings {
   seed: number
   customStopStrings: string[]
   collapseMessages: boolean
+  trimIncompleteWords: boolean
 }
 
 export interface PresetSource {

@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import {
+  addGroupMember,
   addSwipe,
+  applyChatAppearance,
+  branchChat,
   convertSoloChatToGroup,
+  createChat,
   deleteChats,
   getChat,
+  getChatTree,
   cycleSwipe,
   getMessage,
   getMessages,
+  getPreviousSameRoleContent,
+  getTrailingVisibleUserMessageIds,
+  listHiddenRecentChats,
   listRecentChats,
   listRecentChatsGrouped,
   patchMessageExtra,
@@ -154,6 +162,81 @@ afterEach(() => {
   closeDatabase();
 });
 
+describe("previous same-role content", () => {
+  test("finds the nearest earlier message with the same role", () => {
+    seedCharacter("char", "Character");
+    seedChat("chat", "char", "Chat", "{}", 1);
+    seedMessage("greeting", "chat", "hello", {}, { index: 0 });
+    seedMessage("user-1", "chat", "first user", {}, { index: 1, isUser: true });
+    seedMessage("assistant-1", "chat", "first assistant", {}, { index: 2 });
+    seedMessage("user-2", "chat", "second user", {}, { index: 3, isUser: true });
+    seedMessage("assistant-2", "chat", "second assistant", {}, { index: 4 });
+
+    expect(getPreviousSameRoleContent("u1", "chat", true, "user-2"))
+      .toBe("first user");
+    expect(getPreviousSameRoleContent("u1", "chat", false, "assistant-2"))
+      .toBe("first assistant");
+  });
+
+  test("falls back to the greeting when no same-role message exists", () => {
+    seedCharacter("char", "Character");
+    seedChat("chat", "char", "Chat", "{}", 1);
+    seedMessage("greeting", "chat", "hello", {}, { index: 0 });
+    seedMessage("user-1", "chat", "first user", {}, { index: 1, isUser: true });
+
+    expect(getPreviousSameRoleContent("u1", "chat", true, "user-1"))
+      .toBe("hello");
+  });
+});
+
+describe("trailing visible user messages", () => {
+  test("skips hidden turns and stops at the latest visible assistant", () => {
+    seedChat("chat", "c1", "Chat", "{}", 1);
+    seedMessage("assistant", "chat", "reply", {}, { index: 0 });
+    seedMessage("user-1", "chat", "one", {}, { index: 1, isUser: true });
+    seedMessage("hidden-assistant", "chat", "draft", { hidden: true }, { index: 2 });
+    seedMessage("user-2", "chat", "two", {}, { index: 3, isUser: true });
+    seedMessage("hidden-user", "chat", "draft", { hidden: true }, { index: 4, isUser: true });
+
+    expect(getTrailingVisibleUserMessageIds("u1", "chat"))
+      .toEqual(["user-1", "user-2"]);
+    expect(getTrailingVisibleUserMessageIds("other-user", "chat")).toEqual([]);
+  });
+
+  test("paginates through long runs of hidden messages", () => {
+    seedChat("chat", "c1", "Chat", "{}", 1);
+    seedMessage("assistant", "chat", "reply", {}, { index: 0 });
+    seedMessage("user", "chat", "queued", {}, { index: 1, isUser: true });
+    for (let index = 2; index < 140; index++) {
+      seedMessage(`hidden-${index}`, "chat", "draft", { hidden: true }, { index });
+    }
+
+    expect(getTrailingVisibleUserMessageIds("u1", "chat")).toEqual(["user"]);
+  });
+});
+
+describe("chat greeting selection", () => {
+  test("persists the selected greeting index on the chat and greeting message", () => {
+    getDb()
+      .query("UPDATE characters SET first_mes = ?, alternate_greetings = ? WHERE id = ?")
+      .run(
+        "Default greeting",
+        JSON.stringify(["Alternate one", "Alternate two"]),
+        "c1",
+      );
+
+    const chat = createChat("u1", {
+      character_id: "c1",
+      greeting_index: 2,
+    });
+    const greeting = getMessages("u1", chat.id)[0];
+
+    expect(chat.metadata.activeGreetingIndex).toBe(2);
+    expect(greeting?.content).toBe("Alternate two");
+    expect(greeting?.extra.greeting_index).toBe(2);
+  });
+});
+
 describe("chat message search", () => {
   test("searches the active swipe and omits internal injected messages", () => {
     seedChat("chat-find", "c1", "Find", "{}", 100);
@@ -259,6 +342,65 @@ describe("recent chats", () => {
     expect(result.data[0].chat_count).toBe(2);
   });
 
+  test("hides chats marked hidden_from_recent and surfaces the next recent chat", () => {
+    seedChat("c1-old", "c1", "Alpha old", "{}", 100);
+    seedChat("c1-new", "c1", "Alpha new", JSON.stringify({ hidden_from_recent: true }), 200);
+    seedChat("c2-only", "c2", "Beta only", "{}", 150);
+
+    const result = listRecentChatsGrouped("u1", { limit: 10, offset: 0 });
+
+    expect(result.total).toBe(2);
+    expect(result.data.map((chat) => chat.latest_chat_id)).toEqual(["c2-only", "c1-old"]);
+    expect(result.data[1].chat_count).toBe(1);
+  });
+
+  test("lists explicitly hidden chats for the landing-page restore manager", () => {
+    seedChat("visible", "c1", "Visible chat", "{}", 100);
+    seedChat("hidden-solo", "c1", "Hidden chat", JSON.stringify({ hidden_from_recent: true }), 200);
+    seedChat("hidden-group", "c2", "Hidden group", JSON.stringify({
+      hidden_from_recent: true,
+      group: true,
+      character_ids: ["c1", "c2"],
+    }), 300);
+
+    expect(listHiddenRecentChats("u1")).toEqual([
+      expect.objectContaining({ id: "hidden-group", name: "Hidden group", character_name: "Beta", is_group: true }),
+      expect.objectContaining({ id: "hidden-solo", name: "Hidden chat", character_name: "Alpha", is_group: false }),
+    ]);
+  });
+
+  test("pins favorite solo characters before pagination without moving groups", () => {
+    seedChat("favorite-old", "c1", "Favorite", "{}", 100);
+    seedChat("recent", "c2", "Recent", "{}", 300);
+    seedChat("group", "c2", "Group", JSON.stringify({ group: true, character_ids: ["c1", "c2"] }), 200);
+
+    const result = listRecentChatsGrouped(
+      "u1",
+      { limit: 2, offset: 0 },
+      { favoriteCharacterIds: ["c1"] },
+    );
+
+    expect(result.total).toBe(3);
+    expect(result.data.map((chat) => chat.latest_chat_id)).toEqual(["favorite-old", "recent"]);
+  });
+
+  test("hides solo character cards before grouping and pagination but keeps groups", () => {
+    seedChat("c1-old", "c1", "Alpha old", "{}", 100);
+    seedChat("c1-new", "c1", "Alpha new", "{}", 300);
+    seedChat("c2-only", "c2", "Beta only", "{}", 200);
+    seedChat("group", "c1", "Group", JSON.stringify({ group: true, character_ids: ["c1", "c2"] }), 250);
+
+    const result = listRecentChatsGrouped(
+      "u1",
+      { limit: 10, offset: 0 },
+      { hiddenCharacterIds: ["c1"] },
+    );
+
+    expect(result.total).toBe(2);
+    expect(result.data.map((chat) => chat.latest_chat_id)).toEqual(["group", "c2-only"]);
+    expect(result.data[0].is_group).toBe(true);
+  });
+
   test("keeps reasoning scoped to the swipe it belongs to", () => {
     seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
     seedMessage("msg-1", "chat-1", "first swipe", {
@@ -329,6 +471,32 @@ describe("recent chats", () => {
     expect(restoredSecondSwipe.swipe_id).toBe(1);
     expect(restoredSecondSwipe.extra.reasoning).toBeUndefined();
     expect(restoredSecondSwipe.extra.reasoningDuration).toBeUndefined();
+  });
+
+  test("keeps native reasoning carriers scoped to the swipe that produced them", () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "first swipe", {
+      reasoningCarrier: { type: "reasoning_content", content: "first native" },
+    });
+
+    const added = addSwipe("u1", "msg-1", "second swipe")!;
+    patchMessageExtra("u1", "msg-1", {
+      ...added.extra,
+      reasoningCarrier: {
+        type: "reasoning_details",
+        details: [{ type: "reasoning.text", text: "second native" }],
+      },
+    });
+
+    expect(getMessage("u1", "msg-1")!.extra.reasoningCarrier).toEqual({
+      type: "reasoning_details",
+      details: [{ type: "reasoning.text", text: "second native" }],
+    });
+
+    expect(cycleSwipe("u1", "msg-1", "left")!.extra.reasoningCarrier).toEqual({
+      type: "reasoning_content",
+      content: "first native",
+    });
   });
 
   test("keeps generation metadata scoped to the active swipe", () => {
@@ -412,6 +580,23 @@ describe("recent chats", () => {
     ]);
     expect(original.metadata).toEqual({ author_note: "keep me" });
   });
+
+  test("detaches a converted group chat from a solo fork lineage", () => {
+    seedChat("solo-root", "c1", "Alpha chat", "{}", 100);
+    seedMessage("msg-1", "solo-root", "Hello there", {}, { index: 0 });
+
+    const fork = branchChat("u1", "solo-root", "msg-1")!;
+    expect(fork.metadata.branched_from).toBe("solo-root");
+
+    const converted = convertSoloChatToGroup("u1", fork.id)!;
+    const group = addGroupMember("u1", converted.id, "c2", { skip_greeting: true })!;
+
+    expect(group.metadata.group).toBe(true);
+    expect(group.metadata.character_ids).toEqual(["c1", "c2"]);
+    expect(group.metadata.branched_from).toBeUndefined();
+    expect(group.metadata.branch_at_message).toBeUndefined();
+    expect(getChatTree("u1", group.id)?.id).toBe(group.id);
+  });
 });
 
 describe("bulk chat deletion", () => {
@@ -490,5 +675,101 @@ describe("group member alternate fields", () => {
     expect(updated?.metadata.group_alternate_field_selections).toEqual({
       char3: { personality: "quiet" },
     });
+  });
+});
+
+describe("avatar-bound appearance", () => {
+  const appearanceExtensions = {
+    alternate_fields: {
+      description: [{ id: "winter-desc", label: "Winter", content: "Winter coat" }],
+      personality: [{ id: "warm", label: "Warm", content: "Warm personality" }],
+    },
+    alternate_avatars: [{ id: "winter-avatar", image_id: "winter-image", label: "Winter" }],
+    avatar_bindings: {
+      "winter-avatar": {
+        description: "winter-desc",
+        personality: "warm",
+        scenario: null,
+        greeting_index: 1,
+      },
+    },
+  };
+
+  test("selecting an avatar applies its complete field and greeting state", () => {
+    seedCharacterWithExtensions("char1", appearanceExtensions);
+    getDb().query("UPDATE characters SET image_id = ?, first_mes = ?, alternate_greetings = ? WHERE id = ?")
+      .run("primary-image", "Default hello", JSON.stringify(["Winter hello"]), "char1");
+    const chat = createChat("u1", { character_id: "char1", name: "Chat" });
+
+    const result = applyChatAppearance("u1", chat.id, { type: "avatar", avatar_entry_id: "winter-avatar" });
+
+    expect(result?.chat.metadata.active_avatar_id).toBe("winter-image");
+    expect(result?.chat.metadata.active_avatar_entry_id).toBe("winter-avatar");
+    expect(result?.chat.metadata.alternate_field_selections).toEqual({
+      description: "winter-desc",
+      personality: "warm",
+    });
+    expect(result?.chat.metadata.activeGreetingIndex).toBe(1);
+    expect(result?.greeting_message?.content).toBe("Winter hello");
+    expect(result?.greeting_message?.extra.greeting_index).toBe(1);
+  });
+
+  test("selecting a uniquely bound field activates the owning avatar", () => {
+    seedCharacterWithExtensions("char1", appearanceExtensions);
+    getDb().query("UPDATE characters SET alternate_greetings = ? WHERE id = ?")
+      .run(JSON.stringify(["Winter hello"]), "char1");
+    seedChat("chat1", "char1", "Chat", "{}", 1);
+
+    const result = applyChatAppearance("u1", "chat1", {
+      type: "field",
+      field: "description",
+      variant_id: "winter-desc",
+    });
+
+    expect(result?.chat.metadata.active_avatar_id).toBe("winter-image");
+    expect(result?.chat.metadata.alternate_field_selections.personality).toBe("warm");
+  });
+
+  test("an unbound field change does not rewrite an edited greeting", () => {
+    seedCharacterWithExtensions("char1", {
+      alternate_fields: {
+        description: [{ id: "winter-desc", label: "Winter", content: "Winter coat" }],
+      },
+    });
+    getDb().query("UPDATE characters SET first_mes = ? WHERE id = ?").run("Card greeting", "char1");
+    const chat = createChat("u1", { character_id: "char1", name: "Chat" });
+    const greeting = getMessages("u1", chat.id)[0];
+    updateMessage("u1", greeting.id, { content: "User-edited greeting" });
+
+    const result = applyChatAppearance("u1", chat.id, {
+      type: "field",
+      field: "description",
+      variant_id: "winter-desc",
+    });
+
+    expect(result?.greeting_message).toBeUndefined();
+    expect(getMessages("u1", chat.id)[0]?.content).toBe("User-edited greeting");
+  });
+
+  test("stores group member avatars independently", () => {
+    seedCharacterWithExtensions("char1", appearanceExtensions);
+    seedCharacterWithExtensions("char2", appearanceExtensions);
+    getDb().query("UPDATE characters SET alternate_greetings = ? WHERE id IN (?, ?)")
+      .run(JSON.stringify(["Winter hello"]), "char1", "char2");
+    seedChat("chat1", "char1", "Group", JSON.stringify({ group: true, character_ids: ["char1", "char2"] }), 1);
+
+    const result = applyChatAppearance("u1", "chat1", {
+      type: "field",
+      field: "description",
+      variant_id: "winter-desc",
+      character_id: "char2",
+    });
+
+    expect(result?.chat.metadata.group_active_avatar_ids).toEqual({ char2: "winter-image" });
+    expect(result?.chat.metadata.group_alternate_field_selections.char2).toEqual({
+      description: "winter-desc",
+      personality: "warm",
+    });
+    expect(result?.chat.metadata.active_avatar_id).toBeUndefined();
   });
 });

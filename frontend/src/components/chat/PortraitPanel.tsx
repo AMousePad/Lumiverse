@@ -17,6 +17,7 @@ import type { Character, CharacterGalleryItem } from '@/types/api'
 import type { WallpaperRef } from '@/types/store'
 import styles from './PortraitPanel.module.css'
 import clsx from 'clsx'
+import { requestHostIntent } from '@/lib/hostIntents'
 
 interface PortraitPanelProps {
   side?: 'left' | 'right'
@@ -178,7 +179,11 @@ export default function PortraitPanel({ side = 'right', mobileDrawer = false, op
           <div
             className={styles.frame}
             style={frameHeight ? { height: frameHeight } : undefined}
-            onClick={() => setLightboxSrc(getLightboxUrl())}
+            onClick={() => {
+              const imageUrl = getLightboxUrl()
+              if (!imageUrl || requestHostIntent('image-preview', { imageUrl, caption: charName, source: 'portrait-frame' })) return
+              setLightboxSrc(imageUrl)
+            }}
           >
             {/* Previous image — fades out */}
             {prevSrc && (
@@ -234,7 +239,10 @@ export default function PortraitPanel({ side = 'right', mobileDrawer = false, op
                   item={item}
                   className={span}
                   onOpen={(menuItem, pos) => setContextMenu({ item: menuItem, pos })}
-                  onPreview={setLightboxSrc}
+                  onPreview={(imageUrl) => {
+                    if (requestHostIntent('image-preview', { imageUrl, caption: item.caption || charName, source: 'portrait-gallery' })) return
+                    setLightboxSrc(imageUrl)
+                  }}
                 />
               )
             })}

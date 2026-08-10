@@ -57,6 +57,7 @@ import {
   Link,
   Unlink,
   Shield,
+  Archive,
 } from 'lucide-react'
 import clsx from 'clsx'
 import ExpandedTextEditor, { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
@@ -64,7 +65,9 @@ import { ModalShell } from '@/components/shared/ModalShell'
 import { RangeSlider } from '@/components/shared/RangeSlider'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
+import { presetsApi, type StashedPromptBlock } from '@/api/presets'
 import { usePresetProfiles } from '@/hooks/usePresetProfiles'
+import { getEffectivePromptVariableValues } from '@/hooks/preset-profile-prompt-variables'
 import { computeGroups, createBlock, createMarkerBlock, resolvePromptBlockPlacements } from '@/lib/loom/service'
 import { sanitizeCharacterTagTrigger, splitCharacterTagTriggerInput } from '@/lib/loom/characterTagTrigger'
 import {
@@ -86,6 +89,7 @@ import { useStore as __contextMeterStore } from '@/store'
 import { groupBreakdownEntries as __groupBreakdownEntries } from '@/lib/prompt-breakdown'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import { Toggle } from '@/components/shared/Toggle'
+import { PromptStashModal } from './PromptStashModal'
 import { Button } from '@/components/shared/FormComponents'
 import { toast } from '@/lib/toast'
 import { markLoomRuntimeProfileContext } from '@/lib/loom/runtimeProfile'
@@ -305,11 +309,12 @@ interface SortableBlockItemProps {
   onEdit: (block: PromptBlock) => void
   onDelete: (id: string) => void
   onToggle: (id: string) => void
+  onStash?: (block: PromptBlock) => void
   indented: boolean
   dragDisabled?: boolean
 }
 
-function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, indented, dragDisabled = false }: SortableBlockItemProps) {
+function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, onStash, indented, dragDisabled = false }: SortableBlockItemProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
   const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
@@ -339,6 +344,7 @@ function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, i
             {isMarker && <Hash size={12} className={s.blockNameIcon} />}
             {block.isLocked && <Lock size={10} className={clsx(s.blockNameIcon, s.blockNameIconMuted)} />}
             {block.sealed === true && <Shield size={10} className={clsx(s.blockNameIcon, s.blockNameIconSealed)} />}
+            {block.stashId && <Archive size={10} className={clsx(s.blockNameIcon, s.blockNameIconMuted)} />}
             <span className={s.blockNameText}>{block.name}</span>
           </span>
         </div>
@@ -366,6 +372,11 @@ function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, i
       <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={tc('actions.edit')}>
         <Edit2 size={14} />
       </Button>
+      {!isMarker && !block.stashId && onStash && (
+        <Button size="icon-sm" variant="ghost" onClick={() => onStash(block)} title={t('actions.addToStash')}>
+          <Archive size={14} />
+        </Button>
+      )}
       {!block.isLocked && (
         <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title={tc('actions.delete')}>
           <Trash2 size={14} />
@@ -1541,6 +1552,11 @@ function CompletionSettingsPanel({ completionSettings, onSave }: { completionSet
             <span className={s.settingsHint}>{t('settings.assistantPrefillHint')}</span>
           </div>
           <div className={s.settingsField}>
+            <span className={clsx(s.settingsFieldLabel, s.settingsFieldLabelDefault)}>{t('settings.reasoningPrefill')}</span>
+            <textarea className={s.settingsTextarea} style={{ minHeight: '40px' }} value={settings.reasoningPrefill ?? defaults.reasoningPrefill} onChange={e => handleChange('reasoningPrefill', e.target.value)} placeholder={t('settings.reasoningPrefillPlaceholder')} spellCheck={false} />
+            <span className={s.settingsHint}>{t('settings.reasoningPrefillHint')}</span>
+          </div>
+          <div className={s.settingsField}>
             <span className={clsx(s.settingsFieldLabel, s.settingsFieldLabelDefault)}>{t('settings.impersonationPrefill')}</span>
             <textarea className={s.settingsTextarea} style={{ minHeight: '40px' }} value={settings.assistantImpersonation ?? defaults.assistantImpersonation} onChange={e => handleChange('assistantImpersonation', e.target.value)} placeholder={t('settings.impersonationPrefillPlaceholder')} spellCheck={false} />
             <span className={s.settingsHint}>{t('settings.impersonationPrefillHint')}</span>
@@ -1599,9 +1615,10 @@ function AdvancedSettingsPanel({
   const seed = settings.seed ?? defaults.seed
   const stopStrings: string[] = settings.customStopStrings ?? defaults.customStopStrings
   const collapseMessages: boolean = settings.collapseMessages ?? defaults.collapseMessages
+  const trimIncompleteWords: boolean = settings.trimIncompleteWords ?? defaults.trimIncompleteWords
   const namesBehavior = completion.namesBehavior ?? completionDefaults.namesBehavior
 
-  const isActive = seed >= 0 || stopStrings.length > 0 || collapseMessages || namesBehavior !== completionDefaults.namesBehavior
+  const isActive = seed >= 0 || stopStrings.length > 0 || collapseMessages || trimIncompleteWords || namesBehavior !== completionDefaults.namesBehavior
 
   const handleSeedChange = (value: string) => {
     const num = parseInt(value)
@@ -1624,7 +1641,7 @@ function AdvancedSettingsPanel({
       <div className={clsx(s.accordionHeader, isActive && s.accordionHeaderActive)} onClick={() => setIsExpanded(!isExpanded)}>
         <Wrench size={12} style={{ color: isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)', flexShrink: 0 }} />
         <span className={s.accordionTitle}>{t('settings.advanced')}</span>
-        {isActive && <span className={s.accordionBadge}>{(seed >= 0 ? 1 : 0) + (stopStrings.length > 0 ? 1 : 0) + (collapseMessages ? 1 : 0) + (namesBehavior !== completionDefaults.namesBehavior ? 1 : 0)}</span>}
+        {isActive && <span className={s.accordionBadge}>{(seed >= 0 ? 1 : 0) + (stopStrings.length > 0 ? 1 : 0) + (collapseMessages ? 1 : 0) + (trimIncompleteWords ? 1 : 0) + (namesBehavior !== completionDefaults.namesBehavior ? 1 : 0)}</span>}
         {isExpanded ? <ChevronDown size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} /> : <ChevronRight size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} />}
       </div>
       {isExpanded && (
@@ -1668,6 +1685,9 @@ function AdvancedSettingsPanel({
           </div>
           <div className={s.settingsField}>
             <Toggle.Checkbox checked={collapseMessages} onChange={v => onSave({ collapseMessages: v })} label={t('settings.collapseMessages')} hint={t('settings.collapseHint')} />
+          </div>
+          <div className={s.settingsField}>
+            <Toggle.Checkbox checked={trimIncompleteWords} onChange={v => onSave({ trimIncompleteWords: v })} label={t('settings.trimIncompleteWords')} hint={t('settings.trimIncompleteWordsHint')} />
           </div>
         </div>
       )}
@@ -1775,7 +1795,8 @@ export default function LoomBuilder({
     savePromptBehavior,
     saveCompletionSettings,
     saveAdvancedSettings,
-    savePromptVariableValues,
+    savePromptVariableValues: savePresetPromptVariableValues,
+    applyRuntimeBlockProfile,
     updatePresetDraft,
     flushPresetDraft,
     importFromFile,
@@ -1784,7 +1805,39 @@ export default function LoomBuilder({
     exportLegacy,
   } = useLoomBuilder()
 
-  const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
+  const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks, activePreset?.promptVariables)
+  const {
+    activeBinding,
+    activeSource,
+    activeSourceId,
+    activeChatId,
+    activePersonaId,
+    activeCharacterId,
+    activeProfileId,
+    captureDefaults: captureProfileDefaults,
+    defaults,
+    isResolved,
+    resolvedPresetId,
+    saveActivePromptVariableValues,
+    selectResolvedPreset,
+  } = presetProfiles
+  const effectivePromptVariableValues = useMemo(() => getEffectivePromptVariableValues(
+    activePreset?.id,
+    activePreset?.promptVariables ?? {},
+    activeBinding,
+  ), [activePreset?.id, activePreset?.promptVariables, activeBinding])
+  const promptVariableScopeKey = `${activeSource}:${activeSourceId ?? 'none'}:${activePreset?.id ?? 'none'}`
+  const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
+    // Do not make an already-open modal fail merely because a background
+    // profile read has not settled yet. In that case the user is editing the
+    // preset currently shown in Loom, so persist its base values.
+    if (!isResolved || resolvedPresetId !== activePreset?.id) {
+      await savePresetPromptVariableValues(values)
+      return
+    }
+    const savedToProfile = await saveActivePromptVariableValues(values)
+    if (!savedToProfile) await savePresetPromptVariableValues(values)
+  }, [activePreset?.id, isResolved, resolvedPresetId, saveActivePromptVariableValues, savePresetPromptVariableValues])
   const presetEditorTabs = __contextMeterStore((state) => state.presetEditorTabs)
   const presetEditorToolbarItems = __contextMeterStore((state) => state.presetEditorToolbarItems)
   const addToast = __contextMeterStore((s) => s.addToast)
@@ -1792,16 +1845,16 @@ export default function LoomBuilder({
   const suppressNextProfileApplyRef = useRef<string | null>(null)
 
   const getProfileContextKey = useCallback(() => (
-    `${activePresetRef.current?.id ?? 'none'}:${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}:${presetProfiles.activeProfileId ?? 'none'}`
-  ), [presetProfiles.activeChatId, presetProfiles.activeCharacterId, presetProfiles.activeProfileId])
+    `${activePresetRef.current?.id ?? 'none'}:${activeChatId ?? 'none'}:${activePersonaId ?? 'none'}:${activeCharacterId ?? 'none'}:${activeProfileId ?? 'none'}`
+  ), [activeChatId, activePersonaId, activeCharacterId, activeProfileId])
 
   const captureDefaults = useCallback(() => {
     suppressNextProfileApplyRef.current = getProfileContextKey()
-    void presetProfiles.captureDefaults()
-  }, [getProfileContextKey, presetProfiles])
+    void captureProfileDefaults()
+  }, [captureProfileDefaults, getProfileContextKey])
 
   const reapplyDefaults = useCallback(() => {
-    const binding = presetProfiles.defaults
+    const binding = defaults
     if (!binding || !activePreset?.blocks?.length) return
 
     const updatedBlocks = activePreset.blocks.map(b =>
@@ -1810,75 +1863,70 @@ export default function LoomBuilder({
 
     const changed = updatedBlocks.some((b, i) => b.enabled !== activePreset.blocks[i].enabled)
     if (changed) {
-      saveBlocks(updatedBlocks)
+      applyRuntimeBlockProfile(activePreset.id, binding.block_states, binding.prompt_variables ?? {})
       addToast({ type: 'success', message: lb('profiles.reapplied') })
     } else {
       addToast({ type: 'info', message: lb('profiles.alreadyDefault') })
     }
-  }, [presetProfiles.defaults, activePreset, saveBlocks, addToast, lb])
+  }, [defaults, activePreset, applyRuntimeBlockProfile, addToast, lb])
 
-  // Apply the resolved preset profile binding to the active preset's blocks
-  // whenever the chat/character context changes and the hook confirms its
-  // binding state is fresh for that new context (isResolved). Keying off
-  // activeChatId + activeCharacterId — not just the binding reference —
-  // guarantees the effect re-runs on every chat switch, even when two
-  // characters happen to share structurally-identical block states.
-  //
-  // activePreset is read through a ref so user-driven block toggles (which
-  // mutate activePreset) don't re-fire this effect and fight the toggle by
-  // re-applying the binding.
-  const lastProfileContextRef = useRef<string | null>(null)
+  // Profile block states are a runtime overlay. They must never be written
+  // into the shared preset merely because the active chat/persona/connection
+  // changed; doing so lets an unrelated preset save capture the wrong scope.
+  const lastProfileApplicationRef = useRef<string | null>(null)
   activePresetRef.current = activePreset
 
   useEffect(() => {
-    if (!presetProfiles.isResolved) return
+    if (!isResolved) return
 
-    const contextKey = `${activePresetRef.current?.id ?? 'none'}:${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}:${presetProfiles.activeProfileId ?? 'none'}`
-    const contextChanged = lastProfileContextRef.current !== contextKey
+    const contextKey = `${activePresetRef.current?.id ?? 'none'}:${activeChatId ?? 'none'}:${activePersonaId ?? 'none'}:${activeCharacterId ?? 'none'}:${activeProfileId ?? 'none'}`
+    const binding = activeBinding
+    const blockStateKey = binding
+      ? JSON.stringify(Object.entries(binding.block_states).sort(([a], [b]) => a.localeCompare(b)))
+      : 'none'
+    const promptVariableKey = binding?.prompt_variables
+      ? JSON.stringify(binding.prompt_variables)
+      : 'none'
+    const applicationKey = `${contextKey}:${activeSource}:${binding?.preset_id ?? 'none'}:${blockStateKey}:${promptVariableKey}`
+    const applicationChanged = lastProfileApplicationRef.current !== applicationKey
 
     if (
-      presetProfiles.resolvedPresetId
-      && presetProfiles.resolvedPresetId !== activePresetRef.current?.id
-      && (contextChanged || !activePresetRef.current?.id)
+      resolvedPresetId
+      && resolvedPresetId !== activePresetRef.current?.id
+      && (applicationChanged || !activePresetRef.current?.id)
     ) {
-      presetProfiles.selectResolvedPreset()
+      selectResolvedPreset()
       return
     }
 
-    const binding = presetProfiles.activeBinding
-    const currentBlocks = activePresetRef.current?.blocks
-    if (!binding || !currentBlocks?.length) return
-
-    if (!contextChanged) return
+    const activeId = activePresetRef.current?.id
+    if (!activeId || !applicationChanged) return
     if (suppressNextProfileApplyRef.current === contextKey) {
       suppressNextProfileApplyRef.current = null
-      lastProfileContextRef.current = contextKey
-      markLoomRuntimeProfileContext(activePresetRef.current?.id, presetProfiles.activeChatId, presetProfiles.activeCharacterId, presetProfiles.activeProfileId)
+      lastProfileApplicationRef.current = applicationKey
+      markLoomRuntimeProfileContext(activeId, activeChatId, activeCharacterId, activeProfileId)
       return
     }
-    lastProfileContextRef.current = contextKey
-    markLoomRuntimeProfileContext(activePresetRef.current?.id, presetProfiles.activeChatId, presetProfiles.activeCharacterId, presetProfiles.activeProfileId)
-
-    const updatedBlocks = currentBlocks.map(b =>
-      b.id in binding.block_states ? { ...b, enabled: binding.block_states[b.id] } : b
+    lastProfileApplicationRef.current = applicationKey
+    applyRuntimeBlockProfile(activeId, binding?.block_states ?? null, binding?.prompt_variables ?? {})
+    markLoomRuntimeProfileContext(
+      binding ? activeId : null,
+      activeChatId,
+      activeCharacterId,
+      activeProfileId,
     )
-
-    const changed = updatedBlocks.some((b, i) => b.enabled !== currentBlocks[i].enabled)
-    if (changed) {
-      saveBlocks(updatedBlocks)
-    }
   }, [
-    presetProfiles.isResolved,
-    presetProfiles.resolvedPresetId,
-    presetProfiles.selectResolvedPreset,
-    presetProfiles.activeBinding,
-    presetProfiles.activeSource,
-    presetProfiles.activeChatId,
-    presetProfiles.activeCharacterId,
-    presetProfiles.activeProfileId,
-    presetProfiles,
+    isResolved,
+    resolvedPresetId,
+    selectResolvedPreset,
+    activeBinding,
+    activeSource,
+    activeChatId,
+    activePersonaId,
+    activeCharacterId,
+    activeProfileId,
     activePreset?.id,
-    saveBlocks,
+    applyRuntimeBlockProfile,
   ])
 
   const [view, setView] = useState<'list' | 'edit'>('list')
@@ -1891,12 +1939,22 @@ export default function LoomBuilder({
   const [confirmDeletePreset, setConfirmDeletePreset] = useState(false)
   const [showLegacyExportConfirm, setShowLegacyExportConfirm] = useState(false)
   const [showPromptVariablesModal, setShowPromptVariablesModal] = useState(false)
+  const [showPromptStashModal, setShowPromptStashModal] = useState(false)
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const [hoveredAppendRootDropId, setHoveredAppendRootDropId] = useState<string | null>(null)
   const [armedAppendRootDropId, setArmedAppendRootDropId] = useState<string | null>(null)
+
+  useEffect(() => {
+    setShowPromptVariablesModal(false)
+  }, [
+    presetProfiles.activeChatId,
+    presetProfiles.activePersonaId,
+    presetProfiles.activeCharacterId,
+    presetProfiles.activeProfileId,
+  ])
 
   const activePresetEditorTabRef = useRef(activePresetEditorTab)
   const updatePresetDraftRef = useRef(updatePresetDraft)
@@ -2279,6 +2337,29 @@ export default function LoomBuilder({
     setPromptMenuOpen(false)
   }, [addBlock])
 
+  const handleInsertStashedBlock = useCallback((entry: StashedPromptBlock) => {
+    addBlock(createBlock({ ...entry.block, stashId: entry.id }))
+  }, [addBlock])
+
+  const handleUnstash = useCallback((entry: StashedPromptBlock) => {
+    if (!activePreset) return
+    saveBlocks(activePreset.blocks.map((block) => {
+      if (block.stashId !== entry.id) return block
+      const { stashId: _stashId, ...unlinked } = block
+      return unlinked
+    }))
+  }, [activePreset, saveBlocks])
+
+  const handleAddToStash = useCallback(async (block: PromptBlock) => {
+    try {
+      const entry = await presetsApi.addToStash(block, activePreset?.id)
+      updateBlock(block.id, { stashId: entry.id })
+      addToast({ type: 'success', message: lb('actions.addedToStash') })
+    } catch {
+      addToast({ type: 'error', message: lb('actions.stashFailed') })
+    }
+  }, [activePreset?.id, addToast, lb, updateBlock])
+
   const handleAddCategory = useCallback(() => {
     addBlock(createMarkerBlock('category', lb('actions.newCategory')))
   }, [addBlock, lb])
@@ -2574,6 +2655,43 @@ export default function LoomBuilder({
               </button>
             )}
 
+            {/* Bind / unbind active persona. Persona profiles outrank character
+                profiles, so switching persona restores its own writing mode. */}
+            {!presetProfiles.hasPersonaBinding ? (
+              <button
+                className={s.profileBtn}
+                onClick={presetProfiles.bindToPersona}
+                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset || !presetProfiles.activePersonaId}
+                title={
+                  !presetProfiles.activePersonaId ? lb('profiles.noPersona')
+                    : !presetProfiles.hasDefaults ? lb('profiles.captureFirst')
+                      : lb('profiles.bindPersona')
+                }
+                type="button"
+              >
+                <Link size={10} /> {lb('profiles.persona')}
+              </button>
+            ) : (
+              <button
+                className={clsx(s.profileBtn, s.profileBtnActive)}
+                onClick={presetProfiles.bindToPersona}
+                disabled={presetProfiles.isLoading || !presetProfiles.activePersonaId}
+                title={lb('profiles.rebindPersona')}
+                type="button"
+              >
+                <RotateCcw size={10} /> {lb('profiles.persona')}
+                <span
+                  className={s.profileBtnDismiss}
+                  onClick={(e) => { e.stopPropagation(); presetProfiles.unbindPersona() }}
+                  title={lb('profiles.removePersona')}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <X size={8} />
+                </span>
+              </button>
+            )}
+
             {/* Bind / unbind character — hidden in group chats (chat-only) */}
             {presetProfiles.characterBindingEnabled && (!presetProfiles.hasCharacterBinding ? (
               <button
@@ -2687,6 +2805,7 @@ export default function LoomBuilder({
           {presetProfiles.activeSource !== 'none' && (
             <span className={s.profileSourceBadge}>
               {presetProfiles.activeSource === 'chat' ? lb('profiles.sourceChat') :
+               presetProfiles.activeSource === 'persona' ? lb('profiles.sourcePersona') :
                presetProfiles.activeSource === 'character' ? lb('profiles.sourceCharacter') :
                presetProfiles.activeSource === 'connection' ? lb('profiles.sourceConnection') : lb('profiles.sourceDefault')}
             </span>
@@ -2716,6 +2835,9 @@ export default function LoomBuilder({
             <button
               type="button"
               className={clsx(s.btn, s.variablesBtn)}
+              // A cached profile lookup must not make this action inert. The
+              // input bar opens the same modal from the active preset; Loom
+              // uses base values if the scoped profile is still resolving.
               onClick={() => setShowPromptVariablesModal(true)}
             >
               <Braces size={14} />
@@ -2781,6 +2903,7 @@ export default function LoomBuilder({
                           onEdit={handleEdit}
                           onDelete={handleDelete}
                           onToggle={toggleBlock}
+                          onStash={handleAddToStash}
                           indented={!!group.categoryBlock}
                           dragDisabled={isSearchActive}
                         />
@@ -2832,6 +2955,10 @@ export default function LoomBuilder({
               </div>
             )}
           </div>
+
+          <button className={s.btn} onClick={() => setShowPromptStashModal(true)} type="button">
+            <Archive size={14} /> {lb('actions.fromStash')}
+          </button>
 
           <button className={s.btn} onClick={handleAddCategory} type="button">
             <ChevronRight size={14} /> {lb('actions.addCategory')}
@@ -2906,13 +3033,20 @@ export default function LoomBuilder({
 
         {activePreset && (
           <PromptVariablesModal
+            key={promptVariableScopeKey}
             isOpen={showPromptVariablesModal}
             blocks={activePreset.blocks}
-            values={activePreset.promptVariables ?? {}}
+            values={effectivePromptVariableValues}
             onSave={savePromptVariableValues}
             onClose={() => setShowPromptVariablesModal(false)}
           />
         )}
+        <PromptStashModal
+          isOpen={showPromptStashModal}
+          onClose={() => setShowPromptStashModal(false)}
+          onSelect={handleInsertStashedBlock}
+          onUnstash={handleUnstash}
+        />
       </div>
     </PanelFadeIn>
   )

@@ -1,7 +1,9 @@
-import { get, post, put, del, upload, uploadWithProgress, getBlob, BASE_URL } from './client'
+import { get, post, put, del, upload, uploadWithProgress, getBlob, BASE_URL, type RequestOptions } from './client'
 import { triggerBlobDownload } from '@/lib/downloads'
 import type {
   Character,
+  CharacterLibraryScope,
+  CharacterPreview,
   CharacterPerspectiveLayer,
   CharacterSummary,
   TagCount,
@@ -13,6 +15,7 @@ import type {
   BatchDeleteResult,
   BulkTagResult,
   TagLibraryImportResult,
+  CharacterFolderMutationResponse,
 } from '@/types/api'
 
 export interface SummaryParams {
@@ -26,6 +29,8 @@ export interface SummaryParams {
   filter?: string
   favorite_ids?: string
   seed?: number
+  chat_id?: string
+  scope?: CharacterLibraryScope
 }
 
 export type CharacterPerspectiveLayerKind = 'background' | 'framing' | 'subject'
@@ -36,8 +41,14 @@ export const charactersApi = {
     return get<PaginatedResult<Character>>('/characters', params)
   },
 
-  listSummaries(params?: SummaryParams) {
-    return get<PaginatedResult<CharacterSummary>>('/characters/summary', params)
+  listSummaries(params?: SummaryParams, signal?: AbortSignal) {
+    const options: RequestOptions | undefined = signal === undefined ? undefined : { signal }
+    return get<PaginatedResult<CharacterSummary>>('/characters/summary', params, options)
+  },
+
+  getHomepagePreview(id: string, signal?: AbortSignal) {
+    const options: RequestOptions | undefined = signal === undefined ? undefined : { signal }
+    return get<CharacterPreview>(`/characters/${id}/homepage-preview`, undefined, options)
   },
 
   listTags() {
@@ -159,6 +170,21 @@ export const charactersApi = {
 
   bulkUpdateTags(ids: string[], operation: 'add' | 'remove' | 'replace', tags: string[]) {
     return post<BulkTagResult>('/characters/bulk-tags', { ids, operation, tags })
+  },
+
+  renameFolder(oldName: string, newName: string) {
+    return post<CharacterFolderMutationResponse>('/characters/folders/rename', {
+      old_name: oldName,
+      new_name: newName,
+    })
+  },
+
+  deleteFolder(name: string) {
+    return post<CharacterFolderMutationResponse>('/characters/folders/delete', { name })
+  },
+
+  bulkUpdateFolder(ids: string[], folder: string) {
+    return post<CharacterFolderMutationResponse>('/characters/bulk-update', { ids, folder })
   },
 
   async exportCharacter(id: string, format: 'json' | 'png' | 'charx', characterName?: string) {

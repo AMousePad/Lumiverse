@@ -1,5 +1,6 @@
-import { useEffect, useMemo } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { Outlet } from 'react-router'
+import { listen } from '@tauri-apps/api/event'
 import { useTranslation } from 'react-i18next'
 import { LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import { useWebSocket } from '@/ws/useWebSocket'
@@ -12,14 +13,18 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
 import ViewportDrawer from '@/components/panels/ViewportDrawer'
+import CharacterEditorPage from '@/components/panels/character-browser/CharacterEditorPage'
 import ModalContainer from '@/components/modals/ModalContainer'
 import SpindleUIManager from '@/components/spindle/SpindleUIManager'
 import ToastContainer from '@/components/shared/ToastContainer'
 import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
-import DesktopPwaTitlebar from '@/components/shared/DesktopPwaTitlebar'
 import useIsMobile from '@/hooks/useIsMobile'
+import {
+  clampCustomCSSDockSize,
+  CUSTOM_CSS_DOCK_BREAKPOINT,
+} from '@/lib/custom-css-dock'
 import { useBadging } from '@/hooks/useBadging'
 import { useTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { useAutoSummarization } from '@/hooks/useAutoSummarization'
@@ -29,7 +34,18 @@ import { RouterContextExporter } from '@/lib/router-bridge'
 import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
 import { installNotificationAudioPrimer } from '@/lib/notificationAudio'
 import { getSafeThemeState } from '@/lib/safeThemeMode'
+import DesktopFloatingWidgetHost from '@/components/spindle/DesktopFloatingWidgetHost'
+import {
+  buildDesktopFloatingWidgetCatalog,
+  type DesktopFloatingWidgetCatalogEntry,
+  type DesktopFloatingWidgetPopoutState,
+  isDesktopFloatingWidgetWindow,
+  publishDesktopFloatingWidgetCatalog,
+  resizeDesktopFloatingWidget,
+} from '@/lib/desktop-floating-widget'
 import styles from './App.module.css'
+
+const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
 
 export default function App() {
   const { t } = useTranslation('common')
@@ -49,6 +65,11 @@ export default function App() {
   useEffect(() => installNotificationAudioPrimer(), [])
 
   const isMobile = useIsMobile()
+  const customCSSDockUnavailable = useIsMobile(CUSTOM_CSS_DOCK_BREAKPOINT)
+  const customCSSDockOpen = useStore((s) => s.customCSSDockOpen)
+  const customCSSDockSize = useStore((s) => s.customCSSDockSize)
+  const customCSSDockSide = useStore((s) => s.customCSSDockSide)
+  const closeCustomCSSDock = useStore((s) => s.closeCustomCSSDock)
   const dockPanels = useStore((s) => s.dockPanels)
   const hiddenPlacements = useStore((s) => s.hiddenPlacements)
   const dockPanelDesktopSide = useStore((s) => s.spindleSettings.dockPanelDesktopSide)
@@ -56,6 +77,93 @@ export default function App() {
   const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
   const sceneBackground = useStore((s) => s.sceneBackground)
   const globalWallpaperHidden = !!activeChatWallpaper?.image_id || !!sceneBackground
+  const editingCharacterId = useStore((s) => s.editingCharacterId)
+  const floatWidgets = useStore((s) => s.floatWidgets)
+  const extensions = useStore((s) => s.extensions)
+  const lastDesktopCatalog = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (customCSSDockUnavailable && customCSSDockOpen) {
+      closeCustomCSSDock()
+    }
+  }, [customCSSDockUnavailable, customCSSDockOpen, closeCustomCSSDock])
+
+  // Native child windows send their resized bounds back here. Keeping the
+  // primary placement registry current means a later extension setSize call
+  // grows from the user's actual widget size instead of the launch default.
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
+    let unlisten: (() => void) | undefined
+    void listen<DesktopFloatingWidgetCatalogEntry>('desktop-widget-size', ({ payload }) => {
+      useStore.getState().updateFloatWidget(payload.id, {
+        width: payload.width,
+        height: payload.height,
+      })
+    }).then((stop) => { unlisten = stop })
+    return () => { unlisten?.() }
+  }, [])
+
+  // The native tray owns opening and returning pop-outs. Its lifecycle event
+  // determines whether this page renders the extension widget's root.
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
+    let unlisten: (() => void) | undefined
+    void listen<DesktopFloatingWidgetPopoutState>('desktop-widget-popout-state', ({ payload }) => {
+      if (!payload || typeof payload.id !== 'string' || typeof payload.poppedOut !== 'boolean') return
+      const widget = useStore.getState().floatWidgets.find((entry) => entry.id === payload.id)
+      useStore.getState().updateFloatWidget(payload.id, { desktopPoppedOut: payload.poppedOut })
+      if (!payload.poppedOut && widget) {
+        // The page extension remains loaded while its widget root is handed to
+        // a native WebView. Tell it that the root has returned so extensions
+        // with live backend state can explicitly refresh their page instance.
+        window.dispatchEvent(new CustomEvent('spindle:desktop-widget-returned', {
+          detail: { widgetId: widget.id, extensionId: widget.extensionId },
+        }))
+      }
+    }).then((stop) => { unlisten = stop })
+    return () => { unlisten?.() }
+  }, [])
+
+  // FloatWidgetHandle.setSize emits this internal frontend event. A desktop
+  // child window can resize immediately instead of waiting for the normal
+  // catalog synchronization effect below.
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
+    const handleSizeRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ widgetId?: unknown; width?: unknown; height?: unknown }>).detail
+      if (
+        !detail ||
+        typeof detail.widgetId !== 'string' ||
+        typeof detail.width !== 'number' ||
+        typeof detail.height !== 'number' ||
+        !Number.isInteger(detail.width) ||
+        !Number.isInteger(detail.height)
+      ) return
+      console.info('[desktop-widget] primary frontend received size request', detail)
+      void resizeDesktopFloatingWidget(detail.widgetId, detail.width, detail.height)
+        .then(() => console.info('[desktop-widget] primary frontend forwarded size request', detail))
+        .catch((error) => console.warn('[desktop-widget] primary frontend failed to forward size request', detail, error))
+    }
+    window.addEventListener('spindle:float-size-request', handleSizeRequest)
+    return () => window.removeEventListener('spindle:float-size-request', handleSizeRequest)
+  }, [])
+
+  useEffect(() => {
+    if (isDesktopFloatingWidgetWindow()) return
+    const catalog = buildDesktopFloatingWidgetCatalog(floatWidgets, extensions)
+    const serialized = JSON.stringify(catalog)
+    if (serialized === lastDesktopCatalog.current) return
+    lastDesktopCatalog.current = serialized
+    void publishDesktopFloatingWidgetCatalog(catalog).catch(() => {
+      // Browser/PWA clients deliberately do not have the desktop command.
+    })
+  }, [floatWidgets, extensions])
+
+  const customCSSDockInset = useMemo(() => {
+    if (!customCSSDockOpen || customCSSDockUnavailable) return 0
+
+    return clampCustomCSSDockSize(customCSSDockSize, window.innerWidth)
+  }, [customCSSDockOpen, customCSSDockSize, customCSSDockUnavailable])
 
   const dockInsets = useMemo(() => {
     let left = 0, right = 0, top = 0, bottom = 0
@@ -70,8 +178,22 @@ export default function App() {
         case 'bottom': bottom = Math.max(bottom, size); break
       }
     }
+
+    if (customCSSDockSide === 'left') {
+      left = Math.max(left, customCSSDockInset)
+    } else {
+      right = Math.max(right, customCSSDockInset)
+    }
+
     return { left, right, top, bottom }
-  }, [dockPanels, hiddenPlacements, isMobile, dockPanelDesktopSide])
+  }, [
+    dockPanels,
+    hiddenPlacements,
+    isMobile,
+    dockPanelDesktopSide,
+    customCSSDockInset,
+    customCSSDockSide,
+  ])
 
   const openDrawer = useStore((s) => s.openDrawer)
   const setDrawerTab = useStore((s) => s.setDrawerTab)
@@ -159,8 +281,8 @@ export default function App() {
     }
   }, [modalWidthMode, modalMaxWidth])
 
-  return (
-    <AuthGuard>
+  const content = isDesktopFloatingWidgetWindow() ? <DesktopFloatingWidgetHost /> : (
+    <>
       <LazyMotion features={domAnimation} strict={false}>
         <MotionConfig reducedMotion="user">
           <div
@@ -173,29 +295,40 @@ export default function App() {
               '--spindle-dock-bottom': `${dockInsets.bottom}px`,
             } as React.CSSProperties}
           >
-            <DesktopPwaTitlebar />
-            {safeTheme.active && (
-              <div className={styles.safeThemeBanner} role="status">
-                {t(`safeTheme.${safeTheme.source ?? 'url'}`)}
-              </div>
-            )}
-            <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
-            <ErrorBoundary label="App">
-              {/* Mirrors react-router context out to detached drawer-tab roots */}
-              <RouterContextExporter />
-              <main className={styles.main}>
-                <Outlet />
-              </main>
-              <ViewportDrawer />
-              <ModalContainer />
-              <SpindleUIManager />
-              <ToastContainer />
-              <ChatHeads />
-              <ConnectionLostOverlay />
-            </ErrorBoundary>
+              {safeTheme.active && (
+                <div className={styles.safeThemeBanner} role="status">
+                  {t(`safeTheme.${safeTheme.source ?? 'url'}`)}
+                </div>
+              )}
+              <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
+              <ErrorBoundary label="App">
+                {/* Mirrors react-router context out to detached drawer-tab roots */}
+                <RouterContextExporter />
+                <main className={styles.main}>
+                  <Outlet />
+                </main>
+                <ViewportDrawer />
+                {editingCharacterId && <CharacterEditorPage />}
+                <ModalContainer />
+                {customCSSDockOpen && !customCSSDockUnavailable && (
+                  <Suspense fallback={null}>
+                    <CustomCSSDock />
+                  </Suspense>
+                )}
+                <SpindleUIManager />
+                <ToastContainer />
+                <ChatHeads />
+                <ConnectionLostOverlay />
+              </ErrorBoundary>
           </div>
         </MotionConfig>
       </LazyMotion>
+    </>
+  )
+
+  return (
+    <AuthGuard>
+      {content}
     </AuthGuard>
   )
 }

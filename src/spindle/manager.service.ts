@@ -20,14 +20,27 @@ import {
   statSync,
   copyFileSync,
   cpSync,
+  realpathSync,
 } from "fs";
 import { join, resolve, dirname, sep } from "path";
 import { getUserExtensionPath } from "../auth/provision";
 import { spawnAsync, type SpawnAsyncResult } from "./spawn-async";
 import { normalizeSpindleHttpsUrl } from "./url-safety";
 import { bunCmd } from "../utils/bun-cmd";
+import {
+  assertOwnGitRepositoryPath,
+  resetGitRepositoryToRemoteHead,
+} from "./git-repository";
 
 export type InstallScope = "operator" | "user";
+export interface ExtensionUpdateCandidate {
+  id: string;
+  identifier: string;
+  name: string;
+  version: string;
+  branch: string | null;
+}
+
 function isManagedPermission(permission: string): permission is SpindlePermission {
   return isValidPermission(permission);
 }
@@ -69,6 +82,10 @@ const DANGEROUS_BUN_PROPERTIES = new Set(["file", "write", "spawn", "spawnSync",
 const DANGEROUS_PROCESS_PROPERTIES = new Set(["env", "exit", "kill", "chdir", "dlopen"]);
 const WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE = "LUMIVERSE_FORCE_SPINDLE_ASYNC_BUN";
 const warnedWindowsSpindleBunFallback = new Set<string>();
+const backendSafetyScanCache = new Map<string, {
+  signature: string;
+  blocked: string[];
+}>();
 
 const DANGEROUS_BACKEND_CHECKS: BackendSafetyCheck[] = [
   {
@@ -603,10 +620,20 @@ async function assertSafeBackendBundle(
 ): Promise<void> {
   if (!(await Bun.file(backendPath).exists())) return;
 
-  const blocked = detectDangerousBackendCapabilities(
-    await Bun.file(backendPath).text(),
-    declared,
-  );
+  const stat = statSync(backendPath);
+  const declaredKey = [...declared].sort().join(",");
+  const signature = `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${declaredKey}`;
+  const cached = backendSafetyScanCache.get(backendPath);
+  let blocked: string[];
+  if (cached?.signature === signature) {
+    blocked = cached.blocked;
+  } else {
+    blocked = detectDangerousBackendCapabilities(
+      await Bun.file(backendPath).text(),
+      declared,
+    );
+    backendSafetyScanCache.set(backendPath, { signature, blocked });
+  }
   if (blocked.length === 0) return;
 
   throw new Error(
@@ -1325,7 +1352,6 @@ export async function install(
 // ─── Update ──────────────────────────────────────────────────────────────
 
 const LOCAL_GIT_COMMAND_TIMEOUT_MS = 15_000;
-const GIT_PULL_TIMEOUT_MS = 60_000;
 const GIT_FETCH_TIMEOUT_MS = 30_000;
 
 function spawnFailureReason(
@@ -1356,6 +1382,45 @@ async function runGitStep(
   );
 }
 
+function canonicalRealpath(path: string): string {
+  return realpathSync.native(path);
+}
+
+function pathIdentity(path: string): string {
+  const normalized = resolve(path);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+/** Verify the extension directory is its own Git root before mutations. */
+export async function assertOwnedExtensionGitRoot(repo: string): Promise<string> {
+  let canonicalRepo: string;
+  try {
+    canonicalRepo = canonicalRealpath(repo);
+  } catch (error) {
+    throw new Error(`Git root confinement failed for ${repo}: unable to resolve the repository path (${String(error)})`);
+  }
+  const proc = Bun.spawnSync({ cmd: ["git", "rev-parse", "--show-toplevel"], cwd: canonicalRepo, stdout: "pipe", stderr: "pipe" });
+  const stdout = proc.stdout?.toString() ?? "";
+  const stderr = proc.stderr?.toString() ?? "";
+  if (proc.exitCode !== 0) {
+    throw new Error(`Git root confinement failed for ${repo}: git rev-parse --show-toplevel failed: ${stderr.trim() || stdout.trim() || `exit code ${proc.exitCode}`}`);
+  }
+  const roots = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (roots.length !== 1) {
+    throw new Error(`Git root confinement failed for ${repo}: git rev-parse --show-toplevel returned empty or multiple roots`);
+  }
+  let canonicalGitRoot: string;
+  try {
+    canonicalGitRoot = canonicalRealpath(roots[0]);
+  } catch (error) {
+    throw new Error(`Git root confinement failed for ${repo}: unable to resolve Git root ${roots[0]} (${String(error)})`);
+  }
+  if (pathIdentity(canonicalRepo) !== pathIdentity(canonicalGitRoot)) {
+    throw new Error(`Git root confinement failed for ${repo}: deployed repo ${canonicalRepo} does not equal Git root ${canonicalGitRoot}`);
+  }
+  return canonicalRepo;
+}
+
 export async function update(identifier: string): Promise<ExtensionInfo> {
   const repo = repoDir(identifier);
   if (!existsSync(repo)) {
@@ -1364,28 +1429,22 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
 
   // Read manifest up-front so we can honor `dev_mode` before touching the
   // working tree. Extensions with `dev_mode: true` keep their local repo
-  // contents intact — we skip the git checkout/clean/pull and just rebuild
+  // contents intact — we skip the remote reset and just rebuild
   // + relaunch from whatever the developer has on disk.
   const initialManifest = await readManifest(identifier);
   const devMode = (initialManifest as { dev_mode?: boolean }).dev_mode === true;
 
   if (!devMode) {
-    // Clean build artifacts and installed dependencies so git pull succeeds.
-    // We don't read stdout for these — ignore it to reduce pipe overhead.
-    await runGitStep(repo, ["git", "checkout", "."], "git checkout .", {
-      timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
-      ignoreStdout: true,
-    });
-    await runGitStep(repo, ["git", "clean", "-fd"], "git clean -fd", {
-      timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
-      ignoreStdout: true,
-    });
-    await runGitStep(repo, ["git", "pull"], "git pull", {
-      timeoutMs: GIT_PULL_TIMEOUT_MS,
-    });
+    await assertOwnedExtensionGitRoot(repo);
+    // Fetch the checked-out branch first so a remote failure leaves the local
+    // checkout untouched.
+    await resetGitRepositoryToRemoteHead(
+      repo,
+      `Extension "${identifier}"`
+    );
   }
 
-  // Re-read manifest — in non-dev mode the pull may have modified it; in
+  // Re-read manifest — in non-dev mode the remote reset may have modified it; in
   // dev mode we already have the current version.
   const manifest = devMode ? initialManifest : await readManifest(identifier);
 
@@ -1558,6 +1617,26 @@ export async function list(): Promise<ExtensionInfo[]> {
   return Promise.all(rows.map(rowToExtensionInfo));
 }
 
+/** Lightweight rows for the periodic remote-HEAD monitor. */
+export function listExtensionUpdateCandidates(): ExtensionUpdateCandidate[] {
+  const db = getDb();
+  const rows = db
+    .query(
+      `SELECT id, identifier, name, version, branch
+       FROM extensions
+       WHERE enabled = 1
+       ORDER BY installed_at DESC`
+    )
+    .all() as Array<{
+      id: string;
+      identifier: string;
+      name: string;
+      version: string;
+      branch: string | null;
+    }>;
+  return rows.map((row) => ({ ...row, branch: row.branch || null }));
+}
+
 export async function listForUser(userId: string, role: string | null | undefined): Promise<ExtensionInfo[]> {
   if (role === "owner" || role === "admin") {
     return list();
@@ -1615,6 +1694,27 @@ export function canManageExtension(
   );
 }
 
+/** Lightweight ID-only variant used by frequent cached-status polling. */
+export function getManageableExtensionIdsForUser(
+  userId: string,
+  role: string | null | undefined
+): string[] {
+  const db = getDb();
+  if (role === "owner" || role === "admin") {
+    return (db.query("SELECT id FROM extensions").all() as Array<{ id: string }>)
+      .map((row) => row.id);
+  }
+
+  return (
+    db
+      .query(
+        `SELECT id FROM extensions
+         WHERE install_scope = 'user' AND installed_by_user_id = ?`
+      )
+      .all(userId) as Array<{ id: string }>
+  ).map((row) => row.id);
+}
+
 export async function getExtensionByIdentifier(
   identifier: string
 ): Promise<ExtensionInfo | null> {
@@ -1645,12 +1745,18 @@ export function getEnabledExtensionIdentifiers(): string[] {
   return rows.map((r) => r.identifier);
 }
 
-export async function getFrontendBundlePath(identifier: string): Promise<string | null> {
-  const manifest = await readManifest(identifier);
+async function getFrontendBundlePathFromManifest(
+  identifier: string,
+  manifest: SpindleManifest,
+): Promise<string | null> {
   const entry = manifest.entry_frontend || "dist/frontend.js";
   const repo = repoDir(identifier);
   const bundlePath = resolveWithin(repo, entry, "entry_frontend");
   return (await Bun.file(bundlePath).exists()) ? bundlePath : null;
+}
+
+export async function getFrontendBundlePath(identifier: string): Promise<string | null> {
+  return getFrontendBundlePathFromManifest(identifier, await readManifest(identifier));
 }
 
 export async function getFrontendBundleCacheKey(identifier: string): Promise<string | null> {
@@ -1665,14 +1771,25 @@ export async function getFrontendBundleCacheKey(identifier: string): Promise<str
   }
 }
 
-export async function getBackendEntryPath(identifier: string): Promise<string | null> {
-  const manifest = await readManifest(identifier);
+async function getBackendEntryPathFromManifest(
+  identifier: string,
+  manifest: SpindleManifest,
+  options: { verifySafety: boolean },
+): Promise<string | null> {
   const entry = manifest.entry_backend || "dist/backend.js";
   const repo = repoDir(identifier);
   const entryPath = resolveWithin(repo, entry, "entry_backend");
   if (!(await Bun.file(entryPath).exists())) return null;
-  await assertSafeBackendBundle(identifier, entryPath, declaredCapabilitiesFromManifest(manifest));
+  if (options.verifySafety) {
+    await assertSafeBackendBundle(identifier, entryPath, declaredCapabilitiesFromManifest(manifest));
+  }
   return entryPath;
+}
+
+export async function getBackendEntryPath(identifier: string): Promise<string | null> {
+  return getBackendEntryPathFromManifest(identifier, await readManifest(identifier), {
+    verifySafety: true,
+  });
 }
 
 export function getStoragePath(identifier: string): string {
@@ -1823,6 +1940,7 @@ export function getBranches(identifier: string): { current: string | null; branc
   if (!existsSync(repo)) {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
+  assertOwnGitRepositoryPath(repo, `Extension "${identifier}"`);
 
   // Get current branch
   const headProc = Bun.spawnSync({
@@ -1860,6 +1978,11 @@ export async function switchBranch(
   if (!existsSync(repo)) {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
+  const initialManifest = await readManifest(identifier);
+  if ((initialManifest as { dev_mode?: boolean }).dev_mode === true) {
+    throw new Error(`Cannot switch branches for dev_mode extension: ${identifier}`);
+  }
+  await assertOwnedExtensionGitRoot(repo);
 
   // Clean working tree
   await runGitStep(repo, ["git", "checkout", "."], "git checkout .", {
@@ -1963,8 +2086,13 @@ async function rowToExtensionInfo(row: any): Promise<ExtensionInfo> {
   let hasFrontend = false;
   let hasBackend = false;
   try {
-    hasFrontend = (await getFrontendBundlePath(identifier)) !== null;
-    hasBackend = (await getBackendEntryPath(identifier)) !== null;
+    const manifest = await readManifest(identifier);
+    hasFrontend = (await getFrontendBundlePathFromManifest(identifier, manifest)) !== null;
+    // Listing reports bundle presence only. The worker execution path still
+    // calls getBackendEntryPath(), which performs the fail-closed safety scan.
+    hasBackend = (await getBackendEntryPathFromManifest(identifier, manifest, {
+      verifySafety: false,
+    })) !== null;
   } catch {
     // Extension files may not exist
   }

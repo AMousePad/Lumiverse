@@ -25,6 +25,10 @@ type SpindleUISettingsState = {
   view: string
 }
 
+type SpindleUIModalState = {
+  activeModal: string | null
+}
+
 type SpindleUIDomActionDetail = {
   actionId: string
   eventType: SpindleUIDomActionEventType
@@ -45,6 +49,8 @@ export interface FrontendUIEventsHelper {
   onDrawerChange(handler: (state: SpindleUIDrawerState) => void): () => void
   getSettingsState(): SpindleUISettingsState
   onSettingsChange(handler: (state: SpindleUISettingsState) => void): () => void
+  getModalState(): SpindleUIModalState
+  onModalChange(handler: (state: SpindleUIModalState) => void): () => void
   bindActionHandlers(
     target: string | Element,
     handlers: Record<string, (detail: SpindleUIDomActionDetail) => void>,
@@ -146,6 +152,14 @@ function getSettingsState(): SpindleUISettingsState {
 
 function sameSettingsState(a: SpindleUISettingsState, b: SpindleUISettingsState): boolean {
   return a.open === b.open && a.view === b.view
+}
+
+function getModalState(): SpindleUIModalState {
+  return { activeModal: useStore.getState().activeModal }
+}
+
+function sameModalState(a: SpindleUIModalState, b: SpindleUIModalState): boolean {
+  return a.activeModal === b.activeModal
 }
 
 function ownershipBoundary(element: Element): Element | null {
@@ -308,6 +322,19 @@ export function createUIEventsHelper(
           view: state.settingsActiveView,
         }
         if (sameSettingsState(last, next)) return
+        last = next
+        handler(next)
+      })
+    },
+
+    getModalState,
+
+    onModalChange(handler) {
+      assertActive()
+      let last = getModalState()
+      return useStore.subscribe((state) => {
+        const next: SpindleUIModalState = { activeModal: state.activeModal }
+        if (sameModalState(last, next)) return
         last = next
         handler(next)
       })

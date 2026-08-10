@@ -22,6 +22,8 @@ import * as charactersSvc from "../services/characters.service";
 import * as chatsSvc from "../services/chats.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 import * as worldBooksSvc from "../services/world-books.service";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 import { pruneOrphanedWiState } from "../services/wi-state-prune.service";
 import * as regexScriptsSvc from "../services/regex-scripts.service";
 import * as databanksSvc from "../services/databank";
@@ -33,20 +35,97 @@ import * as imagesSvc from "../services/images.service";
 import * as mediaSvc from "../services/media.service";
 import * as audioSvc from "../services/audio.service";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
+import * as presetsSvc from "../services/presets.service";
+import {
+  mapPeerBookSourceToPersona,
+  projectActivationProvenance,
+  type ActivationProvenance,
+} from "./activation-provenance";
 import { getDb } from "../db/connection";
 import { createHash } from "crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import { extname, join, resolve } from "path";
 import { tmpdir } from "os";
 
-type ContentPermission = "characters" | "images" | "media" | "chats" | "world_books" | "databanks" | "personas" | "regex_scripts";
+type ContentPermission = "characters" | "images" | "media" | "chats" | "world_books" | "databanks" | "personas" | "presets" | "regex_scripts";
+export type SpindleEntityExtensionEntity = worldBooksSvc.EntityExtensionEntity;
+
+export function getEntityExtensionPermission(entity: string): ContentPermission {
+  switch (entity) {
+    case "world_book_entry": return "world_books";
+    case "character": return "characters";
+    case "preset": return "presets";
+    default: throw new Error(`Unsupported extension entity ${entity}`);
+  }
+}
 type ResolvedWorkerMediaSource = mediaSvc.ResolvedMediaSourceDTO & { cleanup?: () => void };
+
+type InterimActivatedWorldInfoEntryDTO = Pick<ActivatedWorldInfoEntryDTO,
+  "id" | "comment" | "keys" | "source" | "score" | "bookId" | "bookSource"
+> & { activationProvenance?: ActivationProvenance; firstTriggeredForBook?: boolean };
+
+type InterimWorldBookEntryDTO = WorldBookEntryDTO & { revision: number };
+
+type ActivationProjectionInput = {
+  id: string;
+  comment: string;
+  keys: string[];
+  source: ActivatedWorldInfoEntryDTO["source"];
+  score?: number;
+  bookId?: string;
+  bookSource?: unknown;
+  activationProvenance?: unknown;
+  firstTriggeredForBook?: unknown;
+};
+
+export type SpindleBatchJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | SpindleBatchJsonValue[]
+  | { [key: string]: SpindleBatchJsonValue };
+
+export type SpindleBatchOperation = {
+  domain: string;
+  op: string;
+  args: SpindleBatchJsonValue;
+};
+
+export type SpindleBatchResult =
+  | { ok: true; result: SpindleBatchJsonValue }
+  | { ok: false; error: string };
+
+const MAX_SPINDLE_BATCH_OPS = 64;
+const MAX_SPINDLE_BATCH_JSON_BYTES = 1 * 1024 * 1024;
+
+export function projectActivatedWorldInfoEntryForRpc(
+  entry: ActivationProjectionInput,
+): InterimActivatedWorldInfoEntryDTO {
+  const bookSource = mapPeerBookSourceToPersona(entry.bookSource);
+  const activationProvenance = projectActivationProvenance(entry.activationProvenance);
+  const firstTriggeredForBook = typeof entry.firstTriggeredForBook === "boolean"
+    ? entry.firstTriggeredForBook
+    : undefined;
+  return {
+    id: entry.id,
+    comment: entry.comment,
+    keys: entry.keys,
+    source: entry.source,
+    score: entry.score,
+    bookId: entry.bookId,
+    ...(bookSource === undefined ? {} : { bookSource }),
+    ...(activationProvenance === undefined ? {} : { activationProvenance }),
+    ...(firstTriggeredForBook === undefined ? {} : { firstTriggeredForBook }),
+  };
+}
 
 export type WorkerHostContentApiContext = {
   manifest: { identifier: string };
   hasPermission: (permission: ContentPermission) => boolean;
   resolveEffectiveUserId: (requestUserId?: string) => string | null;
   enforceScopedUser: (userId: string | null | undefined) => void;
+  setEntityExtensionNamespace?: typeof worldBooksSvc.setEntityExtensionNamespace;
   postResponse: (message: { type: "response"; requestId: string; result?: unknown; error?: string }) => void;
 };
 
@@ -992,7 +1071,7 @@ export class WorkerHostContentApi {
     };
   }
 
-  private toWorldBookEntryDTO(e: any): WorldBookEntryDTO {
+  private toWorldBookEntryDTO(e: any): InterimWorldBookEntryDTO {
     return {
       id: e.id,
       world_book_id: e.world_book_id,
@@ -1027,7 +1106,9 @@ export class WorkerHostContentApi {
       selective_logic: e.selective_logic ?? 0,
       use_probability: e.use_probability !== undefined ? !!e.use_probability : true,
       vectorized: !!e.vectorized,
+      exclude_greeting: !!e.exclude_greeting,
       extensions: (typeof e.extensions === "object" && e.extensions) ? e.extensions : {},
+      revision: e.revision,
       created_at: e.created_at,
       updated_at: e.updated_at,
     };
@@ -1229,6 +1310,272 @@ export class WorkerHostContentApi {
       this.postToWorker({ type: "response", requestId, result: deleted });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  handleEntityExtensionSet(
+    requestId: string,
+    entity: SpindleEntityExtensionEntity,
+    entityId: string,
+    namespace: string,
+    value: unknown,
+    userId?: string,
+  ): void {
+    try {
+      const permission = getEntityExtensionPermission(entity);
+      if (!this.hasPermission(permission)) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} ${permission}`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      if (typeof namespace !== "string") throw new Error("namespace is required");
+      const jsonValue = value === null ? null : this.toBatchJson(value);
+
+      const setEntityExtensionNamespace = this.context.setEntityExtensionNamespace ?? worldBooksSvc.setEntityExtensionNamespace;
+      const result = setEntityExtensionNamespace(
+        resolvedUserId,
+        entity,
+        entityId,
+        namespace,
+        jsonValue,
+      );
+      if (!result) throw new Error(`${entity} not found or not owned by the effective user`);
+      this.postToWorker({ type: "response", requestId, result: this.toBatchJson(result) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err?.message || String(err) });
+    }
+  }
+
+  handleWorldBooksEntrySetExtension(
+    requestId: string,
+    entryId: string,
+    namespace: string,
+    value: unknown,
+    userId?: string,
+  ): void {
+    try {
+      if (!this.hasPermission("world_books")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      if (typeof namespace !== "string") throw new Error("namespace is required");
+      const jsonValue = value === null ? null : this.toBatchJson(value);
+
+      const result = worldBooksSvc.setEntityExtensionNamespace(
+        resolvedUserId,
+        "world_book_entry",
+        entryId,
+        namespace,
+        jsonValue,
+      );
+      if (!result) throw new Error("World book entry not found");
+      this.postToWorker({ type: "response", requestId, result });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err?.message || String(err) });
+    }
+  }
+
+  private asBatchRecord(value: SpindleBatchJsonValue, label: string): Record<string, SpindleBatchJsonValue> {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error(`${label} must be an object`);
+    }
+    return value as Record<string, SpindleBatchJsonValue>;
+  }
+
+  private asBatchString(value: SpindleBatchJsonValue | undefined, label: string): string {
+    if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string`);
+    return value;
+  }
+
+  private toBatchJson(value: unknown): SpindleBatchJsonValue {
+    if (value === null || typeof value === "boolean" || typeof value === "string") return value;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) throw new Error("batch result contains a non-finite number");
+      return value;
+    }
+    if (Array.isArray(value)) return value.map((item) => this.toBatchJson(item));
+    if (typeof value === "object") {
+      const result: { [key: string]: SpindleBatchJsonValue } = {};
+      for (const [key, item] of Object.entries(value)) {
+        if (item !== undefined) result[key] = this.toBatchJson(item);
+      }
+      return result;
+    }
+    throw new Error("batch result is not JSON-serializable");
+  }
+
+  private executeSpindleBatchOperation(
+    userId: string,
+    operation: SpindleBatchOperation,
+    expectedRevisions: Record<string, number> | undefined,
+  ): SpindleBatchJsonValue {
+    const args = this.asBatchRecord(operation.args, "operation args");
+    const id = args.id ?? args.entryId ?? args.characterId ?? args.presetId ?? args.personaId ?? args.scriptId;
+
+    if (operation.domain === "world_books" && operation.op === "entries.update") {
+      if (!this.hasPermission("world_books")) throw new Error(`${PERMISSION_DENIED_PREFIX} world_books`);
+      const entryId = this.asBatchString(id, "entryId");
+      const input = { ...this.asBatchRecord(args.input ?? {}, "input") };
+      const expected = expectedRevisions?.[entryId];
+      if (expected !== undefined && input.expected_revision === undefined) input.expected_revision = expected;
+      const entry = worldBooksSvc.updateEntry(
+        userId,
+        entryId,
+        input as unknown as Parameters<typeof worldBooksSvc.updateEntry>[2],
+      );
+      if (!entry) throw new Error("World book entry not found");
+      return this.toBatchJson(this.toWorldBookEntryDTO(entry));
+    }
+
+    if (operation.domain === "world_books" && operation.op === "entry.setExtension") {
+      if (!this.hasPermission("world_books")) throw new Error(`${PERMISSION_DENIED_PREFIX} world_books`);
+      const entryId = this.asBatchString(id, "entryId");
+      const namespace = this.asBatchString(args.namespace, "namespace");
+      const result = worldBooksSvc.setEntityExtensionNamespace(
+        userId,
+        "world_book_entry",
+        entryId,
+        namespace,
+        args.value === undefined ? null : args.value,
+      );
+      if (!result) throw new Error("World book entry not found");
+      return this.toBatchJson(result);
+    }
+
+    if (operation.domain === "entity_extensions" && operation.op === "setNamespace") {
+      const entity = this.asBatchString(args.entity, "entity");
+      const permission = getEntityExtensionPermission(entity);
+      if (!this.hasPermission(permission)) throw new Error(`${PERMISSION_DENIED_PREFIX} ${permission}`);
+      const entityId = this.asBatchString(args.entityId ?? args.id, "entityId");
+      const namespace = this.asBatchString(args.namespace, "namespace");
+      const result = worldBooksSvc.setEntityExtensionNamespace(
+        userId,
+        entity as SpindleEntityExtensionEntity,
+        entityId,
+        namespace,
+        args.value === undefined ? null : args.value,
+      );
+      if (!result) throw new Error(`${entity} not found or not owned by the effective user`);
+      return this.toBatchJson(result);
+    }
+
+    if (operation.domain === "characters" && operation.op === "update") {
+      if (!this.hasPermission("characters")) throw new Error(`${PERMISSION_DENIED_PREFIX} characters`);
+      const characterId = this.asBatchString(id, "characterId");
+      const character = charactersSvc.updateCharacter(
+        userId,
+        characterId,
+        this.asBatchRecord(args.input ?? {}, "input") as unknown as Parameters<typeof charactersSvc.updateCharacter>[2],
+      );
+      if (!character) throw new Error("Character not found");
+      return this.toBatchJson(this.toCharacterDTO(character));
+    }
+
+    if (operation.domain === "presets" && operation.op === "update") {
+      if (!this.hasPermission("presets")) throw new Error(`${PERMISSION_DENIED_PREFIX} presets`);
+      const presetId = this.asBatchString(id, "presetId");
+      const preset = presetsSvc.updatePreset(
+        userId,
+        presetId,
+        this.asBatchRecord(args.input ?? {}, "input") as unknown as Parameters<typeof presetsSvc.updatePreset>[2],
+      );
+      if (!preset) throw new Error("Preset not found");
+      return this.toBatchJson(preset);
+    }
+
+    if (operation.domain === "personas" && operation.op === "update") {
+      if (!this.hasPermission("personas")) throw new Error(`${PERMISSION_DENIED_PREFIX} personas`);
+      const personaId = this.asBatchString(id, "personaId");
+      const persona = personasSvc.updatePersona(
+        userId,
+        personaId,
+        this.asBatchRecord(args.input ?? {}, "input") as unknown as Parameters<typeof personasSvc.updatePersona>[2],
+      );
+      if (!persona) throw new Error("Persona not found");
+      return this.toBatchJson(this.toPersonaDTO(persona));
+    }
+
+    if (operation.domain === "regex_scripts" && operation.op === "update") {
+      if (!this.hasPermission("regex_scripts")) throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts`);
+      const scriptId = this.asBatchString(id, "scriptId");
+      const script = regexScriptsSvc.updateRegexScript(
+        userId,
+        scriptId,
+        this.asBatchRecord(args.input ?? {}, "input") as unknown as Parameters<typeof regexScriptsSvc.updateRegexScript>[2],
+      );
+      if (script === null) throw new Error("Regex script not found");
+      if (typeof script === "string") throw new Error(script);
+      return this.toBatchJson(this.toRegexScriptDTO(script));
+    }
+
+    throw new Error(`Unsupported batch operation: ${operation.domain}.${operation.op}`);
+  }
+
+  handleSpindleBatch(
+    requestId: string,
+    operations: SpindleBatchOperation[],
+    options?: { expected_revisions?: Record<string, number> },
+    userId?: string,
+  ): void {
+    try {
+      if (!Array.isArray(operations) || operations.length === 0 || operations.length > MAX_SPINDLE_BATCH_OPS) {
+        throw new Error(`ops must contain 1-${MAX_SPINDLE_BATCH_OPS} operations`);
+      }
+      const operationKind = `${operations[0].domain}.${operations[0].op}`;
+      if (operations.some((operation) => `${operation.domain}.${operation.op}` !== operationKind)) {
+        throw new Error("batch operations must be homogeneous");
+      }
+      const encoded = JSON.stringify({ operations, options });
+      if (encoded === undefined || new TextEncoder().encode(encoded).byteLength > MAX_SPINDLE_BATCH_JSON_BYTES) {
+        throw new Error(`batch payload exceeds ${MAX_SPINDLE_BATCH_JSON_BYTES} bytes`);
+      }
+      const expectedRevisions = options?.expected_revisions;
+      if (expectedRevisions !== undefined) {
+        if (typeof expectedRevisions !== "object" || expectedRevisions === null || Array.isArray(expectedRevisions)) {
+          throw new Error("expected_revisions must be an object");
+        }
+        for (const [key, value] of Object.entries(expectedRevisions)) {
+          if (!key || !Number.isSafeInteger(value) || value < 1) {
+            throw new Error("expected_revisions values must be safe integers >= 1");
+          }
+        }
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const batch = eventBus.withBufferedEvents(() => getDb().transaction((): SpindleBatchResult[] => {
+        const completed: SpindleBatchResult[] = [];
+        try {
+          for (const operation of operations) {
+            completed.push({
+              ok: true,
+              result: this.executeSpindleBatchOperation(resolvedUserId, operation, expectedRevisions),
+            });
+          }
+          return completed;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`BATCH_ROLLED_BACK: ${message}`);
+        }
+      })());
+      eventBus.emit(EventType.SPINDLE_BATCH_CHANGED, {
+        operationCount: operations.length,
+        sourceEvents: [...new Set(batch.events.map((entry) => entry.event))],
+      }, resolvedUserId);
+      this.postToWorker({ type: "response", requestId, result: batch.value });
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      const error = message.startsWith("BATCH_ROLLED_BACK:")
+        ? message.slice("BATCH_ROLLED_BACK:".length).trim()
+        : message;
+      const results: SpindleBatchResult[] = Array.isArray(operations)
+        ? operations.map(() => ({ ok: false, error: `BATCH_ROLLED_BACK: ${error}` }))
+        : [{ ok: false, error }];
+      this.postToWorker({ type: "response", requestId, result: results });
     }
   }
 
@@ -1899,18 +2246,16 @@ export class WorkerHostContentApi {
 
       const activated = await promptAssemblySvc.getActivatedWorldInfoForChat(resolvedUserId, chatId);
 
-      const result: ActivatedWorldInfoEntryDTO[] = activated.map((e) => ({
+      const result: InterimActivatedWorldInfoEntryDTO[] = activated.map((e) => projectActivatedWorldInfoEntryForRpc({
         id: e.id,
         comment: e.comment,
         keys: e.keys,
         source: e.source,
         score: e.score,
         bookId: e.bookId,
-        // The published Spindle SDK's WorldBookSourceDTO has no "peer" variant
-        // (a relayed multiplayer participant's persona lorebook). Surface it to
-        // extensions as its closest valid kind — "persona" — rather than bumping
-        // the SDK contract; the host's own Prompt Breakdown keeps the distinction.
-        bookSource: e.bookSource === "peer" ? "persona" : e.bookSource,
+        bookSource: e.bookSource,
+        activationProvenance: e.activationProvenance,
+        firstTriggeredForBook: (e as typeof e & { firstTriggeredForBook?: unknown }).firstTriggeredForBook,
       }));
 
       this.postToWorker({ type: "response", requestId, result });

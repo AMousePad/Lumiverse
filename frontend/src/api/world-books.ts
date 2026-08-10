@@ -1,4 +1,4 @@
-import { get, post, postBlob, put, del } from './client'
+import { get, post, postBlob, put, patch, del } from './client'
 import type {
   WorldBook, CreateWorldBookInput, UpdateWorldBookInput,
   WorldBookEntry, CreateWorldBookEntryInput, UpdateWorldBookEntryInput,
@@ -82,6 +82,29 @@ export const worldBooksApi = {
     return get<PaginatedResult<WorldBookEntry>>(`/world-books/${bookId}/entries`, params)
   },
 
+  /** Load every entry so book-wide tools are not limited by the editor's current page. */
+  async listAllEntries(bookId: string) {
+    const pageSize = 200
+    const data: WorldBookEntry[] = []
+    let offset = 0
+    let total = Number.POSITIVE_INFINITY
+
+    while (offset < total) {
+      const page = await get<PaginatedResult<WorldBookEntry>>(`/world-books/${bookId}/entries`, {
+        limit: pageSize,
+        offset,
+        sort_by: 'order',
+        sort_dir: 'asc',
+      })
+      data.push(...page.data)
+      total = page.total
+      if (page.data.length === 0) break
+      offset += page.data.length
+    }
+
+    return data
+  },
+
   getEntry(bookId: string, entryId: string) {
     return get<WorldBookEntry>(`/world-books/${bookId}/entries/${entryId}`)
   },
@@ -106,8 +129,19 @@ export const worldBooksApi = {
     return put<WorldBookEntry>(`/world-books/${bookId}/entries/${entryId}`, input)
   },
 
-  deleteEntry(bookId: string, entryId: string) {
-    return del<void>(`/world-books/${bookId}/entries/${entryId}`)
+  setEntryExtensionNamespace(bookId: string, entryId: string, namespace: string, value: unknown) {
+    return patch<{
+      entity: 'world_book_entry'
+      id: string
+      namespace: string
+      value: unknown
+      extensions: Record<string, any>
+    }>(`/world-books/${bookId}/entries/${entryId}/extensions/${encodeURIComponent(namespace)}`, { value })
+  },
+
+  deleteEntry(bookId: string, entryId: string, expectedRevision?: number) {
+    const suffix = expectedRevision === undefined ? '' : `?expected_revision=${encodeURIComponent(String(expectedRevision))}`
+    return del<void>(`/world-books/${bookId}/entries/${entryId}${suffix}`)
   },
 
   export(bookId: string, format: WorldBookExportFormat = 'lumiverse') {

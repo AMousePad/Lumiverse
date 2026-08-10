@@ -2,6 +2,7 @@
 
 import { afterAll, describe, expect, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
+import { normalizeLegacyFontTags } from './legacyFontTags'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/',
@@ -74,6 +75,16 @@ test('preserves inert associative regex action metadata while stripping event ha
   const button = root.querySelector('button')
   expect(button?.getAttribute('data-lumiverse-regex-action')).toBe('%7B%22id%22%3A%22north%22%7D')
   expect(button?.hasAttribute('onclick')).toBe(false)
+})
+
+test('retains legacy font inline styles after sanitization', () => {
+  const root = parseFragment(sanitizeRichHtml(
+    normalizeLegacyFontTags('<font color="#E8534A" style="font-weight:bold">Alert</font>'),
+  ))
+  const font = root.querySelector('span')
+
+  expect(font?.style.color).toBe('rgb(232, 83, 74)')
+  expect(font?.style.fontWeight).toBe('bold')
 })
 
 describe('richHtmlSanitizer inline SVG support', () => {

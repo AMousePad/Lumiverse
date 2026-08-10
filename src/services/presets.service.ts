@@ -10,6 +10,10 @@ import { paginatedQuery } from "./pagination";
 import { deleteRegexScriptsByPresetId } from "./regex-scripts.service";
 import { sanitizePromptBlockCharacterTagTrigger } from "../utils/prompt-block-character-tags";
 import * as settingsSvc from "./settings.service";
+import {
+  reconcileStashedPromptBlocks,
+  syncStashedBlocksAcrossPresets,
+} from "./prompt-stash.service";
 
 /**
  * Drop entries in metadata.promptVariables that no longer correspond to a
@@ -180,6 +184,38 @@ export function countPresets(userId: string): number {
   return row?.count ?? 0;
 }
 
+const ACTIVE_LOOM_PRESET_SETTING = "activeLoomPresetId";
+
+/**
+ * Return the active Loom preset when it still exists, otherwise replace a
+ * stale selection with the most recently updated remaining Loom preset.
+ *
+ * Presets can be removed in another tab or on another device. Keeping this
+ * repair server-side means a refresh cannot restore a deleted id and send it
+ * back with the next generation request.
+ */
+export function reconcileActiveLoomPreset(userId: string): string | null {
+  const setting = settingsSvc.getSetting(userId, ACTIVE_LOOM_PRESET_SETTING);
+  const selectedId = typeof setting?.value === "string" && setting.value.trim()
+    ? setting.value
+    : null;
+
+  if (selectedId && getPreset(userId, selectedId)) return selectedId;
+  if (!selectedId) return null;
+
+  const replacement = getDb()
+    .query(
+      `SELECT id FROM presets
+       WHERE user_id = ? AND provider = 'loom'
+       ORDER BY updated_at DESC, created_at DESC, id ASC
+       LIMIT 1`,
+    )
+    .get(userId) as { id: string } | null;
+  const replacementId = replacement?.id ?? null;
+  settingsSvc.putSetting(userId, ACTIVE_LOOM_PRESET_SETTING, replacementId);
+  return replacementId;
+}
+
 /**
  * Find a preset previously installed from LumiHub by its hub preset id (stored in
  * metadata._lumiverse_lumihub_id). Used to update-in-place on re-install instead of
@@ -305,6 +341,30 @@ export function createPreset(userId: string, input: CreatePresetInput): Preset {
 export function updatePreset(userId: string, id: string, input: UpdatePresetInput): Preset | null {
   const existing = getPreset(userId, id);
   if (!existing) return null;
+  // Avoid mutating shared stash state for a request we already know is stale.
+  // The conditional UPDATE below remains the authoritative race-safe check.
+  if (input.expected_cache_revision !== undefined && input.expected_cache_revision !== (existing.cache_revision ?? 0)) {
+    throw new PresetRevisionConflictError(id, input.expected_cache_revision, existing.cache_revision ?? 0);
+  }
+
+  // A stashed block has global content/configuration but local visibility and
+  // list placement. Reconcile before validating prompt variables so the
+  // response and persisted row both contain the canonical stash fields.
+  let reconciledPromptOrder = input.prompt_order;
+  let changedStashIds: string[] = [];
+  let commitStashReconciliation: (() => void) | undefined;
+  if (Array.isArray(input.prompt_order) && input.prompt_order.some(
+    (block) => block && typeof block === "object" && typeof (block as PromptBlock).stashId === "string",
+  )) {
+    const reconciliation = reconcileStashedPromptBlocks(
+      userId,
+      (existing.prompt_order || []) as PromptBlock[],
+      input.prompt_order as PromptBlock[],
+    );
+    reconciledPromptOrder = reconciliation.blocks;
+    changedStashIds = reconciliation.changedStashIds;
+    commitStashReconciliation = reconciliation.commit;
+  }
 
   const fields: string[] = [];
   const values: any[] = [];
@@ -315,10 +375,10 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
   // caller didn't touch it — otherwise the orphans would live forever.
   let writeMetadata: Record<string, any> | undefined;
   if (input.metadata !== undefined) {
-    const resolvedOrder = input.prompt_order !== undefined ? input.prompt_order : existing.prompt_order;
+    const resolvedOrder = reconciledPromptOrder !== undefined ? reconciledPromptOrder : existing.prompt_order;
     writeMetadata = (prunePromptVariableOrphans(resolvedOrder, input.metadata) as Record<string, any>) ?? input.metadata;
-  } else if (input.prompt_order !== undefined) {
-    const cleaned = prunePromptVariableOrphans(input.prompt_order, existing.metadata as Record<string, unknown>);
+  } else if (reconciledPromptOrder !== undefined) {
+    const cleaned = prunePromptVariableOrphans(reconciledPromptOrder, existing.metadata as Record<string, unknown>);
     if (cleaned && JSON.stringify(cleaned) !== JSON.stringify(existing.metadata)) {
       writeMetadata = cleaned as Record<string, any>;
     }
@@ -328,7 +388,7 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
   if (input.provider !== undefined) { fields.push("provider = ?"); values.push(input.provider); }
   if (input.engine !== undefined) { fields.push("engine = ?"); values.push(input.engine); }
   if (input.parameters !== undefined) { fields.push("parameters = ?"); values.push(JSON.stringify(input.parameters)); }
-  if (input.prompt_order !== undefined) { fields.push("prompt_order = ?"); values.push(JSON.stringify(input.prompt_order)); }
+  if (reconciledPromptOrder !== undefined) { fields.push("prompt_order = ?"); values.push(JSON.stringify(reconciledPromptOrder)); }
   if (input.prompts !== undefined) { fields.push("prompts = ?"); values.push(JSON.stringify(input.prompts)); }
   if (writeMetadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(writeMetadata)); }
 
@@ -368,6 +428,8 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
 
   const updated = getPreset(userId, id);
   if (!updated) return null;
+  commitStashReconciliation?.();
+  syncStashedBlocksAcrossPresets(userId, id, changedStashIds);
   eventBus.emit(EventType.PRESET_CHANGED, { id, preset: updated }, userId);
   return updated;
 }
@@ -391,6 +453,11 @@ export function deletePreset(userId: string, id: string): boolean {
 
   const deleted = db.query("DELETE FROM presets WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
   if (!deleted) return false;
+
+  // Preserve a usable active selection for the next page load. This also
+  // repairs stale selections left behind by older versions that did not
+  // update the setting when a preset was removed.
+  reconcileActiveLoomPreset(userId);
 
   // Clean up preset_profile bindings (setting-keyed, no FK) that referenced
   // the now-deleted preset. Covers defaults, per-character, per-chat, and
@@ -456,6 +523,7 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
       : null,
     ...(Array.isArray(input.variables) ? { variables: input.variables } : {}),
     ...(placementBinding ? { placementBinding } : {}),
+    ...(typeof input.stashId === "string" && input.stashId.trim() ? { stashId: input.stashId.trim() } : {}),
   };
 }
 

@@ -3,6 +3,9 @@ import { EventType, type EventMessage } from "./events";
 
 type Listener = (event: EventMessage) => void;
 
+export type BufferedEvent = { event: EventType; payload: any; userId?: string; options?: { topic?: string } };
+export type BufferedEventRun<T> = { value: T; events: readonly BufferedEvent[] };
+
 const CLIENT_SWEEP_INTERVAL_MS = 60_000;
 const CLIENT_TIMEOUT_MS = 120_000;
 
@@ -47,6 +50,7 @@ class EventBus {
   private listeners = new Map<EventType, Set<Listener>>();
   private pendingListenerDispatches: Array<() => void> = [];
   private listenerDispatchTimer: ReturnType<typeof setTimeout> | null = null;
+  private bufferedEvents: BufferedEvent[] | null = null;
   /** Per-user visibility: true if at least one session reports visible. */
   private userVisibility = new Map<string, Map<string, boolean>>();
   private userAllHiddenSince = new Map<string, number>();
@@ -55,6 +59,21 @@ class EventBus {
   /** Store the Bun server reference so we can use native publish(). */
   setServer(server: import("bun").Server<unknown>): void {
     this.server = server;
+  }
+
+  withBufferedEvents<T>(callback: () => T): BufferedEventRun<T> {
+    const parent = this.bufferedEvents;
+    const buffer = parent ?? [];
+    this.bufferedEvents = buffer;
+    try {
+      const value = callback();
+      return { value, events: parent ? [] : buffer.slice() };
+    } catch (error) {
+      if (!parent) buffer.length = 0;
+      throw error;
+    } finally {
+      this.bufferedEvents = parent;
+    }
   }
 
   addClient(ws: ServerWebSocket<unknown>, userId: string, sessionId?: string): void {
@@ -361,6 +380,10 @@ class EventBus {
     userId?: string,
     options?: { topic?: string },
   ): void {
+    if (this.bufferedEvents) {
+      this.bufferedEvents.push({ event, payload, userId, options });
+      return;
+    }
     const message: EventMessage = {
       event,
       payload,

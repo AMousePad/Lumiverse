@@ -1,5 +1,14 @@
 import { get, post, put, del } from './client'
 import type { Preset, PresetRegistryItem, CreatePresetInput, UpdatePresetInput, PaginatedResult } from '@/types/api'
+import type { PromptBlock } from '@/lib/loom/types'
+
+export interface StashedPromptBlock {
+  id: string
+  block: Omit<PromptBlock, 'id' | 'enabled' | 'group' | 'stashId'>
+  sourcePreset?: { id: string; name: string }
+  createdAt: number
+  updatedAt: number
+}
 
 export const presetsApi = {
   list(params?: { limit?: number; offset?: number; provider?: string }) {
@@ -24,5 +33,17 @@ export const presetsApi = {
 
   delete(id: string) {
     return del<void>(`/presets/${id}`)
+  },
+
+  listStash() {
+    return get<StashedPromptBlock[]>('/presets/stash')
+  },
+
+  addToStash(block: PromptBlock, sourcePresetId?: string) {
+    return post<StashedPromptBlock>('/presets/stash', { block, sourcePresetId })
+  },
+
+  removeFromStash(id: string) {
+    return del<void>(`/presets/stash/${id}`)
   },
 }

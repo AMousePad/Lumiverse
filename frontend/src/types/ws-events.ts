@@ -55,6 +55,8 @@ export enum EventType {
 
   // World Info
   WORLD_INFO_ACTIVATED = 'WORLD_INFO_ACTIVATED',
+  CONNECTION_PROFILE_LOADED = 'CONNECTION_PROFILE_LOADED',
+  PRESET_PROFILE_CHANGED = 'PRESET_PROFILE_CHANGED',
 
   // World Books (lorebook editor live-sync — mirror src/ws/events.ts)
   WORLD_BOOK_CHANGED = 'WORLD_BOOK_CHANGED',

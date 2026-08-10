@@ -8,6 +8,8 @@ import type {
   ExtensionInfo,
   ConnectionProfileDTO,
   ConnectionReasoningBindingsDTO,
+  InterceptorContextDTO,
+  InterceptorMatchDTO,
   ReasoningSettingsDTO,
   ReasoningEffortDTO,
   ThinkingDisplayDTO,
@@ -17,8 +19,11 @@ import type {
   SpindleCommandContextDTO,
   CouncilMemberContext,
   ImageUploadDTO,
+  BoundAssembleRequestDTO,
+  QuietTrackedRequestDTO,
+  ConnectionDispatchDescriptorDTO,
 } from "lumiverse-spindle-types";
-import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
+import { PERMISSION_DENIED_PREFIX, SPINDLE_HOST_CAPABILITIES } from "lumiverse-spindle-types";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
@@ -56,17 +61,15 @@ import { resolveInterceptorTimeout } from "../services/spindle-settings.service"
 import { getSidecarSettings } from "../services/sidecar-settings.service";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
 import * as tokenizerSvc from "../services/tokenizer.service";
-import * as imageGenConnSvc from "../services/image-gen-connections.service";
 import type * as imagesSvc from "../services/images.service";
 import type * as mediaSvc from "../services/media.service";
 import { spawnAsync } from "./spawn-async";
 import { assembleSpindleBlocks, type SpindleAssembleInput } from "./assembly";
-import { getImageProvider, getImageProviderList } from "../image-gen/registry";
-import "../image-gen/index";
 import { WorkerHostStorageApi } from "./worker-host-storage-api";
 import { WorkerHostStateApi } from "./worker-host-state-api";
 import { WorkerHostContentApi } from "./worker-host-content-api";
 import { WorkerHostMemoryApi } from "./worker-host-memory-api";
+import { WorkerHostImageGenApi } from "./worker-host-image-gen-api";
 import { WorkerHostProcessApi } from "./worker-host-process-api";
 import { WorkerHostInteractionApi } from "./worker-host-interaction-api";
 import { WorkerHostPresentationApi } from "./worker-host-presentation-api";
@@ -80,7 +83,7 @@ import {
   type SharedRpcEndpointPolicy,
 } from "./shared-rpc-pool.service";
 import { getTextContent, type LlmMessage } from "../llm/types";
-import type { CreatePresetInput, UpdatePresetInput } from "../types/preset";
+import type { CreatePresetInput, PromptBlock, UpdatePresetInput } from "../types/preset";
 import { getDb } from "../db/connection";
 import {
   getMessages as getChatMessages,
@@ -130,6 +133,8 @@ type TokenCountResult = {
   tokenizer_name: string;
   approximate: boolean;
 };
+
+type TokenCountBatchResult = TokenCountResult & { index: number };
 
 
 type FrontendProcessState =
@@ -320,6 +325,31 @@ type RuntimeWorkerToHost =
       text: string;
       model?: string;
       modelSource?: TokenModelSource;
+      userId?: string;
+    }
+  | {
+      type: "tokens_count_text_batch";
+      requestId: string;
+      texts: string[];
+      model?: string;
+      modelSource?: TokenModelSource;
+      userId?: string;
+    }
+  | {
+      type: "spindle_batch";
+      requestId: string;
+      ops: import("./worker-host-content-api").SpindleBatchOperation[];
+      options?: { expected_revisions?: Record<string, number> };
+      userId?: string;
+    }
+  | {
+      type: "world_books_entry_set_extension";
+      requestId: string;
+      entity: import("./worker-host-content-api").SpindleEntityExtensionEntity;
+      entityId: string;
+      entryId?: string;
+      namespace: string;
+      value: import("./worker-host-content-api").SpindleBatchJsonValue | null;
       userId?: string;
     }
   | {
@@ -523,7 +553,9 @@ type RuntimeWorkerToHost =
       tabId?: string;
       viewId?: string;
       userId?: string;
-    };
+    }
+  | { type: "image_gen_generate_stream"; requestId: string; input: Record<string, unknown> }
+  | { type: "image_gen_cancel_stream"; requestId: string };
 
 type RuntimeHostToWorker =
   | HostToWorker
@@ -560,7 +592,16 @@ type RuntimeHostToWorker =
   | { type: "frontend_process_lifecycle"; event: FrontendProcessLifecycleEvent }
   | { type: "frontend_process_message"; processId: string; payload: unknown; userId: string }
   | { type: "backend_process_lifecycle"; event: BackendProcessLifecycleEvent }
-  | { type: "backend_process_message"; processId: string; payload: unknown; userId: string };
+  | { type: "backend_process_message"; processId: string; payload: unknown; userId: string }
+  | {
+      type: "image_gen_stream_chunk";
+      requestId: string;
+      event:
+        | { type: "status"; step?: number; totalSteps?: number; nodeId?: string }
+        | { type: "preview"; imageDataUrl: string; step?: number; totalSteps?: number; nodeId?: string }
+        | { type: "done"; result: Record<string, unknown> };
+    }
+  | { type: "image_gen_stream_error"; requestId: string; error: string };
 
 let cachedBackendVersion: string | null = null;
 let cachedFrontendVersion: string | null = null;
@@ -801,6 +842,8 @@ export class WorkerHost {
    */
   private generationAbortControllers = new Map<string, AbortController>();
   private interceptorUnregister: (() => void) | null = null;
+  private interceptorRegistrationId: string | null = null;
+  private activeInterceptorContexts = new Map<string, Omit<InterceptorContextDTO, "signal">>();
   private contextHandlerUnregister: (() => void) | null = null;
   private messageContentProcessorUnregister: (() => void) | null = null;
   private macroInterceptorUnregister: (() => void) | null = null;
@@ -821,6 +864,7 @@ export class WorkerHost {
   private readonly stateApi: WorkerHostStateApi;
   private readonly contentApi: WorkerHostContentApi;
   private readonly memoryApi: WorkerHostMemoryApi;
+  private readonly imageGenApi: WorkerHostImageGenApi;
   private readonly processApi: WorkerHostProcessApi;
   private readonly interactionApi: WorkerHostInteractionApi;
   private readonly presentationApi: WorkerHostPresentationApi;
@@ -863,6 +907,13 @@ export class WorkerHost {
       resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
       enforceScopedUser: (userId) => this.enforceScopedUser(userId),
       postResponse: (message) => this.postToWorker(message),
+    });
+    this.imageGenApi = new WorkerHostImageGenApi({
+      extensionIdentifier: manifest.identifier,
+      hasPermission: (permission) => this.hasPermission(permission),
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
+      post: (message) => this.postToWorker(message as RuntimeHostToWorker),
     });
     this.processApi = new WorkerHostProcessApi({
       extensionId,
@@ -1101,6 +1152,12 @@ export class WorkerHost {
       type: "init",
       manifest: { ...this.manifest, entry_backend: entryPath },
       storagePath,
+      host: {
+        descriptorVersion: 1,
+        lumiverseVersion: await getBackendVersion(),
+        capabilities: SPINDLE_HOST_CAPABILITIES,
+        extensionInstallationId: this.extensionId,
+      },
     });
 
     await readyPromise;
@@ -1206,6 +1263,8 @@ export class WorkerHost {
     // Unregister interceptor
     this.interceptorUnregister?.();
     this.interceptorUnregister = null;
+    this.interceptorRegistrationId = null;
+    this.activeInterceptorContexts.clear();
 
     // Unregister context handler
     this.contextHandlerUnregister?.();
@@ -1557,9 +1616,16 @@ export class WorkerHost {
         this.handleUpdateMacroValue(msg.name, msg.value);
         break;
       case "register_interceptor":
-        this.handleRegisterInterceptor(msg.priority);
+        this.handleRegisterInterceptor(msg.registrationId, msg.priority, msg.match);
+        break;
+      case "unregister_interceptor":
+        this.handleUnregisterInterceptor(msg.registrationId);
         break;
       case "intercept_result": {
+        if (msg.registrationId !== this.interceptorRegistrationId) {
+          console.warn(`[Spindle:${this.manifest.identifier}] Ignoring interceptor result for an inactive registration`);
+          break;
+        }
         // Strip parameters if the extension lacks the generation_parameters permission
         let interceptParams = msg.parameters;
         if (interceptParams && Object.keys(interceptParams).length > 0) {
@@ -1604,6 +1670,12 @@ export class WorkerHost {
       case "assemble_prompt":
         this.handleAssemblePrompt(msg.requestId, msg.input, msg.userId);
         break;
+      case "generate_assemble":
+        void this.handleBoundAssembly(msg.requestId, msg.input);
+        break;
+      case "generate_quiet_tracked":
+        void this.handleBoundQuietGeneration(msg.requestId, msg.input);
+        break;
       case "permissions_get_granted":
         this.handlePermissionsGetGranted(msg.requestId);
         break;
@@ -1631,6 +1703,9 @@ export class WorkerHost {
         break;
       case "connections_get":
         this.handleConnectionsGet(msg.requestId, msg.connectionId, msg.userId);
+        break;
+      case "connections_resolve_dispatch":
+        this.handleConnectionsResolveDispatch(msg.requestId, msg.connectionId);
         break;
       case "chat_get_messages":
         this.handleChatGetMessages(msg.requestId, msg.chatId);
@@ -1947,6 +2022,16 @@ export class WorkerHost {
       case "world_book_entries_update":
         this.contentApi.handleWorldBookEntriesUpdate(msg.requestId, msg.entryId, msg.input, msg.userId);
         break;
+      case "world_books_entry_set_extension":
+        this.contentApi.handleEntityExtensionSet(
+          msg.requestId,
+          msg.entity,
+          msg.entityId,
+          msg.namespace,
+          msg.value,
+          msg.userId,
+        );
+        break;
       case "world_book_entries_delete":
         this.contentApi.handleWorldBookEntriesDelete(msg.requestId, msg.entryId, msg.userId);
         break;
@@ -2198,6 +2283,12 @@ export class WorkerHost {
       case "tokens_count_text":
         this.handleTokensCountText(msg.requestId, msg.text, msg.model, msg.modelSource, msg.userId);
         break;
+      case "tokens_count_text_batch":
+        this.handleTokensCountTextBatch(msg.requestId, msg.texts, msg.model, msg.modelSource, msg.userId);
+        break;
+      case "spindle_batch":
+        this.contentApi.handleSpindleBatch(msg.requestId, msg.ops, msg.options, msg.userId);
+        break;
       case "tokens_count_messages":
         this.handleTokensCountMessages(msg.requestId, msg.messages, msg.model, msg.modelSource, msg.userId);
         break;
@@ -2293,19 +2384,25 @@ export class WorkerHost {
         break;
       // ─── Image Generation (gated: "image_gen") ─────────────────────────
       case "image_gen_generate":
-        this.handleImageGenGenerate(msg.requestId, msg.input);
+        void this.imageGenApi.handleGenerate(msg.requestId, msg.input);
         break;
       case "image_gen_providers":
-        this.handleImageGenProviders(msg.requestId, msg.userId);
+        this.imageGenApi.handleProviders(msg.requestId);
         break;
       case "image_gen_connections_list":
-        this.handleImageGenConnectionsList(msg.requestId, msg.userId);
+        this.imageGenApi.handleConnectionsList(msg.requestId, msg.userId);
         break;
       case "image_gen_connections_get":
-        this.handleImageGenConnectionsGet(msg.requestId, msg.connectionId, msg.userId);
+        this.imageGenApi.handleConnectionsGet(msg.requestId, msg.connectionId, msg.userId);
         break;
       case "image_gen_models":
-        this.handleImageGenModels(msg.requestId, msg.connectionId, msg.userId);
+        void this.imageGenApi.handleModels(msg.requestId, msg.connectionId, msg.userId);
+        break;
+      case "image_gen_generate_stream":
+        void this.imageGenApi.handleGenerateStream(msg.requestId, msg.input);
+        break;
+      case "image_gen_cancel_stream":
+        this.imageGenApi.cancelStream(msg.requestId);
         break;
       // ─── Chat style mode (gated: "app_manipulation") ────────────────────
       case "chat_set_style_mode":
@@ -2571,7 +2668,11 @@ export class WorkerHost {
 
   // ─── Interceptor registration ────────────────────────────────────────
 
-  private handleRegisterInterceptor(priority?: number): void {
+  private handleRegisterInterceptor(
+    registrationId: string,
+    priority?: number,
+    match?: InterceptorMatchDTO,
+  ): void {
     if (!this.hasPermission("interceptor")) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Interceptor permission not granted`
@@ -2595,11 +2696,13 @@ export class WorkerHost {
       );
 
     this.interceptorUnregister?.();
+    this.interceptorRegistrationId = registrationId;
     this.interceptorUnregister = interceptorPipeline.register({
       extensionId: this.extensionId,
       extensionName: this.manifest.name || this.manifest.identifier,
       userId: scopedUserId,
       priority: priority ?? 100,
+      match,
       resolveTimeoutMs,
       handler: async (messages, context) => {
         const requestId = crypto.randomUUID();
@@ -2625,11 +2728,14 @@ export class WorkerHost {
           };
         });
 
+        const interceptorContext = context as Omit<InterceptorContextDTO, "signal">;
+        this.activeInterceptorContexts.set(registrationId, interceptorContext);
         this.postToWorker({
           type: "intercept_request",
           requestId,
+          registrationId,
           messages: messagesWithSourceFlags,
-          context,
+          context: interceptorContext,
         });
 
         return new Promise<InterceptorResult>((resolve, reject) => {
@@ -2655,9 +2761,21 @@ export class WorkerHost {
               reject(err);
             },
           });
+        }).finally(() => {
+          if (this.activeInterceptorContexts.get(registrationId) === interceptorContext) {
+            this.activeInterceptorContexts.delete(registrationId);
+          }
         });
       },
     });
+  }
+
+  private handleUnregisterInterceptor(registrationId: string): void {
+    if (registrationId !== this.interceptorRegistrationId) return;
+    this.interceptorUnregister?.();
+    this.interceptorUnregister = null;
+    this.interceptorRegistrationId = null;
+    this.activeInterceptorContexts.delete(registrationId);
   }
 
   private normalizeInterceptorBreakdownEntry(
@@ -2932,187 +3050,6 @@ export class WorkerHost {
     }
   }
 
-  // ─── Image Generation (gated by "image_gen" permission) ────────────
-
-  private async handleImageGenGenerate(requestId: string, input: any): Promise<void> {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    const resolvedUserId = this.resolveEffectiveUserId(input.userId);
-    if (!resolvedUserId) {
-      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-      return;
-    }
-    this.enforceScopedUser(resolvedUserId);
-
-    try {
-      // Resolve connection
-      const connectionId = input.connection_id || null;
-      let connection = connectionId
-        ? imageGenConnSvc.getConnection(resolvedUserId, connectionId)
-        : imageGenConnSvc.getDefaultConnection(resolvedUserId);
-      if (!connection) throw new Error(connectionId ? "Image gen connection not found" : "No default image gen connection configured");
-
-      const provider = getImageProvider(connection.provider);
-      if (!provider) throw new Error(`Unknown image gen provider: ${connection.provider}`);
-
-      const { getSecret } = await import("../services/secrets.service");
-      const apiKey = await getSecret(resolvedUserId, imageGenConnSvc.imageGenConnectionSecretKey(connection.id));
-      if (!apiKey && provider.capabilities.apiKeyRequired) {
-        throw new Error(`No API key for image gen connection "${connection.name}"`);
-      }
-
-      // Merge connection defaults with request parameters
-      const mergedParams = { ...connection.default_parameters, ...(input.parameters || {}) };
-
-      const response = await provider.generate(apiKey || "", connection.api_url || "", {
-        prompt: input.prompt || "",
-        negativePrompt: input.negativePrompt,
-        model: input.model || connection.model,
-        parameters: mergedParams,
-      });
-
-      // Persist image to the images table
-      let imageId: string | undefined;
-      let imageUrl: string | undefined;
-      if (response.imageDataUrl) {
-        try {
-          const { saveImageFromDataUrl } = await import("../services/images.service");
-          const image = await saveImageFromDataUrl(
-            resolvedUserId,
-            response.imageDataUrl,
-            `image-gen-${connection.provider}-${Date.now()}.png`,
-            {
-              owner_extension_identifier: this.manifest.identifier,
-              owner_character_id: typeof input?.owner_character_id === "string" && input.owner_character_id.trim()
-                ? input.owner_character_id.trim()
-                : undefined,
-              owner_chat_id: typeof input?.owner_chat_id === "string" && input.owner_chat_id.trim()
-                ? input.owner_chat_id.trim()
-                : undefined,
-            }
-          );
-          imageId = image.id;
-          imageUrl = `/api/v1/image-gen/results/${image.id}`;
-        } catch {
-          // Persistence failure is non-fatal
-        }
-      }
-
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: { ...response, imageId, imageUrl },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleImageGenProviders(requestId: string, userId?: string): void {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    try {
-      const providers = getImageProviderList().map((p) => ({
-        id: p.name,
-        name: p.displayName,
-        capabilities: p.capabilities,
-      }));
-      this.postToWorker({ type: "response", requestId, result: providers });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleImageGenConnectionsList(requestId: string, userId?: string): void {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) {
-      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-      return;
-    }
-    this.enforceScopedUser(resolvedUserId);
-
-    try {
-      const result = imageGenConnSvc.listConnections(resolvedUserId, { limit: 100, offset: 0 });
-      this.postToWorker({ type: "response", requestId, result: result.data });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleImageGenConnectionsGet(requestId: string, connectionId: string, userId?: string): void {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) {
-      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-      return;
-    }
-    this.enforceScopedUser(resolvedUserId);
-
-    try {
-      const conn = imageGenConnSvc.getConnection(resolvedUserId, connectionId);
-      this.postToWorker({ type: "response", requestId, result: conn });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleImageGenModels(requestId: string, connectionId: string, userId?: string): Promise<void> {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) {
-      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-      return;
-    }
-    this.enforceScopedUser(resolvedUserId);
-
-    try {
-      const result = await imageGenConnSvc.listConnectionModels(resolvedUserId, connectionId);
-      if (result.error) throw new Error(result.error);
-      this.postToWorker({ type: "response", requestId, result: result.models });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
   // ─── Connection Profiles (gated by "generation" permission) ─────────
 
   /**
@@ -3221,6 +3158,211 @@ export class WorkerHost {
       this.postToWorker({ type: "response", requestId, result: profile });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private getConnectionDispatchDescriptor(
+    userId: string,
+    connectionId: string,
+  ): ConnectionDispatchDescriptorDTO | null {
+    const connection = connectionsSvc.getConnection(userId, connectionId);
+    if (!connection) return null;
+    let endpointOrigin = connection.api_url;
+    try {
+      endpointOrigin = new URL(connection.api_url).origin;
+    } catch {
+      // Preserve a non-standard endpoint verbatim; the descriptor is
+      // informational and must never expose credentials.
+    }
+    return {
+      connectionId: connection.id,
+      connectionName: connection.name,
+      provider: connection.provider,
+      model: connection.model,
+      endpointOrigin,
+      dispatchKind: "concrete",
+      connectionDispatchRevision: `${connection.id}:${connection.updated_at}`,
+    };
+  }
+
+  private getActiveInterceptorContext(): Omit<InterceptorContextDTO, "signal"> {
+    const registrationId = this.interceptorRegistrationId;
+    const context = registrationId ? this.activeInterceptorContexts.get(registrationId) : undefined;
+    if (!context) throw new Error("This operation is only available during an active interceptor callback");
+    return context;
+  }
+
+  private resolveBoundDispatch(
+    context: Omit<InterceptorContextDTO, "signal">,
+    dispatch: BoundAssembleRequestDTO["dispatch"],
+  ): ConnectionDispatchDescriptorDTO {
+    const descriptor = dispatch.source === "main"
+      ? context.mainDispatch.descriptor
+      : this.getConnectionDispatchDescriptor(context.userId, dispatch.connectionId);
+    if (!descriptor || descriptor.dispatchKind !== "concrete") {
+      throw new Error("The requested connection dispatch is not available");
+    }
+    if (descriptor.connectionDispatchRevision !== dispatch.expectedConnectionDispatchRevision) {
+      throw new Error("The requested connection dispatch changed before it could be used");
+    }
+    return descriptor;
+  }
+
+  private handleConnectionsResolveDispatch(requestId: string, connectionId: string): void {
+    try {
+      if (!this.hasPermission("generation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Connection dispatch access requires the generation permission`);
+      }
+      const context = this.getActiveInterceptorContext();
+      const descriptor = this.getConnectionDispatchDescriptor(context.userId, connectionId);
+      this.postToWorker({ type: "response", requestId, result: descriptor });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err?.message ?? String(err) });
+    }
+  }
+
+  private async handleBoundAssembly(
+    requestId: string,
+    input: Omit<BoundAssembleRequestDTO, "signal">,
+  ): Promise<void> {
+    try {
+      if (!this.hasPermission("generation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`);
+      }
+      if (!Number.isFinite(input.deadlineAt) || input.deadlineAt <= Date.now()) {
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: { ok: false, error: { kind: "precondition", code: "INTERCEPTOR_DEADLINE_EXPIRED", message: "The interceptor deadline has expired" } },
+        });
+        return;
+      }
+      const context = this.getActiveInterceptorContext();
+      const dispatch = this.resolveBoundDispatch(context, input.dispatch);
+      const controller = new AbortController();
+      this.generationAbortControllers.set(requestId, controller);
+      try {
+        const result = await assembleSpindleBlocks(
+          context.userId,
+          this.manifest.identifier,
+          {
+            blocks: input.blocks as PromptBlock[],
+            chatId: context.chatId,
+            connectionId: dispatch.connectionId,
+            generationType: context.generationType,
+            promptVariables: input.promptVariableValues,
+          },
+          controller.signal,
+        );
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            ok: true,
+            result: {
+              ...result,
+              resolved: {
+                source: input.dispatch.source === "main" ? "main" : "slot",
+                connectionId: input.dispatch.source === "main" ? null : dispatch.connectionId,
+                connectionDispatchRevision: dispatch.connectionDispatchRevision!,
+                dispatchKind: "concrete",
+              },
+            },
+          },
+        });
+      } finally {
+        this.generationAbortControllers.delete(requestId);
+      }
+    } catch (err: any) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          ok: false,
+          error: {
+            kind: err?.name === "AbortError" ? "abort" : "precondition",
+            code: err?.name === "AbortError" ? "ASSEMBLY_ABORTED" : "BOUND_ASSEMBLY_FAILED",
+            ...(err?.name === "AbortError" ? { name: "AbortError" } : {}),
+            message: err?.message ?? String(err),
+          },
+        },
+      });
+    }
+  }
+
+  private async handleBoundQuietGeneration(
+    requestId: string,
+    input: Omit<QuietTrackedRequestDTO, "signal">,
+  ): Promise<void> {
+    try {
+      if (!this.hasPermission("generation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`);
+      }
+      if (!Number.isFinite(input.deadlineAt) || input.deadlineAt <= Date.now()) {
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            ok: false,
+            phase: "preflight",
+            providerInvoked: false,
+            receipt: null,
+            error: { kind: "precondition", code: "INTERCEPTOR_DEADLINE_EXPIRED", name: "Error", message: "The interceptor deadline has expired" },
+          },
+        });
+        return;
+      }
+      if (input.continuation) {
+        throw new Error("Tracked quiet generation with a parent prefill is not available for this host runtime");
+      }
+      const context = this.getActiveInterceptorContext();
+      const dispatch = this.resolveBoundDispatch(context, input.dispatch);
+      const controller = new AbortController();
+      this.generationAbortControllers.set(requestId, controller);
+      try {
+        const response = await generateSvc.quietGenerate(context.userId, {
+          messages: input.messages as any,
+          connection_id: dispatch.connectionId,
+          parameters: input.parameters as any,
+          reasoning: input.reasoning as any,
+          tools: input.tools as any,
+          signal: controller.signal,
+        });
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            ok: true,
+            response,
+            receipt: {
+              providerInvoked: true,
+              terminalResponse: true,
+              source: input.dispatch.source === "main" ? "main" : "slot",
+              connectionId: input.dispatch.source === "main" ? null : dispatch.connectionId,
+              connectionDispatchRevision: dispatch.connectionDispatchRevision!,
+              ...(response.usage ? { usage: response.usage } : {}),
+            },
+          },
+        });
+      } finally {
+        this.generationAbortControllers.delete(requestId);
+      }
+    } catch (err: any) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          ok: false,
+          phase: "resolved",
+          receipt: null,
+          error: {
+            kind: err?.name === "AbortError" ? "abort" : "precondition",
+            code: err?.name === "AbortError" ? "QUIET_TRACKED_ABORTED" : "QUIET_TRACKED_FAILED",
+            name: err?.name ?? "Error",
+            message: err?.message ?? String(err),
+          },
+        },
+      });
     }
   }
 
@@ -4367,6 +4509,44 @@ export class WorkerHost {
     }
   }
 
+  private async handleTokensCountTextBatch(
+    requestId: string,
+    texts: string[],
+    model?: string,
+    modelSource?: TokenModelSource,
+    userId?: string
+  ): Promise<void> {
+    try {
+      if (!Array.isArray(texts)) {
+        throw new Error("texts must be an array of strings");
+      }
+      if (texts.length > tokenizerSvc.MAX_COUNT_BATCH_TEXTS) {
+        throw new Error(`texts exceeds the ${tokenizerSvc.MAX_COUNT_BATCH_TEXTS}-item batch cap`);
+      }
+      for (let index = 0; index < texts.length; index++) {
+        if (typeof texts[index] !== "string") {
+          throw new Error(`texts[${index}] must be a string`);
+        }
+      }
+
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const results: TokenCountBatchResult[] = [];
+      for (let index = 0; index < texts.length; index++) {
+        const result = await this.buildTokenCountResult(resolvedUserId, texts[index]!, model, modelSource);
+        results.push({ ...result, index });
+        if ((index + 1) % tokenizerSvc.COUNT_BATCH_YIELD_EVERY === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+      }
+      this.postToWorker({ type: "response", requestId, result: results });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
   private async handleTokensCountMessages(
     requestId: string,
     messages: Array<Pick<LlmMessageDTO, "role" | "content">>,
@@ -4454,7 +4634,7 @@ export class WorkerHost {
         return;
       }
 
-      const { evaluate, buildEnv, initMacros, registry, resolvePersonaPronouns } = await import("../macros");
+      const { evaluate, buildEnv, initMacros, registry } = await import("../macros");
       initMacros();
 
       const chatsSvc = await import("../services/chats.service");
@@ -4513,36 +4693,31 @@ export class WorkerHost {
       }
 
       if (!env) {
-        // Minimal fallback
-        const persona = personasSvc.getDefaultPersona(resolvedUserId);
-        const personaPronouns = resolvePersonaPronouns(persona);
+        // Minimal fallback. Route through buildEnv so persona add-ons and
+        // outlet-backed add-ons behave the same as other macro contexts.
+        const { makeAssistantCharacter } = await import("../types/character");
+        const persona = personaAddonStatesSvc.resolvePersonaForChatMacros(
+          resolvedUserId,
+          personasSvc.getDefaultPersona(resolvedUserId),
+          null,
+        );
         const connection = connectionsSvc.resolveConnection(resolvedUserId);
-        env = {
-          commit,
-          names: {
-            user: persona?.name || "User", char: "", group: "", groupNotMuted: "", notChar: persona?.name || "User",
-            charGroupFocused: "", groupOthers: "", groupMemberCount: "0", isGroupChat: "no", isNarrator: persona?.is_narrator ? "yes" : "no", groupLastSpeaker: "", groupCardMode: "solo",
-          },
-          character: {
-            name: "", description: "", personality: "", scenario: "", persona: persona?.description || "",
-            personaSubjectivePronoun: personaPronouns.subjective,
-            personaObjectivePronoun: personaPronouns.objective,
-            personaPossessivePronoun: personaPronouns.possessive,
-            mesExamples: "", mesExamplesRaw: "", systemPrompt: "", postHistoryInstructions: "",
-            depthPrompt: "", creatorNotes: "", version: "", creator: "", firstMessage: "",
-          },
+        env = buildEnv({
+          character: makeAssistantCharacter(),
+          persona,
           chat: {
-            id: "", messageCount: 0, lastMessage: "", lastMessageName: "", lastUserMessage: "",
-            lastCharMessage: "", lastMessageId: -1, firstIncludedMessageId: -1, lastSwipeId: 0, currentSwipeId: 0, rejectedSwipe: "",
+            id: "",
+            character_id: null,
+            name: "",
+            metadata: {},
+            created_at: 0,
+            updated_at: 0,
           },
-          system: {
-            model: connection?.model || "", maxPrompt: 0, maxContext: 0, maxResponse: 0,
-            lastGenerationType: "normal", isMobile: false,
-          },
-          variables: { local: new Map(), global: new Map(), chat: new Map() },
-          dynamicMacros: {},
-          extra: {},
-        };
+          messages: [],
+          generationType: "normal",
+          commit,
+          connection,
+        });
       }
 
       const result = await evaluate(template, env, registry);

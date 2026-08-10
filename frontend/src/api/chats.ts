@@ -2,9 +2,19 @@ import { get, post, put, patch, del, upload, type RequestOptions } from './clien
 import type {
   Chat, CreateChatInput, CreateGroupChatInput, RecentChat, Message,
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
-  GroupedRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult
+  GroupedRecentChat, HiddenRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult
 } from '@/types/api'
 import type { RegexActionEffect } from '@/types/regex'
+
+export type ChatAppearanceAction =
+  | { type: 'avatar'; avatar_entry_id: string; character_id?: string }
+  | { type: 'field'; field: 'description' | 'personality' | 'scenario'; variant_id: string | null; character_id?: string }
+  | { type: 'greeting'; greeting_index: number; character_id?: string }
+
+export interface ChatAppearanceResult {
+  chat: Chat
+  greeting_message?: Message
+}
 
 /** Use the user's local date and time so automatically named chats are easy to distinguish. */
 export function createTimestampedChatName(now = new Date()): string {
@@ -26,8 +36,14 @@ export const chatsApi = {
     search?: string
     sort?: 'name' | 'recent' | 'created'
     direction?: 'asc' | 'desc'
+    favorite_ids?: string
+    hidden_character_ids?: string
   }) {
     return get<PaginatedResult<GroupedRecentChat>>('/chats/recent-grouped', params)
+  },
+
+  listHiddenFromRecent() {
+    return get<HiddenRecentChat[]>('/chats/hidden-from-recent')
   },
 
   listCharacterChats(characterId: string) {
@@ -77,6 +93,18 @@ export const chatsApi = {
    */
   patchMetadata(id: string, partial: Record<string, any>) {
     return patch<Chat>(`/chats/${id}/metadata`, partial)
+  },
+
+  applyAppearance(id: string, action: ChatAppearanceAction) {
+    return patch<ChatAppearanceResult>(`/chats/${id}/appearance`, action)
+  },
+
+  /**
+   * Toggle one persona add-on for this chat. The server also records toggle
+   * recency so competing avatar overrides resolve deterministically.
+   */
+  setPersonaAddonState(chatId: string, personaId: string, addonId: string, enabled: boolean) {
+    return put<Chat>(`/chats/${chatId}/persona-addons/${personaId}/${addonId}`, { enabled })
   },
 
   delete(id: string) {

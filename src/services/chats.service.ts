@@ -4,7 +4,8 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspectiveLayers } from "./characters.service";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
-import type { Chat, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
+import type { Character } from "../types/character";
+import type { Chat, ChatAppearanceAction, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
 import type {
   Message,
@@ -27,6 +28,15 @@ import { buildEnv, type MacroEnv } from "../macros";
 import { resolvePersonaOrDefault } from "./personas.service";
 import { resolvePersonaForChatMacros } from "./persona-addon-states";
 import { resolveAndSanitizeForVectorization, contentHasMacroHints } from "./vectorization-content.service";
+import {
+  AVATAR_BINDING_PRIMARY,
+  AVATAR_BINDING_FIELDS,
+  findAvatarForFieldBinding,
+  findAvatarForGreetingBinding,
+  getAvatarBindings,
+  resolveAvatarImageId,
+  type AvatarBindingField,
+} from "./avatar-bindings";
 
 // --- Chat helpers ---
 
@@ -38,6 +48,12 @@ function parseMetadataObject(value: unknown): Record<string, any> {
   } catch {
     return {};
   }
+}
+
+const HIDDEN_FROM_RECENT_KEY = "hidden_from_recent";
+
+function isHiddenFromRecent(metadata: Record<string, any>): boolean {
+  return metadata[HIDDEN_FROM_RECENT_KEY] === true;
 }
 
 function isGroupMetadata(metadata: Record<string, any>): boolean {
@@ -259,6 +275,10 @@ function normalizeStoredMessageExtra(
     normalized.usageBySwipe,
     safeSwipeCount,
   );
+  const reasoningCarrierBySwipe = normalizeObjectEntries(
+    normalized.reasoningCarrierBySwipe,
+    safeSwipeCount,
+  );
 
   if (normalized.reasoning === null) {
     reasoningBySwipe[safeLegacySwipeId] = null;
@@ -299,11 +319,18 @@ function normalizeStoredMessageExtra(
     usageBySwipe[safeLegacySwipeId] = normalized.usage;
   }
 
+  if (normalized.reasoningCarrier === null) {
+    reasoningCarrierBySwipe[safeLegacySwipeId] = null;
+  } else if (isPlainObject(normalized.reasoningCarrier)) {
+    reasoningCarrierBySwipe[safeLegacySwipeId] = normalized.reasoningCarrier;
+  }
+
   delete normalized.reasoning;
   delete normalized.reasoningDuration;
   delete normalized.tokenCount;
   delete normalized.generationMetrics;
   delete normalized.usage;
+  delete normalized.reasoningCarrier;
 
   if (reasoningBySwipe.some((entry) => entry !== null)) {
     normalized.reasoningBySwipe = reasoningBySwipe;
@@ -335,6 +362,12 @@ function normalizeStoredMessageExtra(
     delete normalized.usageBySwipe;
   }
 
+  if (reasoningCarrierBySwipe.some((entry) => entry !== null)) {
+    normalized.reasoningCarrierBySwipe = reasoningCarrierBySwipe;
+  } else {
+    delete normalized.reasoningCarrierBySwipe;
+  }
+
   return normalized;
 }
 
@@ -357,6 +390,9 @@ function projectActiveSwipeExtra(
     : null;
   const activeUsage = Array.isArray(extra.usageBySwipe)
     ? extra.usageBySwipe[swipeId]
+    : null;
+  const activeReasoningCarrier = Array.isArray(extra.reasoningCarrierBySwipe)
+    ? extra.reasoningCarrierBySwipe[swipeId]
     : null;
 
   if (typeof activeReasoning === "string" && activeReasoning.length > 0) {
@@ -395,6 +431,12 @@ function projectActiveSwipeExtra(
     projected.usage = activeUsage;
   } else {
     delete projected.usage;
+  }
+
+  if (isPlainObject(activeReasoningCarrier)) {
+    projected.reasoningCarrier = activeReasoningCarrier;
+  } else {
+    delete projected.reasoningCarrier;
   }
 
   return projected;
@@ -468,6 +510,18 @@ function removeSwipeScopedExtraEntry(
     }
   }
 
+  if (Array.isArray(normalized.reasoningCarrierBySwipe)) {
+    const reasoningCarrierBySwipe = [
+      ...(normalized.reasoningCarrierBySwipe as (Record<string, unknown> | null)[]),
+    ];
+    reasoningCarrierBySwipe.splice(removedSwipeId, 1);
+    if (reasoningCarrierBySwipe.some((entry) => entry !== null)) {
+      normalized.reasoningCarrierBySwipe = reasoningCarrierBySwipe;
+    } else {
+      delete normalized.reasoningCarrierBySwipe;
+    }
+  }
+
   return normalized;
 }
 
@@ -496,6 +550,7 @@ const SWIPE_SCOPED_EXTRA_ARRAY_KEYS = [
   "tokenCountBySwipe",
   "generationMetricsBySwipe",
   "usageBySwipe",
+  "reasoningCarrierBySwipe",
 ] as const;
 
 /**
@@ -602,6 +657,20 @@ export interface GroupedRecentChatOptions {
   search?: string;
   sort?: GroupedRecentChatSort;
   direction?: 'asc' | 'desc';
+  favoriteCharacterIds?: string[];
+  hiddenCharacterIds?: string[];
+}
+
+/** A chat explicitly removed from the landing-page recent list. */
+export interface HiddenRecentChat {
+  id: string;
+  character_id: string;
+  name: string;
+  character_name: string;
+  character_avatar_path: string | null;
+  character_image_id: string | null;
+  updated_at: number;
+  is_group: boolean;
 }
 
 interface RecentChatCharacterInfo {
@@ -659,7 +728,12 @@ export function listRecentChatsGrouped(
   const searchTerm = options.search?.trim().toLowerCase() ?? '';
   const sort: GroupedRecentChatSort = options.sort ?? 'recent';
   const direction = options.direction ?? (sort === 'name' ? 'asc' : 'desc');
-  const isDefaultRecentSort = !searchTerm && sort === 'recent' && direction === 'desc';
+  const favoriteCharacterIds = new Set(options.favoriteCharacterIds ?? []);
+  const hiddenCharacterIds = new Set(options.hiddenCharacterIds ?? []);
+  const isDefaultRecentSort = !searchTerm
+    && favoriteCharacterIds.size === 0
+    && sort === 'recent'
+    && direction === 'desc';
 
   // Parse metadata in JS so a single malformed row cannot make SQLite abort
   // the landing-page recent-chat query while evaluating json_extract().
@@ -690,14 +764,27 @@ export function listRecentChatsGrouped(
         `).all(userId) as any[]
   );
 
-  const soloCounts = new Map<string, number>();
-  const groupCounts = new Map<string, number>();
-  const parsedRows = rows.map((row) => {
+  // Parse metadata first, then filter out chats the user has explicitly
+  // hidden from the landing-page recent list. Build the lineage lookup from
+  // the full set so forking/grouping resolution stays correct even when a
+  // hidden chat sits in a group's ancestry.
+  const allParsedRows = rows.map((row) => {
     const metadata = parseMetadataObject(row.metadata);
     const isGroup = isGroupMetadata(metadata);
-    if (!isGroup) soloCounts.set(row.character_id, (soloCounts.get(row.character_id) ?? 0) + 1);
     return { ...row, metadata, isGroup, groupKey: null as string | null };
   });
+  const parsedRows = allParsedRows.filter((row) => {
+    if (isHiddenFromRecent(row.metadata)) return false;
+    // Character visibility applies only to solo cards. Group chats remain
+    // chat-scoped entities even when one of their members is hidden from home.
+    return row.isGroup || !hiddenCharacterIds.has(row.character_id);
+  });
+
+  const soloCounts = new Map<string, number>();
+  const groupCounts = new Map<string, number>();
+  for (const row of parsedRows) {
+    if (!row.isGroup) soloCounts.set(row.character_id, (soloCounts.get(row.character_id) ?? 0) + 1);
+  }
 
   // Build a metadata lookup so we can resolve each group chat's lineage root.
   // Branches inherit the root's member-set key — without this, mutating the
@@ -705,7 +792,7 @@ export function listRecentChatsGrouped(
   // a separate landing-page entry, which users perceive as "new group chats
   // spawning on every fork."
   const metadataById = new Map<string, Record<string, any>>();
-  for (const row of parsedRows) metadataById.set(row.id, row.metadata);
+  for (const row of allParsedRows) metadataById.set(row.id, row.metadata);
 
   const resolveGroupDedupKey = (rowId: string, metadata: Record<string, any>): string | null => {
     const visited = new Set<string>([rowId]);
@@ -759,6 +846,9 @@ export function listRecentChatsGrouped(
 
   const sign = direction === 'asc' ? 1 : -1;
   const sortedRows = isDefaultRecentSort ? filteredRows : [...filteredRows].sort((a, b) => {
+    const aFavorite = !a.isGroup && favoriteCharacterIds.has(a.character_id) ? 1 : 0;
+    const bFavorite = !b.isGroup && favoriteCharacterIds.has(b.character_id) ? 1 : 0;
+    if (aFavorite !== bFavorite) return bFavorite - aFavorite;
     if (sort === 'name') {
       return sign * displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base' });
     }
@@ -796,6 +886,44 @@ export function listRecentChatsGrouped(
     limit: pagination.limit,
     offset: pagination.offset,
   };
+}
+
+/**
+ * Return only chats explicitly hidden from the landing-page recent list.
+ * This intentionally does not consider `landingHiddenCharacterIds`: that
+ * preference is client-owned and is managed separately from per-chat hides.
+ */
+export function listHiddenRecentChats(userId: string): HiddenRecentChat[] {
+  const rows = getDb().query(`
+    SELECT
+      c.id,
+      c.character_id,
+      c.name,
+      c.metadata,
+      c.updated_at,
+      ch.name AS character_name,
+      ch.avatar_path AS character_avatar_path,
+      ch.image_id AS character_image_id
+    FROM chats c
+    LEFT JOIN characters ch ON ch.id = c.character_id
+    WHERE c.user_id = ? AND c.character_id IS NOT NULL
+    ORDER BY c.updated_at DESC
+  `).all(userId) as any[];
+
+  return rows.flatMap((row): HiddenRecentChat[] => {
+    const metadata = parseMetadataObject(row.metadata);
+    if (!isHiddenFromRecent(metadata)) return [];
+    return [{
+      id: row.id,
+      character_id: row.character_id,
+      name: row.name || '',
+      character_name: row.character_name || '',
+      character_avatar_path: row.character_avatar_path || null,
+      character_image_id: row.character_image_id || null,
+      updated_at: row.updated_at,
+      is_group: isGroupMetadata(metadata),
+    }];
+  });
 }
 
 export function listChatSummaries(userId: string, characterId: string): ChatSummary[] {
@@ -923,6 +1051,15 @@ export function getChat(userId: string, id: string): Chat | null {
 export function createChat(userId: string, input: CreateChatInput): Chat {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
+  const requestedGreetingIndex = input.greeting_index
+    ?? input.metadata?.activeGreetingIndex;
+  const greetingIndex =
+    Number.isInteger(requestedGreetingIndex) && requestedGreetingIndex >= 0
+      ? requestedGreetingIndex
+      : 0;
+  const metadata = input.character_id
+    ? { ...(input.metadata || {}), activeGreetingIndex: greetingIndex }
+    : (input.metadata || {});
 
   // Auto-name with character name
   let chatName = input.name || "";
@@ -933,14 +1070,14 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
 
   getDb()
     .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(id, userId, input.character_id ?? null, chatName, JSON.stringify(input.metadata || {}), now, now);
+    .run(id, userId, input.character_id ?? null, chatName, JSON.stringify(metadata), now, now);
 
   // Insert the character's greeting as the opening message
   const character = input.character_id ? getCharacter(userId, input.character_id) : null;
   if (character) {
     let greeting = character.first_mes;
-    if (input.greeting_index && input.greeting_index >= 1 && character.alternate_greetings?.length) {
-      const altIdx = input.greeting_index - 1;
+    if (greetingIndex >= 1 && character.alternate_greetings?.length) {
+      const altIdx = greetingIndex - 1;
       if (altIdx < character.alternate_greetings.length) {
         greeting = character.alternate_greetings[altIdx];
       }
@@ -953,13 +1090,21 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
         extra: {
           greeting: true,
           greeting_character_id: character.id,
-          greeting_index: input.greeting_index ?? 0,
+          greeting_index: greetingIndex,
         },
       }, userId);
     }
   }
 
-  return getChat(userId, id)!;
+  const created = getChat(userId, id)!;
+  if (character && findAvatarForGreetingBinding(character, greetingIndex)) {
+    return applyChatAppearance(userId, id, {
+      type: "greeting",
+      greeting_index: greetingIndex,
+      ...(metadata.group === true ? { character_id: character.id } : {}),
+    })?.chat || created;
+  }
+  return created;
 }
 
 export function createGroupChat(userId: string, input: CreateGroupChatInput): Chat {
@@ -982,11 +1127,22 @@ export function convertSoloChatToGroup(userId: string, chatId: string): Chat | n
   if (source.metadata?.group) throw new Error("Chat is already a group chat");
   if (!source.character_id) throw new Error("Temporary chats cannot be converted to group chats");
 
+  // Conversion copies the conversation into a new, independently managed
+  // group chat. A solo fork's lineage markers describe its relationship to
+  // another solo chat; carrying them into the group makes the new group show
+  // up in that solo branch tree and lets lineage-based consumers treat it as
+  // another solo-character branch instead of a distinct group.
+  const {
+    branched_from: _branchedFrom,
+    branch_at_message: _branchAtMessage,
+    ...sourceMetadata
+  } = source.metadata || {};
+
   const converted = createChatRaw(userId, {
     character_id: source.character_id,
     name: source.name,
     metadata: {
-      ...(source.metadata || {}),
+      ...sourceMetadata,
       group: true,
       character_ids: [source.character_id],
     },
@@ -1196,15 +1352,33 @@ export function updateChat(
   const changedFields = diffChatChangedFields(existing, updated);
   eventBus.emit(EventType.CHAT_CHANGED, { chat: updated, changedFields }, userId);
 
-  // Detect avatar switch and emit specific event for theme resampling / extensions
-  const oldAvatarId = existing.metadata?.active_avatar_id as string | undefined;
-  const newAvatarId = updated.metadata?.active_avatar_id as string | undefined;
-  if (oldAvatarId !== newAvatarId) {
-    eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
-      chatId: id,
-      characterId: updated.character_id,
-      imageId: newAvatarId || null,
-    }, userId);
+  // Detect avatar switches and emit specific events for theme resampling / extensions.
+  if (updated.metadata?.group === true) {
+    const oldByCharacter = isPlainObject(existing.metadata?.group_active_avatar_ids)
+      ? existing.metadata.group_active_avatar_ids
+      : {};
+    const newByCharacter = isPlainObject(updated.metadata?.group_active_avatar_ids)
+      ? updated.metadata.group_active_avatar_ids
+      : {};
+    const characterIds = new Set([...Object.keys(oldByCharacter), ...Object.keys(newByCharacter)]);
+    for (const characterId of characterIds) {
+      if (oldByCharacter[characterId] === newByCharacter[characterId]) continue;
+      eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
+        chatId: id,
+        characterId,
+        imageId: typeof newByCharacter[characterId] === "string" ? newByCharacter[characterId] : null,
+      }, userId);
+    }
+  } else {
+    const oldAvatarId = existing.metadata?.active_avatar_id as string | undefined;
+    const newAvatarId = updated.metadata?.active_avatar_id as string | undefined;
+    if (oldAvatarId !== newAvatarId) {
+      eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
+        chatId: id,
+        characterId: updated.character_id,
+        imageId: newAvatarId || null,
+      }, userId);
+    }
   }
 
   return updated;
@@ -1314,6 +1488,222 @@ export function setGroupMemberAlternateFields(
   return updateChat(userId, chatId, { metadata: nextMetadata });
 }
 
+export interface ChatAppearanceResult {
+  chat: Chat;
+  greeting_message?: Message;
+}
+
+function setCharacterMetadataValue(
+  metadata: Record<string, any>,
+  group: boolean,
+  characterId: string,
+  soloKey: string,
+  groupKey: string,
+  value: unknown,
+): void {
+  if (!group) {
+    if (value === undefined || value === null) delete metadata[soloKey];
+    else metadata[soloKey] = value;
+    return;
+  }
+
+  const current = isPlainObject(metadata[groupKey]) ? { ...metadata[groupKey] } : {};
+  if (value === undefined || value === null) delete current[characterId];
+  else current[characterId] = value;
+  if (Object.keys(current).length > 0) metadata[groupKey] = current;
+  else delete metadata[groupKey];
+}
+
+function getCharacterSelections(
+  metadata: Record<string, any>,
+  group: boolean,
+  characterId: string,
+): Record<string, string> {
+  if (!group) {
+    return isPlainObject(metadata.alternate_field_selections)
+      ? { ...metadata.alternate_field_selections } as Record<string, string>
+      : {};
+  }
+  const byCharacter = isPlainObject(metadata.group_alternate_field_selections)
+    ? metadata.group_alternate_field_selections
+    : {};
+  return isPlainObject(byCharacter[characterId])
+    ? { ...byCharacter[characterId] } as Record<string, string>
+    : {};
+}
+
+function setCharacterSelections(
+  metadata: Record<string, any>,
+  group: boolean,
+  characterId: string,
+  selections: Record<string, string>,
+): void {
+  setCharacterMetadataValue(
+    metadata,
+    group,
+    characterId,
+    "alternate_field_selections",
+    "group_alternate_field_selections",
+    Object.keys(selections).length > 0 ? selections : null,
+  );
+}
+
+function applyAvatarEntryToMetadata(
+  character: Character,
+  metadata: Record<string, any>,
+  group: boolean,
+  characterId: string,
+  avatarEntryId: string,
+): boolean {
+  const imageId = resolveAvatarImageId(character, avatarEntryId);
+  if (imageId === undefined) return false;
+
+  setCharacterMetadataValue(
+    metadata,
+    group,
+    characterId,
+    "active_avatar_id",
+    "group_active_avatar_ids",
+    avatarEntryId === AVATAR_BINDING_PRIMARY ? null : imageId,
+  );
+  setCharacterMetadataValue(
+    metadata,
+    group,
+    characterId,
+    "active_avatar_entry_id",
+    "group_active_avatar_entry_ids",
+    avatarEntryId,
+  );
+
+  const binding = getAvatarBindings(character)[avatarEntryId];
+  if (!binding) return true;
+
+  const selections = getCharacterSelections(metadata, group, characterId);
+  for (const field of AVATAR_BINDING_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(binding, field)) continue;
+    const variantId = binding[field];
+    if (variantId === null) {
+      delete selections[field];
+    } else if (typeof variantId === "string" && hasAlternateVariant(character, field, variantId)) {
+      selections[field] = variantId;
+    } else {
+      return false;
+    }
+  }
+  setCharacterSelections(metadata, group, characterId, selections);
+
+  if (Object.prototype.hasOwnProperty.call(binding, "greeting_index")) {
+    const index = binding.greeting_index === null ? 0 : binding.greeting_index;
+    if (!Number.isInteger(index) || index! < 0 || index! > character.alternate_greetings.length) return false;
+    setCharacterMetadataValue(
+      metadata,
+      group,
+      characterId,
+      "activeGreetingIndex",
+      "group_active_greeting_indices",
+      index,
+    );
+  }
+  return true;
+}
+
+function updateAppearanceGreetingMessage(
+  userId: string,
+  chatId: string,
+  character: Character,
+  greetingIndex: number,
+  group: boolean,
+): Message | undefined {
+  const greeting = greetingIndex === 0
+    ? character.first_mes
+    : character.alternate_greetings[greetingIndex - 1];
+  if (typeof greeting !== "string") return undefined;
+
+  const message = getMessages(userId, chatId).find((candidate) =>
+    candidate.extra?.greeting === true
+    && (candidate.extra?.greeting_character_id === character.id
+      || (!group && !candidate.extra?.greeting_character_id)),
+  );
+  if (!message) return undefined;
+  return updateMessage(userId, message.id, {
+    content: greeting,
+    extra: { ...message.extra, greeting_index: greetingIndex },
+  }) || undefined;
+}
+
+/**
+ * Apply one appearance action using the latest chat row. Avatar bindings are
+ * resolved server-side so all metadata keys change in one CHAT_CHANGED event.
+ */
+export function applyChatAppearance(
+  userId: string,
+  chatId: string,
+  action: ChatAppearanceAction,
+): ChatAppearanceResult | null {
+  const chat = getChat(userId, chatId);
+  if (!chat) return null;
+  const group = chat.metadata?.group === true;
+  const characterId = action.character_id || chat.character_id;
+  if (!characterId) return null;
+  if (group && !getGroupMemberIds(chat.metadata).includes(characterId)) return null;
+  if (!group && characterId !== chat.character_id) return null;
+
+  const character = getCharacter(userId, characterId);
+  if (!character) return null;
+  const metadata: Record<string, any> = { ...(chat.metadata || {}) };
+  let greetingChanged = false;
+
+  if (action.type === "avatar") {
+    if (!applyAvatarEntryToMetadata(character, metadata, group, characterId, action.avatar_entry_id)) return null;
+    greetingChanged = Object.prototype.hasOwnProperty.call(
+      getAvatarBindings(character)[action.avatar_entry_id] || {},
+      "greeting_index",
+    );
+  } else if (action.type === "field") {
+    if (!AVATAR_BINDING_FIELDS.includes(action.field as AvatarBindingField)) return null;
+    if (action.variant_id !== null && !hasAlternateVariant(character, action.field, action.variant_id)) return null;
+    const selections = getCharacterSelections(metadata, group, characterId);
+    if (action.variant_id === null) delete selections[action.field];
+    else selections[action.field] = action.variant_id;
+    setCharacterSelections(metadata, group, characterId, selections);
+
+    const avatarEntryId = findAvatarForFieldBinding(character, action.field, action.variant_id);
+    if (avatarEntryId) {
+      if (!applyAvatarEntryToMetadata(character, metadata, group, characterId, avatarEntryId)) return null;
+      greetingChanged = Object.prototype.hasOwnProperty.call(
+        getAvatarBindings(character)[avatarEntryId] || {},
+        "greeting_index",
+      );
+    }
+  } else {
+    if (!Number.isInteger(action.greeting_index)
+      || action.greeting_index < 0
+      || action.greeting_index > character.alternate_greetings.length) return null;
+    setCharacterMetadataValue(
+      metadata,
+      group,
+      characterId,
+      "activeGreetingIndex",
+      "group_active_greeting_indices",
+      action.greeting_index,
+    );
+    const avatarEntryId = findAvatarForGreetingBinding(character, action.greeting_index);
+    if (avatarEntryId && !applyAvatarEntryToMetadata(character, metadata, group, characterId, avatarEntryId)) return null;
+    greetingChanged = true;
+  }
+
+  const updated = updateChat(userId, chatId, { metadata });
+  if (!updated) return null;
+
+  const greetingIndex = group
+    ? (updated.metadata.group_active_greeting_indices?.[characterId] as number | undefined)
+    : (updated.metadata.activeGreetingIndex as number | undefined);
+  const greetingMessage = greetingChanged && Number.isInteger(greetingIndex)
+    ? updateAppearanceGreetingMessage(userId, chatId, character, greetingIndex!, group)
+    : undefined;
+  return { chat: updated, ...(greetingMessage ? { greeting_message: greetingMessage } : {}) };
+}
+
 // ---- Group chat member management ----
 
 export function addGroupMember(
@@ -1354,6 +1744,14 @@ export function addGroupMember(
         },
       }, userId);
     }
+    const greetingIndex = options?.greeting_index ?? 0;
+    if (findAvatarForGreetingBinding(character, greetingIndex)) {
+      return applyChatAppearance(userId, chatId, {
+        type: "greeting",
+        greeting_index: greetingIndex,
+        character_id: character.id,
+      })?.chat || updated;
+    }
   }
 
   return updated;
@@ -1390,6 +1788,19 @@ export function removeGroupMember(userId: string, chatId: string, characterId: s
     delete groupAlternateFieldSelections[characterId];
   }
 
+  const groupActiveAvatarIds = isPlainObject(chat.metadata.group_active_avatar_ids)
+    ? { ...chat.metadata.group_active_avatar_ids }
+    : undefined;
+  if (groupActiveAvatarIds) delete groupActiveAvatarIds[characterId];
+  const groupActiveAvatarEntryIds = isPlainObject(chat.metadata.group_active_avatar_entry_ids)
+    ? { ...chat.metadata.group_active_avatar_entry_ids }
+    : undefined;
+  if (groupActiveAvatarEntryIds) delete groupActiveAvatarEntryIds[characterId];
+  const groupActiveGreetingIndices = isPlainObject(chat.metadata.group_active_greeting_indices)
+    ? { ...chat.metadata.group_active_greeting_indices }
+    : undefined;
+  if (groupActiveGreetingIndices) delete groupActiveGreetingIndices[characterId];
+
   const newMetadata = {
     ...chat.metadata,
     character_ids: newCharacterIds,
@@ -1398,11 +1809,17 @@ export function removeGroupMember(userId: string, chatId: string, characterId: s
     ...(groupAlternateFieldSelections !== undefined && {
       group_alternate_field_selections: groupAlternateFieldSelections,
     }),
+    ...(groupActiveAvatarIds !== undefined && { group_active_avatar_ids: groupActiveAvatarIds }),
+    ...(groupActiveAvatarEntryIds !== undefined && { group_active_avatar_entry_ids: groupActiveAvatarEntryIds }),
+    ...(groupActiveGreetingIndices !== undefined && { group_active_greeting_indices: groupActiveGreetingIndices }),
   };
 
   if (groupAlternateFieldSelections && Object.keys(groupAlternateFieldSelections).length === 0) {
     delete newMetadata.group_alternate_field_selections;
   }
+  if (groupActiveAvatarIds && Object.keys(groupActiveAvatarIds).length === 0) delete newMetadata.group_active_avatar_ids;
+  if (groupActiveAvatarEntryIds && Object.keys(groupActiveAvatarEntryIds).length === 0) delete newMetadata.group_active_avatar_entry_ids;
+  if (groupActiveGreetingIndices && Object.keys(groupActiveGreetingIndices).length === 0) delete newMetadata.group_active_greeting_indices;
 
   // If the removed character was the primary character_id on the chat row,
   // reassign to the first remaining member
@@ -1499,6 +1916,30 @@ export function getLastAssistantMessage(userId: string, chatId: string): Message
   return rowToMessage(row);
 }
 
+export function getPreviousSameRoleContent(
+  userId: string,
+  chatId: string,
+  isUser: boolean,
+  beforeMessageId?: string,
+): string | undefined {
+  const boundary = beforeMessageId
+    ? getDb()
+        .query("SELECT m.index_in_chat FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.id = ? AND m.chat_id = ? AND c.user_id = ?")
+        .get(beforeMessageId, chatId, userId) as { index_in_chat?: number } | null
+    : null;
+  const beforeIndex = typeof boundary?.index_in_chat === "number"
+    ? boundary.index_in_chat
+    : Number.MAX_SAFE_INTEGER;
+  const prior = getDb()
+    .query("SELECT m.content FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? AND m.is_user = ? AND m.index_in_chat < ? ORDER BY m.index_in_chat DESC LIMIT 1")
+    .get(chatId, userId, isUser ? 1 : 0, beforeIndex) as { content?: string } | null;
+  if (typeof prior?.content === "string") return prior.content;
+  const greeting = getDb()
+    .query("SELECT m.content FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC LIMIT 1")
+    .get(chatId, userId) as { content?: string } | null;
+  return typeof greeting?.content === "string" ? greeting.content : undefined;
+}
+
 export function getLastMessage(userId: string, chatId: string): Message | null {
   const row = getDb()
     .query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC LIMIT 1")
@@ -1514,6 +1955,7 @@ let _stmtMsgAll: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgCount: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgTail: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtMsgRolesBefore: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgGen = -1;
 
 function getMsgStmts() {
@@ -1524,18 +1966,64 @@ function getMsgStmts() {
     _stmtMsgCount = null;
     _stmtMsgTail = null;
     _stmtMsgById = null;
+    _stmtMsgRolesBefore = null;
     _stmtMsgGen = gen;
   }
   if (!_stmtMsgAll) _stmtMsgAll = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC");
   if (!_stmtMsgCount) _stmtMsgCount = db.query("SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ?");
   if (!_stmtMsgTail) _stmtMsgTail = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC LIMIT ?");
   if (!_stmtMsgById) _stmtMsgById = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.id = ? AND c.user_id = ?");
-  return { all: _stmtMsgAll, count: _stmtMsgCount, tail: _stmtMsgTail, byId: _stmtMsgById };
+  if (!_stmtMsgRolesBefore) _stmtMsgRolesBefore = db.query("SELECT m.id, m.index_in_chat, m.is_user, m.extra FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? AND m.index_in_chat < ? ORDER BY m.index_in_chat DESC LIMIT ?");
+  return { all: _stmtMsgAll, count: _stmtMsgCount, tail: _stmtMsgTail, byId: _stmtMsgById, rolesBefore: _stmtMsgRolesBefore };
 }
 
 export function getMessages(userId: string, chatId: string): Message[] {
   const rows = getMsgStmts().all.all(chatId, userId) as any[];
   return rows.map(rowToMessage);
+}
+
+/**
+ * Return the visible user messages at the end of a chat without hydrating the
+ * entire history (including swipe text and per-swipe metadata). Generation
+ * uses this on every normal send to remember which queued user turns were
+ * consumed by the eventual assistant response.
+ */
+export function getTrailingVisibleUserMessageIds(userId: string, chatId: string): string[] {
+  const pageSize = 128;
+  let beforeIndex = Number.MAX_SAFE_INTEGER;
+  const ids: string[] = [];
+
+  while (true) {
+    const rows = getMsgStmts().rolesBefore.all(
+      chatId,
+      userId,
+      beforeIndex,
+      pageSize,
+    ) as Array<{ id: string; index_in_chat: number; is_user: number; extra: string | null }>;
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      let hidden = false;
+      try {
+        const extra = JSON.parse(row.extra || "{}");
+        hidden = extra?.hidden === true;
+      } catch {
+        // Match rowToMessage's malformed-extra fallback: treat it as visible.
+      }
+      if (hidden) continue;
+      if (!row.is_user) {
+        ids.reverse();
+        return ids;
+      }
+      ids.push(row.id);
+    }
+
+    if (rows.length < pageSize) break;
+    beforeIndex = rows[rows.length - 1].index_in_chat;
+  }
+
+  ids.reverse();
+  return ids;
 }
 
 export function listMessages(userId: string, chatId: string, pagination: PaginationParams, opts?: { light?: boolean }): PaginatedResult<Message> {
@@ -2085,6 +2573,7 @@ const SWIPE_SCOPED_EXTRA_KEYS = [
   "tokenCount",
   "generationMetrics",
   "usage",
+  "reasoningCarrier",
 ] as const;
 
 /**
@@ -3318,7 +3807,7 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
     const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
     if (chunk) {
       const cortexConfig = memoryCortex.getCortexConfig(userId);
-      if (!cortexConfig.enabled) return;
+      if (!memoryCortex.isCortexEnabledForChat(cortexConfig, chat?.metadata)) return;
 
       const characterNames: string[] = [];
       const aliasMaps: Map<string, string>[] = [];

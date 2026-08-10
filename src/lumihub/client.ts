@@ -5,7 +5,7 @@
  */
 import type { LumiHubWSMessage } from "./types";
 import { installCharacter, installPreset, installTheme, installWorldbook } from "./installer";
-import { buildInstallManifest } from "./manifest";
+import { buildInstallManifest, selectLumiHubManifestEntries } from "./manifest";
 import { buildStatsSyncPayload } from "./usage-stats";
 import { updateLastConnected, isStatsSharingEnabled } from "../services/lumihub-link.service";
 import { eventBus } from "../ws/bus";
@@ -368,14 +368,14 @@ class LumiHubWSClient {
   /** Build and send the install manifest to LumiHub. */
   private syncManifest(): void {
     try {
-      const entries = buildInstallManifest(this.userId);
+      const entries = selectLumiHubManifestEntries(buildInstallManifest(this.userId));
       this.send({
         type: "manifest_sync",
         id: crypto.randomUUID(),
         payload: { entries },
         timestamp: Date.now(),
       });
-      console.log(`[LumiHub WS] Sent manifest sync (${entries.length} entries)`);
+      console.log(`[LumiHub WS] Sent manifest sync (${entries.length} LumiHub entries)`);
     } catch (err) {
       console.warn("[LumiHub WS] Failed to build/send manifest:", err);
     }

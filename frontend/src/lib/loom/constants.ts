@@ -119,6 +119,7 @@ export const DEFAULT_PROMPT_BEHAVIOR: PromptBehavior = {
 
 export const DEFAULT_COMPLETION_SETTINGS: CompletionSettings = {
   assistantPrefill: '',
+  reasoningPrefill: '',
   assistantImpersonation: '',
   continuePrefill: false,
   continuePostfix: ' ',
@@ -135,6 +136,7 @@ export const DEFAULT_ADVANCED_SETTINGS: AdvancedSettings = {
   seed: -1,
   customStopStrings: [],
   collapseMessages: false,
+  trimIncompleteWords: false,
 }
 
 // ============================================================================

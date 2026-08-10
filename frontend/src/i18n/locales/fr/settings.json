@@ -195,6 +195,10 @@
       "cards": "Cartes",
       "compactList": "Liste compacte",
       "layoutHelper": "Basculez la page d'accueil entre la galerie de cartes actuelle et une liste adaptative plus dense de discussions récentes.",
+      "galleryWidth": "LARGEUR DE LA GALERIE DE DISCUSSIONS RÉCENTES",
+      "compact": "Compacte",
+      "expanded": "Étendue",
+      "galleryWidthHelper": "Conservez une largeur de lecture confortable sur ordinateur ou étendez la galerie de discussions récentes à toute la fenêtre.",
       "batchSize": "LANDING PAGE CHATS PAR BATCH"
     }
   },

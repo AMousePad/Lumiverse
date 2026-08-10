@@ -20,6 +20,10 @@ import {
   resolveWorldInfoOutlets,
 } from "../services/prompt-assembly.service";
 import { resolveRegexActionEffects } from "../services/associative-regex-effects.service";
+import {
+  personaHasAddon,
+  withChatPersonaAddonState,
+} from "../services/persona-addon-states";
 import type { RegexActionEffect } from "../types/regex-script";
 
 async function runMessageContentProcessors(
@@ -29,6 +33,30 @@ async function runMessageContentProcessors(
 ): Promise<MessageContentProcessorCtx> {
   if (messageContentProcessorChain.count === 0) return ctx;
   return messageContentProcessorChain.run(ctx, userId, signal);
+}
+
+function editRegexOptions(
+  scripts: readonly { metadata?: Record<string, any> }[],
+  userId: string,
+  chatId: string,
+  message: { id: string; index_in_chat: number; is_user: boolean } | null,
+) {
+  const hasRepeatBack = regexScriptsSvc.hasRegexMatchAction(
+    scripts,
+    "repeat_back",
+  );
+  if (!hasRepeatBack || (message?.index_in_chat ?? -1) <= 0) return undefined;
+  const previousContent = message
+    ? svc.getPreviousSameRoleContent(
+        userId,
+        chatId,
+        message.is_user,
+        message.id,
+      )
+    : undefined;
+  return {
+    ...(previousContent !== undefined ? { previousContent } : {}),
+  };
 }
 
 // Auto-greetings are inserted by service-layer createMessage calls that
@@ -43,6 +71,7 @@ async function processChatGreeting(userId: string, chat: { id: string }) {
     chatId: chat.id,
     messageId: greeting.id,
     content: greeting.content,
+    isUser: false,
     extra: greeting.extra,
     origin: "create",
     userId,
@@ -58,9 +87,9 @@ async function processChatGreeting(userId: string, chat: { id: string }) {
 
 const app = new Hono();
 
-/** Matches the `{{outlet::name}}` macro so display resolution can populate
- *  the world-info outlet map only when a message actually references it. */
-const OUTLET_MACRO_RE = /\{\{outlet::/i;
+/** Matches an outlet macro so display resolution can populate Lorebook
+ * outlets when a directly or indirectly referenced persona outlet needs one. */
+const OUTLET_MACRO_RE = /\{\{(?:outlet|persona_outlet|personaoutlet)::/i;
 const DISPLAY_PREPROCESS_BATCH_MAX = 100;
 
 interface DisplayPreprocessItem {
@@ -98,6 +127,7 @@ async function runDisplayPreprocessItem(
     ? await messageContentProcessorChain.run({
         chatId,
         content: item.rawContent,
+        isUser: item.role === "user",
         origin: "render",
         userId,
         ...(item.messageId ? { messageId: item.messageId } : {}),
@@ -150,6 +180,14 @@ app.get("/recent-grouped", (c) => {
   const search = c.req.query("search");
   const sortParam = c.req.query("sort");
   const directionParam = c.req.query("direction");
+  const favoriteCharacterIds = c.req.query("favorite_ids")
+    ?.split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const hiddenCharacterIds = c.req.query("hidden_character_ids")
+    ?.split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
   const sort: svc.GroupedRecentChatSort | undefined =
     sortParam === "name" || sortParam === "recent" || sortParam === "created" ? sortParam : undefined;
   const direction: "asc" | "desc" | undefined =
@@ -158,7 +196,14 @@ app.get("/recent-grouped", (c) => {
     ...(search ? { search } : {}),
     ...(sort ? { sort } : {}),
     ...(direction ? { direction } : {}),
+    ...(favoriteCharacterIds?.length ? { favoriteCharacterIds } : {}),
+    ...(hiddenCharacterIds?.length ? { hiddenCharacterIds } : {}),
   }));
+});
+
+app.get("/hidden-from-recent", (c) => {
+  const userId = c.get("userId");
+  return c.json(svc.listHiddenRecentChats(userId));
 });
 
 app.get("/character-chats/:characterId", (c) => {
@@ -297,6 +342,67 @@ app.patch("/:id/members/:characterId/alternate-fields", async (c) => {
   if (!updated) {
     return c.json({ error: "Not found, not a group chat/member, or invalid alternate field selection" }, 400);
   }
+  return c.json(updated);
+});
+
+app.patch("/:id/appearance", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Appearance action must be an object" }, 400);
+  }
+
+  const characterId = typeof body.character_id === "string" && body.character_id
+    ? body.character_id
+    : undefined;
+  let action: import("../types/chat").ChatAppearanceAction | null = null;
+  if (body.type === "avatar" && typeof body.avatar_entry_id === "string" && body.avatar_entry_id) {
+    action = { type: "avatar", avatar_entry_id: body.avatar_entry_id, ...(characterId ? { character_id: characterId } : {}) };
+  } else if (
+    body.type === "field"
+    && (body.field === "description" || body.field === "personality" || body.field === "scenario")
+    && (body.variant_id === null || typeof body.variant_id === "string")
+  ) {
+    action = { type: "field", field: body.field, variant_id: body.variant_id, ...(characterId ? { character_id: characterId } : {}) };
+  } else if (body.type === "greeting" && Number.isInteger(body.greeting_index)) {
+    action = { type: "greeting", greeting_index: body.greeting_index, ...(characterId ? { character_id: characterId } : {}) };
+  }
+  if (!action) return c.json({ error: "Invalid appearance action" }, 400);
+
+  const result = svc.applyChatAppearance(userId, c.req.param("id"), action);
+  if (!result) return c.json({ error: "Invalid character, avatar, or binding" }, 400);
+  return c.json(result);
+});
+
+/**
+ * Atomically toggle one persona add-on in this chat. Besides the existing
+ * boolean override, this records toggle recency so that the newest enabled
+ * add-on with alternative art owns the active persona avatar.
+ */
+app.put("/:id/persona-addons/:personaId/:addonId", async (c) => {
+  const userId = c.get("userId");
+  const chat = svc.getChat(userId, c.req.param("id"));
+  if (!chat) return c.json({ error: "Not found" }, 404);
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body.enabled !== "boolean") {
+    return c.json({ error: "enabled must be a boolean" }, 400);
+  }
+
+  const persona = personasSvc.getPersona(userId, c.req.param("personaId"));
+  if (!persona) return c.json({ error: "Persona not found" }, 404);
+  if (!personaHasAddon(persona, c.req.param("addonId"))) {
+    return c.json({ error: "Add-on is not attached to this persona" }, 404);
+  }
+
+  const metadata = withChatPersonaAddonState(
+    chat.metadata,
+    persona.id,
+    c.req.param("addonId"),
+    body.enabled,
+  );
+  const updated = svc.updateChat(userId, chat.id, { metadata });
+  if (!updated) return c.json({ error: "Not found" }, 404);
   return c.json(updated);
 });
 
@@ -691,7 +797,14 @@ app.post("/:chatId/messages", async (c) => {
   }
 
   const processed = await runMessageContentProcessors(
-    { chatId, content: body.content, extra: body.extra, origin: "create", userId },
+    {
+      chatId,
+      content: body.content,
+      isUser: body.is_user === true,
+      extra: body.extra,
+      origin: "create",
+      userId,
+    },
     userId,
     c.req.raw.signal,
   );
@@ -843,11 +956,13 @@ app.put("/:chatId/messages/:id", async (c) => {
   const body = await c.req.json();
 
   if (body.content !== undefined) {
+    const existing = svc.getMessage(userId, messageId);
     const processed = await runMessageContentProcessors(
       {
         chatId,
         messageId,
         content: body.content,
+        isUser: existing?.is_user === true,
         extra: body.extra,
         origin: "update",
         userId,
@@ -865,13 +980,20 @@ app.put("/:chatId/messages/:id", async (c) => {
         chatId,
       });
       if (editScripts.length > 0) {
-        const existing = svc.getMessage(userId, messageId);
         const placement = existing?.is_user ? "user_input" as const : "ai_output" as const;
         body.content = await regexScriptsSvc.applyRegexScripts(
           body.content,
           editScripts,
           placement,
           0,
+          undefined,
+          undefined,
+          editRegexOptions(
+            editScripts,
+            userId,
+            chatId,
+            existing,
+          ),
         );
       }
     }
@@ -915,11 +1037,13 @@ app.post("/:chatId/messages/:id/swipe", async (c) => {
   if (body.direction === "left" || body.direction === "right") {
     msg = svc.cycleSwipe(userId, messageId, body.direction);
   } else if (body.content !== undefined) {
+    const existing = svc.getMessage(userId, messageId);
     const processed = await runMessageContentProcessors(
       {
         chatId,
         messageId,
         content: body.content,
+        isUser: existing?.is_user === true,
         origin: "swipe_add",
         userId,
       },
@@ -942,12 +1066,14 @@ app.put("/:chatId/messages/:id/swipe/:idx", async (c) => {
   const body = await c.req.json();
   if (body.content === undefined) return c.json({ error: "content is required" }, 400);
   const idx = parseInt(c.req.param("idx"), 10);
+  const existing = svc.getMessage(userId, messageId);
 
   const processed = await runMessageContentProcessors(
     {
       chatId,
       messageId,
       content: body.content,
+      isUser: existing?.is_user === true,
       origin: "swipe_update",
       swipeIndex: idx,
       userId,
@@ -964,13 +1090,20 @@ app.put("/:chatId/messages/:id/swipe/:idx", async (c) => {
       chatId,
     });
     if (editScripts.length > 0) {
-      const existing = svc.getMessage(userId, messageId);
       const placement = existing?.is_user ? "user_input" as const : "ai_output" as const;
       finalContent = await regexScriptsSvc.applyRegexScripts(
         finalContent,
         editScripts,
         placement,
         0,
+        undefined,
+        undefined,
+        editRegexOptions(
+          editScripts,
+          userId,
+          chatId,
+          existing,
+        ),
       );
     }
   }

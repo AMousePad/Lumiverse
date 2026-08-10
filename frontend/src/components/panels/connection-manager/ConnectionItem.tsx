@@ -289,14 +289,16 @@ export default function ConnectionItem({
   const handleRef = useDragHandleBlur(isDragging)
 
   return (
-    <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging, isActive && styles.itemActive)}>
+    <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging, isActive && styles.itemActive)} data-component="ConnectionItem">
       {editing ? (
-        <ConnectionForm
-          providers={providers}
-          profile={profile}
-          onSave={handleSaveEdit}
-          onCancel={() => setEditing(false)}
-        />
+        <div data-component="ConnectionItem">
+          <ConnectionForm
+            providers={providers}
+            profile={profile}
+            onSave={handleSaveEdit}
+            onCancel={() => setEditing(false)}
+          />
+        </div>
       ) : (
         <>
           <div className={styles.itemRow}>

@@ -240,6 +240,7 @@ function resetStore(): void {
     drawerTab: null,
     settingsModalOpen: false,
     settingsActiveView: 'general',
+    spindleSettings: { infoLoggingEnabled: false },
   } as never)
 }
 // The loader is intentionally loaded after boundary mocks so this test exercises
@@ -974,8 +975,9 @@ describe('public root producers', () => {
 
   test('inject and mount roots carry generation metadata and stale factories cannot register', () => {
     let active = true
-    const domHelper = createDOMHelper(extensionId, undefined, undefined, () => {
+    const domHelper = createDOMHelper(extensionId, undefined, undefined, undefined, () => {
       if (!active) throw new Error('SPINDLE_FRONTEND_INACTIVE')
+      return true
     }, generation)
     const target = document.createElement('section')
     target.id = 'injection-target'
@@ -986,6 +988,7 @@ describe('public root producers', () => {
     const oldComponents = createComponentsHelper(extensionId, extensionId, async () => ({ categories: [] }), generation)
     const oldUI = createUIEventsHelper(extensionId, () => {
       if (!active) throw new Error('SPINDLE_FRONTEND_INACTIVE')
+      return true
     }, generation)
     createComponentsHelper(extensionId, extensionId, async () => ({ categories: [] }), nextGeneration)
     active = false
@@ -1159,6 +1162,7 @@ describe('retained non-UI context lifecycle', () => {
         ['messages.listMessageIds', () => firstContext.messages.listMessageIds()],
         ['display.registerResolver', () => firstContext.display.registerResolver({ resolveTemplates: async () => null, applyScripts: async () => null })],
         ['display.invalidate', () => firstContext.display.invalidate(['stale'])],
+        ['display.setExpression', () => firstContext.display.setExpression({ chatId: 'stale', characterId: 'stale', label: 'stale', imageId: 'stale' })],
         ['containers.registerContainer', () => firstContext.containers.registerContainer({ id: 'stale', side: 'left', element: document.createElement('div') })],
         ['containers.unregisterContainer', () => firstContext.containers.unregisterContainer('stale')],
         ['getActiveChat', () => firstContext.getActiveChat()],

@@ -107,9 +107,12 @@ export function registerRegexRefMacros(): void {
             ? (await evaluate(substituted, ctx.env, registry)).text
             : substituted;
         } else {
-          // "none" or "escaped" mode
+          // "none", "find", or "escaped" mode
           let replaceString = script.replace_string;
-          if (script.substitute_macros !== "none") {
+          if (
+            script.substitute_macros !== "none"
+            && script.substitute_macros !== "find"
+          ) {
             const resolved = (await evaluate(replaceString, ctx.env, registry)).text;
             replaceString = script.substitute_macros === "escaped"
               ? resolved.replace(/\$/g, "$$$$")

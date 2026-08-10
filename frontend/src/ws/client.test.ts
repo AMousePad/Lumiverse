@@ -33,12 +33,15 @@ const windowMock = {
 class MockWebSocket {
   static readonly CONNECTING = 0
   static readonly OPEN = 1
+  static instances: MockWebSocket[] = []
 
   readyState = MockWebSocket.OPEN
   sent: string[] = []
   closeCalls = 0
 
-  constructor(_url: string) {}
+  constructor(_url: string) {
+    MockWebSocket.instances.push(this)
+  }
 
   send(payload: string) {
     this.sent.push(payload)
@@ -75,7 +78,7 @@ class MockWorker {
 ;(globalThis as any).WebSocket = MockWebSocket
 ;(globalThis as any).Worker = MockWorker
 
-const { WebSocketClient, WS_PONG } = await import('./client')
+const { WebSocketClient, shouldUseHeartbeatWorker } = await import('./client')
 
 afterAll(() => {
   if (originalWindow === undefined) delete (globalThis as any).window
@@ -98,6 +101,19 @@ function makeClient() {
 }
 
 describe('WebSocketClient resume watchdog guard', () => {
+  test('does not use a heartbeat worker on iOS or iPadOS', () => {
+    expect(shouldUseHeartbeatWorker({
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X)',
+      platform: 'iPhone',
+      maxTouchPoints: 5,
+    })).toBe(false)
+    expect(shouldUseHeartbeatWorker({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      platform: 'MacIntel',
+      maxTouchPoints: 5,
+    })).toBe(false)
+  })
+
   test('sends the fast watchdog ping on an unsuppressed hidden-to-visible transition', () => {
     const client = makeClient()
     const pingTimeouts: number[] = []
@@ -130,7 +146,7 @@ describe('WebSocketClient resume watchdog guard', () => {
     expect(pingTimeouts).toEqual([3_000])
   })
 
-  test('runs heartbeat scheduling in a worker and closes on its timeout', () => {
+  test('uses the worker to schedule and watch the primary socket heartbeat', () => {
     const client = makeClient()
     const socket = client.ws as MockWebSocket
     client.startPing()
@@ -139,10 +155,13 @@ describe('WebSocketClient resume watchdog guard', () => {
     const start = worker.sent.find((message) => message.type === 'start')
     expect(start).toMatchObject({ intervalMs: 30_000, timeoutMs: 10_000 })
 
-    expect(start.url).toBe('ws://localhost:3000/api/ws')
-
-    worker.emit({ type: 'ping-primary', generation: start.generation })
+    worker.emit({ type: 'ping', generation: start.generation, timeoutMs: 10_000 })
     expect(socket.sent).toEqual([JSON.stringify({ type: 'ping' })])
+    expect(worker.sent.at(-1)).toEqual({
+      type: 'arm',
+      generation: start.generation,
+      timeoutMs: 10_000,
+    })
 
     worker.emit({ type: 'timeout', generation: start.generation })
     expect(socket.closeCalls).toBe(1)
@@ -150,22 +169,42 @@ describe('WebSocketClient resume watchdog guard', () => {
     client.disconnect()
   })
 
-  test('accepts worker verification and ignores stale worker timeouts', () => {
+  test('acknowledges primary pongs and ignores stale worker timeouts', () => {
     const client = makeClient()
     const socket = client.ws as MockWebSocket
-    let verified = 0
-    client.on(WS_PONG, () => { verified += 1 })
-
     client.startPing()
     const worker = MockWorker.instances.at(-1)!
     const firstStart = worker.sent.find((message) => message.type === 'start')
-    worker.emit({ type: 'verified', generation: firstStart.generation })
-    expect(verified).toBe(1)
+    client.ackHeartbeat()
+    expect(worker.sent.at(-1)).toEqual({ type: 'ack', generation: firstStart.generation })
 
     client.startPing()
     worker.emit({ type: 'timeout', generation: firstStart.generation })
     expect(socket.closeCalls).toBe(0)
     expect(client.ws).toBe(socket)
     client.disconnect()
+  })
+})
+
+describe('WebSocketClient Spindle console logging', () => {
+  test('can suppress routine Spindle events without suppressing other WebSocket diagnostics', () => {
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    const originalDebug = console.debug
+    const logged: unknown[][] = []
+    console.debug = (...args: unknown[]) => { logged.push(args) }
+
+    try {
+      client.setSpindleInfoLogging(false)
+      client.connect()
+      const socket = MockWebSocket.instances.at(-1)!
+
+      ;(socket as any).onmessage({ data: JSON.stringify({ event: 'SPINDLE_RUNTIME_STATS', payload: {} }) })
+      ;(socket as any).onmessage({ data: JSON.stringify({ event: 'MESSAGE_SENT', payload: {} }) })
+
+      expect(logged).toEqual([['[WS] ←', 'MESSAGE_SENT', {}]])
+    } finally {
+      console.debug = originalDebug
+      client.disconnect()
+    }
   })
 })

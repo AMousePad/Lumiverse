@@ -375,7 +375,13 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
   // message, tool_result parts become separate role:tool messages.
   protected flattenForChat(m: LlmMessage): any[] {
     if (typeof m.content === "string") {
-      return [{ role: m.role, content: m.content }];
+      return [
+        {
+          role: m.role,
+          content: m.content,
+          ...this.assistantReasoningCarrier(m),
+        },
+      ];
     }
     const parts = m.content as LlmMessagePart[];
     const toolUses = parts.filter((p): p is Extract<LlmMessagePart, { type: "tool_use" }> => p.type === "tool_use");
@@ -419,7 +425,11 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
             : {}),
       });
     } else if (nonTool.length > 0) {
-      out.push({ role: m.role, content: this.formatContent({ ...m, content: nonTool }) });
+      out.push({
+        role: m.role,
+        content: this.formatContent({ ...m, content: nonTool }),
+        ...this.assistantReasoningCarrier(m),
+      });
     }
 
     for (const tr of toolResults) {
@@ -431,6 +441,21 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     }
 
     return out;
+  }
+
+  /**
+   * Reasoning payloads belong to the assistant turn that produced them. This
+   * is also used for ordinary prompt history (not only inline tool turns), so
+   * retained native reasoning is sent back in its original provider field.
+   */
+  private assistantReasoningCarrier(m: LlmMessage): Record<string, unknown> {
+    if (m.role !== "assistant") return {};
+    if (m.reasoning_details?.length) {
+      return { reasoning_details: m.reasoning_details };
+    }
+    return m.reasoning_content
+      ? { reasoning_content: m.reasoning_content }
+      : {};
   }
 
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { getPreset, getPresetCacheRevision, getPresetRegistrySignature, updatePreset } from "./presets.service";
-import { PresetRevisionConflictError } from "../types/preset";
+import { deletePreset, getPreset, getPresetCacheRevision, getPresetRegistrySignature, reconcileActiveLoomPreset, updatePreset } from "./presets.service";
+import { PresetRevisionConflictError, type PromptBlock } from "../types/preset";
+import { addPromptBlockToStash, removePromptBlockFromStash } from "./prompt-stash.service";
+import * as settingsSvc from "./settings.service";
 
 function initPresetsTestDb(): void {
   closeDatabase();
@@ -19,6 +21,23 @@ function initPresetsTestDb(): void {
     user_id TEXT,
     engine TEXT NOT NULL DEFAULT 'classic',
     cache_revision INTEGER NOT NULL DEFAULT 0
+  )`);
+  getDb().run(`CREATE TABLE settings (
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (key, user_id)
+  )`);
+  getDb().run(`CREATE TABLE connection_profiles (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    preset_id TEXT
+  )`);
+  getDb().run(`CREATE TABLE regex_scripts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    preset_id TEXT
   )`);
 }
 
@@ -166,5 +185,84 @@ describe("presets.service — ETag sources + row trim", () => {
 
     expect(getPreset("u1", "p1")?.name).toBe("newer");
     expect(getPreset("u1", "p1")?.cache_revision).toBe(1);
+  });
+});
+
+describe("presets.service — active preset recovery", () => {
+  test("repairs a legacy deleted selection during settings hydration", () => {
+    insertPreset({ id: "available", name: "Available", provider: "loom", user_id: "u1", updated_at: 100 });
+    settingsSvc.putSetting("u1", "activeLoomPresetId", "already-deleted");
+
+    expect(reconcileActiveLoomPreset("u1")).toBe("available");
+    expect(settingsSvc.getSetting("u1", "activeLoomPresetId")?.value).toBe("available");
+  });
+
+  test("replaces a deleted active preset with the most recently updated remaining Loom preset", () => {
+    insertPreset({ id: "deleted", name: "Deleted", provider: "loom", user_id: "u1", updated_at: 300 });
+    insertPreset({ id: "older", name: "Older", provider: "loom", user_id: "u1", updated_at: 100 });
+    insertPreset({ id: "recent", name: "Recent", provider: "loom", user_id: "u1", updated_at: 200 });
+    settingsSvc.putSetting("u1", "activeLoomPresetId", "deleted");
+
+    expect(deletePreset("u1", "deleted")).toBe(true);
+    expect(settingsSvc.getSetting("u1", "activeLoomPresetId")?.value).toBe("recent");
+  });
+
+  test("clears the active setting when the deleted preset was the final Loom preset", () => {
+    insertPreset({ id: "only", name: "Only", provider: "loom", user_id: "u1" });
+    settingsSvc.putSetting("u1", "activeLoomPresetId", "only");
+
+    expect(deletePreset("u1", "only")).toBe(true);
+    expect(settingsSvc.getSetting("u1", "activeLoomPresetId")?.value).toBeNull();
+  });
+});
+
+describe("presets.service — prompt stash", () => {
+  test("syncs a stashed block globally while keeping visibility and grouping local", () => {
+    const source: PromptBlock = {
+      id: "source-block", name: "Shared prompt", content: "original", role: "system",
+      enabled: true, position: "pre_history", depth: 0, marker: null, isLocked: false,
+      color: null, injectionTrigger: [], group: null,
+    };
+    const stash = addPromptBlockToStash("u1", source);
+    insertPreset({
+      id: "p1", name: "One", provider: "loom", user_id: "u1",
+      prompt_order: [{ ...source, id: "p1-block", stashId: stash.id }],
+    });
+    insertPreset({
+      id: "p2", name: "Two", provider: "loom", user_id: "u1",
+      prompt_order: [{ ...source, id: "p2-block", stashId: stash.id, enabled: false, group: "local-category" }],
+    });
+
+    updatePreset("u1", "p1", {
+      prompt_order: [{ ...source, id: "p1-block", stashId: stash.id, content: "updated everywhere" }],
+    });
+
+    const second = getPreset("u1", "p2")!;
+    expect(second.prompt_order[0]).toMatchObject({
+      content: "updated everywhere",
+      enabled: false,
+      group: "local-category",
+      stashId: stash.id,
+    });
+    expect(second.cache_revision).toBe(1);
+  });
+
+  test("un-stashing keeps linked blocks as independent local copies", () => {
+    const source: PromptBlock = {
+      id: "source-block", name: "Shared prompt", content: "keep this", role: "system",
+      enabled: true, position: "pre_history", depth: 0, marker: null, isLocked: false,
+      color: null, injectionTrigger: [], group: null,
+    };
+    const stash = addPromptBlockToStash("u1", source, { id: "origin", name: "Origin preset" });
+    insertPreset({
+      id: "p1", name: "One", provider: "loom", user_id: "u1",
+      prompt_order: [{ ...source, id: "p1-block", stashId: stash.id, enabled: false, group: "local-category" }],
+    });
+
+    expect(removePromptBlockFromStash("u1", stash.id)).toBe(true);
+    expect(getPreset("u1", "p1")?.prompt_order[0]).toMatchObject({
+      content: "keep this", enabled: false, group: "local-category",
+    });
+    expect(getPreset("u1", "p1")?.prompt_order[0].stashId).toBeUndefined();
   });
 });

@@ -69,10 +69,21 @@ function parseConnectionConfig(body: any): FileConnectionConfig {
   return body.connection as FileConnectionConfig;
 }
 
+async function parseObjectBody(c: any): Promise<{ body: Record<string, any> } | { response: Response }> {
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return { response: c.json({ error: "Invalid JSON body" }, 400) }; }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { response: c.json({ error: "JSON body must be an object" }, 400) };
+  }
+  return { body: body as Record<string, any> };
+}
+
 // ─── POST /test-connection — test a remote file connection ──────────────────
 
 app.post("/test-connection", async (c) => {
-  const body = await c.req.json();
+  const parsed = await parseObjectBody(c);
+  if ("response" in parsed) return parsed.response;
+  const { body } = parsed;
   const config = body.connection as FileConnectionConfig | undefined;
 
   if (!config || config.type === "local") {
@@ -175,7 +186,9 @@ app.get("/browse", async (c) => {
 // ─── POST /validate — validate SillyTavern installation ────────────────────
 
 app.post("/validate", async (c) => {
-  const body = await c.req.json();
+  const parsed = await parseObjectBody(c);
+  if ("response" in parsed) return parsed.response;
+  const { body } = parsed;
   const rawPath = body.path;
   const config = parseConnectionConfig(body);
 
@@ -248,7 +261,9 @@ app.post("/validate", async (c) => {
 // ─── POST /scan — preview available data ────────────────────────────────────
 
 app.post("/scan", async (c) => {
-  const body = await c.req.json();
+  const parsed = await parseObjectBody(c);
+  if ("response" in parsed) return parsed.response;
+  const { body } = parsed;
   const dataDir = body.dataDir;
   const config = parseConnectionConfig(body);
 
@@ -308,7 +323,9 @@ app.post("/execute", async (c) => {
     return c.json({ error: "A migration is already in progress" }, 409);
   }
 
-  const body = await c.req.json();
+  const parsed = await parseObjectBody(c);
+  if ("response" in parsed) return parsed.response;
+  const { body } = parsed;
   const { dataDir, targetUserId, scope } = body;
   const config = parseConnectionConfig(body);
 
@@ -356,6 +373,9 @@ app.post("/execute", async (c) => {
     personas: !!scope.personas,
     chats: !!scope.chats,
     groupChats: !!scope.groupChats,
+    connections: !!scope.connections,
+    repairExisting: !!scope.repairExisting,
+    dryRun: !!scope.dryRun,
   }, fs);
 
   return c.json({ migrationId }, 202);

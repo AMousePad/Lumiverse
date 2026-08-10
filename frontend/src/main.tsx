@@ -7,6 +7,7 @@ import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
 import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
 import { rememberRegistration } from './lib/swUpdater'
+import { installPwaLifecycleDiagnostics } from './lib/pwaLifecycleDiagnostics'
 import { initializeSafeThemeMode } from './lib/safeThemeMode'
 import { router } from './router'
 import ErrorBoundary from './components/shared/ErrorBoundary'
@@ -15,6 +16,7 @@ import './theme/reset.css'
 import './theme/global.css'
 
 installWindowOpenGuard()
+installPwaLifecycleDiagnostics()
 
 let reloading = false
 
@@ -60,6 +62,9 @@ navigator.serviceWorker?.addEventListener('message', (event) => {
 // the no-keyboard baseline as a per-orientation max so a stuck reduced height
 // can never poison it.
 const hasVirtualKeyboard = navigator.maxTouchPoints > 0
+const isIOS =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 // Real soft keyboards are >150px tall in portrait, >100px in landscape. Treat
 // anything below this floor as an iOS viewport glitch (the stuck ~24px
 // residual), not a keyboard — prevents the input bar floating by a sliver.
@@ -150,8 +155,16 @@ function syncViewportVars() {
 let viewportSyncFrame = 0
 
 function scheduleViewportSync() {
-  cancelAnimationFrame(viewportSyncFrame)
-  viewportSyncFrame = window.requestAnimationFrame(syncViewportVars)
+  // Coalesce multiple resize notifications into one update per paint rather
+  // than debouncing them. macOS emits a rapid stream while its native zoom
+  // animation runs; cancelling the pending frame on every notification left
+  // our viewport-dependent layouts at their old dimensions until the zoom
+  // completed.
+  if (viewportSyncFrame) return
+  viewportSyncFrame = window.requestAnimationFrame(() => {
+    viewportSyncFrame = 0
+    syncViewportVars()
+  })
 }
 
 scheduleViewportSync()
@@ -258,6 +271,23 @@ const isStandalone =
 
 if (/^Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) {
   document.documentElement.setAttribute('data-platform', 'macos')
+}
+
+// iPadOS can identify itself as macOS, so use both the iOS user-agent and
+// touch-capable MacIntel checks. Mobile editor surfaces use this to reserve
+// only the status-bar area without shrinking their full-screen frame.
+if (isIOS) {
+  document.documentElement.setAttribute('data-ios', '')
+}
+
+// Mark the native dashboard WebView for desktop-specific behavior. Its macOS
+// title bar is native; the HTML title-bar component is only used by browser
+// PWAs running in window-controls-overlay mode.
+if ('__TAURI_INTERNALS__' in window) {
+  document.documentElement.setAttribute('data-tauri-desktop', '')
+  if (new URLSearchParams(window.location.search).has('desktopWidgetExtension')) {
+    document.documentElement.setAttribute('data-tauri-floating-widget', '')
+  }
 }
 
 if (isStandalone) {

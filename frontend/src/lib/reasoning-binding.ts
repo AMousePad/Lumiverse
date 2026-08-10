@@ -55,6 +55,7 @@ const NANOGPT_EFFORTS: EffortOption[] = [
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra High' },
 ]
 
 // Amazon Bedrock's OpenAI-compatible endpoint exposes a single `reasoning_effort`
@@ -68,6 +69,15 @@ const BEDROCK_EFFORTS: EffortOption[] = [
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
+]
+
+const OPENAI_COMPATIBLE_EFFORTS: EffortOption[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra High' },
+  { value: 'max', label: 'Max' },
 ]
 
 const GENERIC_EFFORTS: EffortOption[] = [
@@ -92,6 +102,9 @@ const EFFORT_RANKS: Record<Exclude<ReasoningEffort, 'auto'>, number> = {
 
 export function getEffortOptions(provider: string | null | undefined, model: string | null | undefined): EffortOption[] {
   switch (provider) {
+    case 'openai':
+    case 'custom':
+      return OPENAI_COMPATIBLE_EFFORTS
     case 'openrouter':
       return OPENROUTER_EFFORTS
     case 'google':

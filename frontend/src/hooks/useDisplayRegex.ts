@@ -31,6 +31,9 @@ interface DisplayRegexContentCacheEntry {
 export interface DisplayPreprocessOpts {
   messageId: string
   role: 'user' | 'assistant' | 'system'
+  depth?: number
+  messageIndex?: number
+  dynamicMacros?: Record<string, string>
 }
 
 interface ResolvedTemplatesState {
@@ -54,6 +57,9 @@ interface DisplayPreprocessBody {
   messageId: string
   role: string
   rawContent: string
+  depth?: number
+  messageIndex?: number
+  dynamicMacros?: Record<string, string>
 }
 
 interface DisplayPreprocessOutcome {
@@ -74,6 +80,7 @@ const displayRegexCacheListeners = new Set<() => void>()
 let displayRegexGlobalCv = 0
 const displayRegexPerMessageCv = new Map<string, number>()
 const slowDisplayRegexToastKeys = new Set<string>()
+const recoveredDisplayRegexReportKeys = new Set<string>()
 const displayPreprocessQueues = new Map<string, PendingDisplayPreprocess[]>()
 const DISPLAY_PREPROCESS_BATCH_MAX = 64
 const DISPLAY_PREPROCESS_BATCH_DELAY_MS = 8
@@ -96,6 +103,9 @@ function formatElapsedMs(elapsedMs: number): string {
 
 function reportSlowDisplayRegex(script: RegexScript, elapsedMs: number, timedOut: boolean, thresholdMs: number): void {
   const versionKey = `${script.id}:${script.updated_at}`
+  // A newly slow run needs a later recovery report, even if this version had
+  // previously recovered during the current page session.
+  recoveredDisplayRegexReportKeys.delete(versionKey)
   if (!slowDisplayRegexToastKeys.has(versionKey)) {
     slowDisplayRegexToastKeys.add(versionKey)
     toast.warning(
@@ -112,6 +122,21 @@ function reportSlowDisplayRegex(script: RegexScript, elapsedMs: number, timedOut
     threshold_ms: thresholdMs,
     source: 'display_client',
   }).catch(() => {})
+}
+
+function reportRecoveredDisplayRegex(script: RegexScript, elapsedMs: number, thresholdMs: number): void {
+  const versionKey = `${script.id}:${script.updated_at}`
+  if (recoveredDisplayRegexReportKeys.has(versionKey)) return
+  recoveredDisplayRegexReportKeys.add(versionKey)
+
+  void regexApi.reportPerformance(script.id, {
+    elapsed_ms: elapsedMs,
+    threshold_ms: thresholdMs,
+    source: 'display_client',
+  }).catch(() => {
+    // Keep retrying on a future render if this recovery report was not saved.
+    recoveredDisplayRegexReportKeys.delete(versionKey)
+  })
 }
 
 function fnv1a(s: string): string {
@@ -223,9 +248,11 @@ function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Pr
           context: {
             chatId,
             isUser: body.role === 'user',
-            depth: 0,
+            depth: body.depth ?? 0,
             messageId: body.messageId,
             role: body.role,
+            ...(typeof body.messageIndex === 'number' ? { messageIndex: body.messageIndex } : {}),
+            ...(body.dynamicMacros ? { dynamicMacros: body.dynamicMacros } : {}),
           },
         })
         .then((local) => {
@@ -267,8 +294,8 @@ function useDisplayPreprocessedState(
 
   const key = useMemo(() => {
     if (!opts?.messageId || !chatId) return null
-    return `${chatId}|${opts.messageId}|${opts.role}|${content.length}|${fnv1a(content)}`
-  }, [content, opts?.messageId, opts?.role, chatId])
+    return `${chatId}|${opts.messageId}|${opts.role}|${opts.depth ?? 0}|${opts.messageIndex ?? -1}|${JSON.stringify(opts.dynamicMacros ?? {})}|${content.length}|${fnv1a(content)}`
+  }, [content, opts?.messageId, opts?.role, opts?.depth, opts?.messageIndex, opts?.dynamicMacros, chatId])
 
   const cached = key ? displayPreprocessCache.get(key)?.value : undefined
   const [state, setState] = useState<{ key: string; value: string; ok: boolean } | null>(() =>
@@ -300,6 +327,9 @@ function useDisplayPreprocessedState(
         messageId: opts.messageId,
         role: opts.role,
         rawContent: content,
+        ...(typeof opts.depth === 'number' ? { depth: opts.depth } : {}),
+        ...(typeof opts.messageIndex === 'number' ? { messageIndex: opts.messageIndex } : {}),
+        ...(opts.dynamicMacros ? { dynamicMacros: opts.dynamicMacros } : {}),
       })
         .then((next) => {
           if (displayPreprocessCache.get(key)?.promise === assignedPromise) {
@@ -330,7 +360,17 @@ function useDisplayPreprocessedState(
     }
     displayPreprocessCache.get(key)?.promise?.then(apply)
     return () => { cancelled = true }
-  }, [key, opts?.messageId, opts?.role, chatId, content, cvSnapshot])
+  }, [
+    key,
+    opts?.messageId,
+    opts?.role,
+    opts?.depth,
+    opts?.messageIndex,
+    opts?.dynamicMacros,
+    chatId,
+    content,
+    cvSnapshot,
+  ])
 
   if (!key) return { value: content, ready: true }
   if (cached !== undefined) return { value: cached, ready: true }
@@ -353,6 +393,10 @@ const RAW_MACRO_RE = /\{\{(?!\s*(?:user|char|bot|notChar|not_char|charName)\s*\}
 // messages-array identity. The previous per-card findIndex selector was
 // O(messages) per card per store update — O(n²) on chat open.
 const messageIndexMaps = new WeakMap<readonly Message[], Map<string, number>>()
+const previousSameRoleMaps = new WeakMap<
+  readonly Message[],
+  Map<string, string | undefined>
+>()
 
 function getMessageIndex(messages: readonly Message[], messageId: string): number {
   let map = messageIndexMaps.get(messages)
@@ -362,6 +406,34 @@ function getMessageIndex(messages: readonly Message[], messageId: string): numbe
     messageIndexMaps.set(messages, map)
   }
   return map.get(messageId) ?? -1
+}
+
+function getPreviousSameRoleContent(
+  messages: readonly Message[],
+  messageId: string,
+): string | undefined {
+  let map = previousSameRoleMaps.get(messages)
+  if (!map) {
+    map = new Map()
+    const greeting = messages[0]?.content
+    let previousUser: string | undefined
+    let previousAssistant: string | undefined
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index]!
+      map.set(
+        message.id,
+        index === 0
+          ? undefined
+          : message.is_user
+            ? previousUser ?? greeting
+            : previousAssistant ?? greeting,
+      )
+      if (message.is_user) previousUser = message.content
+      else previousAssistant = message.content
+    }
+    previousSameRoleMaps.set(messages, map)
+  }
+  return map.get(messageId)
 }
 
 /** Quick check for macro syntax in a string. */
@@ -509,11 +581,28 @@ export function useDisplayRegex(
   }, [messageIndex])
   const macroCharacterId = activeGroupCharacterId ?? activeCharacterId
 
-  const { value: content, ready: preprocessReady } = useDisplayPreprocessedState(rawContent, activeChatId, preprocessOpts)
+  const displayPreprocessOpts = useMemo(
+    () => preprocessOpts
+      ? {
+          ...preprocessOpts,
+          depth,
+          ...(messageIndex >= 0 ? { messageIndex } : {}),
+          ...(dynamicMacros ? { dynamicMacros } : {}),
+        }
+      : undefined,
+    [preprocessOpts, depth, messageIndex, dynamicMacros],
+  )
+  const { value: content, ready: preprocessReady } = useDisplayPreprocessedState(
+    rawContent,
+    activeChatId,
+    displayPreprocessOpts,
+  )
   const pendingSlowReportsRef = useRef<SlowRegexReport[]>([])
+  const pendingRecoveredReportsRef = useRef<SlowRegexReport[]>([])
 
+  const displayOwned = !!activeChatId && isDisplayChatOwned(activeChatId)
   // When an extension owns display, regex runs on preprocessed content only.
-  const regexGated = !!activeChatId && isDisplayChatOwned(activeChatId) && !preprocessReady
+  const regexGated = displayOwned && !preprocessReady
 
   const displayScripts = useMemo(
     () =>
@@ -527,12 +616,32 @@ export function useDisplayRegex(
       ),
     [regexScripts, activeCharacterId, activeChatId],
   )
+  const needsPreviousContent = useMemo(
+    () => displayScripts.some(
+      (script) =>
+        Array.isArray(script.metadata?.match_actions)
+        && script.metadata.match_actions.includes('repeat_back'),
+    ),
+    [displayScripts],
+  )
+  const previousContent = useStore((s) => {
+    if (!needsPreviousContent || !preprocessOpts?.messageId) return undefined
+    return getPreviousSameRoleContent(s.messages, preprocessOpts.messageId)
+  })
 
   // Collect display scripts that need backend macro resolution
   const scriptsNeedingResolution = useMemo(
     () =>
       displayScripts.filter(
-        (s) => s.substitute_macros !== 'none' && (hasMacroSyntax(s.find_regex) || hasMacroSyntax(s.replace_string)),
+        (s) =>
+          s.substitute_macros !== 'none'
+          && (
+            hasMacroSyntax(s.find_regex)
+            || (
+              s.substitute_macros !== 'find'
+              && hasMacroSyntax(s.replace_string)
+            )
+          ),
       ),
     [displayScripts],
   )
@@ -545,7 +654,13 @@ export function useDisplayRegex(
       if (hasMacroSyntax(s.find_regex)) {
         templates[`find:${s.id}`] = s.find_regex
       }
-      if (s.substitute_macros !== 'raw' && s.substitute_macros !== 'after' && hasMacroSyntax(s.replace_string)) {
+      if (
+        s.substitute_macros !== 'none'
+        && s.substitute_macros !== 'find'
+        && s.substitute_macros !== 'raw'
+        && s.substitute_macros !== 'after'
+        && hasMacroSyntax(s.replace_string)
+      ) {
         templates[`replace:${s.id}`] = s.replace_string
       }
     }
@@ -589,7 +704,13 @@ export function useDisplayRegex(
       if (hasMacroSyntax(s.find_regex)) {
         templates[`find:${s.id}`] = s.find_regex
       }
-      if (s.substitute_macros !== 'raw' && s.substitute_macros !== 'after' && hasMacroSyntax(s.replace_string)) {
+      if (
+        s.substitute_macros !== 'none'
+        && s.substitute_macros !== 'find'
+        && s.substitute_macros !== 'raw'
+        && s.substitute_macros !== 'after'
+        && hasMacroSyntax(s.replace_string)
+      ) {
         templates[`replace:${s.id}`] = s.replace_string
       }
     }
@@ -657,8 +778,10 @@ export function useDisplayRegex(
   const fallbackContent = useMemo(
     () => {
       const slowReports: SlowRegexReport[] = []
+      const recoveredReports: SlowRegexReport[] = []
       if (displayScripts.length === 0 || regexGated) {
         pendingSlowReportsRef.current = slowReports
+        pendingRecoveredReportsRef.current = recoveredReports
         return content
       }
       const next = applyDisplayRegex(content, displayScripts, {
@@ -668,13 +791,18 @@ export function useDisplayRegex(
         resolvedFindPatterns: resolvedTemplates.resolvedFindPatterns,
         resolvedReplacements: resolvedTemplates.resolvedReplacements,
         dynamicMacros,
+        ...(messageIndex >= 0 ? { messageIndex } : {}),
+        ...(previousContent !== undefined ? { previousContent } : {}),
       }, ({ script, elapsedMs, timedOut, thresholdMs }) => {
         slowReports.push({ script, elapsedMs, timedOut, thresholdMs })
+      }, ({ script, elapsedMs, timedOut, thresholdMs }) => {
+        recoveredReports.push({ script, elapsedMs, timedOut, thresholdMs })
       })
       pendingSlowReportsRef.current = slowReports
+      pendingRecoveredReportsRef.current = recoveredReports
       return next
     },
-    [content, displayScripts, isUser, depth, macroCtx, resolvedTemplates, dynamicMacros, regexGated],
+    [content, displayScripts, isUser, depth, macroCtx, resolvedTemplates, dynamicMacros, messageIndex, previousContent, regexGated],
   )
 
   useEffect(() => {
@@ -686,11 +814,20 @@ export function useDisplayRegex(
     }
   }, [fallbackContent])
 
+  useEffect(() => {
+    const reports = pendingRecoveredReportsRef.current
+    if (reports.length === 0) return
+    pendingRecoveredReportsRef.current = []
+    for (const report of reports) {
+      reportRecoveredDisplayRegex(report.script, report.elapsedMs, report.thresholdMs)
+    }
+  }, [fallbackContent])
+
   const hasAsyncMacroScripts = useMemo(
-    () => displayScripts.some(
+    () => displayOwned || displayScripts.some(
       (s) => s.substitute_macros === 'raw' || s.substitute_macros === 'after',
     ),
-    [displayScripts],
+    [displayOwned, displayScripts],
   )
 
   const resolvedTemplateKey = useMemo(
@@ -715,6 +852,7 @@ export function useDisplayRegex(
       content,
       resolvedTemplateKey,
       dynamicMacros: dynamicMacros ?? null,
+      previousContent: previousContent ?? null,
       scripts: displayScripts.map((s) => [
         s.id,
         s.updated_at,
@@ -726,6 +864,9 @@ export function useDisplayRegex(
         s.max_depth,
         s.trim_strings,
         s.substitute_macros,
+        s.metadata?.match_actions,
+        s.metadata?.repeat_position,
+        s.metadata?.repeat_raw_match,
       ]),
     })
   }, [
@@ -740,6 +881,7 @@ export function useDisplayRegex(
     content,
     resolvedTemplateKey,
     dynamicMacros,
+    previousContent,
     regexGated,
   ])
 
@@ -782,6 +924,8 @@ export function useDisplayRegex(
           resolvedReplacements: resolvedTemplates.resolvedReplacements,
           dynamicMacros,
           ...(preprocessOpts?.messageId ? { messageId: preprocessOpts.messageId } : {}),
+          ...(messageIndex >= 0 ? { messageIndex } : {}),
+          ...(previousContent !== undefined ? { previousContent } : {}),
           ...(preprocessOpts?.role ? { role: preprocessOpts.role } : {}),
         },
         (templates) => resolveMacrosBatchChunked(templates, {
@@ -836,6 +980,8 @@ export function useDisplayRegex(
     activePersonaId,
     contentCacheKey,
     dynamicMacros,
+    messageIndex,
+    previousContent,
     cvSnapshot,
     preprocessOpts?.messageId,
     preprocessOpts?.role,

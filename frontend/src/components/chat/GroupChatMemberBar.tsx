@@ -13,6 +13,7 @@ import { useLongPress } from '@/hooks/useLongPress'
 import useHorizontalScroll from '@/hooks/useHorizontalScroll'
 import styles from './GroupChatMemberBar.module.css'
 import clsx from 'clsx'
+import { imagesApi } from '@/api/images'
 
 interface GroupChatMemberBarProps {
   chatId: string
@@ -207,6 +208,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
             isMuted={mutedCharacterIds.includes(id)}
             isStreaming={isStreaming}
             hasVoiceOverride={overrideIds.has(id)}
+            avatarOverrideId={typeof activeChatMetadata?.group_active_avatar_ids?.[id] === 'string' ? activeChatMetadata.group_active_avatar_ids[id] : null}
             onForceGenerate={handleForceGenerate}
             onOpenContextMenu={openContextMenu}
           />
@@ -239,15 +241,16 @@ interface MemberButtonProps {
   isMuted: boolean
   isStreaming: boolean
   hasVoiceOverride: boolean
+  avatarOverrideId: string | null
   onForceGenerate: (id: string) => void
   onOpenContextMenu: (id: string, pos: ContextMenuPos) => void
 }
 
-function MemberButton({ id, characters, isActive, isMuted, isStreaming, hasVoiceOverride, onForceGenerate, onOpenContextMenu }: MemberButtonProps) {
+function MemberButton({ id, characters, isActive, isMuted, isStreaming, hasVoiceOverride, avatarOverrideId, onForceGenerate, onOpenContextMenu }: MemberButtonProps) {
   const { t } = useTranslation('chat')
   const char = characters.find((c: any) => c.id === id)
   const talk = char?.talkativeness ?? 0.5
-  const avatarUrl = getCharacterAvatarThumbUrl(char)
+  const avatarUrl = avatarOverrideId ? imagesApi.smallUrl(avatarOverrideId) : getCharacterAvatarThumbUrl(char)
 
   const longPress = useLongPress({
     onLongPress: (pos) => onOpenContextMenu(id, pos),
@@ -268,7 +271,7 @@ function MemberButton({ id, characters, isActive, isMuted, isStreaming, hasVoice
       title={char?.name || t('characterFallback')}
       disabled={isStreaming}
     >
-      {char?.avatar_path || char?.image_id ? (
+      {avatarOverrideId || char?.avatar_path || char?.image_id ? (
         <img
           src={avatarUrl || undefined}
           alt={char?.name}

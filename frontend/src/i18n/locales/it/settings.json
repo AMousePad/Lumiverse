@@ -111,6 +111,10 @@
       "cards": "Card",
       "compactList": "Lista compatta",
       "layoutHelper": "Passa la pagina iniziale dalla galleria di card attuale a una lista adattiva più densa delle chat recenti.",
+      "galleryWidth": "LARGHEZZA GALLERIA CHAT RECENTI",
+      "compact": "Compatta",
+      "expanded": "Espansa",
+      "galleryWidthHelper": "Mantieni una larghezza di lettura confortevole sul desktop oppure espandi la galleria delle chat recenti a tutta la finestra.",
       "batchSize": "CHAT PER BATCH NELLA PAGINA INIZIALE"
     }
   },

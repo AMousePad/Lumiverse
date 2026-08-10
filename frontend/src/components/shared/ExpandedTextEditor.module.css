@@ -243,6 +243,15 @@
   position: relative;
 }
 
+.markdownPreview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
 /* ── Plain textarea (no highlighting) ── */
 
 .textarea {

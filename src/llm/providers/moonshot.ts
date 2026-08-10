@@ -1,5 +1,6 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
+import type { LlmMessage } from "../types";
 
 export class MoonshotProvider extends OpenAICompatibleProvider {
   readonly name = "moonshot";
@@ -32,4 +33,27 @@ export class MoonshotProvider extends OpenAICompatibleProvider {
     // temperature = 1.0 for thinking models.
     interleavedThinking: true,
   };
+
+  /**
+   * Kimi Partial Mode is enabled per message, not with a top-level request
+   * parameter. A trailing assistant prefill must therefore be serialized as
+   * `{ role: "assistant", content, partial: true }`. When this is resuming a
+   * thinking response, Moonshot also requires the prior `reasoning_content`.
+   *
+   * Keep the extension here rather than in OpenAICompatibleProvider: `partial`
+   * is a Moonshot/Kimi-specific field and other OpenAI-compatible APIs reject
+   * it.
+   */
+  protected override flattenForChat(m: LlmMessage): any[] {
+    const messages = super.flattenForChat(m);
+    if (!m.partial || m.role !== "assistant") return messages;
+
+    const assistant = messages.find((message) => message.role === "assistant");
+    if (!assistant) return messages;
+
+    assistant.partial = true;
+    if (m.name) assistant.name = m.name;
+    if (m.reasoning_content) assistant.reasoning_content = m.reasoning_content;
+    return messages;
+  }
 }

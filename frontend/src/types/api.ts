@@ -1,4 +1,6 @@
 // ---- Character ----
+export type CharacterLibraryScope = 'mine' | 'shared';
+
 export interface Character {
   id: string;
   name: string;
@@ -13,6 +15,8 @@ export interface Character {
   creator_notes: string;
   system_prompt: string;
   post_history_instructions: string;
+  folder: string;
+  library_scope: CharacterLibraryScope;
   tags: string[];
   alternate_greetings: string[];
   talkativeness: number; // 0.0–1.0, default 0.5
@@ -39,6 +43,8 @@ export interface CreateCharacterInput {
   creator_notes?: string;
   system_prompt?: string;
   post_history_instructions?: string;
+  folder?: string;
+  library_scope?: CharacterLibraryScope;
   tags?: string[];
   alternate_greetings?: string[];
   talkativeness?: number;
@@ -51,11 +57,30 @@ export interface CharacterSummary {
   id: string;
   name: string;
   creator: string;
+  folder: string;
   tags: string[];
   image_id: string | null;
+  library_scope: CharacterLibraryScope;
   created_at: number;
   updated_at: number;
   has_alternate_greetings: boolean;
+}
+
+export interface CharacterPreview {
+  character: CharacterSummary;
+  lorebooks: { id: string; name: string }[];
+  last_chat: {
+    id: string;
+    name: string;
+    updated_at: number;
+    last_message_preview: string;
+  } | null;
+  open_chat_id: string | null;
+}
+
+export interface CharacterFolderMutationResponse {
+  updated: Character[];
+  count: number;
 }
 
 export interface TagCount {
@@ -108,6 +133,17 @@ export interface GroupedRecentChat {
   group_character_ids?: string[];
   group_name?: string;
   multiplayer?: boolean;
+}
+
+export interface HiddenRecentChat {
+  id: string;
+  character_id: string;
+  name: string;
+  character_name: string;
+  character_avatar_path: string | null;
+  character_image_id: string | null;
+  updated_at: number;
+  is_group: boolean;
 }
 
 export interface ChatSummary {
@@ -626,6 +662,12 @@ export interface PersonaAddon {
   content: string
   enabled: boolean
   sort_order: number
+  /** When set, content is exposed as {{persona_outlet::name}} instead of {{persona}}. */
+  outlet_name?: string | null
+  /** Persona-specific artwork shown while this add-on is active. */
+  avatar_image_id?: string
+  /** Optional square crop of avatar_image_id, preferred for avatar surfaces. */
+  avatar_crop_image_id?: string
 }
 
 export interface GlobalAddon {
@@ -641,6 +683,9 @@ export interface GlobalAddon {
 export interface AttachedGlobalAddon {
   id: string
   enabled: boolean
+  /** Avatar overrides belong to the persona attachment, not the shared add-on. */
+  avatar_image_id?: string
+  avatar_crop_image_id?: string
 }
 
 export interface CharacterPersonaBinding {
@@ -656,6 +701,8 @@ export interface Persona {
   subjective_pronoun: string;
   objective_pronoun: string;
   possessive_pronoun: string;
+  reflexive_pronoun: string;
+  possessive_pronoun_standalone: string;
   avatar_path: string | null;
   image_id: string | null;
   attached_world_book_id: string | null;
@@ -674,6 +721,8 @@ export interface CreatePersonaInput {
   subjective_pronoun?: string;
   objective_pronoun?: string;
   possessive_pronoun?: string;
+  reflexive_pronoun?: string;
+  possessive_pronoun_standalone?: string;
   folder?: string;
   is_default?: boolean;
   is_narrator?: boolean;
@@ -840,9 +889,27 @@ export interface WorldBookEntry {
   vector_index_status: WorldBookVectorIndexStatus;
   vector_indexed_at: number | null;
   vector_index_error: string | null;
+  revision: number;
   extensions: Record<string, any>;
   created_at: number;
   updated_at: number;
+}
+export interface WorldBookEntryConflict {
+  id: string
+  current: WorldBookEntry | null
+}
+
+export interface WorldBookEntryConflictPayload {
+  error: 'world_book_entry_conflict'
+  code: 'WORLD_BOOK_ENTRY_CONFLICT'
+  conflicts: WorldBookEntryConflict[]
+}
+
+export interface WorldBookEntryPreconditionErrorPayload {
+  error: string
+  code: string
+  field: string
+  message: string
 }
 
 export interface WorldBookVectorSummary {
@@ -1067,23 +1134,31 @@ export interface CreateWorldBookEntryInput {
   extensions?: Record<string, any>;
 }
 
+export interface UpdateWorldBookEntryInput extends CreateWorldBookEntryInput {
+  expected_revision?: number;
+}
+
 export interface DuplicateWorldBookEntryInput {
-  target_book_id?: string | null;
+  target_book_id?: string | null
+  expected_revision?: number
 }
 
 export interface ReorderWorldBookEntriesInput {
   ordered_ids: string[];
+  expected_revisions?: Record<string, number>;
 }
 
 export interface WorldBookEntryBulkDeleteInput {
   action: 'delete';
   entry_ids: string[];
+  expected_revisions?: Record<string, number>;
 }
 
 export interface WorldBookEntryBulkMoveInput {
   action: 'move';
   entry_ids: string[];
   target_book_id: string;
+  expected_revisions?: Record<string, number>;
 }
 
 export interface WorldBookEntryBulkRenumberInput {
@@ -1092,6 +1167,7 @@ export interface WorldBookEntryBulkRenumberInput {
   start?: number | null;
   step?: number;
   direction?: 'asc' | 'desc';
+  expected_revisions?: Record<string, number>;
 }
 
 export interface WorldBookEntryBulkAddKeywordInput {
@@ -1099,6 +1175,7 @@ export interface WorldBookEntryBulkAddKeywordInput {
   entry_ids: string[];
   keyword: string;
   target?: 'primary' | 'secondary';
+  expected_revisions?: Record<string, number>;
 }
 
 export interface WorldBookEntryBulkSetPositionInput {
@@ -1106,6 +1183,55 @@ export interface WorldBookEntryBulkSetPositionInput {
   entry_ids: string[];
   position: number;
   depth?: number;
+  expected_revisions?: Record<string, number>;
+}
+
+export interface WorldBookEntryBulkSetActivationInput {
+  action: 'set_activation';
+  entry_ids: string[];
+  activation: 'trigger' | 'constant' | 'vector';
+  expected_revisions?: Record<string, number>;
+}
+
+export interface WorldBookEntryBulkSetTriggerInput {
+  action: 'set_trigger';
+  entry_ids: string[];
+  expected_revisions?: Record<string, number>;
+}
+
+export interface WorldBookEntryBulkSetPriorityInput {
+  action: 'set_priority';
+  entry_ids: string[];
+  priority: number;
+  expected_revisions?: Record<string, number>;
+}
+
+export interface WorldBookEntryBulkSetDepthInput {
+  action: 'set_depth';
+  entry_ids: string[];
+  depth: number;
+  expected_revisions?: Record<string, number>;
+}
+
+export interface WorldBookEntryBulkSetEnabledInput {
+  action: 'set_enabled';
+  entry_ids: string[];
+  enabled: boolean;
+  expected_revisions?: Record<string, number>;
+}
+
+export interface WorldBookEntryBulkSetFieldsInput {
+  action: 'set_fields';
+  entry_ids: string[];
+  fields: Partial<CreateWorldBookEntryInput>;
+  expected_revisions?: Record<string, number>;
+}
+
+export interface WorldBookEntryBulkCopyInput {
+  action: 'copy';
+  entry_ids: string[];
+  target_book_id: string;
+  expected_revisions?: Record<string, number>;
 }
 
 export type WorldBookEntryBulkActionInput =
@@ -1113,7 +1239,14 @@ export type WorldBookEntryBulkActionInput =
   | WorldBookEntryBulkMoveInput
   | WorldBookEntryBulkRenumberInput
   | WorldBookEntryBulkAddKeywordInput
-  | WorldBookEntryBulkSetPositionInput;
+  | WorldBookEntryBulkSetPositionInput
+  | WorldBookEntryBulkSetActivationInput
+  | WorldBookEntryBulkSetTriggerInput
+  | WorldBookEntryBulkSetPriorityInput
+  | WorldBookEntryBulkSetDepthInput
+  | WorldBookEntryBulkSetEnabledInput
+  | WorldBookEntryBulkSetFieldsInput
+  | WorldBookEntryBulkCopyInput;
 
 export interface WorldBookEntryBulkActionResult {
   action: WorldBookEntryBulkActionInput['action'];
@@ -1196,13 +1329,34 @@ export interface ActivatedWorldInfoEntry {
   comment: string;
   keys: string[];
   source: 'keyword' | 'vector';
+  activationType: 'constant' | 'sticky' | 'keyword' | 'vector';
   score?: number;
   bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
   bookName?: string;
+  activationOrder: number;
+  firstTriggeredForBook: boolean;
+  estimatedTokens: number;
+  priority: number;
+  position: number;
+  depth: number;
+  preventRecursion: boolean;
+  triggerPhrase?: string;
+  matchedPhrase?: string;
+  matchedKey?: string;
+  matchedTrigger?: string;
+  trigger?: string;
+  matchedPrimaryKeys?: string[];
+  matchedSecondaryKeys?: string[];
+  matchedBecause?: string;
+  matchReason?: string;
+  matchedContentPreview?: string;
+  contentPreview?: string;
+  whyActivated?: string;
+  triggeringSentence?: string;
+  messageExcerpt?: string;
+  contextExcerpt?: string;
 }
-
-export type UpdateWorldBookEntryInput = CreateWorldBookEntryInput;
 
 // ---- Pack ----
 export interface Pack {
@@ -1358,6 +1512,17 @@ export interface BulkImportResultItem {
 export interface BulkImportResult {
   results: BulkImportResultItem[]
   summary: { total: number; imported: number; skipped: number; failed: number }
+}
+
+export interface BulkPersonaImportResult {
+  imported: Persona[]
+  count: number
+  failed: number
+  errors: Array<{ index: number; name: string; error: string }>
+  warnings: {
+    detached_world_books: number
+    skipped_asset_references: number
+  }
 }
 
 export interface BatchDeleteResult {

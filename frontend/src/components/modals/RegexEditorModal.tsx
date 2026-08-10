@@ -55,6 +55,49 @@ const FIND_PRESET_DEFS = [
 ] as const
 
 const REGEX_FLAG_KEYS = ['g', 'i', 'm', 's', 'u', 'v', 'd', 'y'] as const
+type RegexMoveSelection = 'replace' | 'move_top' | 'move_bottom'
+type RegexRepeatPosition = 'end' | 'start' | 'end_nl' | 'start_nl'
+
+function readRegexActions(metadata: Record<string, any> | undefined): string[] {
+  return Array.isArray(metadata?.match_actions)
+    ? metadata.match_actions.filter((action: unknown): action is string => typeof action === 'string')
+    : []
+}
+
+function updateRegexMetadata(
+  metadata: Record<string, any> | undefined,
+  moveBehavior: RegexMoveSelection,
+  repeatBack: boolean,
+  repeatPosition: RegexRepeatPosition,
+  repeatRawMatch: boolean,
+): Record<string, any> {
+  const next = { ...(metadata ?? {}) }
+  const actions = readRegexActions(metadata).filter(
+    (action) =>
+      action !== 'move_top'
+      && action !== 'move_bottom'
+      && action !== 'repeat_back',
+  )
+  if (moveBehavior !== 'replace') actions.push(moveBehavior)
+  if (repeatBack) actions.push('repeat_back')
+  if (actions.length > 0) next.match_actions = actions
+  else delete next.match_actions
+  if (repeatBack) next.repeat_position = repeatPosition
+  else delete next.repeat_position
+  if (repeatBack && repeatRawMatch) next.repeat_raw_match = true
+  else delete next.repeat_raw_match
+  return next
+}
+
+function readRepeatPosition(
+  metadata: Record<string, any> | undefined,
+  replaceString: string,
+): RegexRepeatPosition {
+  const value = metadata?.repeat_position ?? replaceString.split(' ', 2)[1]
+  return value === 'start' || value === 'end_nl' || value === 'start_nl'
+    ? value
+    : 'end'
+}
 
 export default function RegexEditorModal() {
   const { t: tr } = useTranslation('modals', { keyPrefix: 'regexEditor' })
@@ -123,6 +166,10 @@ export default function RegexEditorModal() {
   const [minDepth, setMinDepth] = useState<string>('')
   const [maxDepth, setMaxDepth] = useState<string>('')
   const [substituteMacros, setSubstituteMacros] = useState<RegexMacroMode>('none')
+  const [moveBehavior, setMoveBehavior] = useState<RegexMoveSelection>('replace')
+  const [repeatBack, setRepeatBack] = useState(false)
+  const [repeatPosition, setRepeatPosition] = useState<RegexRepeatPosition>('end')
+  const [repeatRawMatch, setRepeatRawMatch] = useState(false)
   const [trimStrings, setTrimStrings] = useState('')
   const [runOnEdit, setRunOnEdit] = useState(false)
   const [description, setDescription] = useState('')
@@ -149,6 +196,17 @@ export default function RegexEditorModal() {
       setMinDepth(script.min_depth != null ? String(script.min_depth) : '')
       setMaxDepth(script.max_depth != null ? String(script.max_depth) : '')
       setSubstituteMacros(script.substitute_macros)
+      const regexActions = readRegexActions(script.metadata)
+      setMoveBehavior(
+        regexActions.includes('move_top')
+          ? 'move_top'
+          : regexActions.includes('move_bottom')
+            ? 'move_bottom'
+            : 'replace',
+      )
+      setRepeatBack(regexActions.includes('repeat_back'))
+      setRepeatPosition(readRepeatPosition(script.metadata, script.replace_string))
+      setRepeatRawMatch(script.metadata?.repeat_raw_match === true)
       setTrimStrings(script.trim_strings.join(', '))
       setRunOnEdit(script.run_on_edit)
       setDescription(script.description)
@@ -164,14 +222,24 @@ export default function RegexEditorModal() {
     }
     const timer = setTimeout(async () => {
       try {
-        const res = await regexApi.testRegex({ find_regex: findRegex, replace_string: replaceString, flags, content: testInput })
+        const matchActions = [
+          ...(moveBehavior === 'replace' ? [] : [moveBehavior]),
+          ...(repeatBack ? ['repeat_back'] : []),
+        ]
+        const res = await regexApi.testRegex({
+          find_regex: findRegex,
+          replace_string: replaceString,
+          flags,
+          content: testInput,
+          match_actions: matchActions,
+        })
         setTestResult(res)
       } catch {
         setTestResult(null)
       }
     }, 300)
     return () => clearTimeout(timer)
-  }, [testInput, findRegex, replaceString, flags])
+  }, [testInput, findRegex, replaceString, flags, moveBehavior, repeatBack])
 
   const handleSave = useCallback(async () => {
     if (!scriptId) return
@@ -205,6 +273,13 @@ export default function RegexEditorModal() {
         min_depth: minDepth ? parseInt(minDepth) : null,
         max_depth: maxDepth ? parseInt(maxDepth) : null,
         substitute_macros: substituteMacros,
+        metadata: updateRegexMetadata(
+          script.metadata,
+          moveBehavior,
+          repeatBack,
+          repeatPosition,
+          repeatRawMatch,
+        ),
         trim_strings: trimStrings ? trimStrings.split(',').map((s) => s.trim()).filter(Boolean) : [],
         run_on_edit: runOnEdit,
         description,
@@ -214,7 +289,7 @@ export default function RegexEditorModal() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message)
     }
-  }, [scriptId, script, activeCharacterId, activeChatId, name, userScriptId, findRegex, replaceString, actions, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, trimStrings, runOnEdit, description, folder, updateRegexScript, closeModal, tr])
+  }, [scriptId, script, activeCharacterId, activeChatId, name, userScriptId, findRegex, replaceString, actions, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, moveBehavior, repeatBack, repeatPosition, repeatRawMatch, trimStrings, runOnEdit, description, folder, updateRegexScript, closeModal, tr])
 
   if (!script) return null
 
@@ -692,6 +767,25 @@ export default function RegexEditorModal() {
                     ))}
                   </div>
                 </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>{tr('matchBehavior')}</label>
+                  <div className={styles.segmented}>
+                    {([
+                      { value: 'replace' as const, label: tr('behaviorReplace') },
+                      { value: 'move_top' as const, label: tr('behaviorMoveTop') },
+                      { value: 'move_bottom' as const, label: tr('behaviorMoveBottom') },
+                    ]).map(({ value, label }) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={clsx(styles.segmentedBtn, moveBehavior === value && styles.segmentedBtnActive)}
+                        onClick={() => setMoveBehavior(value)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
               <div className={styles.targetCol}>
                 <div className={styles.field}>
@@ -744,6 +838,7 @@ export default function RegexEditorModal() {
                     <div className={styles.segmented}>
                       {([
                         { m: 'none' as const, label: tr('macroNone') },
+                        { m: 'find' as const, label: tr('macroFind') },
                         { m: 'raw' as const, label: tr('macroRaw') },
                         { m: 'escaped' as const, label: tr('macroEscaped') },
                         { m: 'after' as const, label: tr('macroAfter') },
@@ -763,6 +858,48 @@ export default function RegexEditorModal() {
                     checked={runOnEdit}
                     onChange={setRunOnEdit}
                     label={tr('runOnEdit')}
+                    className={styles.inlineToggle}
+                  />
+                </div>
+                <div className={styles.advancedRow}>
+                  <div className={styles.field}>
+                    <label className={styles.fieldLabel}>{tr('behaviorRepeatPrevious')}</label>
+                    <div className={styles.segmented}>
+                      {([
+                        { value: 'none' as const, label: tr('repeatNone') },
+                        { value: 'start' as const, label: tr('repeatStart') },
+                        { value: 'end' as const, label: tr('repeatEnd') },
+                        { value: 'start_nl' as const, label: tr('repeatStartNewline') },
+                        { value: 'end_nl' as const, label: tr('repeatEndNewline') },
+                      ]).map(({ value, label }) => {
+                        const active = value === 'none'
+                          ? !repeatBack
+                          : repeatBack && repeatPosition === value
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            className={clsx(styles.segmentedBtn, active && styles.segmentedBtnActive)}
+                            onClick={() => {
+                              if (value === 'none') {
+                                setRepeatBack(false)
+                              } else {
+                                setRepeatBack(true)
+                                setRepeatPosition(value)
+                              }
+                            }}
+                          >
+                            {label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  <Toggle.Checkbox
+                    checked={repeatRawMatch}
+                    onChange={setRepeatRawMatch}
+                    label={tr('repeatRawMatch')}
+                    disabled={!repeatBack}
                     className={styles.inlineToggle}
                   />
                 </div>

@@ -5,8 +5,10 @@ import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/p
 import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
-import { hasUnsavedSettings } from '@/store/slices/settings'
+import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
+import { hasUnsavedSettings, settingsUpdateKeys, shouldReloadSettingsAfterUpdate } from '@/store/slices/settings'
 import { routeBackendMessage, routeFrontendProcessEvent, loadFrontendExtension } from '@/lib/spindle/loader'
+import { applyHostAction, type HostActionRuntime } from '@/lib/spindle/host-actions'
 import { spindleApi } from '@/api/spindle'
 import { messagesApi } from '@/api/chats'
 import { multiplayerApi } from '@/api/multiplayer'
@@ -55,7 +57,7 @@ import type {
   RoomPresencePayload,
   SystemSmartAlertPayload,
 } from '@/types/ws-events'
-import type { Message } from '@/types/api'
+import type { ConnectionProfile, Message } from '@/types/api'
 import type { ChatHeadStatus } from '@/types/store'
 import type { RoomStateView } from '@/types/multiplayer'
 import type { CouncilToolResult } from 'lumiverse-spindle-types'
@@ -74,6 +76,27 @@ function isLocalStreamPlaceholderId(id: string | null | undefined) {
 
 const MAX_TOAST_ERROR_LENGTH = 800
 const MULTIPLAYER_CHAT_HEAD_PREFIX = 'mp-room:'
+
+/**
+ * The websocket bridge receives already-authorized UI navigation requests from
+ * the backend. Keep their execution on the same fail-closed host-action
+ * switch used by frontend surface invocations instead of maintaining a second
+ * navigation implementation here.
+ */
+const spindleUiActionRuntime: HostActionRuntime = {
+  openDrawer: (id) => useStore.getState().openDrawer(id),
+  closeDrawer: () => useStore.getState().closeDrawer(),
+  openSettings: (id) => useStore.getState().openSettings(id),
+  closeSettings: () => useStore.getState().closeSettings(),
+  openCommandPalette: () => useStore.getState().openCommandPalette(),
+  closeCommandPalette: () => useStore.getState().closeCommandPalette(),
+  runCommand: () => { throw new Error('HOST_ACTION_UNMAPPED:command') },
+  navigate: () => { throw new Error('HOST_ACTION_UNMAPPED:route') },
+  setEditingCharacterId: () => { throw new Error('HOST_ACTION_UNMAPPED:modal') },
+  openWorldBookEditor: () => { throw new Error('HOST_ACTION_UNMAPPED:modal') },
+  invokeInputBarAction: () => { throw new Error('HOST_ACTION_UNMAPPED:input_bar_action') },
+  invokeExtensionCommand: () => { throw new Error('HOST_ACTION_UNMAPPED:ext_command') },
+}
 
 const LIVE_GENERATION_HEAD_STATUSES = new Set<ChatHeadStatus>([
   'assembling',
@@ -259,6 +282,35 @@ function fetchLatestMessages(chatId: string) {
   return messagesApi.list(chatId, { limit: pageSize, tail: true })
 }
 
+/**
+ * GENERATION_STARTED is a durable confirmation that the backend has already
+ * staged the target swipe. Reflect it locally as well as listening for
+ * MESSAGE_SWIPED: a list response or a short websocket gap must not leave the
+ * streaming marker pointing past the visible swipe count.
+ */
+function ensureStreamingTargetSwipe(
+  state: ReturnType<typeof useStore.getState>,
+  payload: GenerationStartedPayload,
+): void {
+  if (
+    payload.generationType !== 'swipe' ||
+    !payload.targetMessageId ||
+    payload.targetSwipeId == null
+  ) return
+
+  const message = state.messages.find((item) => item.id === payload.targetMessageId)
+  if (!message || message.swipes.length > payload.targetSwipeId) return
+
+  const missing = payload.targetSwipeId - message.swipes.length + 1
+  const now = Math.floor(Date.now() / 1000)
+  state.updateMessage(message.id, {
+    swipes: [...message.swipes, ...Array<string | null>(missing).fill('')],
+    swipe_dates: [...message.swipe_dates, ...Array<number>(missing).fill(now)],
+    swipe_id: payload.targetSwipeId,
+    content: '',
+  })
+}
+
 // Deferred generation metrics (tokenCount / TTFT / TPS / model / provider) are
 // persisted *after* GENERATION_ENDED and pushed via GENERATION_METRICS_READY,
 // which races that event's reconciliation re-fetch (the fetch can read the row
@@ -369,15 +421,17 @@ export function useWebSocket() {
   const isAuthenticated = useStore((s) => s.isAuthenticated)
   const userRole = useStore((s) => s.user?.role)
   const activeChatId = useStore((s) => s.activeChatId)
+  const spindleInfoLoggingEnabled = useStore((s) => s.spindleSettings.infoLoggingEnabled)
   const lastExtensionSyncAtRef = useRef(0)
   const lastOperatorUpdateToastKeyRef = useRef<string | null>(null)
-  /**
-   * Set to true when the socket closes after we'd already had a fully healthy
-   * connection — i.e. an actual drop, not the initial connect. The next pong
-   * that completes the recovery will trigger one bundle-update check and clear
-   * the flag, so checks only fire on reconnect-after-drop.
-   */
-  const pendingReconnectCheckRef = useRef(false)
+  // Set only after a confirmed healthy session drops. The following verified
+  // reconnect then gets one prompt service-worker update check, which catches
+  // bundles rebuilt while the server was unavailable.
+  const pendingReconnectBundleCheckRef = useRef(false)
+
+  useEffect(() => {
+    wsClient.setSpindleInfoLogging(spindleInfoLoggingEnabled)
+  }, [spindleInfoLoggingEnabled])
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -455,18 +509,15 @@ export function useWebSocket() {
       }),
       wsClient.on(WS_CLOSE, () => {
         store.getState().setWsConnected(false)
-        // If the user had a working connection before this close, remember to
-        // ask the SW for a fresh bundle once we recover. Initial-load failures
-        // (wsHasEverConnected still false) shouldn't trigger an update check.
         if (store.getState().wsHasEverConnected) {
-          pendingReconnectCheckRef.current = true
+          pendingReconnectBundleCheckRef.current = true
         }
       }),
       wsClient.on(WS_PONG, () => {
         store.getState().setWsRoundTripVerified(true)
-        if (pendingReconnectCheckRef.current) {
-          pendingReconnectCheckRef.current = false
-          checkForBundleUpdate()
+        if (pendingReconnectBundleCheckRef.current) {
+          pendingReconnectBundleCheckRef.current = false
+          void checkForBundleUpdate()
         }
       }),
       wsClient.on(WS_AUTH_ERROR, () => {
@@ -609,6 +660,7 @@ export function useWebSocket() {
           // Anchor the streaming buffer to its swipe so the user can navigate to
           // other swipes mid-generation without smearing live tokens onto them.
           state.setStreamingSwipeId(payload.targetSwipeId ?? null)
+          ensureStreamingTargetSwipe(state, payload)
           // A new generation supersedes any stale "new swipe ready" badge on this
           // message — the upcoming completion will re-flag the fresh swipe if needed.
           if (payload.targetMessageId) state.clearUnseenSwipe(payload.targetMessageId)
@@ -638,6 +690,7 @@ export function useWebSocket() {
           // Refine (never clobber) the swipe anchor — GENERATION_STARTED is the
           // authoritative source; only overwrite if this event actually carries it.
           if (payload.targetSwipeId != null) state.setStreamingSwipeId(payload.targetSwipeId)
+          ensureStreamingTargetSwipe(state, payload)
 
           // Surface context clipping once the final assembly metadata is ready.
           const clip = payload.contextClipStats
@@ -1183,14 +1236,14 @@ export function useWebSocket() {
         // onopen with an empty payload, and once when the backend's CONNECTED
         // message arrives (carrying the user role). Only the second one means
         // auth has been verified server-side — gate auth-sync on `role`.
-        if (payload?.role) {
+        if (shouldSyncExtensionsAfterConnected(payload)) {
           store.getState().reconcileRole(payload.role)
           store.getState().setWsAuthSynced(true)
           // Immediately verify round-trip so the overlay can dismiss without
           // waiting up to 30s for the next scheduled ping.
           wsClient.forcePing()
+          syncExtensions(true)
         }
-        syncExtensions(true)
 
         // Re-sync settings on every WS (re)connect. Covers two cases:
         // 1. Page refresh: the old page's keepalive flush may have landed after
@@ -1215,8 +1268,9 @@ export function useWebSocket() {
       // Re-sync settings when another tab (or the old page's keepalive flush)
       // writes to the settings table. Skip if this tab has pending writes to
       // avoid overwriting in-flight local changes with stale DB values.
-      wsClient.on(EventType.SETTINGS_UPDATED, () => {
-        if (!hasUnsavedSettings()) {
+      wsClient.on(EventType.SETTINGS_UPDATED, (payload: unknown) => {
+        const reload = shouldReloadSettingsAfterUpdate(payload)
+        if (reload) {
           store.getState().loadSettings()
         }
       }),
@@ -1369,7 +1423,9 @@ export function useWebSocket() {
         rssKb: number | null
         startupMs?: number
       }) => {
-        console.info('[Spindle] Runtime stats:', payload)
+        if (store.getState().spindleSettings.infoLoggingEnabled) {
+          console.info('[Spindle] Runtime stats:', payload)
+        }
       }),
 
       wsClient.on(EventType.SPINDLE_BULK_UPDATE_COMPLETE, (payload: { total: number; updated: number; failed: number; errors: Array<{ id: string; name: string; error: string }> }) => {
@@ -1545,26 +1601,44 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.SPINDLE_UI_NAVIGATE, (payload: { extensionId: string; extensionName: string; action: 'open_drawer_tab' | 'close_drawer' | 'open_settings' | 'close_settings' | 'open_command_palette' | 'close_command_palette'; tabId?: string; viewId?: string }) => {
-        const s = store.getState()
-        switch (payload.action) {
-          case 'open_drawer_tab':
-            if (payload.tabId) s.openDrawer(payload.tabId)
-            break
-          case 'close_drawer':
-            s.closeDrawer()
-            break
-          case 'open_settings':
-            s.openSettings(payload.viewId)
-            break
-          case 'close_settings':
-            s.closeSettings()
-            break
-          case 'open_command_palette':
-            s.openCommandPalette()
-            break
-          case 'close_command_palette':
-            s.closeCommandPalette()
-            break
+        try {
+          switch (payload.action) {
+            case 'open_drawer_tab':
+              applyHostAction({ kind: 'drawer_tab', id: payload.tabId ?? '' }, undefined, spindleUiActionRuntime)
+              break
+            case 'open_settings':
+              applyHostAction({ kind: 'settings_tab', id: payload.viewId ?? '' }, undefined, spindleUiActionRuntime)
+              break
+            case 'close_drawer':
+              spindleUiActionRuntime.closeDrawer()
+              break
+            case 'close_settings':
+              spindleUiActionRuntime.closeSettings()
+              break
+            case 'open_command_palette':
+              spindleUiActionRuntime.openCommandPalette()
+              break
+            case 'close_command_palette':
+              spindleUiActionRuntime.closeCommandPalette()
+              break
+          }
+        } catch (error) {
+          console.warn('[Spindle] rejected UI navigation event', error)
+        }
+      }),
+
+      // Connection mutations can originate in another tab, an OAuth callback,
+      // or a preset operation. Reconcile them through the same store setters
+      // used by the native manager, while avoiding duplicate rows when the
+      // initiating tab already applied the REST response locally.
+      wsClient.on(EventType.CONNECTION_PROFILE_LOADED, (payload: { id?: string; profile?: ConnectionProfile }) => {
+        const profile = payload?.profile
+        if (!profile || typeof profile.id !== 'string' || !profile.id) return
+        const state = store.getState()
+        if (state.profiles.some((candidate) => candidate.id === profile.id)) {
+          state.updateProfile(profile.id, profile)
+        } else {
+          state.addProfile(profile)
         }
       }),
 

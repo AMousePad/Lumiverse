@@ -10,6 +10,32 @@ interface SecretRow {
 }
 
 let _cachedKey: CryptoKey | null = null;
+const warnedUnreadableSecrets = new Set<string>();
+
+export class SecretDecryptionError extends Error {
+  readonly code = "SECRET_DECRYPTION_FAILED";
+
+  constructor(secretKey: string, cause?: unknown) {
+    super(
+      `Stored credential "${secretKey}" cannot be decrypted. Restore the matching identity file or replace the credential in Settings.`,
+      { cause },
+    );
+    this.name = "SecretDecryptionError";
+  }
+}
+
+export function isSecretDecryptionFailure(err: unknown): boolean {
+  return err instanceof DOMException && (err.name === "OperationError" || err.name === "DataError");
+}
+
+export function isSecretDecryptionError(err: unknown): err is SecretDecryptionError {
+  return err instanceof SecretDecryptionError
+    || (err instanceof Error && (err as Error & { code?: unknown }).code === "SECRET_DECRYPTION_FAILED");
+}
+
+function normalizeSecretReadError(err: unknown, secretKey: string): unknown {
+  return isSecretDecryptionFailure(err) ? new SecretDecryptionError(secretKey, err) : err;
+}
 
 async function getEncryptionKey(): Promise<CryptoKey> {
   if (_cachedKey) return _cachedKey;
@@ -73,7 +99,41 @@ export async function putSecret(userId: string, key: string, value: string): Pro
 export async function getSecret(userId: string, key: string): Promise<string | null> {
   const row = getDb().query("SELECT * FROM secrets WHERE key = ? AND user_id = ?").get(key, userId) as SecretRow | null;
   if (!row) return null;
-  return decrypt(row.encrypted_value, row.iv, row.tag);
+  try {
+    return await decrypt(row.encrypted_value, row.iv, row.tag);
+  } catch (err) {
+    throw normalizeSecretReadError(err, key);
+  }
+}
+
+async function recoverUnreadableSecretForStatus(
+  userId: string,
+  key: string,
+  read: () => Promise<string | null>,
+): Promise<string | null> {
+  const warningKey = `${userId}:${key}`;
+  try {
+    const value = await read();
+    warnedUnreadableSecrets.delete(warningKey);
+    return value;
+  } catch (err) {
+    const normalized = normalizeSecretReadError(err, key);
+    if (!isSecretDecryptionError(normalized)) throw normalized;
+    if (!warnedUnreadableSecrets.has(warningKey)) {
+      warnedUnreadableSecrets.add(warningKey);
+      console.warn(`[secrets] ${normalized.message} Treating it as missing until it is replaced.`);
+    }
+    return null;
+  }
+}
+
+/**
+ * Read a credential for a presence/status response. An unreadable encrypted row
+ * is reported as missing so its settings UI remains available for recovery.
+ * Database and other non-crypto failures still propagate.
+ */
+export function getSecretForStatus(userId: string, key: string): Promise<string | null> {
+  return recoverUnreadableSecretForStatus(userId, key, () => getSecret(userId, key));
 }
 
 export function deleteSecret(userId: string, key: string): boolean {
@@ -81,10 +141,11 @@ export function deleteSecret(userId: string, key: string): boolean {
 }
 
 export async function validateSecret(userId: string, key: string): Promise<boolean> {
-  try {
-    const value = await getSecret(userId, key);
-    return value !== null && value.length > 0;
-  } catch {
-    return false;
-  }
+  const value = await getSecretForStatus(userId, key);
+  return value !== null && value.length > 0;
 }
+
+export const __test__ = {
+  normalizeSecretReadError,
+  recoverUnreadableSecretForStatus,
+};

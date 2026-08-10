@@ -98,6 +98,8 @@
     "expandEditor": "Expand editor",
     "hideMacros": "Hide Macros",
     "insertMacro": "Insert Macro",
+    "previewMarkdown": "Preview Markdown",
+    "editMarkdown": "Edit Markdown",
     "searchMacros": "Search macros...",
     "clearMacroSearch": "Clear macro search",
     "find": "Find",

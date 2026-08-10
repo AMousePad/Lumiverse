@@ -19,10 +19,17 @@ import { applyCharxModulesAndAssets, autoImportEmbeddedWorldbook } from "../serv
 import { mapWithConcurrency } from "../utils/concurrency";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import type { Character, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
+import type { Character, CharacterLibraryScope, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
 
 const app = new Hono();
 const PERSPECTIVE_LAYERS = new Set<svc.PerspectiveLayerKind>(["background", "framing", "subject"]);
+function parseLibraryScope(raw: unknown): CharacterLibraryScope | null {
+  try { return svc.normalizeCharacterLibraryScope(raw); } catch { return null; }
+}
+function isInvalidLibraryScopeError(err: unknown): boolean {
+  return err instanceof svc.InvalidCharacterLibraryScopeError || (typeof err === "object" && err !== null && (err as any).code === "INVALID_CHARACTER_LIBRARY_SCOPE");
+}
+function respondInvalidLibraryScope(c: any) { return c.json({ error: "invalid_scope" }, 400); }
 
 // ─── Import error response helper ────────────────────────────────────────
 
@@ -31,6 +38,7 @@ function respondImportError(c: any, err: any, fallbackMessage: string) {
   // Generic 400s from the old code swallowed this — which is how a 500 MB
   // decompression-cap hit looked like "no backend error" to operators.
   console.error("[character import] failed:", err);
+  if (isInvalidLibraryScopeError(err)) return respondInvalidLibraryScope(c);
   if (err instanceof cardSvc.CharacterImportError) {
     return c.json({ error: err.message, code: err.code }, err.status);
   }
@@ -230,7 +238,7 @@ async function importGalleryFromUrls(userId: string, characterId: string, urls: 
   }
 }
 
-async function fetchChubCharacter(chubPath: string, userId: string) {
+async function fetchChubCharacter(chubPath: string, userId: string, libraryScope: CharacterLibraryScope) {
   const data = await fetchChubJson(`characters/${chubPath}?full=true`);
   const node = data?.node;
   if (!node) throw new Error("Invalid Chub API response: missing node");
@@ -274,7 +282,7 @@ async function fetchChubCharacter(chubPath: string, userId: string) {
   }
 
   const cardInput = cardSvc.parseCardJson(card);
-  const character = svc.createCharacter(userId, cardInput);
+  const character = svc.createCharacter(userId, { ...cardInput, library_scope: libraryScope });
   importCardRegexBestEffort(userId, character.id, cardInput.extensions);
 
   // Fetch avatar image
@@ -326,7 +334,7 @@ async function fetchChubCharacter(chubPath: string, userId: string) {
 
 // ─── JannyAI character fetcher ────────────────────────────────────────────
 
-async function fetchJannyCharacter(uuid: string, userId: string) {
+async function fetchJannyCharacter(uuid: string, userId: string, libraryScope: CharacterLibraryScope) {
   // safeFetch is GET-only; JannyAI requires POST — validate host then POST directly
   await validateHost("api.jannyai.com");
   const downloadRes = await fetch("https://api.jannyai.com/api/v1/download", {
@@ -360,7 +368,7 @@ async function fetchJannyCharacter(uuid: string, userId: string) {
   const file = new File([buf], `${uuid}.png`, { type: "image/png" });
 
   const cardInput = cardSvc.normalizeJannyCharacterInput(await cardSvc.extractCardFromPng(file));
-  const character = svc.createCharacter(userId, cardInput);
+  const character = svc.createCharacter(userId, { ...cardInput, library_scope: libraryScope });
 
   // Use the PNG as avatar
   const image = await images.uploadImage(userId, file);
@@ -396,7 +404,7 @@ function sniffCardContainer(buf: ArrayBuffer): "png" | "zip" | null {
   return null;
 }
 
-async function fetchGenericCharacter(url: string, userId: string) {
+async function fetchGenericCharacter(url: string, userId: string, libraryScope: CharacterLibraryScope) {
   const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 100 * 1024 * 1024 });
   if (!res.ok) throw new Error(`Failed to fetch URL: ${res.status}`);
 
@@ -407,7 +415,7 @@ async function fetchGenericCharacter(url: string, userId: string) {
   if (sniffed === "png" || contentType.includes("image/png") || url.toLowerCase().endsWith(".png")) {
     const file = new File([buf], "import.png", { type: "image/png" });
     const cardInput = await cardSvc.extractCardFromPng(file);
-    const character = svc.createCharacter(userId, cardInput);
+    const character = svc.createCharacter(userId, { ...cardInput, library_scope: libraryScope });
 
     const image = await images.uploadImage(userId, file);
     svc.setCharacterImage(userId, character.id, image.id);
@@ -420,7 +428,7 @@ async function fetchGenericCharacter(url: string, userId: string) {
   if (sniffed === "zip" || contentType.includes("application/zip") || url.toLowerCase().endsWith(".charx")) {
     const file = new File([buf], "import.charx", { type: "application/zip" });
     const charxResult = await cardSvc.extractCardFromCharx(file);
-    const character = svc.createCharacter(userId, charxResult.card);
+    const character = svc.createCharacter(userId, { ...charxResult.card, library_scope: libraryScope });
     await applyCharxModulesAndAssets(userId, character, charxResult);
     return svc.getCharacter(userId, character.id)!;
   }
@@ -435,7 +443,7 @@ async function fetchGenericCharacter(url: string, userId: string) {
   }
 
   const cardInput = cardSvc.parseCardJson(json);
-  const character = svc.createCharacter(userId, cardInput);
+  const character = svc.createCharacter(userId, { ...cardInput, library_scope: libraryScope });
   autoImportEmbeddedWorldbook(userId, character.id);
   return svc.getCharacter(userId, character.id)!;
 }
@@ -457,6 +465,9 @@ app.get("/", (c) => {
 // ─── Lightweight summary endpoint for character browser ───────────────────
 app.get("/summary", (c) => {
   const userId = c.get("userId");
+  const rawScope = c.req.query("scope");
+  const scope = rawScope === undefined ? undefined : parseLibraryScope(rawScope);
+  if (rawScope !== undefined && !scope) return c.json({ error: "scope must be either 'mine' or 'shared'" }, 400);
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
   const search = c.req.query("search") || undefined;
   const rawTags = c.req.query("tags");
@@ -470,6 +481,7 @@ app.get("/summary", (c) => {
   const seed = rawSeed ? parseInt(rawSeed, 10) : undefined;
   const rawFavorites = c.req.query("favorite_ids");
   const favoriteIds = rawFavorites ? rawFavorites.split(",").filter(Boolean) : undefined;
+  const chatId = c.req.query("chat_id") || undefined;
 
   return c.json(
     svc.listCharacterSummaries(userId, pagination, {
@@ -481,6 +493,8 @@ app.get("/summary", (c) => {
       favoriteIds,
       filterMode,
       seed: isNaN(seed as number) ? undefined : seed,
+      chatId,
+      ...(scope ? { scope } : {}),
     })
   );
 });
@@ -508,12 +522,48 @@ app.post("/bulk-tags", async (c) => {
   }
 });
 
+app.post("/folders/rename", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ old_name?: string; new_name?: string }>();
+  const oldName = body.old_name?.trim() || "";
+  const newName = body.new_name?.trim() || "";
+  if (!oldName) return c.json({ error: "old_name is required" }, 400);
+  if (!newName) return c.json({ error: "new_name is required" }, 400);
+
+  const updated = svc.renameCharacterFolder(userId, oldName, newName);
+  if (updated.length === 0) return c.json({ error: "Folder not found" }, 404);
+  return c.json({ updated, count: updated.length });
+});
+
+app.post("/folders/delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ name?: string }>();
+  const name = body.name?.trim() || "";
+  if (!name) return c.json({ error: "name is required" }, 400);
+
+  const updated = svc.deleteCharacterFolder(userId, name);
+  return c.json({ updated, count: updated.length });
+});
+
+app.post("/bulk-update", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown; folder?: unknown }>();
+  if (!Array.isArray(body.ids) || body.ids.length === 0 || body.ids.length > 1000) {
+    return c.json({ error: "ids must be a non-empty array with at most 1000 items" }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (ids.length === 0) return c.json({ error: "ids must contain character ids" }, 400);
+  if (typeof body.folder !== "string") return c.json({ error: "folder must be a string" }, 400);
+
+  const updated = svc.bulkUpdateCharacterFolders(userId, ids, body.folder);
+  return c.json({ updated, count: updated.length });
+});
+
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   if (!body.name) return c.json({ error: "name is required" }, 400);
-  const character = svc.createCharacter(userId, body);
-  return c.json(character, 201);
+  try { return c.json(svc.createCharacter(userId, body), 201); } catch (err) { if (isInvalidLibraryScopeError(err)) return respondInvalidLibraryScope(c); throw err; }
 });
 
 // --- Static routes MUST come before /:id to avoid shadowing ---
@@ -521,6 +571,8 @@ app.post("/", async (c) => {
 app.post("/import-url", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
+  const libraryScope = body?.library_scope === undefined ? undefined : parseLibraryScope(body.library_scope);
+  if (body?.library_scope !== undefined && !libraryScope) return c.json({ error: "library_scope must be either 'mine' or 'shared'" }, 400);
   const url = body.url;
   if (!url || typeof url !== "string") return c.json({ error: "url is required" }, 400);
 
@@ -530,14 +582,14 @@ app.post("/import-url", async (c) => {
     // Check for Chub.ai URL
     const chubPath = parseChubUrl(url);
     if (chubPath) {
-      character = await fetchChubCharacter(chubPath, userId);
+      character = await fetchChubCharacter(chubPath, userId, libraryScope || "mine");
       return c.json({ character, ...loraSurface(character) }, 201);
     }
 
     // Check for JannyAI URL
     const jannyId = parseJannyUrl(url);
     if (jannyId) {
-      character = await fetchJannyCharacter(jannyId, userId);
+      character = await fetchJannyCharacter(jannyId, userId, libraryScope || "mine");
       return c.json({ character, ...loraSurface(character) }, 201);
     }
 
@@ -545,14 +597,15 @@ app.post("/import-url", async (c) => {
     // SillyTavern-compatible card *and* an avatar, then reuse the generic importer.
     const botBooruPngUrl = rewriteBotBooruUrl(url, "png");
     if (botBooruPngUrl) {
-      character = await fetchGenericCharacter(botBooruPngUrl, userId);
+      character = await fetchGenericCharacter(botBooruPngUrl, userId, libraryScope || "mine");
       return c.json({ character, ...loraSurface(character) }, 201);
     }
 
     // Generic URL (direct PNG or JSON link)
-    character = await fetchGenericCharacter(url, userId);
+    character = await fetchGenericCharacter(url, userId, libraryScope || "mine");
     return c.json({ character, ...loraSurface(character) }, 201);
   } catch (err: any) {
+    if (isInvalidLibraryScopeError(err)) return respondInvalidLibraryScope(c);
     if (err instanceof SSRFError) {
       return c.json({ error: err.message }, 400);
     }
@@ -609,12 +662,20 @@ app.get("/:id", (c) => {
   return c.json(char);
 });
 
+app.get("/:id/homepage-preview", (c) => {
+  const preview = svc.getCharacterPreview(c.get("userId"), c.req.param("id"));
+  if (!preview) return c.json({ error: "Not found" }, 404);
+  return c.json(preview);
+});
+
 app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const char = svc.updateCharacter(userId, c.req.param("id"), body);
-  if (!char) return c.json({ error: "Not found" }, 404);
-  return c.json(char);
+  try {
+    const char = svc.updateCharacter(userId, c.req.param("id"), body);
+    if (!char) return c.json({ error: "Not found" }, 404);
+    return c.json(char);
+  } catch (err) { if (isInvalidLibraryScopeError(err)) return respondInvalidLibraryScope(c); throw err; }
 });
 
 app.delete("/:id", (c) => {
@@ -1026,13 +1087,16 @@ app.post("/import", async (c) => {
       const formData = await c.req.formData();
       const file = formData.get("file") as File | null;
       if (!file) return c.json({ error: "file is required" }, 400);
+      const rawScope = formData.get("library_scope");
+      const libraryScope = rawScope === null ? undefined : parseLibraryScope(rawScope);
+      if (rawScope !== null && !libraryScope) return c.json({ error: "library_scope must be either 'mine' or 'shared'" }, 400);
 
       const detectedFormat = await cardSvc.detectCharacterImportFormat(file);
 
       if (detectedFormat === "png") {
         // PNG card — extract embedded JSON + use as avatar
         const cardInput = await cardSvc.extractCardFromPng(file);
-        const character = svc.createCharacter(userId, cardInput);
+        const character = svc.createCharacter(userId, { ...cardInput, ...(libraryScope ? { library_scope: libraryScope } : {}) });
         const image = await images.uploadImage(userId, file);
         svc.setCharacterImage(userId, character.id, image.id);
         svc.setCharacterAvatar(userId, character.id, image.filename);
@@ -1046,7 +1110,7 @@ app.post("/import", async (c) => {
         // shared with bulk & URL import so all paths stay in parity (see
         // applyCharxModulesAndAssets).
         const charxResult = await cardSvc.extractCardFromCharx(file);
-        const character = svc.createCharacter(userId, charxResult.card);
+        const character = svc.createCharacter(userId, { ...charxResult.card, ...(libraryScope ? { library_scope: libraryScope } : {}) });
         const { lumiverseModulesSummary } = await applyCharxModulesAndAssets(userId, character, charxResult, {
           signal: c.req.raw.signal,
           emitGalleryProgress: true,
@@ -1069,7 +1133,7 @@ app.post("/import", async (c) => {
           return c.json({ error: "Invalid JSON in uploaded file" }, 400);
         }
         const cardInput = cardSvc.parseCardJson(json);
-        const character = svc.createCharacter(userId, cardInput);
+        const character = svc.createCharacter(userId, { ...cardInput, ...(libraryScope ? { library_scope: libraryScope } : {}) });
         importCardRegexBestEffort(userId, character.id, cardInput.extensions);
         autoImportEmbeddedWorldbook(userId, character.id);
         const imported = svc.getCharacter(userId, character.id)!;
@@ -1078,9 +1142,12 @@ app.post("/import", async (c) => {
     } else {
       // Raw JSON body — support both card-spec wrapper and flat input
       const body = await c.req.json();
+      const rawScope = body?.library_scope;
+      const libraryScope = rawScope === undefined ? undefined : parseLibraryScope(rawScope);
+      if (rawScope !== undefined && !libraryScope) return c.json({ error: "library_scope must be either 'mine' or 'shared'" }, 400);
       const input = (body.spec && body.data) ? cardSvc.parseCardJson(body) : body;
       if (!input.name) return c.json({ error: "name is required" }, 400);
-      const character = svc.createCharacter(userId, input);
+      const character = svc.createCharacter(userId, { ...input, ...(libraryScope ? { library_scope: libraryScope } : {}) });
       importCardRegexBestEffort(userId, character.id, input.extensions);
       autoImportEmbeddedWorldbook(userId, character.id);
       const imported = svc.getCharacter(userId, character.id)!;

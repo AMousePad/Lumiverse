@@ -131,7 +131,7 @@ export default function GreetingPickerModal({
                   >
                     {greetingBgs[i] ? (
                       <img
-                        src={imagesApi.url(greetingBgs[i]) + '?size=sm'}
+                        src={imagesApi.smallUrl(greetingBgs[i])}
                         alt=""
                         className={styles.bgPickerThumb}
                       />

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import * as svc from "../services/presets.service";
+import * as stashSvc from "../services/prompt-stash.service";
 import { PresetRevisionConflictError } from "../types/preset";
 import { parsePagination } from "../services/pagination";
 import { REVALIDATE_PRIVATE, ifNoneMatchSatisfies } from "../utils/http-cache";
@@ -41,6 +42,37 @@ app.post("/", async (c) => {
   const body = await c.req.json();
   if (!body.name || !body.provider) return c.json({ error: "name and provider are required" }, 400);
   return c.json(svc.createPreset(userId, body), 201);
+});
+
+app.get("/stash", (c) => {
+  return c.json(stashSvc.listPromptStash(c.get("userId")));
+});
+
+app.post("/stash", async (c) => {
+  const body = await c.req.json();
+  try {
+    if (!body?.block || typeof body.block !== "object") return c.json({ error: "block is required" }, 400);
+    const userId = c.get("userId");
+    const sourcePreset = typeof body.sourcePresetId === "string"
+      ? svc.getPreset(userId, body.sourcePresetId)
+      : null;
+    return c.json(
+      stashSvc.addPromptBlockToStash(
+        userId,
+        body.block,
+        sourcePreset ? { id: sourcePreset.id, name: sourcePreset.name } : undefined,
+      ),
+      201,
+    );
+  } catch (err: any) {
+    return c.json({ error: err?.message || "Unable to add prompt block to stash" }, 400);
+  }
+});
+
+app.delete("/stash/:stashId", (c) => {
+  const deleted = stashSvc.removePromptBlockFromStash(c.get("userId"), c.req.param("stashId"));
+  if (!deleted) return c.json({ error: "Not found" }, 404);
+  return c.json({ success: true });
 });
 
 app.get("/:id", (c) => {

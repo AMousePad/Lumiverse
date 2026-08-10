@@ -46,6 +46,11 @@ export interface UpdateChatInput {
   metadata?: Record<string, any>;
 }
 
+export type ChatAppearanceAction =
+  | { type: "avatar"; avatar_entry_id: string; character_id?: string }
+  | { type: "field"; field: "description" | "personality" | "scenario"; variant_id: string | null; character_id?: string }
+  | { type: "greeting"; greeting_index: number; character_id?: string };
+
 export interface RecentChat {
   id: string;
   character_id: string;

@@ -91,7 +91,12 @@ export function getSettingsByKeys(userId: string, keys: string[]): Map<string, a
   return result;
 }
 
-export function putSetting(userId: string, key: string, value: any): Setting {
+export function putSetting(
+  userId: string,
+  key: string,
+  value: any,
+  options: { suppressBroadcast?: boolean } = {},
+): Setting {
   assertValidKey(key);
   const json = serializeValueOrThrow(key, value);
   const now = Math.floor(Date.now() / 1000);
@@ -111,8 +116,10 @@ export function putSetting(userId: string, key: string, value: any): Setting {
   }
 
   const setting = { key, value, updated_at: now };
-  eventBus.emit(EventType.SETTINGS_UPDATED, { key, value }, userId);
-  if (key === "activeChatId") {
+  if (!options.suppressBroadcast) {
+    eventBus.emit(EventType.SETTINGS_UPDATED, { key, value }, userId);
+  }
+  if (!options.suppressBroadcast && key === "activeChatId") {
     eventBus.emit(EventType.CHAT_SWITCHED, { chatId: typeof value === "string" ? value : null }, userId);
   }
   return setting;

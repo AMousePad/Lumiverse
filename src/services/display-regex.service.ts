@@ -1,4 +1,4 @@
-import { buildEnv, initMacros, mergeDynamicMacros, resolveGroupCharacterNames, resolvePersonaPronouns } from "../macros";
+import { buildEnv, initMacros, mergeDynamicMacros, resolveGroupCharacterNames } from "../macros";
 import type { MacroEnv } from "../macros";
 import { messageContentProcessorChain } from "../spindle/message-content-processor";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
@@ -11,7 +11,7 @@ import * as connectionsSvc from "./connections.service";
 import * as personasSvc from "./personas.service";
 import { resolvePersonaForChatMacros } from "./persona-addon-states";
 import { populateLumiaLoomContext } from "./prompt-assembly.service";
-import { applyRegexScripts } from "./regex-scripts.service";
+import { applyRegexScripts, hasRegexMatchAction } from "./regex-scripts.service";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 
@@ -129,74 +129,55 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
     personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id),
     null,
   );
-  const personaPronouns = resolvePersonaPronouns(persona);
   const connection = connectionsSvc.resolveConnection(userId);
-  return {
-    commit: true,
-    names: {
-      user: persona?.name || "User",
-      char: "",
-      group: "",
-      groupNotMuted: "",
-      notChar: persona?.name || "User",
-      charGroupFocused: "",
-      groupOthers: "",
-      groupMemberCount: "0",
-      isGroupChat: "no",
-      isNarrator: persona?.is_narrator ? "yes" : "no",
-      groupLastSpeaker: "",
-      groupCardMode: "solo",
-    },
-    character: {
-      name: "",
-      description: "",
-      personality: "",
-      scenario: "",
-      persona: persona?.description || "",
-      personaSubjectivePronoun: personaPronouns.subjective,
-      personaObjectivePronoun: personaPronouns.objective,
-      personaPossessivePronoun: personaPronouns.possessive,
-      mesExamples: "",
-      mesExamplesRaw: "",
-      systemPrompt: "",
-      postHistoryInstructions: "",
-      depthPrompt: "",
-      creatorNotes: "",
-      version: "",
-      creator: "",
-      firstMessage: "",
-    },
-    chat: {
-      id: "",
-      messageCount: 0,
-      lastMessage: "",
-      lastMessageName: "",
-      lastUserMessage: "",
-      lastCharMessage: "",
-      lastMessageId: -1,
-      firstIncludedMessageId: -1,
-      lastSwipeId: 0,
-      currentSwipeId: 0,
-      rejectedSwipe: "",
-    },
-    system: {
-      model: connection?.model || "",
-      maxPrompt: 0,
-      maxContext: 0,
-      maxResponse: 0,
-      lastGenerationType: "normal",
-      isMobile: false,
-    },
-    variables: { local: new Map(), global: new Map(), chat: new Map() },
-    dynamicMacros: {},
-    extra: {},
+  const chat: Chat = {
+    id: "",
+    character_id: null,
+    name: "",
+    metadata: {},
+    created_at: 0,
+    updated_at: 0,
   };
+  return buildEnv({
+    character: makeAssistantCharacter(),
+    persona,
+    chat,
+    messages: [],
+    generationType: "normal",
+    connection,
+  });
 }
 
 export interface ApplyDisplayRegexResult {
   result: string;
   touchedVars: ReadonlySet<string>;
   cacheable: boolean;
+}
+
+function getDisplayBehaviorContext(
+  userId: string,
+  context: DisplayRegexContext,
+): { previousContent?: string } {
+  if (!context.chat_id) return {};
+  const message = context.message_id
+    ? chatsSvc.getMessage(userId, context.message_id)
+    : undefined;
+  const messageIndex = message?.index_in_chat ?? context.message_index;
+  if (typeof messageIndex !== "number" || messageIndex <= 0) {
+    return {};
+  }
+  const isUser = context.role
+    ? context.role === "user"
+    : message?.is_user ?? context.is_user;
+  const previousContent = chatsSvc.getPreviousSameRoleContent(
+    userId,
+    context.chat_id,
+    isUser,
+    context.message_id,
+  );
+  return {
+    ...(previousContent !== undefined ? { previousContent } : {}),
+  };
 }
 
 type DisplayVarEnv = { variables: { local: Map<string, unknown>; chat: Map<string, unknown>; global: Map<string, unknown> } } | null | undefined;
@@ -282,6 +263,7 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
         {
           chatId: input.context.chat_id,
           content,
+          isUser: input.context.is_user,
           origin: "render",
           userId: input.userId,
           ...(input.context.message_id ? { messageId: input.context.message_id } : {}),
@@ -327,6 +309,10 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
   }
 
   const fingerprint = { touchedVars: new Set<string>(), cacheable: true };
+  const hasRepeatBack = hasRegexMatchAction(input.scripts, "repeat_back");
+  const behaviorContext = hasRepeatBack
+    ? getDisplayBehaviorContext(input.userId, input.context)
+    : undefined;
   const result = await applyRegexScripts(
     content,
     input.scripts,
@@ -337,7 +323,11 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
       resolvedFindPatterns: input.resolvedFindPatterns,
       resolvedReplacements: input.resolvedReplacements,
     },
-    { source: "display_backend", outFingerprint: fingerprint },
+    {
+      source: "display_backend",
+      outFingerprint: fingerprint,
+      ...(behaviorContext ?? {}),
+    },
   );
   if (!noCache && fingerprint.cacheable) {
     DISPLAY_REGEX_CACHE.set(cacheKey, {

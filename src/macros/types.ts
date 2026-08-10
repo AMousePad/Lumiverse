@@ -164,6 +164,8 @@ export interface MacroEnv {
     personaSubjectivePronoun: string;
     personaObjectivePronoun: string;
     personaPossessivePronoun: string;
+    personaReflexivePronoun: string;
+    personaPossessivePronounStandalone: string;
     mesExamples: string;
     mesExamplesRaw: string;
     systemPrompt: string;
@@ -173,6 +175,8 @@ export interface MacroEnv {
     version: string;
     creator: string;
     firstMessage: string;
+    /** Card-defined alternatives, excluding the default first message. */
+    alternateGreetings?: string[];
   };
   chat: {
     id: string;
@@ -186,6 +190,8 @@ export interface MacroEnv {
     lastSwipeId: number;
     currentSwipeId: number;
     rejectedSwipe: string;
+    /** Selected index in [default greeting, ...alternate greetings]. */
+    greetingIndex?: number;
   };
   system: {
     model: string;

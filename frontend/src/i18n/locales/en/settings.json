@@ -201,7 +201,14 @@
       "cards": "Cards",
       "compactList": "Compact List",
       "layoutHelper": "Switch the landing page between the current card gallery and a denser adaptive list of recent chats.",
-      "batchSize": "LANDING PAGE CHATS PER BATCH"
+      "galleryWidth": "RECENT CHAT GALLERY WIDTH",
+      "compact": "Compact",
+      "expanded": "Expanded",
+      "galleryWidthHelper": "Keep a comfortable reading width on desktop, or expand the recent-chat gallery to use the full window.",
+      "batchSize": "LANDING PAGE CHATS PER BATCH",
+      "hiddenCharacters": "HIDDEN FROM HOME ({{count}})",
+      "manageHiddenCharacters": "Manage hidden items",
+      "hiddenCharactersHelper": "Restore characters or individual chats hidden from the landing page. This does not affect Character Browser."
     }
   },
   "notifications": {
@@ -687,6 +694,9 @@
   "advanced": {
     "title": "Advanced",
     "imageOptimization": "Image Optimization",
+    "spindleLogging": "Spindle Logging",
+    "spindleInfoLogging": "Log routine Spindle events to the browser console",
+    "spindleInfoLoggingHint": "When off, routine Spindle WebSocket, lifecycle, and runtime-stat messages stay out of the console. Spindle warnings and errors are always shown.",
     "longTermMemory": "Long-Term Chat Memory",
     "loadingMemory": "Loading memory settings...",
     "loadFailed": "Failed to load chat memory settings",

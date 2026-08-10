@@ -162,6 +162,8 @@ export interface PromptBlock {
   categoryMode?: 'radio' | 'checkbox' | null;
   variables?: PromptVariableDef[];
   placementBinding?: PromptBlockPlacementBinding;
+  /** Stable identity of a user-owned stash entry shared across presets. */
+  stashId?: string;
   sealed?: boolean;
   sealedKey?: string;
   sealedSource?: string;
@@ -182,6 +184,8 @@ export interface PromptBehavior {
 
 export interface CompletionSettings {
   assistantPrefill: string;
+  /** Moonshot/Kimi Partial Mode prefix for the model's reasoning_content. */
+  reasoningPrefill?: string;
   assistantImpersonation: string;
   continuePrefill: boolean;
   continuePostfix: string;
@@ -219,6 +223,8 @@ export interface AdvancedSettings {
   seed: number;
   customStopStrings: string[];
   collapseMessages: boolean;
+  /** Drop a trailing word when a streamed response ends directly on it. */
+  trimIncompleteWords?: boolean;
 }
 
 export interface AuthorsNote {

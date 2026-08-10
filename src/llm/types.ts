@@ -74,6 +74,12 @@ export interface LlmMessage {
   role: "system" | "user" | "assistant";
   content: string | LlmMessagePart[];
   name?: string;
+  /**
+   * Marks a trailing assistant message as a generation prefix. Providers that
+   * support native partial/prefill mode can use this to continue after
+   * `content` instead of treating it as a completed history message.
+   */
+  partial?: boolean;
   cache_control?: Record<string, unknown>;
   /** Provider-returned reasoning payload required by some OpenAI-compatible tool-call continuations. */
   reasoning_content?: string;
@@ -269,6 +275,10 @@ export interface AssemblyContext {
   excludeMessageId?: string;
   /** For regenerate/swipe: content of the active target swipe before it was replaced. */
   rejectedSwipe?: string;
+  /** For continue: source message id of the assistant turn being extended. */
+  continueMessageId?: string;
+  /** For continue: separator to append to the target in the model prompt and saved reply. */
+  continuePostfix?: string;
   /** For group chats: generate a response as this specific character. */
   targetCharacterId?: string;
   /** Council tool results (passed from generate.service when council executes before assembly). */
@@ -344,6 +354,15 @@ export interface ActivatedWorldInfoEntry {
   bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
   bookName?: string;
+  activationType?: "constant" | "sticky" | "keyword" | "vector";
+  estimatedTokens?: number;
+  activationOrder?: number;
+  priority?: number;
+  position?: number;
+  depth?: number;
+  preventRecursion?: boolean;
+  activationProvenance?: ActivationProvenance;
+  firstTriggeredForBook?: boolean;
 }
 
 export interface MemoryStats {
@@ -427,13 +446,13 @@ export interface ContextClipStats {
   budgetInvalid?: boolean;
   /** True when fixed prompt overhead alone is larger than the available input budget. */
   fixedOverBudget?: boolean;
-  /** True when a chat context anchor protected one or more history messages. */
+  /** True when a context anchor set the first chat-history message the model may read. */
   anchorActive?: boolean;
-  /** Exact tokens required by the protected anchor tail. */
+  /** Exact tokens required by the anchored history tail. */
   protectedHistoryTokens?: number;
-  /** Space left for history before the protected anchor. Negative means the anchor cannot fit. */
+  /** Budget remaining after the anchored history tail. Negative means the anchor cannot fit. */
   remainingBeforeAnchor?: number;
-  /** True when the protected anchor tail cannot fit in the remaining history budget. */
+  /** True when the anchored history tail cannot fit in the remaining history budget. */
   anchorOverflow?: boolean;
 }
 
@@ -441,13 +460,21 @@ export interface AssemblyResult {
   messages: LlmMessage[];
   breakdown: AssemblyBreakdownEntry[];
   parameters: Record<string, any>;
+  /** Whether a directly word-terminated streaming response should lose its final word. */
+  trimIncompleteWords?: boolean;
   /** The resolved assistant prefill text (from promptBias / assistantPrefill / assistantImpersonation).
    *  When set, the last message in `messages` is an assistant message containing this text.
    *  The generate service must prepend this to the LLM response content since the model
    *  continues *after* the prefill (it's not included in the model's output). */
   assistantPrefill?: string;
+  /**
+   * A Moonshot/Kimi Partial Mode prefix for `reasoning_content`. The generation
+   * service surfaces this before the provider's streamed reasoning tail.
+   */
+  assistantReasoningPrefill?: string;
   /** Summary of all world info entries activated during this assembly. */
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
+  spindleWorldInfoCaptures?: Record<string, ActivatedWorldInfoEntry[]>;
   /** Statistics from the World Info activation pipeline (budget enforcement, etc.). */
   worldInfoStats?: {
     totalCandidates: number;
@@ -520,3 +547,5 @@ export interface AssemblyBreakdownEntry {
   /** Human-readable extension attribution for injected prompt blocks. */
   extensionName?: string;
 }
+import type { ActivationProvenance } from "../spindle/activation-provenance";
+export type { ActivationProvenance, ActivationTraceEntry } from "../spindle/activation-provenance";

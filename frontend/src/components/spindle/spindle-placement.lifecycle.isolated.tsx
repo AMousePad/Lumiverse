@@ -57,7 +57,7 @@ Object.defineProperty(domWindow, 'requestAnimationFrame', { configurable: true, 
 Object.defineProperty(domWindow, 'cancelAnimationFrame', { configurable: true, value: cancelAnimationFrame })
 
 const placementState = {
-  spindleSettings: { dockPanelDesktopSide: 'right' as const },
+  spindleSettings: { dockPanelDesktopSide: 'right' as const, infoLoggingEnabled: true },
   updateDockPanel: () => {},
   unregisterDockPanel: () => {},
   updateFloatWidget: () => {},

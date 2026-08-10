@@ -1,24 +1,50 @@
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import type { Character, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
+import type { Character, CharacterLibraryScope, CharacterPreview, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as filesSvc from "./files.service";
 import * as imagesSvc from "./images.service";
 import { deleteRegexScriptsByCharacterId } from "./regex-scripts.service";
 import { deleteAutoManagedCharacterWorldBooks } from "./world-books.service";
+import { getCharacterWorldBookIds } from "../utils/character-world-books";
+
+export class InvalidCharacterLibraryScopeError extends Error {
+  readonly code = "INVALID_CHARACTER_LIBRARY_SCOPE" as const;
+  constructor(readonly value: unknown) { super('Character library scope must be exactly "mine" or "shared"'); this.name = "InvalidCharacterLibraryScopeError"; }
+}
+
+export function normalizeCharacterLibraryScope(scope: unknown): CharacterLibraryScope {
+  if (scope === undefined) return "mine";
+  if (scope === "mine" || scope === "shared") return scope;
+  throw new InvalidCharacterLibraryScopeError(scope);
+}
+
+function explicitCharacterInputScope(input: { library_scope?: unknown; extensions?: Record<string, any> }): CharacterLibraryScope | undefined {
+  const direct = input.library_scope === undefined ? undefined : normalizeCharacterLibraryScope(input.library_scope);
+  const mirrorValue = input.extensions && Object.prototype.hasOwnProperty.call(input.extensions, "_lumiverse_library_scope") ? input.extensions._lumiverse_library_scope : undefined;
+  const mirror = mirrorValue === undefined ? undefined : normalizeCharacterLibraryScope(mirrorValue);
+  if (direct !== undefined && mirror !== undefined && direct !== mirror) throw new InvalidCharacterLibraryScopeError({ library_scope: direct, _lumiverse_library_scope: mirror });
+  return direct ?? mirror;
+}
+
+function canonicalCharacterExtensions(extensions: Record<string, any> | undefined, scope: CharacterLibraryScope): Record<string, any> {
+  return { ...(extensions || {}), _lumiverse_library_scope: scope };
+}
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
-const SUMMARY_COLUMNS = `c.id, c.name, c.creator, c.tags, c.image_id, c.created_at, c.updated_at,
+const SUMMARY_COLUMNS = `c.id, c.library_scope, c.name, c.creator, c.folder, c.tags, c.image_id, c.created_at, c.updated_at,
   (json_array_length(c.alternate_greetings) > 0) as has_alternate_greetings`;
 
 function rowToSummary(row: any): CharacterSummary {
   return {
     id: row.id,
+    library_scope: normalizeCharacterLibraryScope(row.library_scope),
     name: row.name,
     creator: row.creator,
+    folder: row.folder || "",
     tags: JSON.parse(row.tags),
     image_id: row.image_id || null,
     created_at: row.created_at,
@@ -77,6 +103,8 @@ export interface SummaryQueryOptions {
   favoriteIds?: string[];
   filterMode?: "all" | "favorites" | "non-favorites";
   seed?: number;
+  scope?: CharacterLibraryScope;
+  chatId?: string;
 }
 
 const UUID_HEX_SQL = "LOWER(REPLACE(c.id, '-', ''))";
@@ -155,6 +183,7 @@ export function listCharacterSummaries(
 ): PaginatedResult<CharacterSummary> {
   const db = getDb();
   const { search, tags, excludeTags, sort, direction = "desc", favoriteIds, filterMode = "all", seed } = options;
+  const scope = options.scope === undefined ? undefined : normalizeCharacterLibraryScope(options.scope);
 
   if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
     return {
@@ -172,6 +201,11 @@ export function listCharacterSummaries(
 
   const whereClauses: string[] = ["c.user_id = ?", "c.deleting = 0"];
   const whereParams: any[] = [userId];
+  if (scope) { whereClauses.push("c.library_scope = ?"); whereParams.push(scope); }
+  if (options.chatId) {
+    whereClauses.push(`EXISTS (SELECT 1 FROM chats chat_filter WHERE chat_filter.id = ? AND chat_filter.user_id = ? AND (chat_filter.character_id = c.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(chat_filter.metadata, '$.character_ids'), '[]')) participant WHERE participant.value = c.id)))`);
+    whereParams.push(options.chatId, userId);
+  }
 
   // FTS5 (trigram) search — falls back to LIKE for 1–2 char queries that
   // trigram cannot match (common for 2-char CJK names like 魔王).
@@ -263,6 +297,7 @@ function listCharacterSummariesDiscover(
   const nowSeconds = Math.floor(Date.now() / 1000);
   const shuffleSeed = normalizeShuffleSeed(options.seed);
   const { search, tags, excludeTags, favoriteIds, filterMode = "all" } = options;
+  const scope = options.scope === undefined ? undefined : normalizeCharacterLibraryScope(options.scope);
 
   if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
     return {
@@ -275,6 +310,11 @@ function listCharacterSummariesDiscover(
 
   const whereClauses: string[] = ["c.user_id = ?", "c.deleting = 0"];
   const whereParams: any[] = [userId];
+  if (scope) { whereClauses.push("c.library_scope = ?"); whereParams.push(scope); }
+  if (options.chatId) {
+    whereClauses.push(`EXISTS (SELECT 1 FROM chats chat_filter WHERE chat_filter.id = ? AND chat_filter.user_id = ? AND (chat_filter.character_id = c.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(chat_filter.metadata, '$.character_ids'), '[]')) participant WHERE participant.value = c.id)))`);
+    whereParams.push(options.chatId, userId);
+  }
 
   let extraJoin = "";
   if (search) {
@@ -546,13 +586,16 @@ function sanitizePerspectiveLayerInputs(inputs: unknown): LandingPerspectiveLaye
 
 function rowToCharacter(row: any): Character {
   const { deleting: _deleting, ...rest } = row;
+  const libraryScope = normalizeCharacterLibraryScope(row.library_scope);
   return {
     ...rest,
+    library_scope: libraryScope,
     avatar_path: row.avatar_path || null,
     image_id: row.image_id || null,
+    folder: row.folder || "",
     tags: JSON.parse(row.tags),
     alternate_greetings: JSON.parse(row.alternate_greetings),
-    extensions: JSON.parse(row.extensions),
+    extensions: canonicalCharacterExtensions(JSON.parse(row.extensions), libraryScope),
   };
 }
 
@@ -594,6 +637,55 @@ function cleanupUnreferencedImageIds(userId: string, ids: Iterable<string>): voi
   void imagesSvc.deleteImagesBulk(userId, unreferenced).catch((err) =>
     console.error("[characters] image cleanup failed:", err instanceof Error ? err.message : err)
   );
+}
+
+function clearRemovedChatAvatarReferences(userId: string, removedImageIds: Iterable<string>): void {
+  const removed = new Set(removedImageIds);
+  if (removed.size === 0) return;
+  let rows: any[];
+  try {
+    rows = getDb().query("SELECT id, character_id, name, metadata, created_at, updated_at FROM chats WHERE user_id = ?").all(userId) as any[];
+  } catch {
+    return;
+  }
+  for (const row of rows) {
+    let metadata: Record<string, any>;
+    try {
+      metadata = JSON.parse(row.metadata || "{}");
+    } catch {
+      continue;
+    }
+    let changed = false;
+    if (typeof metadata.active_avatar_id === "string" && removed.has(metadata.active_avatar_id)) {
+      delete metadata.active_avatar_id;
+      delete metadata.active_avatar_entry_id;
+      changed = true;
+    }
+    if (metadata.group_active_avatar_ids && typeof metadata.group_active_avatar_ids === "object") {
+      const ids = { ...metadata.group_active_avatar_ids };
+      const entries = metadata.group_active_avatar_entry_ids && typeof metadata.group_active_avatar_entry_ids === "object"
+        ? { ...metadata.group_active_avatar_entry_ids }
+        : {};
+      for (const [characterId, imageId] of Object.entries(ids)) {
+        if (typeof imageId !== "string" || !removed.has(imageId)) continue;
+        delete ids[characterId];
+        delete entries[characterId];
+        changed = true;
+      }
+      if (Object.keys(ids).length > 0) metadata.group_active_avatar_ids = ids;
+      else delete metadata.group_active_avatar_ids;
+      if (Object.keys(entries).length > 0) metadata.group_active_avatar_entry_ids = entries;
+      else delete metadata.group_active_avatar_entry_ids;
+    }
+    if (!changed) continue;
+    const now = Math.floor(Date.now() / 1000);
+    getDb().query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(JSON.stringify(metadata), now, row.id, userId);
+    eventBus.emit(EventType.CHAT_CHANGED, {
+      chat: { ...row, metadata, updated_at: now },
+      changedFields: ["metadata.active_avatar_id", "metadata.group_active_avatar_ids"],
+    }, userId);
+  }
 }
 
 function listCharacterGalleryImageIds(userId: string, characterId: string): string[] {
@@ -697,6 +789,36 @@ export function getCharacter(userId: string, id: string): Character | null {
   return rowToCharacter(row);
 }
 
+export function getCharacterPreview(userId: string, id: string): CharacterPreview | null {
+  const character = getCharacter(userId, id);
+  if (!character) return null;
+  const summary: CharacterSummary = rowToSummary({
+    id: character.id,
+    library_scope: character.library_scope,
+    name: character.name,
+    creator: character.creator,
+    folder: character.folder,
+    tags: JSON.stringify(character.tags),
+    image_id: character.image_id,
+    created_at: character.created_at,
+    updated_at: character.updated_at,
+    has_alternate_greetings: character.alternate_greetings.length > 0,
+  });
+  const bookIds = getCharacterWorldBookIds(character.extensions);
+  const lorebooks = bookIds.length === 0 ? [] : getDb().query(
+    `SELECT id, name FROM world_books WHERE user_id = ? AND id IN (${bookIds.map(() => "?").join(",")})`
+  ).all(userId, ...bookIds) as Array<{ id: string; name: string }>;
+  const chat = getDb().query(`
+    SELECT c.id, c.name, c.updated_at,
+      (SELECT substr(content, 1, 280) FROM messages WHERE chat_id = c.id ORDER BY index_in_chat DESC LIMIT 1) AS last_message_preview
+    FROM chats c
+    WHERE c.user_id = ? AND c.character_id = ? AND COALESCE(json_extract(c.metadata, '$.group'), 0) != 1
+    ORDER BY (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) DESC, c.updated_at DESC LIMIT 1
+  `).get(userId, id) as { id: string; name: string; updated_at: number; last_message_preview: string | null } | null;
+  const lastChat = chat ? { ...chat, name: chat.name || "", last_message_preview: chat.last_message_preview || "" } : null;
+  return { character: summary, lorebooks, last_chat: lastChat, open_chat_id: lastChat?.id ?? null };
+}
+
 /**
  * Batch-load multiple characters by ID in a single query.
  */
@@ -715,19 +837,21 @@ export function createCharacter(userId: string, input: CreateCharacterInput): Ch
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const createdAt = input.created_at ?? now;
-  const extensions = { ...(input.extensions || {}) };
+  const libraryScope = explicitCharacterInputScope(input) ?? "mine";
+  const extensions = canonicalCharacterExtensions(input.extensions, libraryScope);
   delete extensions.avatar_crop_image_id;
   delete extensions.original_image_id;
 
   getDb()
     .query(
-      `INSERT INTO characters (id, user_id, name, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, tags, alternate_greetings, extensions, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO characters (id, user_id, name, library_scope, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, tags, alternate_greetings, extensions, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
       userId,
       input.name,
+      libraryScope,
       input.description || "",
       input.personality || "",
       input.scenario || "",
@@ -743,6 +867,10 @@ export function createCharacter(userId: string, input: CreateCharacterInput): Ch
       createdAt,
       now
     );
+
+  if (input.folder?.trim()) {
+    getDb().query("UPDATE characters SET folder = ? WHERE id = ? AND user_id = ?").run(input.folder.trim(), id, userId);
+  }
 
   const character = getCharacter(userId, id)!;
   eventBus.emit(EventType.CHARACTER_CREATED, { id, character }, userId);
@@ -770,12 +898,23 @@ export function updateCharacter(userId: string, id: string, input: UpdateCharact
     }
   }
 
-  const jsonFields = ["tags", "alternate_greetings", "extensions"] as const;
+  if (input.folder !== undefined) {
+    fields.push("folder = ?");
+    values.push(input.folder.trim());
+  }
+
+  const explicitScope = explicitCharacterInputScope(input);
+  if (explicitScope !== undefined) { fields.push("library_scope = ?"); values.push(explicitScope); }
+  const jsonFields = ["tags", "alternate_greetings"] as const;
   for (const field of jsonFields) {
     if (input[field] !== undefined) {
       fields.push(`${field} = ?`);
       values.push(JSON.stringify(input[field]));
     }
+  }
+  if (input.extensions !== undefined || explicitScope !== undefined) {
+    const scope = explicitScope ?? existing.library_scope ?? "mine";
+    fields.push("extensions = ?"); values.push(JSON.stringify(canonicalCharacterExtensions(input.extensions ?? existing.extensions, scope)));
   }
 
   if (fields.length === 0) return existing;
@@ -790,9 +929,66 @@ export function updateCharacter(userId: string, id: string, input: UpdateCharact
   if (input.extensions !== undefined) {
     const newImageIds = collectCharacterImageIds(updated);
     const removedImageIds = [...oldImageIds].filter((imageId) => !newImageIds.has(imageId));
+    clearRemovedChatAvatarReferences(userId, removedImageIds);
     cleanupUnreferencedImageIds(userId, removedImageIds);
   }
   eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
+  return updated;
+}
+
+export function renameCharacterFolder(userId: string, oldName: string, newName: string): Character[] {
+  const source = oldName.trim();
+  const target = newName.trim();
+  if (!source || !target) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM characters WHERE user_id = ? AND folder = ? AND deleting = 0")
+    .all(userId, source) as any[];
+  if (rows.length === 0) return [];
+  if (source === target) return rows.map(rowToCharacter);
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE characters SET folder = ?, updated_at = ? WHERE user_id = ? AND folder = ? AND deleting = 0")
+    .run(target, now, userId, source);
+
+  const updated = rows.map((row) => rowToCharacter({ ...row, folder: target, updated_at: now }));
+  for (const character of updated) {
+    eventBus.emit(EventType.CHARACTER_EDITED, { id: character.id, character }, userId);
+  }
+  return updated;
+}
+
+export function deleteCharacterFolder(userId: string, name: string): Character[] {
+  const folder = name.trim();
+  if (!folder) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM characters WHERE user_id = ? AND folder = ? AND deleting = 0")
+    .all(userId, folder) as any[];
+  if (rows.length === 0) return [];
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE characters SET folder = '', updated_at = ? WHERE user_id = ? AND folder = ? AND deleting = 0")
+    .run(now, userId, folder);
+
+  const updated = rows.map((row) => rowToCharacter({ ...row, folder: "", updated_at: now }));
+  for (const character of updated) {
+    eventBus.emit(EventType.CHARACTER_EDITED, { id: character.id, character }, userId);
+  }
+  return updated;
+}
+
+export function bulkUpdateCharacterFolders(userId: string, ids: string[], folder: string): Character[] {
+  const target = folder.trim();
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const updated: Character[] = [];
+
+  for (const id of uniqueIds) {
+    const character = updateCharacter(userId, id, { folder: target });
+    if (character) updated.push(character);
+  }
   return updated;
 }
 
@@ -996,13 +1192,14 @@ export function duplicateCharacter(userId: string, id: string): Character | null
 
   getDb()
     .query(
-      `INSERT INTO characters (id, user_id, name, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, avatar_path, image_id, tags, alternate_greetings, extensions, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       `INSERT INTO characters (id, user_id, name, library_scope, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, folder, avatar_path, image_id, tags, alternate_greetings, extensions, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       newId,
       userId,
       `${existing.name} (Copy)`,
+      existing.library_scope ?? "mine",
       existing.description,
       existing.personality,
       existing.scenario,
@@ -1012,6 +1209,7 @@ export function duplicateCharacter(userId: string, id: string): Character | null
       existing.creator_notes,
       existing.system_prompt,
       existing.post_history_instructions,
+      existing.folder,
       existing.avatar_path,
       existing.image_id,
       JSON.stringify(existing.tags),

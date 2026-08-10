@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
 import { RefreshCw, GripVertical } from 'lucide-react'
@@ -56,7 +56,9 @@ import DataPortability from '@/components/settings/DataPortability'
 import StreamDeckSettings from '@/components/settings/StreamDeckSettings'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
-import { getVisibleSettingsTabs, sectionAnchorId } from '@/lib/settings-tab-registry'
+import { getVisibleSettingsTabs, sectionAnchorId, SETTINGS_TABS } from '@/lib/settings-tab-registry'
+import { activateExtensionSettingsTab } from '@/lib/spindle/settings-tab-bridge'
+import type { SettingsTabState } from '@/store/slices/spindle-placement'
 import SettingsSearch from './SettingsSearch'
 import styles from './SettingsModal.module.css'
 import formStyles from '@/components/shared/FormComponents.module.css'
@@ -71,9 +73,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const settingsActiveView = useStore((s) => s.settingsActiveView)
   const settingsScrollTarget = useStore((s) => s.settingsScrollTarget)
   const user = useStore((s) => s.user)
+  const settingsTabs = useStore((s) => s.settingsTabs)
   const [activeView, setActiveView] = useState(settingsActiveView || 'display')
 
-  const VIEWS = useMemo(() => getVisibleSettingsTabs(user?.role), [user?.role])
+  const VIEWS = useMemo(() => {
+    void settingsTabs
+    return getVisibleSettingsTabs(user?.role)
+  }, [settingsTabs, user?.role])
 
   const contentRef = useRef<HTMLDivElement>(null)
   const navNonce = useRef(0)
@@ -213,56 +219,99 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
 function SettingsView({ view }: { view: string }) {
   const { t } = useTranslation('shared')
+  const settingsTabs = useStore((s) => s.settingsTabs)
+  const extensionTabs = useMemo(
+    () => settingsTabs
+      .filter((tab) => tab.tabId === view)
+      .sort((left, right) => left.order - right.order || left.sequence - right.sequence),
+    [settingsTabs, view],
+  )
+  const hasCoreTab = SETTINGS_TABS.some((tab) => tab.id === view)
+
+  useEffect(() => {
+    if (extensionTabs.length > 0) activateExtensionSettingsTab(view)
+  }, [extensionTabs, view])
+
+  let coreContent: ReactNode | null = null
   switch (view) {
     case 'account':
-      return <AccountSettings />
+      coreContent = <AccountSettings />; break
     case 'display':
-      return <DisplaySettings />
+      coreContent = <DisplaySettings />; break
     case 'chat':
-      return <ChatSettings />
+      coreContent = <ChatSettings />; break
     case 'extensions':
-      return <ExtensionSettingsView />
+      coreContent = <ExtensionSettingsView />; break
     case 'guided':
-      return <GuidedGenerationSettings />
+      coreContent = <GuidedGenerationSettings />; break
     case 'quickReplies':
-      return <QuickRepliesSettings />
+      coreContent = <QuickRepliesSettings />; break
     case 'extensionPools':
-      return <ExtensionPoolSettings />
+      coreContent = <ExtensionPoolSettings />; break
     case 'advanced':
-      return <AdvancedSettings />
+      coreContent = <AdvancedSettings />; break
     case 'embeddings':
-      return <EmbeddingsSettings />
+      coreContent = <EmbeddingsSettings />; break
     case 'webSearch':
-      return <WebSearchSettings />
+      coreContent = <WebSearchSettings />; break
     case 'lumihub':
-      return <LumiHubSettings />
+      coreContent = <LumiHubSettings />; break
     case 'tokenizers':
-      return <TokenizerManager />
+      coreContent = <TokenizerManager />; break
     case 'users':
-      return <UserManagement />
+      coreContent = <UserManagement />; break
     case 'ssoProviders':
-      return <SsoProviderSettings />
+      coreContent = <SsoProviderSettings />; break
     case 'memoryCortex':
-      return <MemoryCortexSettings />
+      coreContent = <MemoryCortexSettings />; break
     case 'notifications':
-      return <NotificationSettings />
+      coreContent = <NotificationSettings />; break
     case 'voice':
-      return <VoiceSettings />
+      coreContent = <VoiceSettings />; break
     case 'mcpServers':
-      return <McpServerSettings />
+      coreContent = <McpServerSettings />; break
     case 'dataPortability':
-      return <DataPortability />
+      coreContent = <DataPortability />; break
     case 'diagnostics':
-      return <Diagnostics />
+      coreContent = <Diagnostics />; break
     case 'streamDeck':
-      return <StreamDeckSettings />
+      coreContent = <StreamDeckSettings />; break
     case 'migration':
-      return <MigrationSettings />
+      coreContent = <MigrationSettings />
+      break
     case 'operator':
-      return <OperatorPanel />
-    default:
-      return <div className={styles.placeholder}>{t('selectCategory')}</div>
+      coreContent = <OperatorPanel />
+      break
   }
+
+  if (!coreContent && extensionTabs.length === 0) {
+    return hasCoreTab ? <div className={styles.placeholder}>{t('selectCategory')}</div> : null
+  }
+
+  return (
+    <>
+      {coreContent}
+      {extensionTabs.length > 0 && <SettingsExtensionTabBodies tabs={extensionTabs} />}
+    </>
+  )
+}
+
+function SettingsExtensionTabBodies({ tabs }: { tabs: readonly SettingsTabState[] }) {
+  const hostRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    const roots = tabs.map((tab) => tab.root)
+    host.replaceChildren(...roots)
+    return () => {
+      for (const root of roots) {
+        if (root.parentElement === host) root.remove()
+      }
+    }
+  }, [tabs])
+
+  return <div ref={hostRef} data-settings-tab-id={tabs[0]?.tabId} />
 }
 
 function createId(prefix: string) {
@@ -277,6 +326,8 @@ function DisplaySettings() {
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const landingPageLayoutMode = useStore((s) => s.landingPageLayoutMode)
+  const landingPageGalleryWidth = useStore((s) => s.landingPageGalleryWidth)
+  const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
   const toastPosition = useStore((s) => s.toastPosition)
   const chatHeadsEnabled = useStore((s) => s.chatHeadsEnabled)
   const chatHeadsSize = useStore((s) => s.chatHeadsSize)
@@ -286,6 +337,7 @@ function DisplaySettings() {
   const chatHeadsCustomCompletionSound = useStore((s) => s.chatHeadsCustomCompletionSound)
   const setSetting = useStore((s) => s.setSetting)
   const addToast = useStore((s) => s.addToast)
+  const openModal = useStore((s) => s.openModal)
 
   const updateDrawer = (patch: Partial<DrawerSettings>) => {
     setSetting('drawerSettings', { ...drawerSettings, ...patch })
@@ -564,6 +616,25 @@ function DisplaySettings() {
       </div>
 
       <div className={styles.field}>
+        <label className={styles.fieldLabel}>{t('display.landing.galleryWidth')}</label>
+        <div className={styles.segmented}>
+          {(['compact', 'expanded'] as const).map((width) => (
+            <button
+              key={width}
+              type="button"
+              className={clsx(styles.segmentedBtn, landingPageGalleryWidth === width && styles.segmentedBtnActive)}
+              onClick={() => setSetting('landingPageGalleryWidth', width)}
+            >
+              {t(`display.landing.${width}`)}
+            </button>
+          ))}
+        </div>
+        <p className={styles.helperText} style={{ marginTop: 8 }}>
+          {t('display.landing.galleryWidthHelper')}
+        </p>
+      </div>
+
+      <div className={styles.field}>
         <label className={styles.fieldLabel}>{t('display.landing.batchSize')}</label>
         <NumericInput
           className={styles.numberInput}
@@ -573,6 +644,16 @@ function DisplaySettings() {
           integer
           onChange={(value) => setSetting('landingPageChatsDisplayed', value ?? 12)}
         />
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>
+          {t('display.landing.hiddenCharacters', { count: landingHiddenCharacterIds.length })}
+        </label>
+        <Button variant="ghost" size="sm" onClick={() => openModal('hiddenFromHome')}>
+          {t('display.landing.manageHiddenCharacters')}
+        </Button>
+        <p className={styles.helperText}>{t('display.landing.hiddenCharactersHelper')}</p>
       </div>
 
     </div>
@@ -2921,6 +3002,8 @@ function ImageOptimizationSettings() {
 
 function AdvancedSettings() {
   const { t } = useTranslation('settings')
+  const spindleSettings = useStore((s) => s.spindleSettings)
+  const setSetting = useStore((s) => s.setSetting)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -2993,6 +3076,18 @@ function AdvancedSettings() {
       {/* Image Optimization accordion */}
       <CollapsibleSection title={t('advanced.imageOptimization')} defaultExpanded={false}>
         <ImageOptimizationSettings />
+      </CollapsibleSection>
+
+      <CollapsibleSection title={t('advanced.spindleLogging')} defaultExpanded={false}>
+        <Toggle.Checkbox
+          checked={spindleSettings.infoLoggingEnabled}
+          onChange={(infoLoggingEnabled) => setSetting('spindleSettings', {
+            ...spindleSettings,
+            infoLoggingEnabled,
+          })}
+          label={t('advanced.spindleInfoLogging')}
+          hint={t('advanced.spindleInfoLoggingHint')}
+        />
       </CollapsibleSection>
 
       {/* Long-Term Memory accordion */}

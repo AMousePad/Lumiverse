@@ -104,7 +104,7 @@ export interface ManifestSyncPayload {
     type: "character" | "worldbook" | "theme" | "preset";
     name: string;
     creator: string;
-    source: "local" | "chub" | "lumihub";
+    source: "lumihub";
     /** Installed version label (presets), enabling the hub to detect outdated installs. */
     version?: string;
     installed_at: number;

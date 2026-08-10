@@ -115,12 +115,16 @@ function embeddingProviderSecretKey(provider: EmbeddingProvider): string {
   return `${EMBEDDING_SECRET_KEY}_${provider}`;
 }
 
-async function getEmbeddingSecret(userId: string, provider: EmbeddingProvider): Promise<string | null> {
+async function readEmbeddingSecret(
+  userId: string,
+  provider: EmbeddingProvider,
+  readSecret: (userId: string, key: string) => Promise<string | null>,
+): Promise<string | null> {
   const scopedKey = embeddingProviderSecretKey(provider);
-  const scoped = await secretsSvc.getSecret(userId, scopedKey);
+  const scoped = await readSecret(userId, scopedKey);
   if (scoped && scoped.length > 0) return scoped;
 
-  const legacy = await secretsSvc.getSecret(userId, EMBEDDING_SECRET_KEY);
+  const legacy = await readSecret(userId, EMBEDDING_SECRET_KEY);
   if (!legacy || legacy.length === 0) return null;
 
   await secretsSvc.putSecret(userId, scopedKey, legacy);
@@ -128,8 +132,12 @@ async function getEmbeddingSecret(userId: string, provider: EmbeddingProvider): 
   return legacy;
 }
 
+async function getEmbeddingSecret(userId: string, provider: EmbeddingProvider): Promise<string | null> {
+  return readEmbeddingSecret(userId, provider, secretsSvc.getSecret);
+}
+
 async function hasEmbeddingSecret(userId: string, provider: EmbeddingProvider): Promise<boolean> {
-  const secret = await getEmbeddingSecret(userId, provider);
+  const secret = await readEmbeddingSecret(userId, provider, secretsSvc.getSecretForStatus);
   return !!secret && secret.length > 0;
 }
 
@@ -2612,6 +2620,7 @@ async function commitWorldBookVectorWritesIfCurrent(
 export const __test__ = {
   collectWorldBookHitsByUniqueSource,
   collapseWorldBookHitsBySource,
+  hasEmbeddingSecret,
   worldBookSourceExclusionFilters,
   commitWorldBookVectorWritesIfCurrent,
   coordinateWorldBookVectorAndSourceDelete,
@@ -4281,9 +4290,44 @@ export function mapDatabankSearchHits(
   hits: VectorHit[],
   requestedLimit: number,
 ): Array<{ chunk_id: string; score: number | null; content: string; metadata: any }> {
+  // Databanks are presented to users as documents, but the vector store ranks
+  // chunks. A broad query can therefore put several chunks from one document
+  // ahead of the first chunk from every other relevant document. Keep the
+  // provider's ranked order for each document's best hit, while using the
+  // available slots to cover as many documents as possible before admitting
+  // second and subsequent chunks from one document.
+  //
+  // Metadata written by vectorization always contains documentId. Treat a
+  // legacy/malformed row without it as unique to its source instead of
+  // collapsing every such row into a single synthetic document.
+  const selected: VectorHit[] = [];
+  const overflow: VectorHit[] = [];
+  const selectedDocumentIds = new Set<string>();
+
+  for (const hit of hits) {
+    let documentId: string | null = null;
+    try {
+      const metadata = JSON.parse(hit.metadata_json || "{}");
+      if (typeof metadata?.documentId === "string" && metadata.documentId) {
+        documentId = metadata.documentId;
+      }
+    } catch {
+      // A malformed legacy metadata value still gets a deterministic slot.
+    }
+
+    const documentKey = documentId ?? `source:${String(hit.source_id)}`;
+    if (!selectedDocumentIds.has(documentKey)) {
+      selectedDocumentIds.add(documentKey);
+      selected.push(hit);
+    } else {
+      overflow.push(hit);
+    }
+  }
+
+  const diversifiedHits = [...selected, ...overflow].slice(0, requestedLimit);
   const results: Array<{ chunk_id: string; score: number | null; content: string; metadata: any }> = [];
 
-  for (const hit of hits.slice(0, requestedLimit)) {
+  for (const hit of diversifiedHits) {
     let meta: any = {};
     try { meta = JSON.parse(hit.metadata_json || "{}"); } catch { /* empty */ }
 

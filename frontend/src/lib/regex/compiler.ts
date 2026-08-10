@@ -105,6 +105,14 @@ function hasMacroSyntax(value: string): boolean {
   return value.includes('{{') || value.includes('<USER>') || value.includes('<BOT>') || value.includes('<CHAR>')
 }
 
+function resolvesFindMacros(script: RegexScript): boolean {
+  return script.substitute_macros !== 'none'
+}
+
+function resolvesReplacementMacros(mode: RegexMacroMode): boolean {
+  return mode !== 'none' && mode !== 'find'
+}
+
 /**
  * Resolve macros in a regex string using the available display macros.
  * Mirrors the backend's macro resolution order, but only for the frontend's
@@ -149,7 +157,7 @@ function resolveReplacementMacros(
   mode: RegexMacroMode,
   macroCtx: DisplayMacroContext,
 ): string {
-  if (mode === 'none') return replaceString
+  if (!resolvesReplacementMacros(mode)) return replaceString
 
   const resolved = resolveRegexStringMacros(replaceString, macroCtx)
 
@@ -222,6 +230,152 @@ function rebuildFromMatches(input: string, matches: DisplayRegexMatch[], replace
   return output
 }
 
+type RegexRuntimeAction = 'move_top' | 'move_bottom' | 'repeat_back'
+
+function readRegexActions(script: RegexScript): ReadonlySet<RegexRuntimeAction> {
+  const raw = script.metadata?.match_actions
+  if (!Array.isArray(raw)) return new Set()
+  return new Set(raw.filter(
+    (action): action is RegexRuntimeAction =>
+      action === 'move_top'
+      || action === 'move_bottom'
+      || action === 'repeat_back',
+  ))
+}
+
+function readRepeatPosition(script: RegexScript): string | undefined {
+  const value = script.metadata?.repeat_position
+  return typeof value === 'string' ? value : undefined
+}
+
+function readRepeatRawMatch(script: RegexScript): boolean {
+  return script.metadata?.repeat_raw_match === true
+}
+
+function resolveRepeatedMatchReplacement(
+  script: RegexScript,
+  match: DisplayRegexMatch,
+  input: string,
+  context: ApplyDisplayRegexContext,
+): string {
+  let replacement = script.replace_string
+
+  if (script.substitute_macros === 'raw' || script.substitute_macros === 'after') {
+    replacement = substituteRegexCaptures(
+      replacement,
+      match.fullMatch,
+      match.groups,
+      match.offset,
+      input,
+      match.namedGroups,
+    )
+    if (context.macroCtx) {
+      replacement = resolveReplacementMacros(
+        replacement,
+        script.substitute_macros,
+        context.macroCtx,
+      )
+    }
+  } else {
+    const preResolved = context.resolvedReplacements?.get(script.id)
+    if (preResolved !== undefined) {
+      replacement = script.substitute_macros === 'escaped'
+        ? preResolved.replace(/\$/g, '$$$$')
+        : preResolved
+    } else if (context.macroCtx) {
+      replacement = resolveReplacementMacros(
+        replacement,
+        script.substitute_macros,
+        context.macroCtx,
+      )
+    }
+    replacement = substituteRegexCaptures(
+      replacement,
+      match.fullMatch,
+      match.groups,
+      match.offset,
+      input,
+      match.namedGroups,
+    )
+  }
+
+  return decorateMatchReplacement(replacement, script, match, input)
+}
+
+function applyDisplayActions(
+  content: string,
+  regex: RegExp,
+  pattern: string,
+  script: RegexScript,
+  context: ApplyDisplayRegexContext,
+): { handled: boolean; content: string } {
+  const actions = readRegexActions(script)
+  if (actions.size === 0) return { handled: false, content }
+  const movesTop = actions.has('move_top')
+  const movesBottom = actions.has('move_bottom')
+  const effectiveFlags = movesTop || movesBottom
+    ? script.flags.replaceAll('g', '') || 'u'
+    : script.flags
+  const effectiveRegex = effectiveFlags === script.flags
+    ? regex
+    : compileRegex(pattern, effectiveFlags)
+  if (!effectiveRegex) return { handled: true, content }
+  const matches = collectRegexMatches(
+    content,
+    effectiveRegex,
+    pattern,
+    effectiveFlags,
+    script.replace_string,
+  )
+  if (matches.length === 0) {
+    if (
+      !actions.has('repeat_back')
+      || context.previousContent === undefined
+    ) return { handled: true, content }
+    const priorMatches = collectRegexMatches(
+      context.previousContent,
+      effectiveRegex,
+      pattern,
+      effectiveFlags,
+      script.replace_string,
+    )
+    if (priorMatches.length === 0) return { handled: true, content }
+    const piece = readRepeatRawMatch(script)
+      ? priorMatches[0].fullMatch
+      : resolveRepeatedMatchReplacement(
+          script,
+          priorMatches[0],
+          context.previousContent,
+          context,
+        )
+    const position = readRepeatPosition(script) ?? script.replace_string.split(' ', 2)[1]
+    if (position === 'start') return { handled: true, content: piece + content }
+    if (position === 'start_nl') return { handled: true, content: `${piece}\n${content}` }
+    if (position === 'end_nl') return { handled: true, content: `${content}\n${piece}` }
+    if (!position || position === 'end') return { handled: true, content: content + piece }
+    return { handled: true, content }
+  }
+  if (movesTop || movesBottom) {
+    const match = matches[0]
+    const moved = substituteRegexCaptures(
+      script.replace_string,
+      match.fullMatch,
+      match.groups,
+      match.offset,
+      content,
+      match.namedGroups,
+    )
+    const remainder = rebuildFromMatches(content, [match], [''])
+    return {
+      handled: true,
+      content: movesTop
+        ? `${moved}\n${remainder}`
+        : `${remainder}\n${moved}`,
+    }
+  }
+  return { handled: false, content }
+}
+
 interface ApplyDisplayRegexContext {
   isUser: boolean
   depth: number
@@ -235,6 +389,7 @@ interface ApplyDisplayRegexContext {
   messageId?: string
   messageIndex?: number
   role?: 'user' | 'assistant' | 'system'
+  previousContent?: string
 }
 
 interface SlowRegexReport {
@@ -259,6 +414,13 @@ function shouldReportSlowRegex(script: RegexScript, elapsedMs: number): boolean 
   if (elapsedMs < DISPLAY_SLOW_REGEX_WARNING_MS) return false
   const current = getRegexPerformanceMetadata(script)
   return !current || current.version !== script.updated_at
+}
+
+function recoveryThresholdForRegex(script: RegexScript, elapsedMs: number): number | null {
+  const current = getRegexPerformanceMetadata(script)
+  if (!current || current.version !== script.updated_at) return null
+  if (current.source !== 'display_client' && current.source !== 'display_backend') return null
+  return elapsedMs < current.threshold_ms ? current.threshold_ms : null
 }
 
 function mapToRecord(map?: Map<string, string>): Record<string, string> | undefined {
@@ -318,6 +480,7 @@ export function applyDisplayRegex(
   scripts: RegexScript[],
   context: ApplyDisplayRegexContext,
   onSlowRegex?: (report: SlowRegexReport) => void,
+  onRecoveredRegex?: (report: SlowRegexReport) => void,
 ): string {
   let result = content
 
@@ -331,7 +494,7 @@ export function applyDisplayRegex(
     if (script.max_depth !== null && context.depth > script.max_depth) continue
 
     let findRegex = script.find_regex
-    if (script.substitute_macros !== 'none') {
+    if (resolvesFindMacros(script)) {
       const preResolvedFind = context.resolvedFindPatterns?.get(script.id)
       if (preResolvedFind !== undefined) {
         findRegex = preResolvedFind
@@ -346,8 +509,17 @@ export function applyDisplayRegex(
     const startedAt = performance.now()
     try {
       let replaceString = script.replace_string
+      const behaviorResult = applyDisplayActions(
+        result,
+        regex,
+        findRegex,
+        script,
+        context,
+      )
 
-      if (script.substitute_macros === 'raw') {
+      if (behaviorResult.handled) {
+        result = behaviorResult.content
+      } else if (script.substitute_macros === 'raw') {
         result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, (fullMatch, ...args) => {
           const hasNamedGroups = typeof args[args.length - 1] === 'object' && args[args.length - 1] !== null
           const namedGroups = hasNamedGroups ? args.pop() as Record<string, string> : undefined
@@ -380,7 +552,7 @@ export function applyDisplayRegex(
         }
       } else {
         // Prefer backend-resolved replacement string (full macro engine)
-        if (script.substitute_macros !== 'none') {
+        if (resolvesReplacementMacros(script.substitute_macros)) {
           const preResolved = context.resolvedReplacements?.get(script.id)
           if (preResolved !== undefined) {
             replaceString = script.substitute_macros === 'escaped'
@@ -420,6 +592,15 @@ export function applyDisplayRegex(
           elapsedMs,
           timedOut: false,
           thresholdMs: DISPLAY_SLOW_REGEX_WARNING_MS,
+        })
+      } else {
+        const recoveryThresholdMs = recoveryThresholdForRegex(script, elapsedMs)
+        if (recoveryThresholdMs === null) continue
+        onRecoveredRegex?.({
+          script,
+          elapsedMs,
+          timedOut: false,
+          thresholdMs: recoveryThresholdMs,
         })
       }
     } catch {
@@ -489,7 +670,7 @@ export async function applyDisplayRegexAsync(
     if (script.max_depth !== null && context.depth > script.max_depth) continue
 
     let findRegex = script.find_regex
-    if (script.substitute_macros !== 'none') {
+    if (resolvesFindMacros(script)) {
       const preResolvedFind = context.resolvedFindPatterns?.get(script.id)
       if (preResolvedFind !== undefined) {
         findRegex = preResolvedFind
@@ -502,7 +683,16 @@ export async function applyDisplayRegexAsync(
     if (!regex) continue
 
     try {
-      if (script.substitute_macros === 'raw') {
+      const behaviorResult = applyDisplayActions(
+        result,
+        regex,
+        findRegex,
+        script,
+        context,
+      )
+      if (behaviorResult.handled) {
+        result = behaviorResult.content
+      } else if (script.substitute_macros === 'raw') {
         const matches = collectRegexMatches(
           result,
           regex,
@@ -559,7 +749,7 @@ export async function applyDisplayRegexAsync(
         }
       } else {
         let replaceString = script.replace_string
-        if (script.substitute_macros !== 'none') {
+        if (resolvesReplacementMacros(script.substitute_macros)) {
           const preResolved = context.resolvedReplacements?.get(script.id)
           if (preResolved !== undefined) {
             replaceString = script.substitute_macros === 'escaped'

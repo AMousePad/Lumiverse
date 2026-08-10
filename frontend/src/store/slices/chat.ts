@@ -156,14 +156,55 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
 
     setActiveChatAvatarId: (imageId) => set({ activeChatAvatarId: imageId }),
 
-    setActiveChatMetadata: (metadata) => set({ activeChatMetadata: metadata }),
+    setActiveChatMetadata: (metadata) => set((state) => {
+      const groupAvatar = metadata?.group === true && state.activeCharacterId
+        ? metadata.group_active_avatar_ids?.[state.activeCharacterId]
+        : undefined
+      const avatarId = typeof groupAvatar === 'string'
+        ? groupAvatar
+        : metadata?.group === true
+          ? null
+          : typeof metadata?.active_avatar_id === 'string'
+            ? metadata.active_avatar_id
+            : null
+      return { activeChatMetadata: metadata, activeChatAvatarId: avatarId }
+    }),
 
     setActiveChatDisplayOwner: (owner) => set({ activeChatDisplayOwner: owner }),
 
     setActiveChatName: (name) => set({ activeChatName: name }),
 
     setMessages: (messages, total?) =>
-      set({ messages: sortMessagesByPosition(messages), totalChatLength: total ?? messages.length }),
+      set((state) => {
+        let nextMessages = messages
+
+        // A list request can begin just before a swipe is staged and resolve
+        // just after its MESSAGE_SWIPED event. Do not let that older snapshot
+        // erase the streaming target; the final reconciliation will replace it
+        // once the server response contains that swipe slot.
+        if (
+          state.isStreaming &&
+          state.streamingGenerationType === 'swipe' &&
+          state.regeneratingMessageId &&
+          state.streamingSwipeId != null
+        ) {
+          const current = state.messages.find((message) => message.id === state.regeneratingMessageId)
+          const incomingIndex = nextMessages.findIndex((message) => message.id === state.regeneratingMessageId)
+          if (
+            current &&
+            incomingIndex >= 0 &&
+            nextMessages[incomingIndex].swipes.length <= state.streamingSwipeId
+          ) {
+            nextMessages = [...nextMessages]
+            nextMessages[incomingIndex] = current
+          }
+        }
+
+        return {
+          messages: sortMessagesByPosition(nextMessages),
+          totalChatLength: total ?? nextMessages.length,
+        }
+      }),
 
     prependMessages: (olderMessages) =>
       set((state) => {

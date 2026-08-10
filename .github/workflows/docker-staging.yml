@@ -1,6 +1,8 @@
 name: Build & Push Staging Docker Image
 
 on:
+  push:
+    branches: [staging]
   schedule:
     # Daily staging rebuild from the `staging` branch. Runs once per day so we
     # don't burn through the GitHub Actions free tier on every commit but still

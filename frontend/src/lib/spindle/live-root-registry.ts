@@ -1,4 +1,4 @@
-export type LiveRootPermission = 'characters' | 'ui_panels' | 'app_manipulation' | 'presets' | null
+export type LiveRootPermission = 'characters' | 'ui_panels' | 'app_manipulation' | 'presets' | 'generation' | 'world_books' | null
 
 export interface LiveRootRecord {
   readonly root: Element

@@ -21,7 +21,7 @@
  * Crash-avoidance structure (Bun 1.3.x):
  *   The run is split into three phases — stop-all, update-all, start-all —
  *   instead of stop/update/start per extension. Interleaving Worker
- *   teardown with `git pull` / `bun install` / `bun build` subprocess
+ *   teardown with Git sync / `bun install` / `bun build` subprocess
  *   spawns has been observed to trigger a null-pointer segfault in Bun's
  *   subprocess/worker cleanup path. Batching the Worker lifecycle bursts
  *   on either side of the pure-subprocess phase gives JSC time to
@@ -33,6 +33,7 @@ import * as lifecycle from "./lifecycle";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { ExtensionInfo } from "lumiverse-spindle-types";
+import { clearCachedExtensionUpdate } from "./update-check.service";
 
 let bulkUpdateInProgress = false;
 
@@ -107,7 +108,7 @@ interface BulkPlanEntry {
   ext: ExtensionInfo;
   wasRunning: boolean;
   wasEnabled: boolean;
-  /** Set when the update (git pull / bun install / bun build) succeeded. */
+  /** Set when the update (remote reset / bun install / bun build) succeeded. */
   updated: boolean;
   /** Set when the update failed so we can decide whether to attempt restart. */
   updateError: string | null;
@@ -190,6 +191,7 @@ async function runBulkUpdate(
 
     try {
       await managerSvc.update(ext.identifier);
+      clearCachedExtensionUpdate(ext.id);
       entry.updated = true;
       completed++;
       eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
