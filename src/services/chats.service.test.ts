@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
+import { eventBus } from "../ws/bus";
+import { EventType, type EventMessage } from "../ws/events";
 import {
   addGroupMember,
   addSwipe,
@@ -234,6 +236,30 @@ describe("chat greeting selection", () => {
     expect(chat.metadata.activeGreetingIndex).toBe(2);
     expect(greeting?.content).toBe("Alternate two");
     expect(greeting?.extra.greeting_index).toBe(2);
+  });
+});
+
+describe("chat lifecycle events", () => {
+  test("emits CHAT_CREATED after solo creation and group conversion", async () => {
+    const events: EventMessage[] = [];
+    const unsubscribe = eventBus.on(EventType.CHAT_CREATED, (event) => events.push(event));
+
+    try {
+      const solo = createChat("u1", { character_id: "c1", name: "Solo" });
+      const converted = convertSoloChatToGroup("u1", solo.id);
+      expect(converted).not.toBeNull();
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(events.map((event) => event.payload.id)).toEqual([solo.id, converted!.id]);
+      expect(events.every((event) => event.userId === "u1")).toBe(true);
+      expect(events[1]?.payload.chat.metadata).toEqual(expect.objectContaining({
+        group: true,
+        character_ids: ["c1"],
+      }));
+    } finally {
+      unsubscribe();
+    }
   });
 });
 
