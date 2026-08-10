@@ -174,7 +174,24 @@
   padding-left: 24px;
 }
 
+.prose ul {
+  list-style: disc;
+}
+
+.prose ol {
+  list-style: decimal;
+}
+
+.prose ul ul {
+  list-style: circle;
+}
+
+.prose ul ul ul {
+  list-style: square;
+}
+
 .prose li {
+  display: list-item;
   margin: 4px 0;
 }
 
@@ -278,6 +295,121 @@
   margin: 14px auto;
 
   border-radius: var(--lumiverse-radius-md);
+}
+
+.prose :global(.guide-admonition) {
+  margin: 16px 0;
+  padding: 12px 14px;
+
+  border: 1px solid var(--lumiverse-border);
+  border-left: 3px solid var(--lumiverse-primary);
+  border-radius: var(--lumiverse-radius-md);
+
+  background: var(--lumiverse-fill-subtle);
+}
+
+.prose :global(.guide-admonition-title) {
+  margin-bottom: 6px;
+
+  color: var(--lumiverse-text);
+  font-weight: 650;
+}
+
+.prose :global(.guide-admonition) > :last-child {
+  margin-bottom: 0;
+}
+
+.prose :global(.guide-content-tabs) {
+  margin: 16px 0;
+
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-md);
+
+  overflow: hidden;
+  background: var(--lumiverse-bg);
+}
+
+.prose :global(.guide-content-tab-list) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+
+  padding: 6px;
+
+  border-bottom: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.prose :global(.guide-content-tab) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  min-height: 30px;
+  padding: 5px 10px;
+
+  border: 1px solid transparent;
+  border-radius: 7px;
+
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+
+  cursor: pointer;
+
+  transition:
+    color var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast),
+    background var(--lumiverse-transition-fast);
+}
+
+.prose :global(.guide-content-tab:hover) {
+  color: var(--lumiverse-text);
+  background: var(--lumiverse-fill);
+}
+
+.prose
+  :global(.guide-content-tab[aria-selected='true']) {
+  color: var(--lumiverse-text);
+
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-015);
+}
+
+.prose :global(.guide-content-tab:focus-visible) {
+  outline: 1px solid var(--lumiverse-primary);
+  outline-offset: 1px;
+}
+
+.prose :global(.guide-content-tab code) {
+  padding: 0;
+  background: transparent;
+
+  color: inherit;
+  font-size: inherit;
+}
+
+.prose :global(.guide-content-tab-panel) {
+  padding: 14px 16px;
+}
+
+.prose
+  :global(.guide-content-tab-panel[data-active='false']) {
+  display: none;
+}
+
+.prose
+  :global(.guide-content-tab-panel > :first-child) {
+  margin-top: 0;
+}
+
+.prose
+  :global(.guide-content-tab-panel > :last-child) {
+  margin-bottom: 0;
 }
 
 @media (max-width: 600px) {
