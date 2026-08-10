@@ -121,6 +121,10 @@ const activeTabTitle =
         )
       : t('panel', { defaultValue: 'Panel' })
 
+useEffect(() => {
+  setGuideOpen(false)
+}, [activeTab])
+
   useEffect(() => {
     if (drawerTab && drawerTab !== activeTab) {
       setDrawerTab(activeTab)

@@ -48,12 +48,14 @@ export type DrawerGuide =
   | {
       kind: 'builtin'
       path: string
+      title?: string
     }
   | {
       kind: 'markdown'
       title?: string
       markdown: string
     }
+
 export interface DrawerTabEntry {
   id: string
   /** Short label shown beneath the icon in the sidebar */
@@ -134,6 +136,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Profile',
     tabDescription: 'View and edit the active character',
     tabIcon: User,
+    guide: {
+  kind: 'builtin',
+  path: 'characters/index.md',
+},
     keywords: ['character', 'avatar', 'info', 'edit', 'card', 'description', 'bio', 'greeting', 'first message'],
     mount: (root) => mountReactComponent(root, <CharacterProfile />),
   },
@@ -143,6 +149,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Reasoning',
     tabDescription: 'Configure reasoning, chain-of-thought, and prompt behavior',
     tabIcon: Wand2,
+    guide: {
+  kind: 'builtin',
+  path: 'presets/index.md',
+},
     tabHeaderTitle: 'Reasoning',
     keywords: ['reasoning', 'cot', 'chain of thought', 'thinking', 'reasoning effort', 'api reasoning', 'prompt bias', 'start reply with', 'prefix', 'suffix'],
     mount: (root) => mountReactComponent(root, <PresetManager />),
@@ -153,6 +163,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Loom',
     tabDescription: 'Configure narrative structure and story beats',
     tabIcon: GitFork,
+    guide: {
+  kind: 'builtin',
+  path: 'presets/index.md',
+},
     keywords: ['narrative', 'story', 'lore', 'structure', 'beats', 'loom', 'pacing', 'plot', 'sovereign hand', 'director'],
     mount: (root) => mountReactComponent(root, <LoomBuilder compact />),
   },
@@ -162,6 +176,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Weaver',
     tabDescription: 'Craft a character from your idea',
     tabIcon: Feather,
+    guide: {
+  kind: 'builtin',
+  path: 'weaver/index.md',
+},
     keywords: ['weaver', 'dream', 'character', 'create', 'ai'],
     mount: (root) => mountReactComponent(root, <WeaverPanel />),
   },
@@ -171,6 +189,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Connections',
     tabDescription: 'Manage API connections and providers',
     tabIcon: Link2,
+    guide: {
+  kind: 'builtin',
+  path: 'connections/index.md',
+},
     tabHeaderTitle: 'Connections',
     keywords: ['api', 'provider', 'key', 'openai', 'anthropic', 'model', 'endpoint', 'google', 'vertex', 'claude', 'gemini', 'openrouter', 'deepseek', 'url', 'secret'],
     mount: (root) => mountReactComponent(root, (
@@ -197,6 +219,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Pack Browser',
     tabDescription: 'Browse and manage content packs',
     tabIcon: Package,
+    guide: {
+  kind: 'builtin',
+  path: 'packs/index.md',
+},
     tabHeaderTitle: 'Browser',
     keywords: ['packs', 'content', 'download', 'browse', 'browser', 'install', 'marketplace', 'library', 'search'],
     mount: (root) => mountReactComponent(root, <PackBrowser />),
@@ -207,6 +233,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Characters',
     tabDescription: 'Browse and manage your character cards',
     tabIcon: Users,
+    guide: {
+  kind: 'builtin',
+  path: 'characters/index.md',
+},
     tabHeaderTitle: 'Characters',
     keywords: ['character', 'list', 'import', 'card', 'browse', 'export', 'png', 'charx', 'gallery', 'switch', 'select'],
     mount: (root) => mountReactComponent(root, <CharacterBrowser />),
@@ -217,6 +247,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Personas',
     tabDescription: 'Manage your user personas',
     tabIcon: Drama,
+    guide: {
+  kind: 'builtin',
+  path: 'personas/index.md',
+},
     keywords: ['persona', 'identity', 'user', 'avatar', 'name', 'sender', 'you', 'addons'],
     mount: (root) => mountReactComponent(root, <PersonaManager />),
   },
@@ -236,6 +270,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Lorebook',
     tabDescription: 'Edit world book and lorebook entries',
     tabIcon: Library,
+    guide: {
+  kind: 'builtin',
+  path: 'world-books/index.md',
+},
     tabHeaderTitle: 'Lorebook',
     keywords: ['lorebook', 'world', 'lore', 'book', 'entries', 'worldbook', 'world info', 'wi', 'keywords', 'triggers', 'knowledge'],
     mount: (root) => mountReactComponent(root, <WorldBookPanel />),
@@ -246,6 +284,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Memory Cortex',
     tabDescription: 'View and manage memory cortex entries',
     tabIcon: Brain,
+    guide: {
+  kind: 'builtin',
+  path: 'chatting/memory-cortex.md',
+},
     tabHeaderTitle: 'Memory',
     keywords: ['memory', 'cortex', 'embeddings', 'recall', 'brain', 'entities', 'relationships', 'salience', 'vector', 'long term', 'ltcm', 'facts'],
     mount: (root) => mountReactComponent(root, <MemoryCortexPanel />),
@@ -256,6 +298,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Databank',
     tabDescription: 'Upload and manage reference documents for AI context',
     tabIcon: Database,
+    guide: {
+  kind: 'builtin',
+  path: 'chatting/databank.md',
+},
     tabHeaderTitle: 'Databank',
     keywords: ['databank', 'knowledge', 'documents', 'upload', 'files', 'bank', 'reference', 'data', 'rag'],
     mount: (root) => mountReactComponent(root, <DatabankPanel />),
@@ -276,6 +322,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'OOC',
     tabDescription: 'Out-of-character comment display settings',
     tabIcon: MessageCircle,
+    guide: {
+  kind: 'builtin',
+  path: 'chatting/ooc.md',
+},
     keywords: ['ooc', 'out of character', 'comments', 'irc', 'social', 'chat', 'meta', 'parentheses', 'brackets'],
     mount: (root) => mountReactComponent(root, <OOCPanel />),
   },
@@ -308,6 +358,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Summary',
     tabDescription: 'Configure context summarization and truncation',
     tabIcon: ScrollText,
+    guide: {
+  kind: 'builtin',
+  path: 'chatting/loom-summary.md',
+},
     keywords: ['summary', 'context', 'truncation', 'compress', 'summarize', 'shorten', 'overflow', 'window', 'limit'],
     mount: (root) => mountReactComponent(root, <SummaryEditor />),
   },
@@ -317,6 +371,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Council Feedback',
     tabDescription: 'View the latest council execution results',
     tabIcon: MessageSquareReply,
+    guide: {
+  kind: 'builtin',
+  path: 'council/council-tools.md',
+},
     tabHeaderTitle: 'Feedback',
     keywords: ['feedback', 'council', 'results', 'tools', 'output', 'debug', 'log', 'response', 'execution', 'trace'],
     mount: (root) => mountReactComponent(root, <CouncilFeedback />),
@@ -327,6 +385,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'World Info',
     tabDescription: 'View currently activated world info entries',
     tabIcon: Globe,
+    guide: {
+  kind: 'builtin',
+  path: 'world-books/keywords-and-activation.md',
+},
     tabHeaderTitle: 'World Info',
     keywords: ['world info', 'activation', 'lorebook', 'active', 'entries', 'triggered', 'wi', 'matched', 'fired'],
     mount: (root) => mountReactComponent(root, <WorldInfoFeedback />),
@@ -337,6 +399,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Image Generation',
     tabDescription: 'Configure and control AI scene generation',
     tabIcon: Image,
+    guide: {
+  kind: 'builtin',
+  path: 'image-generation/index.md',
+},
     tabHeaderTitle: 'Image Gen',
     keywords: ['image', 'generation', 'scene', 'art', 'picture', 'ai', 'background', 'novelai', 'nai', 'dalle', 'illustration'],
     mount: (root) => mountReactComponent(root, <ImageGenPanel />),
@@ -347,6 +413,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Wallpaper',
     tabDescription: 'Set global or per-chat background wallpapers',
     tabIcon: Wallpaper,
+    guide: {
+  kind: 'builtin',
+  path: 'customization/wallpapers.md',
+},
     keywords: ['wallpaper', 'background', 'backdrop', 'image', 'video', 'animated', 'mp4', 'webm', 'gif', 'scenery', 'chat background'],
     mount: (root) => mountReactComponent(root, <WallpaperPanel />),
   },
@@ -356,6 +426,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Regex Scripts',
     tabDescription: 'Create and manage regex find/replace scripts',
     tabIcon: Replace,
+    guide: {
+  kind: 'builtin',
+  path: 'customization/regex-scripts.md',
+},
     tabHeaderTitle: 'Regex',
     keywords: ['regex', 'find', 'replace', 'script', 'transform', 'filter', 'pattern', 'substitution', 'text', 'output', 'display', 'rewrite', 'format'],
     mount: (root) => mountReactComponent(root, <RegexPanel />),
@@ -366,6 +440,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Branch Tree',
     tabDescription: 'View and navigate the chat branch history',
     tabIcon: GitBranch,
+    guide: {
+  kind: 'builtin',
+  path: 'chatting/branching.md',
+},
     tabHeaderTitle: 'Branches',
     keywords: ['branch', 'fork', 'history', 'tree', 'navigate', 'alternate', 'swipe', 'undo', 'timeline', 'rewind', 'path'],
     mount: (root) => mountReactComponent(root, <BranchTreePanel />),
@@ -376,6 +454,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Theme',
     tabDescription: 'Customize colors, accent, and visual style',
     tabIcon: Palette,
+    guide: {
+  kind: 'builtin',
+  path: 'customization/themes.md',
+},
     keywords: ['theme', 'colors', 'accent', 'appearance', 'dark', 'light', 'glass', 'radius', 'font', 'css', 'style', 'customize', 'ui', 'mode'],
     mount: (root) => mountReactComponent(root, <ThemePanel />),
   },
@@ -385,6 +467,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabName: 'Extensions',
     tabDescription: 'Manage Spindle extensions',
     tabIcon: Puzzle,
+    guide: {
+  kind: 'builtin',
+  path: 'extensions/index.md',
+},
     tabHeaderTitle: 'Extensions',
     keywords: ['extensions', 'spindle', 'plugins', 'addons', 'install', 'manage', 'enable', 'disable', 'uninstall', 'github'],
     mount: (root) => mountReactComponent(root, <SpindlePanel />),

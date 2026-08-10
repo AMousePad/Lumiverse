@@ -220,12 +220,12 @@ export function GuideViewer({
   }, [content, currentPath])
 
   const documentTitle = useMemo(() => {
-    if (guide.kind === 'markdown' && guide.title) {
+    if (guide.title) {
       return guide.title
-    }
+  }
 
-    return getFrontMatterTitle(content) ?? title
-  }, [content, guide, title])
+     return getFrontMatterTitle(content) ?? title
+    }, [content, guide, title])
 
   const handleBack = () => {
     const previousPath = history.at(-1)
