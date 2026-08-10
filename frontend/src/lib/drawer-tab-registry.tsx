@@ -44,6 +44,16 @@ import MemoryCortexPanel from '@/components/panels/memory-cortex/MemoryCortexPan
 import DatabankPanel from '@/components/panels/databank/DatabankPanel'
 import MultiplayerPanel from '@/components/panels/multiplayer/MultiplayerPanel'
 
+export type DrawerGuide =
+  | {
+      kind: 'builtin'
+      path: string
+    }
+  | {
+      kind: 'markdown'
+      title?: string
+      markdown: string
+    }
 export interface DrawerTabEntry {
   id: string
   /** Short label shown beneath the icon in the sidebar */
@@ -56,6 +66,8 @@ export interface DrawerTabEntry {
   tabIcon: ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
   /** Title shown in the panel header navbar. Falls back to tabName if omitted. */
   tabHeaderTitle?: string
+  /** Contextual documentation available from the panel header. */
+  guide?: DrawerGuide
   /** Keywords for command palette fuzzy search */
   keywords: string[]
   /** Optional scope restriction for command palette filtering */
@@ -277,15 +289,19 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     keywords: ['composition', 'compose', 'lumia', 'loom', 'sovereign hand', 'context filters', 'narrative', 'selection', 'modes'],
     mount: (root) => mountReactComponent(root, <PromptPanel />),
   },
-  {
-    id: 'council',
-    shortName: 'Council',
-    tabName: 'Council',
-    tabDescription: 'Configure the Lumia Council and tool functions',
-    tabIcon: IconUsersGroup,
-    keywords: ['council', 'tools', 'agents', 'lumia', 'functions', 'tool use', 'sidecar', 'function calling'],
-    mount: (root) => mountReactComponent(root, <CouncilManager />),
+{
+  id: 'council',
+  shortName: 'Council',
+  tabName: 'Council',
+  tabDescription: 'Configure the Lumia Council and tool functions',
+  tabIcon: IconUsersGroup,
+  guide: {
+    kind: 'builtin',
+    path: 'council/index.md',
   },
+  keywords: ['council', 'tools', 'agents', 'lumia', 'functions', 'tool use', 'sidecar', 'function calling'],
+  mount: (root) => mountReactComponent(root, <CouncilManager />),
+},
   {
     id: 'summary',
     shortName: 'Summary',
