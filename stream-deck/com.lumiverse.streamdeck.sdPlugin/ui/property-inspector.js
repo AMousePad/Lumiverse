@@ -9,6 +9,14 @@ const status = document.getElementById("status");
 
 function send(event, ctx, payload) { websocket.send(JSON.stringify({ event, context: ctx, payload })); }
 function saveGlobal() { send("setGlobalSettings", uuid, { serverUrl: server.value.trim(), token: token.value.trim() }); }
+function saveActionSettings(settings) {
+  websocket.send(JSON.stringify({
+    action: actionInfo.action,
+    event: "setSettings",
+    context: uuid,
+    payload: settings,
+  }));
+}
 function requestCharacters() {
   status.textContent = "Loading characters…";
   websocket.send(JSON.stringify({
@@ -56,7 +64,7 @@ window.connectElgatoStreamDeckSocket = (port, pluginUUID, registerEvent, info, r
           characterImageUrl: selectedCharacter.image_url || "",
         };
         actionInfo.payload.settings = settings;
-        send("setSettings", context, settings);
+        saveActionSettings(settings);
       }
       status.textContent = "";
     }
@@ -74,5 +82,5 @@ character.addEventListener("change", () => {
     characterImageUrl: selectedCharacter?.image_url || "",
   };
   actionInfo.payload.settings = settings;
-  send("setSettings", context, settings);
+  saveActionSettings(settings);
 });

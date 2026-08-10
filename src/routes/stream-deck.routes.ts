@@ -5,6 +5,7 @@ import * as characters from "../services/characters.service";
 import * as chats from "../services/chats.service";
 import * as images from "../services/images.service";
 import { parsePagination } from "../services/pagination";
+import sharp from "sharp";
 
 const management = new Hono();
 const integration = new Hono();
@@ -80,11 +81,18 @@ integration.get("/characters/:id/avatar", requireScope("characters:read"), async
   const filepath = await images.getImageFilePath(userId, imageId, "sm");
   if (!filepath) return c.json({ error: "Not found" }, 404);
 
-  const file = Bun.file(filepath);
-  c.header("Content-Type", filepath.endsWith(".webp") ? "image/webp" : image.mime_type);
-  c.header("Content-Length", String(file.size));
+  // Stream Deck's programmable key-image renderer is inconsistent with WebP
+  // data URIs. Normalize to its native 144px key size and a universally
+  // supported PNG before the plugin converts the response to a data URI.
+  const png = await sharp(filepath)
+    .resize(144, 144, { fit: "cover", position: "centre" })
+    .png()
+    .toBuffer();
+  c.header("Content-Type", "image/png");
+  c.header("Content-Length", String(png.byteLength));
   c.header("X-Content-Type-Options", "nosniff");
-  return new Response(file, { headers: c.res.headers });
+  const body = new Uint8Array(png.buffer as ArrayBuffer, png.byteOffset, png.byteLength);
+  return new Response(body, { headers: c.res.headers });
 });
 
 integration.get("/recent-chat", requireScope("chats:read"), (c) => {
