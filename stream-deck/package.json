@@ -1,10 +1,10 @@
 {
   "name": "lumiverse-stream-deck",
-  "version": "0.1.0-2",
+  "version": "0.1.0-5",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/render-icons.mjs && tsc --noEmit && esbuild src/plugin.ts --bundle --platform=node --format=cjs --target=node20 --outfile=com.lumiverse.streamdeck.sdPlugin/bin/plugin.cjs",
+    "build": "node scripts/render-icons.mjs && tsc --noEmit && esbuild ./src/plugin.ts --bundle --platform=node --format=cjs --target=node20 --outfile=./com.lumiverse.streamdeck.sdPlugin/bin/plugin.cjs",
     "validate": "streamdeck validate com.lumiverse.streamdeck.sdPlugin"
   },
   "dependencies": {

@@ -3,6 +3,8 @@ import type { Context, Next } from "hono";
 import * as tokens from "../services/stream-deck-token.service";
 import * as characters from "../services/characters.service";
 import * as chats from "../services/chats.service";
+import * as images from "../services/images.service";
+import { parsePagination } from "../services/pagination";
 
 const management = new Hono();
 const integration = new Hono();
@@ -48,15 +50,41 @@ function requireScope(scope: tokens.StreamDeckScope) {
 }
 
 integration.get("/characters", requireScope("characters:read"), (c) => {
-  const result = characters.listCharacterSummaries(c.get("userId"), { limit: 200, offset: 0 }, { sort: "name", direction: "asc" });
+  const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"), 500);
+  const result = characters.listCharacterSummaries(c.get("userId"), pagination, { sort: "name", direction: "asc" });
   return c.json({
     data: result.data.map((character) => ({
       id: character.id,
       name: character.name,
       image_id: character.image_id ?? null,
+      image_url: character.image_id
+        ? `/api/integrations/stream-deck/v1/characters/${encodeURIComponent(character.id)}/avatar`
+        : null,
     })),
     total: result.total,
+    limit: result.limit,
+    offset: result.offset,
   });
+});
+
+integration.get("/characters/:id/avatar", requireScope("characters:read"), async (c) => {
+  const userId = c.get("userId");
+  const characterId = c.req.param("id");
+  if (!characterId) return c.json({ error: "Not found" }, 404);
+  const character = characters.getCharacter(userId, characterId);
+  if (!character?.image_id) return c.json({ error: "Not found" }, 404);
+  const imageId = character.image_id;
+
+  const image = images.getImage(userId, imageId);
+  if (!image || !image.mime_type.startsWith("image/")) return c.json({ error: "Not found" }, 404);
+  const filepath = await images.getImageFilePath(userId, imageId, "sm");
+  if (!filepath) return c.json({ error: "Not found" }, 404);
+
+  const file = Bun.file(filepath);
+  c.header("Content-Type", filepath.endsWith(".webp") ? "image/webp" : image.mime_type);
+  c.header("Content-Length", String(file.size));
+  c.header("X-Content-Type-Options", "nosniff");
+  return new Response(file, { headers: c.res.headers });
 });
 
 integration.get("/recent-chat", requireScope("chats:read"), (c) => {

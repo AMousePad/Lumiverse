@@ -17311,7 +17311,30 @@ async function request(path5) {
   return response.json();
 }
 async function listCharacters() {
-  return (await request("/api/integrations/stream-deck/v1/characters")).data;
+  const characters = [];
+  const pageSize = 500;
+  while (true) {
+    const page = await request(
+      `/api/integrations/stream-deck/v1/characters?limit=${pageSize}&offset=${characters.length}`
+    );
+    characters.push(...page.data);
+    if (page.limit === void 0 || characters.length >= page.total || page.data.length === 0) return characters;
+  }
+}
+var imageCache = /* @__PURE__ */ new Map();
+async function getCharacterImage(imageUrl) {
+  const cached2 = imageCache.get(imageUrl);
+  if (cached2) return cached2;
+  const settings2 = await plugin_default.settings.getGlobalSettings();
+  if (!settings2.token) throw new Error("Configure a Lumiverse integration token");
+  const response = await fetch(`${normalizeServerUrl(settings2.serverUrl)}${imageUrl}`, {
+    headers: { Authorization: `Bearer ${settings2.token}` }
+  });
+  if (!response.ok) throw new Error(`Lumiverse image returned ${response.status}`);
+  const contentType = response.headers.get("content-type") || "image/webp";
+  const dataUrl = `data:${contentType};base64,${Buffer.from(await response.arrayBuffer()).toString("base64")}`;
+  imageCache.set(imageUrl, dataUrl);
+  return dataUrl;
 }
 async function getRecentChat(characterId) {
   const query = characterId ? `?characterId=${encodeURIComponent(characterId)}` : "";
@@ -17326,6 +17349,19 @@ async function openChat(characterId) {
 }
 
 // src/plugin.ts
+async function applyCharacterAppearance(action2, settings2) {
+  if (settings2.characterImageUrl) {
+    try {
+      await action2.setImage(await getCharacterImage(settings2.characterImageUrl));
+      await action2.setTitle("");
+      return;
+    } catch (error40) {
+      plugin_default.logger.error(`Failed to load character image: ${String(error40)}`);
+    }
+  }
+  await action2.setImage();
+  await action2.setTitle(settings2.characterName || "Choose\ncharacter");
+}
 var _OpenRecentChat_decorators, _init, _a;
 _OpenRecentChat_decorators = [action({ UUID: "com.lumiverse.streamdeck.openrecent" })];
 var OpenRecentChat = class extends (_a = SingletonAction) {
@@ -17345,10 +17381,10 @@ var _OpenCharacterChat_decorators, _init2, _a2;
 _OpenCharacterChat_decorators = [action({ UUID: "com.lumiverse.streamdeck.opencharacter" })];
 var OpenCharacterChat = class extends (_a2 = SingletonAction) {
   async onWillAppear(event) {
-    await event.action.setTitle(event.payload.settings.characterName || "Choose\ncharacter");
+    await applyCharacterAppearance(event.action, event.payload.settings);
   }
   async onDidReceiveSettings(event) {
-    await event.action.setTitle(event.payload.settings.characterName || "Choose\ncharacter");
+    await applyCharacterAppearance(event.action, event.payload.settings);
   }
   async onKeyDown(event) {
     try {

@@ -6,9 +6,26 @@ import streamDeck, {
   type SendToPluginEvent,
   type WillAppearEvent,
 } from "@elgato/streamdeck";
-import { listCharacters, openChat } from "./api.js";
+import { getCharacterImage, listCharacters, openChat } from "./api.js";
 
-type CharacterSettings = { characterId?: string; characterName?: string };
+type CharacterSettings = { characterId?: string; characterName?: string; characterImageUrl?: string };
+
+async function applyCharacterAppearance(
+  action: { setImage(image?: string): Promise<void>; setTitle(title?: string): Promise<void> },
+  settings: CharacterSettings,
+): Promise<void> {
+  if (settings.characterImageUrl) {
+    try {
+      await action.setImage(await getCharacterImage(settings.characterImageUrl));
+      await action.setTitle("");
+      return;
+    } catch (error) {
+      streamDeck.logger.error(`Failed to load character image: ${String(error)}`);
+    }
+  }
+  await action.setImage();
+  await action.setTitle(settings.characterName || "Choose\ncharacter");
+}
 
 @action({ UUID: "com.lumiverse.streamdeck.openrecent" })
 class OpenRecentChat extends SingletonAction {
@@ -25,11 +42,11 @@ class OpenRecentChat extends SingletonAction {
 @action({ UUID: "com.lumiverse.streamdeck.opencharacter" })
 class OpenCharacterChat extends SingletonAction<CharacterSettings> {
   override async onWillAppear(event: WillAppearEvent<CharacterSettings>): Promise<void> {
-    await event.action.setTitle(event.payload.settings.characterName || "Choose\ncharacter");
+    await applyCharacterAppearance(event.action, event.payload.settings);
   }
 
   override async onDidReceiveSettings(event: DidReceiveSettingsEvent<CharacterSettings>): Promise<void> {
-    await event.action.setTitle(event.payload.settings.characterName || "Choose\ncharacter");
+    await applyCharacterAppearance(event.action, event.payload.settings);
   }
 
   override async onKeyDown(event: KeyDownEvent<CharacterSettings>): Promise<void> {
