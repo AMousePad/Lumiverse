@@ -1,3 +1,4 @@
+import { Glob } from "bun";
 import { Hono } from "hono";
 import { Buffer } from "node:buffer";
 import { resolve, sep } from "node:path";
@@ -5,6 +6,76 @@ import { resolve, sep } from "node:path";
 const docsRoutes = new Hono();
 
 const DOCS_ROOT = resolve(import.meta.dir, "../../user-docs/docs");
+
+interface GuideCatalogEntry {
+  path: string;
+  title: string;
+}
+
+function extractDocumentTitle(
+  markdown: string,
+  path: string,
+): string {
+  const frontMatter = markdown.match(
+    /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/,
+  );
+
+  if (frontMatter) {
+    const titleMatch = frontMatter[1].match(
+      /^title:\s*(.+?)\s*$/m,
+    );
+
+    if (titleMatch) {
+      return titleMatch[1]
+        .trim()
+        .replace(/^["']|["']$/g, "");
+    }
+  }
+
+  const heading = markdown.match(/^#\s+(.+?)\s*$/m);
+
+  if (heading) {
+    return heading[1].trim();
+  }
+
+  const filename =
+    path.split("/").at(-1)?.replace(/\.md$/i, "") ??
+    path;
+
+  return filename
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+async function buildGuideCatalog(): Promise<GuideCatalogEntry[]> {
+  const glob = new Glob("**/*.md");
+  const entries: GuideCatalogEntry[] = [];
+
+  for await (const relativePath of glob.scan({
+    cwd: DOCS_ROOT,
+    absolute: false,
+  })) {
+    const normalizedPath = relativePath.replace(/\\/g, "/");
+
+    const file = Bun.file(
+      resolve(DOCS_ROOT, relativePath),
+    );
+
+    const markdown = await file.text();
+
+    entries.push({
+      path: normalizedPath,
+      title: extractDocumentTitle(
+        markdown,
+        normalizedPath,
+      ),
+    });
+  }
+
+  return entries.sort((a, b) =>
+    a.title.localeCompare(b.title),
+  );
+}
 
 function resolveDocumentPath(requestPath: string): string | null {
   const cleanPath = requestPath.replace(/^[/\\]+/, "");
@@ -54,6 +125,14 @@ async function documentResponse(
     },
   });
 }
+
+docsRoutes.get("/catalog", async (c) => {
+  const entries = await buildGuideCatalog();
+
+  return c.json(entries, 200, {
+    "Cache-Control": "no-cache",
+  });
+});
 
 /**
  * Opaque document endpoint used by the in-app guide viewer.

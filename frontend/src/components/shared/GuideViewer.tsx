@@ -4,7 +4,7 @@ import {
   useMemo,
   useState,
 } from 'react'
-import { ArrowLeft, BookOpen } from 'lucide-react'
+import { ArrowLeft, BookOpen, Search, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 
@@ -14,11 +14,18 @@ import type { DrawerGuide } from '@/lib/drawer-tab-registry'
 
 import styles from './GuideViewer.module.css'
 
+
+interface GuideCatalogEntry {
+  path: string
+  title: string
+}
+
 interface GuideViewerProps {
   isOpen: boolean
   onClose: () => void
   guide: DrawerGuide
   title: string
+  searchable?: boolean
 }
 
 interface ResolvedGuideLink {
@@ -335,10 +342,14 @@ export function GuideViewer({
   onClose,
   guide,
   title,
+  searchable = false,
 }: GuideViewerProps) {
   const [content, setContent] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [catalog, setCatalog] = useState<GuideCatalogEntry[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [catalogLoading, setCatalogLoading] = useState(false)
 
   const [currentPath, setCurrentPath] = useState<string | null>(
     guide.kind === 'builtin'
@@ -347,6 +358,108 @@ export function GuideViewer({
   )
 
   const [history, setHistory] = useState<string[]>([])
+
+  useEffect(() => {
+  if (!isOpen || !searchable || catalog.length > 0) {
+    return
+  }
+
+  const controller = new AbortController()
+
+  setCatalogLoading(true)
+
+  void fetch('/api/v1/docs/catalog', {
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(
+          `Guide catalog request failed (${response.status})`,
+        )
+      }
+
+      return response.json() as Promise<GuideCatalogEntry[]>
+    })
+    .then((entries) => {
+      setCatalog(entries)
+    })
+    .catch((error: unknown) => {
+      if (controller.signal.aborted) return
+
+      console.error(
+        '[GuideViewer] failed to load guide catalog',
+        error,
+      )
+    })
+    .finally(() => {
+      if (!controller.signal.aborted) {
+        setCatalogLoading(false)
+      }
+    })
+
+  return () => {
+    controller.abort()
+  }
+}, [isOpen, searchable, catalog.length])
+
+useEffect(() => {
+  if (isOpen) {
+    setSearchQuery('')
+  }
+}, [isOpen])
+
+const searchResults = useMemo(() => {
+  const query = searchQuery.trim().toLowerCase()
+
+  if (!query) return []
+
+  const terms = query
+    .split(/\s+/)
+    .filter(Boolean)
+
+  return catalog
+    .map((entry) => {
+      const title = entry.title.toLowerCase()
+      const path = entry.path
+        .replace(/\.md$/i, '')
+        .replace(/[-_/]+/g, ' ')
+        .toLowerCase()
+
+      let score = 0
+
+      for (const term of terms) {
+        if (title === term) score += 100
+        else if (title.startsWith(term)) score += 40
+        else if (title.includes(term)) score += 20
+
+        if (path.includes(term)) score += 5
+      }
+
+      return {
+        ...entry,
+        score,
+      }
+    })
+    .filter((entry) => entry.score > 0)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.title.localeCompare(b.title),
+    )
+    .slice(0, 20)
+}, [catalog, searchQuery])
+
+const openSearchResult = (entry: GuideCatalogEntry) => {
+  if (currentPath && currentPath !== entry.path) {
+    setHistory((current) => [
+      ...current,
+      currentPath,
+    ])
+  }
+
+  setCurrentPath(entry.path)
+  setSearchQuery('')
+}
 
 useEffect(() => {
   if (
@@ -532,9 +645,70 @@ const parsed = marked.parse(
 
         <CloseButton onClick={onClose} />
       </div>
+      {searchable && (
+  <div className={styles.searchArea}>
+    <div className={styles.searchInputWrap}>
+      <Search size={15} strokeWidth={1.7} />
 
+      <input
+        type="text"
+        role="searchbox"
+        className={styles.searchInput}
+        value={searchQuery}
+        onChange={(event) =>
+          setSearchQuery(event.target.value)
+        }
+        placeholder="Search guides…"
+        aria-label="Search Lumiverse guides"
+      />
+
+      {searchQuery && (
+        <button
+          type="button"
+          className={styles.searchClear}
+          onClick={() => setSearchQuery('')}
+          aria-label="Clear guide search"
+          title="Clear"
+        >
+          <X size={14} strokeWidth={1.7} />
+        </button>
+      )}
+    </div>
+
+    {searchQuery.trim() && (
+      <div className={styles.searchResults}>
+        {catalogLoading ? (
+          <div className={styles.searchEmpty}>
+            Loading guides…
+          </div>
+        ) : searchResults.length > 0 ? (
+          searchResults.map((entry) => (
+            <button
+              key={entry.path}
+              type="button"
+              className={styles.searchResult}
+              onClick={() => openSearchResult(entry)}
+            >
+              <span className={styles.searchResultTitle}>
+                {entry.title}
+              </span>
+
+              <span className={styles.searchResultPath}>
+                {entry.path.replace(/\.md$/i, '')}
+              </span>
+            </button>
+          ))
+        ) : (
+          <div className={styles.searchEmpty}>
+            No matching guides
+          </div>
+        )}
+      </div>
+    )}
+  </div>
+)}
       <div className={styles.body}>
-        {loading ? (
+        {searchable && searchQuery.trim() ? null : loading ? (
           <div className={styles.status}>
             Loading guide…
           </div>
