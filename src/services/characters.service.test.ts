@@ -16,6 +16,7 @@ function initCharactersTestDb(): void {
     tags TEXT NOT NULL DEFAULT '[]',
     image_id TEXT,
     alternate_greetings TEXT NOT NULL DEFAULT '[]',
+    library_scope TEXT NOT NULL DEFAULT 'mine',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleting INTEGER NOT NULL DEFAULT 0
@@ -89,5 +90,47 @@ describe("character discover shuffle", () => {
     const promotedCount = afterPageOne.data.filter((item) => !beforeFirstPageIds.has(item.id) && laterPageIds.has(item.id)).length;
 
     expect(promotedCount).toBeGreaterThan(0);
+  });
+});
+
+describe("character recent chat sorting", () => {
+  test("ranks recently messaged characters above unchatted characters", () => {
+    const char1 = seedCharacter(1, "Alpha", 1_000);
+    const char2 = seedCharacter(2, "Beta", 1_000);
+
+    let summaries = listCharacterSummaries("u1", { limit: 1, offset: 0 }, { sort: "recent" });
+    expect(summaries.data[0]?.id).toBe(char1);
+    expect(summaries.total).toBe(2);
+
+    seedChat("chat-beta", char2, 5_000);
+
+    summaries = listCharacterSummaries("u1", { limit: 1, offset: 0 }, { sort: "recent" });
+    expect(summaries.data[0]?.id).toBe(char2);
+    expect(summaries.total).toBe(2);
+  });
+
+  test("ranks every group chat participant by the latest group activity", () => {
+    const char1 = seedCharacter(10, "GroupMember1", 1_000);
+    const char2 = seedCharacter(11, "GroupMember2", 1_000);
+
+    const groupMeta = JSON.stringify({ group: true, character_ids: [char1, char2] });
+    seedChat("group-chat-1", char1, 8_000, groupMeta);
+
+    const summaries = listCharacterSummaries("u1", { limit: 10, offset: 0 }, { sort: "recent" });
+    const topTwoIds = summaries.data.slice(0, 2).map((character) => character.id);
+
+    expect(topTwoIds).toContain(char1);
+    expect(topTwoIds).toContain(char2);
+  });
+
+  test("ignores chats marked as hidden_from_recent", () => {
+    const char1 = seedCharacter(20, "VisibleChar", 2_000);
+    const char2 = seedCharacter(21, "HiddenChar", 1_000);
+
+    const hiddenMeta = JSON.stringify({ hidden_from_recent: true });
+    seedChat("chat-hidden", char2, 10_000, hiddenMeta);
+
+    const summaries = listCharacterSummaries("u1", { limit: 10, offset: 0 }, { sort: "recent" });
+    expect(summaries.data[0]?.id).toBe(char1);
   });
 });
