@@ -103,4 +103,24 @@ integration.get("/recent-chat", requireScope("chats:read"), (c) => {
   return c.json({ chat: result.data[0] ?? null });
 });
 
+integration.get("/recent-chats", requireScope("chats:read"), (c) => {
+  const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"), 32);
+  const result = chats.listRecentChats(c.get("userId"), pagination);
+  return c.json({
+    data: result.data.map((chat) => ({
+      id: chat.id,
+      character_id: chat.character_id,
+      name: chat.name,
+      character_name: chat.character_name,
+      updated_at: chat.updated_at,
+      image_url: chat.character_image_id
+        ? `/api/integrations/stream-deck/v1/characters/${encodeURIComponent(chat.character_id)}/avatar`
+        : null,
+    })),
+    total: result.total,
+    limit: result.limit,
+    offset: result.offset,
+  });
+});
+
 export { management as streamDeckManagementRoutes, integration as streamDeckIntegrationRoutes };
