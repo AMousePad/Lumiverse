@@ -71,7 +71,8 @@
 
 :global([data-spindle-mount='chat_surface_side']),
 :global([data-spindle-mount='lorebook_half_workspace']),
-:global([data-spindle-mount='lorebook_half_workspace'] > [data-spindle-extension-root]) {
+:global([data-spindle-mount='lorebook_half_workspace'] > [data-spindle-extension-root]),
+:global([data-spindle-mount='lorebook_half_workspace'] > [data-spindle-extension-root] > [data-spindle-host-surface='lorebook.half.workspace']) {
   display: contents;
 }
 
