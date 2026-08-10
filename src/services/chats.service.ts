@@ -1097,14 +1097,16 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
   }
 
   const created = getChat(userId, id)!;
+  let result = created;
   if (character && findAvatarForGreetingBinding(character, greetingIndex)) {
-    return applyChatAppearance(userId, id, {
+    result = applyChatAppearance(userId, id, {
       type: "greeting",
       greeting_index: greetingIndex,
       ...(metadata.group === true ? { character_id: character.id } : {}),
     })?.chat || created;
   }
-  return created;
+  eventBus.emit(EventType.CHAT_CREATED, { id, chat: result }, userId);
+  return result;
 }
 
 export function createGroupChat(userId: string, input: CreateGroupChatInput): Chat {
@@ -1164,7 +1166,9 @@ export function convertSoloChatToGroup(userId: string, chatId: string): Chat | n
   const now = Math.floor(Date.now() / 1000);
   getDb().query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, converted.id, userId);
 
-  return getChat(userId, converted.id)!;
+  const result = getChat(userId, converted.id)!;
+  eventBus.emit(EventType.CHAT_CREATED, { id: result.id, chat: result }, userId);
+  return result;
 }
 
 export function deleteChat(userId: string, id: string): boolean {
