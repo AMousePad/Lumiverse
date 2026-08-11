@@ -37,7 +37,7 @@ import { measureLayoutHeight, renderedPxToLayoutPx } from '@/lib/uiScale'
 import LazyImage from '@/components/shared/LazyImage'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { GuideViewer } from '@/components/shared/GuideViewer'
-import type { DrawerGuide } from '@/lib/drawer-tab-registry'
+import type { GuideDefinition } from '@/lib/guides/types'
 import SearchField from '@/components/shared/SearchField'
 import { SortControl } from '@/components/shared/SortControl'
 import { useLongPress } from '@/hooks/useLongPress'
@@ -991,7 +991,7 @@ function VirtualizedChatRows({
   )
 }
 
-const FULL_GUIDES: DrawerGuide = {
+const FULL_GUIDES: GuideDefinition = {
   kind: 'builtin',
   path: 'index.md',
   title: 'Lumiverse Guides',
@@ -1981,10 +1981,11 @@ export default function LandingPage() {
       </motion.div>
     </div>
     <GuideViewer
-     isOpen={guidesOpen}
-     onClose={() => setGuidesOpen(false)}
-     guide={FULL_GUIDES}
-     title="Lumiverse Guides"
+        isOpen={guidesOpen}
+        onClose={() => setGuidesOpen(false)}
+        guide={FULL_GUIDES}
+        title="Lumiverse Guides"
+        searchable
     />
     <ContextMenu
       position={contextMenu?.position ?? null}

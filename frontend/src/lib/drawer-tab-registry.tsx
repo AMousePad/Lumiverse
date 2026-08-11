@@ -44,17 +44,7 @@ import MemoryCortexPanel from '@/components/panels/memory-cortex/MemoryCortexPan
 import DatabankPanel from '@/components/panels/databank/DatabankPanel'
 import MultiplayerPanel from '@/components/panels/multiplayer/MultiplayerPanel'
 
-export type DrawerGuide =
-  | {
-      kind: 'builtin'
-      path: string
-      title?: string
-    }
-  | {
-      kind: 'markdown'
-      title?: string
-      markdown: string
-    }
+import type { GuideDefinition } from '@/lib/guides/types'
 
 export interface DrawerTabEntry {
   id: string
@@ -69,7 +59,7 @@ export interface DrawerTabEntry {
   /** Title shown in the panel header navbar. Falls back to tabName if omitted. */
   tabHeaderTitle?: string
   /** Contextual documentation available from the panel header. */
-  guide?: DrawerGuide
+  guide?: GuideDefinition
   /** Keywords for command palette fuzzy search */
   keywords: string[]
   /** Optional scope restriction for command palette filtering */
@@ -481,12 +471,29 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 export function adaptExtensionTabs(tabs: DrawerTabState[]): DrawerTabEntry[] {
   return tabs.map((dt) => ({
     id: dt.id,
-    shortName: dt.shortName ?? (dt.title.length > 8 ? dt.title.slice(0, 7) + '\u2026' : dt.title),
+    shortName:
+      dt.shortName ??
+      (dt.title.length > 8
+        ? dt.title.slice(0, 7) + '\u2026'
+        : dt.title),
     tabName: dt.title,
-    tabDescription: dt.description ?? `Open ${dt.title} extension tab`,
+    tabDescription:
+      dt.description ??
+      `Open ${dt.title} extension tab`,
     tabIcon: Puzzle,
     tabHeaderTitle: dt.headerTitle,
-    keywords: ['extension', 'spindle', dt.extensionId, ...(dt.keywords ?? [])],
+    guide: dt.guide
+      ? {
+          ...dt.guide,
+          kind: 'markdown',
+        }
+      : undefined,
+    keywords: [
+      'extension',
+      'spindle',
+      dt.extensionId,
+      ...(dt.keywords ?? []),
+    ],
     mount: () => () => {},
   }))
 }

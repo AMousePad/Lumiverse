@@ -8,9 +8,9 @@ import { ArrowLeft, BookOpen, Search, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 
+import type { GuideDefinition } from '@/lib/guides/types'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { CloseButton } from '@/components/shared/CloseButton'
-import type { DrawerGuide } from '@/lib/drawer-tab-registry'
 
 import styles from './GuideViewer.module.css'
 
@@ -23,7 +23,7 @@ interface GuideCatalogEntry {
 interface GuideViewerProps {
   isOpen: boolean
   onClose: () => void
-  guide: DrawerGuide
+  guide: GuideDefinition
   title: string
   searchable?: boolean
 }
@@ -358,6 +358,22 @@ export function GuideViewer({
   )
 
   const [history, setHistory] = useState<string[]>([])
+  const inlineMarkdown =
+  guide.kind === 'markdown'
+    ? guide.markdown
+    : null
+
+    useEffect(() => {
+  if (!isOpen || inlineMarkdown === null) {
+    return
+  }
+
+  setContent(inlineMarkdown)
+  setError(null)
+  setLoading(false)
+  setCurrentPath(null)
+  setHistory([])
+}, [isOpen, inlineMarkdown])
 
   useEffect(() => {
   if (!isOpen || !searchable || catalog.length > 0) {

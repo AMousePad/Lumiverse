@@ -419,18 +419,24 @@ export function createDrawerTabHandle(
   try {
     assertActive()
     getStore().registerDrawerTab({
-      id: tabId,
-      extensionId,
-      title: options.title,
-      shortName: options.shortName,
-      description: options.description,
-      keywords: options.keywords,
-      headerTitle: options.headerTitle,
-      iconUrl: options.iconUrl,
-      iconSvg: options.iconSvg,
-      badge: null,
-      root,
-    })
+    id: tabId,
+    extensionId,
+    title: options.title,
+    shortName: options.shortName,
+    description: options.description,
+    keywords: options.keywords,
+    headerTitle: options.headerTitle,
+    guide: options.guide
+      ? {
+          markdown: options.guide.markdown,
+          title: options.guide.title,
+        }
+      : undefined,
+    iconUrl: options.iconUrl,
+    iconSvg: options.iconSvg,
+    badge: null,
+    root,
+  })
     registered = true
     if (disposedDuringRegistration) {
       getStore().unregisterDrawerTab(tabId)
