@@ -143,7 +143,13 @@
 }
 
 .body[data-panel-open='true'] {
-  grid-template-columns: minmax(0, 1fr) minmax(360px, min(var(--homepage-panel-width, 420px), 44vw));
+  grid-template-columns: minmax(0, 1fr) minmax(
+    0,
+    min(
+      var(--homepage-preview-layout-width, var(--homepage-panel-width, 420px)),
+      calc((100vw / var(--lumiverse-ui-scale, 1)) - 48px)
+    )
+  );
 }
 
 .grid {
@@ -151,6 +157,45 @@
   grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--character-card-width, 170px)), 1fr));
   gap: var(--character-grid-gap, 10px);
   min-width: 0;
+}
+
+.grid[data-view-mode='single'],
+.grid[data-view-mode='list'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.grid[data-view-mode='single'] .card,
+.grid[data-view-mode='single'] .cardSelected {
+  max-width: var(--character-card-width, 170px);
+}
+
+.grid[data-view-mode='list'] .card,
+.grid[data-view-mode='list'] .cardSelected {
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 76px;
+}
+
+.grid[data-view-mode='list'] .imageFrame {
+  flex: 0 0 76px;
+  width: 76px;
+  height: 76px;
+  min-height: 76px;
+}
+
+.grid[data-view-mode='list'] .cardFooter,
+.grid[data-view-mode='list'] .card[data-footer-mode='compact'] .cardFooter,
+.grid[data-view-mode='list'] .cardSelected[data-footer-mode='compact'] .cardFooter {
+  position: static;
+  inset: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  padding: 8px 10px;
+  overflow: visible;
+  border: 0;
+  border-left: 1px solid var(--lumiverse-border-subtle);
 }
 
 .grid > .state {
@@ -307,6 +352,16 @@
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
+.cardDescription {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .tags {
   display: flex;
   flex-wrap: wrap;
@@ -381,7 +436,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   max-width: 100%;
   border: 1px solid var(--lumiverse-border-subtle);
@@ -389,7 +444,7 @@
   background:
     radial-gradient(circle at 50% -10%, color-mix(in srgb, var(--lumiverse-primary) 13%, transparent), transparent 42%),
     var(--lumiverse-surface-raised);
-  padding: 12px 12px 62px;
+  padding: 10px 10px 62px;
   box-shadow: var(--lumiverse-shadow-xl);
   overflow: hidden;
 }
@@ -397,7 +452,8 @@
 .previewBody {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+  align-content: start;
+  gap: 6px;
   min-width: 0;
   min-height: 0;
   max-width: 100%;
@@ -405,15 +461,26 @@
   overflow-y: auto;
 }
 
+.previewMetadata {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+
 .preview[data-pinned='true'] {
   position: fixed;
   top: 108px;
   right: 24px;
-  bottom: 18px;
+  bottom: auto;
   /* Stacking ladder (theme/variables.css): this is a page-level pinned panel, so it must
      clear the chat docks but stay under ViewportDrawer (9992) and every modal above it. */
   z-index: var(--z-homepage-preview-panel, 9990);
-  width: min(var(--homepage-panel-width, 420px), calc((100vw / var(--lumiverse-ui-scale, 1)) - 48px));
+  width: min(
+    var(--homepage-preview-auto-width, var(--homepage-panel-width, 420px)),
+    calc((100vw / var(--lumiverse-ui-scale, 1)) - 48px)
+  );
   max-height: calc(100dvh - 126px);
 }
 
@@ -462,27 +529,15 @@
   position: relative;
   display: grid;
   place-items: center;
-  width: 100%;
+  width: min(100%, var(--homepage-preview-image-width, 100%));
+  margin-inline: auto;
   min-width: 0;
   max-width: 100%;
-  height: min(var(--homepage-panel-image-height, 320px), max(180px, calc(100dvh - 560px)));
+  height: var(--homepage-panel-image-height, 320px);
   overflow: hidden;
   isolation: isolate;
   background: var(--lumiverse-card-image-bg);
   border-radius: var(--lumiverse-radius-md);
-}
-
-.previewImageFrame::before {
-  content: '';
-  position: absolute;
-  inset: -18px;
-  z-index: 0;
-  background-image: var(--preview-image-url);
-  background-position: center;
-  background-size: cover;
-  filter: blur(18px) saturate(0.9);
-  opacity: 0.52;
-  transform: scale(1.08);
 }
 
 .previewImageFrame::after {
@@ -715,9 +770,14 @@
     transform: none;
   }
 
-  .grid {
+  .grid[data-view-mode='grid'] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--character-grid-gap, 10px);
+  }
+
+  .grid[data-view-mode='single'] .card,
+  .grid[data-view-mode='single'] .cardSelected {
+    max-width: none;
   }
 
   .previewControls {
@@ -733,11 +793,18 @@
 
   .preview[data-pinned] {
     position: fixed;
-    inset: calc(64px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
+    inset-block-start: calc(64px + env(safe-area-inset-top));
+    inset-block-end: auto;
+    left: 50%;
+    right: auto;
     z-index: var(--z-homepage-preview-panel, 9990);
-    width: auto;
-    max-width: none;
-    max-height: none;
+    width: min(
+      var(--homepage-preview-auto-width, var(--homepage-panel-width, 420px)),
+      calc((100vw / var(--lumiverse-ui-scale, 1)) - 24px)
+    );
+    max-width: calc((100vw / var(--lumiverse-ui-scale, 1)) - 24px);
+    max-height: calc(100dvh - 76px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    transform: translateX(-50%);
     background-color: var(--lumiverse-bg-deep, #0a0812);
     overflow: hidden;
     isolation: isolate;
@@ -786,14 +853,20 @@
     display: none;
   }
 
-  .imageFrame {
+  .grid[data-view-mode='grid'] .imageFrame,
+  .grid[data-view-mode='single'] .imageFrame {
     height: min(var(--character-image-height, 226px), 62vw);
     min-height: min(var(--character-image-height, 226px), 62vw);
   }
 }
 
-@media (prefers-reduced-transparency: reduce) {
-  .previewImageFrame::before {
-    opacity: 0.3;
-  }
+.previewDescription {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
 }
