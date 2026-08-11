@@ -1,5 +1,22 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DraggableAttributes,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
 import { GripVertical, KeyRound, Lock, Sparkles } from 'lucide-react'
 import clsx from 'clsx'
 import { Toggle } from '@/components/shared/Toggle'
@@ -18,6 +35,7 @@ import {
 } from '@/lib/lorebookRowMetrics'
 import { buildEntryIndexMap, planEntryReveal } from '@/lib/entryReveal'
 import { getUiScale as readUiScale } from '@/lib/uiScale'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { estimateTokens } from '@/lib/tokenEstimate'
 import type { LorebookResolvedTokenCount as ResolvedTokenCount } from './useLorebookTokenCounts'
 import type { WorldBookEntry } from '@/types/api'
@@ -303,6 +321,9 @@ export interface EntryTableProps {
   entries: WorldBookEntry[]
   filteredEntries: WorldBookEntry[]
   loading: boolean
+  /** Reordering is only safe for the complete, unfiltered custom-order list. */
+  reorderEnabled?: boolean
+  onReorder?: (activeId: string, overId: string) => Promise<void> | void
   /**
    * The columns the *user* has enabled. Which of them actually render is decided
    * here, from the measured width — see {@link resolveResponsiveColumns}.
@@ -356,6 +377,9 @@ interface EntryRowProps {
   saveEntry: (entryId: string, updates: Partial<WorldBookEntry>) => void
   onEntryPointerEnter?: (entryId: string) => void
   onEntryPointerLeave?: (entryId: string) => void
+  dragHandleAttributes?: DraggableAttributes
+  dragHandleListeners?: Record<string, unknown>
+  dragEnabled?: boolean
 }
 
 /**
@@ -388,6 +412,9 @@ const EntryRow = memo(function EntryRow({
   saveEntry,
   onEntryPointerEnter,
   onEntryPointerLeave,
+  dragHandleAttributes,
+  dragHandleListeners,
+  dragEnabled = false,
 }: EntryRowProps) {
   return (
     <div
@@ -405,7 +432,19 @@ const EntryRow = memo(function EntryRow({
         aria-label={`Select ${entry.comment || 'Untitled entry'}`}
       />
       <span className={styles.entryName} title={entry.comment || 'Untitled entry'}>
-        <GripVertical size={12} />{entry.comment || 'Untitled entry'}
+        <button
+          type="button"
+          className={styles.entryDragHandle}
+          aria-label={`Reorder ${entry.comment || 'Untitled entry'}`}
+          title={dragEnabled ? 'Drag to reorder' : 'Reordering is available only for the complete custom-order list'}
+          disabled={!dragEnabled}
+          onClick={(event) => event.stopPropagation()}
+          {...dragHandleAttributes}
+          {...dragHandleListeners}
+        >
+          <GripVertical size={12} />
+        </button>
+        {entry.comment || 'Untitled entry'}
       </span>
       {responsiveColumns.map((column) => {
         const name = entry.comment || 'entry'
@@ -484,10 +523,41 @@ const EntryRow = memo(function EntryRow({
   )
 })
 
+function SortableEntryRow({
+  reorderEnabled,
+  ...props
+}: EntryRowProps & { reorderEnabled: boolean }) {
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
+    id: props.entry.id,
+    disabled: !reorderEnabled,
+  })
+  const { setNodeRef, style } = useScaledSortableStyle({
+    setNodeRef: setSortableRef,
+    transform,
+    transition,
+    isDragging,
+  })
+
+  // This node is deliberately nested inside `.entryVirtualRow`: TanStack owns
+  // the outer wrapper's translateY, while dnd-kit owns this transform.
+  return (
+    <div ref={setNodeRef} className={isDragging ? styles.entrySortableDragging : undefined} style={style}>
+      <EntryRow
+        {...props}
+        dragHandleAttributes={attributes}
+        dragHandleListeners={listeners}
+        dragEnabled={reorderEnabled}
+      />
+    </div>
+  )
+}
+
 export default function EntryTable({
   entries,
   filteredEntries,
   loading,
+  reorderEnabled = false,
+  onReorder,
   visibleColumns,
   selectedEntryId,
   setSelectedEntryId,
@@ -571,6 +641,15 @@ export default function EntryTable({
   }), [])
 
   const rowMetrics = useEntryRowMetrics(regionRef)
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  const handleDragEnd = useCallback(({ active, over }: DragEndEvent) => {
+    if (!reorderEnabled || !over || active.id === over.id) return
+    void onReorder?.(String(active.id), String(over.id))
+  }, [onReorder, reorderEnabled])
 
   /**
    * Distance from the scroll element's content origin to the first virtual row.
@@ -773,44 +852,49 @@ export default function EntryTable({
             virtualizer's total, so the region scrolls exactly as far as 554 real
             rows used to make it.
           */}
-          <div
-            ref={spacerRef}
-            className={styles.entryVirtualSpacer}
-            style={{ height: virtualizer.getTotalSize() }}
-          >
-            {virtualizer.getVirtualItems().map((virtualRow) => {
-              const entry = filteredEntries[virtualRow.index]
-              if (!entry) return null
-              const tokens = tokensVisible ? resolveTokenCount(entry) : NO_TOKENS
-              return (
-                <div
-                  key={virtualRow.key}
-                  className={styles.entryVirtualRow}
-                  data-index={virtualRow.index}
-                  ref={virtualizer.measureElement}
-                  // `virtualRow.start` is measured from the scroll element's
-                  // origin and therefore includes `scrollMargin`; the wrapper is
-                  // positioned inside the spacer, which already starts there.
-                  style={{ transform: `translateY(${virtualRow.start - (scrollMargin ?? 0)}px)` }}
-                >
-                  <EntryRow
-                    entry={entry}
-                    responsiveColumns={responsiveColumns}
-                    selected={entry.id === selectedEntryId}
-                    checked={selectedIdSet.has(entry.id)}
-                    triggerDisplay={triggerDisplay}
-                    tokenValue={tokens.value}
-                    tokenExact={tokens.exact}
-                    setSelectedEntryId={stableActions.setSelectedEntryId}
-                    toggleEntrySelection={stableActions.toggleEntrySelection}
-                    saveEntry={stableActions.saveEntry}
-                    onEntryPointerEnter={stableActions.onEntryPointerEnter}
-                    onEntryPointerLeave={stableActions.onEntryPointerLeave}
-                  />
-                </div>
-              )
-            })}
-          </div>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={filteredEntries.map((entry) => entry.id)} strategy={verticalListSortingStrategy}>
+              <div
+                ref={spacerRef}
+                className={styles.entryVirtualSpacer}
+                style={{ height: virtualizer.getTotalSize() }}
+              >
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const entry = filteredEntries[virtualRow.index]
+                  if (!entry) return null
+                  const tokens = tokensVisible ? resolveTokenCount(entry) : NO_TOKENS
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      className={styles.entryVirtualRow}
+                      data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
+                      // `virtualRow.start` is measured from the scroll element's
+                      // origin and therefore includes `scrollMargin`; the wrapper is
+                      // positioned inside the spacer, which already starts there.
+                      style={{ transform: `translateY(${virtualRow.start - (scrollMargin ?? 0)}px)` }}
+                    >
+                      <SortableEntryRow
+                        entry={entry}
+                        responsiveColumns={responsiveColumns}
+                        selected={entry.id === selectedEntryId}
+                        checked={selectedIdSet.has(entry.id)}
+                        triggerDisplay={triggerDisplay}
+                        tokenValue={tokens.value}
+                        tokenExact={tokens.exact}
+                        setSelectedEntryId={stableActions.setSelectedEntryId}
+                        toggleEntrySelection={stableActions.toggleEntrySelection}
+                        saveEntry={stableActions.saveEntry}
+                        onEntryPointerEnter={stableActions.onEntryPointerEnter}
+                        onEntryPointerLeave={stableActions.onEntryPointerLeave}
+                        reorderEnabled={reorderEnabled}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            </SortableContext>
+          </DndContext>
         </div>
       </div>
     </div>

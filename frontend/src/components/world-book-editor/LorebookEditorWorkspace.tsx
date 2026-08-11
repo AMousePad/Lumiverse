@@ -26,6 +26,7 @@ import {
 } from '@/lib/lorebookEntryColumns'
 import { filterBooks } from '@/lib/lorebookBookSearch'
 import { createEntrySearchIndex, filterEntriesByQuery } from '@/lib/lorebookEntrySearch'
+import { runLorebookReorderIfCurrent } from '@/lib/lorebookMutationGuard'
 import {
   buildBulkFieldPatch,
   EMPTY_BULK_FIELD_FORM,
@@ -35,6 +36,7 @@ import {
   type BulkPositionSelection,
   type BulkTriggerSelection,
 } from '@/lib/lorebookBulkPatch'
+import { arrayMove } from '@dnd-kit/sortable'
 import { useLorebookTokenCounts } from './useLorebookTokenCounts'
 import { useLorebookEditorLayoutSettings } from './useLorebookEditorLayoutSettings'
 import type {
@@ -105,6 +107,8 @@ export default function LorebookEditorWorkspace({
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(initialEntryId ?? null)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
+  const [entriesComplete, setEntriesComplete] = useState(false)
+  const [reordering, setReordering] = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [conflicts, setConflicts] = useState<Record<string, EntryConflictState>>({})
   // Every bulk control starts in the same "leave as is" state `enabled` already
@@ -167,33 +171,35 @@ export default function LorebookEditorWorkspace({
   const requestedEntriesBookId = useRef<string | null>(null)
   const entriesRequestSeq = useRef(0)
 
+  useEffect(() => {
+    setSavedAt(null)
+  }, [selectedBookId])
+
   const loadEntries = useCallback((bookId: string, preserveSelection = true): Promise<void> => {
     requestedEntriesBookId.current = bookId
     const seq = ++entriesRequestSeq.current
     setLoading(true)
+    setEntriesComplete(false)
     return (async () => {
       try {
-        const result = await worldBooksApi.listEntries(bookId, {
-          limit: 1000,
-          sort_by: 'order',
-          sort_dir: 'asc',
-        })
+        const result = await worldBooksApi.listAllEntries(bookId)
         // A newer request started while this one was in flight — a book switch,
         // Refresh, or the reload that ends every bulk action. That answer is the
         // current one, so this older payload is dropped rather than committed
         // over the top of it.
         if (seq !== entriesRequestSeq.current) return
-        commitEntries(result.data)
+        commitEntries(result)
+        setEntriesComplete(true)
         setSelectedEntryId((current) => {
           const pending = pendingInitialEntryId.current
-          if (pending && result.data.some((entry) => entry.id === pending)) {
+          if (pending && result.some((entry) => entry.id === pending)) {
             pendingInitialEntryId.current = null
             return pending
           }
-          if (preserveSelection && current && result.data.some((entry) => entry.id === current)) return current
-          return result.data[0]?.id ?? null
+          if (preserveSelection && current && result.some((entry) => entry.id === current)) return current
+          return result[0]?.id ?? null
         })
-        setSelectedIds((current) => current.filter((id) => result.data.some((entry) => entry.id === id)))
+        setSelectedIds((current) => current.filter((id) => result.some((entry) => entry.id === id)))
       } finally {
         // Only the newest request owns the spinner; a superseded one clearing it
         // would report "loaded" while the current fetch is still out.
@@ -305,6 +311,14 @@ export default function LorebookEditorWorkspace({
     return filterEntriesByQuery(byType, entrySearch, entrySearchIndex)
   }, [entries, entrySearch, entrySearchIndex, typeFilter])
 
+  // `listAllEntries` always requests `sort_by: 'order'`, which is this editor's
+  // custom-order view. There is no alternate sort control in this workspace.
+  const reorderEnabled = !loading
+    && !reordering
+    && entriesComplete
+    && entrySearch.trim() === ''
+    && typeFilter === 'all'
+
   // Background token counting. Everything it produces is client-only: it reaches
   // the Tokens column through a module-level cache and `useSyncExternalStore`,
   // never through the entry object, so no prefetch can trigger a save, bump
@@ -383,6 +397,40 @@ export default function LorebookEditorWorkspace({
       return next
     })
   }, [commitEntries])
+
+  const reorderEntries = useCallback(async (activeId: string, overId: string) => {
+    if (!selectedBookId || !reorderEnabled || activeId === overId) return
+    const reorderBookId = selectedBookId
+    const currentEntries = entriesRef.current
+    const oldIndex = currentEntries.findIndex((entry) => entry.id === activeId)
+    const newIndex = currentEntries.findIndex((entry) => entry.id === overId)
+    if (oldIndex < 0 || newIndex < 0) return
+
+    const orderedEntries = arrayMove(currentEntries, oldIndex, newIndex)
+    const orderedIds = orderedEntries.map((entry) => entry.id)
+    const expectedRevisions = expectedRevisionMap(currentEntries, orderedIds)
+    setReordering(true)
+    commitEntries(orderedEntries)
+    try {
+      await runLorebookReorderIfCurrent({
+        bookId: reorderBookId,
+        getCurrentBookId: () => selectedBookIdRef.current,
+        reorder: () => worldBooksApi.reorderEntries(reorderBookId, {
+          ordered_ids: orderedIds,
+          expected_revisions: expectedRevisions,
+        }).then(() => undefined),
+        refresh: () => loadEntries(reorderBookId),
+        onSaved: () => setSavedAt(Date.now()),
+      })
+    } catch (error) {
+      if (selectedBookIdRef.current !== reorderBookId) return
+      const payload = conflictPayload(error)
+      if (payload) applyConflict(payload, {})
+      await loadEntries(reorderBookId)
+    } finally {
+      setReordering(false)
+    }
+  }, [applyConflict, commitEntries, loadEntries, reorderEnabled, selectedBookId])
 
   const saveEntry = useCallback((entryId: string, updates: Partial<WorldBookEntry>) => {
     pendingDrafts.current[entryId] = { ...pendingDrafts.current[entryId], ...updates }
@@ -708,6 +756,8 @@ export default function LorebookEditorWorkspace({
             entries={entries}
             filteredEntries={filteredEntries}
             loading={loading}
+            reorderEnabled={reorderEnabled}
+            onReorder={reorderEntries}
             visibleColumns={visibleColumns}
             entryGridTemplate={entryGridTemplate}
             entryTableMinWidth={entryTableMinWidth}
