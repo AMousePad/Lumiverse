@@ -694,6 +694,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     interceptorTimeoutMs: 10_000,
     dockPanelDesktopSide: 'right',
     infoLoggingEnabled: true,
+    extensionUpdateToastDisabled: {},
   },
   voiceSettings: {
     sttProvider: 'webspeech' as const,
@@ -749,6 +750,18 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
     if (settings.drawerSettings && typeof settings.drawerSettings === 'object') {
       patch.drawerSettings = { ...get().drawerSettings, ...settings.drawerSettings }
+    }
+    if (settings.spindleSettings && typeof settings.spindleSettings === 'object') {
+      const current = get().spindleSettings
+      const disabled = settings.spindleSettings.extensionUpdateToastDisabled
+      patch.spindleSettings = {
+        ...current,
+        ...settings.spindleSettings,
+        extensionUpdateToastDisabled:
+          disabled && typeof disabled === 'object' && !Array.isArray(disabled)
+            ? { ...disabled }
+            : current.extensionUpdateToastDisabled,
+      }
     }
     if (settings.connectionsOrder && typeof settings.connectionsOrder === 'object') {
       patch.connectionsOrder = normalizeConnectionsOrder(settings.connectionsOrder)

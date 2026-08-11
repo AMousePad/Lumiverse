@@ -122,6 +122,7 @@ export interface StartupSettings {
   landingPageGalleryWidth?: 'compact' | 'expanded'
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
+  spindleSettings?: Partial<SpindleSettings>
   connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
 }
 
@@ -775,7 +776,8 @@ export interface SpindleSettings {
   dockPanelDesktopSide: 'left' | 'right'
   /** Show routine Spindle lifecycle and WebSocket events in the browser console. */
   infoLoggingEnabled: boolean
-  extensionUpdateToastDisabled: boolean
+  /** Per-extension opt-out for update notification toasts. */
+  extensionUpdateToastDisabled: Record<string, boolean>
 }
 
 // ---- Loom Registry Entry ----

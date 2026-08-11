@@ -63,6 +63,11 @@ import type { RoomStateView } from '@/types/multiplayer'
 import type { CouncilToolResult } from 'lumiverse-spindle-types'
 import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
 import { playNotificationPing } from '@/lib/notificationAudio'
+import {
+  extensionUpdateFingerprint,
+  pruneAnnouncedExtensionUpdates,
+  selectToastableExtensionUpdates,
+} from '@/lib/spindle/update-notifications'
 
 const LOCAL_STREAM_PLACEHOLDER_PREFIX = '__stream_placeholder_'
 const LOCAL_REGEN_PLACEHOLDER_PREFIX = '__regen_placeholder_'
@@ -76,6 +81,8 @@ function isLocalStreamPlaceholderId(id: string | null | undefined) {
 
 const MAX_TOAST_ERROR_LENGTH = 800
 const MULTIPLAYER_CHAT_HEAD_PREFIX = 'mp-room:'
+const EXTENSION_UPDATE_STARTUP_RETRY_MS = 1_000
+const EXTENSION_UPDATE_STARTUP_RETRY_MAX_MS = 5_000
 
 /**
  * The websocket bridge receives already-authorized UI navigation requests from
@@ -420,10 +427,12 @@ export function useWebSocket() {
   const store = useStore
   const isAuthenticated = useStore((s) => s.isAuthenticated)
   const userRole = useStore((s) => s.user?.role)
+  const settingsLoaded = useStore((s) => s.settingsLoaded)
   const activeChatId = useStore((s) => s.activeChatId)
   const spindleInfoLoggingEnabled = useStore((s) => s.spindleSettings.infoLoggingEnabled)
   const lastExtensionSyncAtRef = useRef(0)
   const lastOperatorUpdateToastKeyRef = useRef<string | null>(null)
+  const announcedExtensionUpdatesRef = useRef<Set<string>>(new Set())
   // Set only after a confirmed healthy session drops. The following verified
   // reconnect then gets one prompt service-worker update check, which catches
   // bundles rebuilt while the server was unavailable.
@@ -482,6 +491,98 @@ export function useWebSocket() {
       window.clearInterval(interval)
     }
   }, [isAuthenticated, store, userRole])
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      announcedExtensionUpdatesRef.current = new Set()
+      return
+    }
+
+    let cancelled = false
+    let startupRetryTimer: number | null = null
+    let startupRetryDelay = EXTENSION_UPDATE_STARTUP_RETRY_MS
+    let initialSnapshotComplete = false
+
+    function scheduleStartupRetry() {
+      if (cancelled || startupRetryTimer !== null) return
+      const delay = startupRetryDelay
+      startupRetryTimer = window.setTimeout(() => {
+        startupRetryTimer = null
+        startupRetryDelay = Math.min(
+          startupRetryDelay * 2,
+          EXTENSION_UPDATE_STARTUP_RETRY_MAX_MS,
+        )
+        void syncExtensionUpdates()
+      }, delay)
+    }
+
+    async function syncExtensionUpdates() {
+      try {
+        const snapshot = await spindleApi.getUpdates()
+        if (cancelled) return
+
+        store.getState().setExtensionUpdates(snapshot.updates)
+        if (snapshot.checkedAt === null || snapshot.checking) {
+          scheduleStartupRetry()
+          return
+        }
+        initialSnapshotComplete = true
+        startupRetryDelay = EXTENSION_UPDATE_STARTUP_RETRY_MS
+        if (!settingsLoaded) return
+
+        const announced = pruneAnnouncedExtensionUpdates(
+          announcedExtensionUpdatesRef.current,
+          snapshot.updates,
+        )
+        const newToastable = selectToastableExtensionUpdates(
+          snapshot.updates,
+          store.getState().spindleSettings.extensionUpdateToastDisabled,
+          announced,
+        )
+        announcedExtensionUpdatesRef.current = announced
+        if (newToastable.length === 0) return
+
+        for (const update of newToastable) {
+          announcedExtensionUpdatesRef.current.add(extensionUpdateFingerprint(update))
+        }
+
+        const shownNames = newToastable.slice(0, 3).map((update) => update.name)
+        const remaining = newToastable.length - shownNames.length
+        const suffix = shownNames.length > 0
+          ? `: ${shownNames.join(', ')}${remaining > 0 ? ` +${remaining}` : ''}`
+          : ''
+        toast.info(
+          i18n.t('common.toast.extensionUpdatesAvailable', {
+            count: newToastable.length,
+            suffix,
+          }),
+          {
+            title: i18n.t('common.toast.extensionUpdateTitle'),
+            duration: 8000,
+            action: {
+              label: i18n.t('common.toast.viewExtensions'),
+              onClick: () => {
+                const state = store.getState()
+                state.closeSettings()
+                state.openDrawer('spindle')
+              },
+            },
+          },
+        )
+      } catch {
+        if (!initialSnapshotComplete) scheduleStartupRetry()
+      }
+    }
+
+    void syncExtensionUpdates()
+    const interval = window.setInterval(syncExtensionUpdates, 30_000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+      if (startupRetryTimer !== null) window.clearTimeout(startupRetryTimer)
+    }
+  }, [isAuthenticated, settingsLoaded, store])
 
   useEffect(() => {
     if (!isAuthenticated) return
@@ -1390,7 +1491,17 @@ export function useWebSocket() {
           payload.operation,
           payload.name ?? null
         )
+        if (payload.operation === 'disabled' && payload.extensionId) {
+          const state = useStore.getState()
+          state.setExtensionUpdates(
+            state.extensionUpdates.filter((update) => update.extensionId !== payload.extensionId),
+          )
+        }
         if (payload.operation === 'updated' && payload.extensionId) {
+          const state = useStore.getState()
+          state.setExtensionUpdates(
+            state.extensionUpdates.filter((update) => update.extensionId !== payload.extensionId),
+          )
           // Force a list refresh so the status dot reflects the post-restart state
           syncExtensions(true)
           const ext = useStore.getState().extensions.find((e) => e.id === payload.extensionId)
@@ -1430,6 +1541,11 @@ export function useWebSocket() {
 
       wsClient.on(EventType.SPINDLE_BULK_UPDATE_COMPLETE, (payload: { total: number; updated: number; failed: number; errors: Array<{ id: string; name: string; error: string }> }) => {
         const { total, updated, failed, errors } = payload
+        const failedIds = new Set(errors.map((error) => error.id))
+        const currentState = useStore.getState()
+        currentState.setExtensionUpdates(
+          currentState.extensionUpdates.filter((update) => failedIds.has(update.extensionId)),
+        )
         useStore.getState().setBulkUpdateStatus({
           total,
           completed: updated,
