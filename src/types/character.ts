@@ -90,6 +90,8 @@ export function getEffectiveCharacterName(character: Character): string {
 export interface CharacterSummary {
   id: string;
   name: string;
+  description: string;
+  preview_description: string;
   creator: string;
   folder: string;
   tags: string[];

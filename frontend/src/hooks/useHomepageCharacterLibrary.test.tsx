@@ -6,9 +6,11 @@ import type { Root } from 'react-dom/client'
 const listSummaries = jest.fn()
 const listTags = jest.fn(async () => [])
 const getHomepagePreview = jest.fn(async () => null)
+const getCharacter = jest.fn()
 const navigate = jest.fn()
 const setSetting = jest.fn()
 const setEditingCharacterId = jest.fn()
+const updateCharacter = jest.fn()
 const openSettings = jest.fn()
 
 const homepageSettings = {
@@ -37,6 +39,7 @@ const storeState = {
   activeChatId: null,
   setSetting,
   setEditingCharacterId,
+  updateCharacter,
   openSettings,
 }
 
@@ -56,7 +59,7 @@ const wsOn = jest.fn((event: string, handler: (payload: unknown) => void) => {
 mock.module('@/store', () => ({ useStore }))
 mock.module('react-router', () => ({ useNavigate: () => navigate }))
 mock.module('@/api/characters', () => ({
-  charactersApi: { listSummaries, listTags, getHomepagePreview },
+  charactersApi: { listSummaries, listTags, getHomepagePreview, get: getCharacter },
 }))
 mock.module('@/api/chats', () => ({ chatsApi: { create: jest.fn() } }))
 mock.module('@/ws/client', () => ({ wsClient: { on: wsOn } }))
@@ -141,6 +144,11 @@ afterEach(async () => {
   listSummaries.mockReset()
   listTags.mockClear()
   getHomepagePreview.mockClear()
+  getCharacter.mockReset()
+  navigate.mockClear()
+  setEditingCharacterId.mockClear()
+  updateCharacter.mockClear()
+  openSettings.mockClear()
 })
 
 afterAll(() => {
@@ -205,5 +213,106 @@ describe('useHomepageCharacterLibrary websocket invalidation', () => {
 
     expect(unsubscribeEvents.sort()).toEqual(activityEvents.map(String).sort())
     expect([...handlers.values()].every((listeners) => listeners.size === 0)).toBe(true)
+  })
+})
+
+describe('useHomepageCharacterLibrary actions', () => {
+  test('loads the full character into the store before opening the global editor without navigating', async () => {
+    listSummaries.mockResolvedValue({ data: [], total: 0, limit: 80, offset: 0 })
+    const character = { id: 'character-1', name: 'Iris' }
+    getCharacter.mockResolvedValue(character)
+
+    const host = document.createElement('div')
+    document.body.append(host)
+    mountedRoot = createRoot(host)
+    await act(async () => {
+      mountedRoot?.render(createElement(HookHarness))
+      await flush()
+    })
+
+    await act(async () => {
+      await hookSurface.editCharacter(character.id)
+    })
+
+    expect(getCharacter).toHaveBeenCalledWith(character.id)
+    expect(updateCharacter).toHaveBeenCalledWith(character.id, character)
+    expect(setEditingCharacterId).toHaveBeenCalledWith(character.id)
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  test('ignores a stale edit response when a newer character finishes loading first', async () => {
+    listSummaries.mockResolvedValue({ data: [], total: 0, limit: 80, offset: 0 })
+    let resolveFirst!: (character: { id: string; name: string }) => void
+    let resolveSecond!: (character: { id: string; name: string }) => void
+    getCharacter.mockImplementation((id: string) => new Promise((resolve) => {
+      if (id === 'character-1') resolveFirst = resolve
+      else resolveSecond = resolve
+    }))
+
+    const host = document.createElement('div')
+    document.body.append(host)
+    mountedRoot = createRoot(host)
+    await act(async () => {
+      mountedRoot?.render(createElement(HookHarness))
+      await flush()
+    })
+
+    let firstEdit!: Promise<void>
+    let secondEdit!: Promise<void>
+    await act(async () => {
+      firstEdit = hookSurface.editCharacter('character-1')
+      secondEdit = hookSurface.editCharacter('character-2')
+      await flush()
+    })
+    await act(async () => {
+      resolveSecond({ id: 'character-2', name: 'Second' })
+      await secondEdit
+      resolveFirst({ id: 'character-1', name: 'First' })
+      await firstEdit
+    })
+
+    expect(updateCharacter).toHaveBeenCalledTimes(1)
+    expect(updateCharacter).toHaveBeenCalledWith('character-2', { id: 'character-2', name: 'Second' })
+    expect(setEditingCharacterId).toHaveBeenCalledTimes(1)
+    expect(setEditingCharacterId).toHaveBeenCalledWith('character-2')
+  })
+
+  test('surfaces the active edit request failure without opening the editor', async () => {
+    listSummaries.mockResolvedValue({ data: [], total: 0, limit: 80, offset: 0 })
+    getCharacter.mockRejectedValue(new Error('Unable to load character'))
+
+    const host = document.createElement('div')
+    document.body.append(host)
+    mountedRoot = createRoot(host)
+    await act(async () => {
+      mountedRoot?.render(createElement(HookHarness))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await flush()
+    })
+    await act(async () => {
+      await hookSurface.editCharacter('character-1')
+      await flush()
+    })
+
+    expect(hookSurface.error).toBe('Unable to load character')
+    expect(updateCharacter).not.toHaveBeenCalled()
+    expect(setEditingCharacterId).not.toHaveBeenCalled()
+  })
+
+  test('opens productivity settings at the homepage character library section', async () => {
+    listSummaries.mockResolvedValue({ data: [], total: 0, limit: 80, offset: 0 })
+    const host = document.createElement('div')
+    document.body.append(host)
+    mountedRoot = createRoot(host)
+    await act(async () => {
+      mountedRoot?.render(createElement(HookHarness))
+      await flush()
+    })
+
+    await act(async () => {
+      hookSurface.openSettings()
+    })
+
+    expect(openSettings).toHaveBeenCalledWith('productivity', { anchorId: 'homepage-character-library-settings' })
   })
 })

@@ -364,13 +364,23 @@ describe("character library scope", () => {
   test("projects an owner-safe CharacterPreview with scope, lorebooks, and the latest chat", () => {
     const character = createCharacter(USER_A, {
       name: "Preview Character",
+      personality: "Imported personality fallback",
       creator: "Creator",
       library_scope: "shared",
       tags: ["preview"],
       alternate_greetings: ["Hello"],
       extensions: { world_book_ids: ["book-a", "book-b", "missing-book"] },
     });
+    const canonicalDescriptionCharacter = createCharacter(USER_A, {
+      name: "Canonical Description",
+      description: "Canonical description wins",
+      personality: "Personality fallback must not replace it",
+    });
     const foreignCharacter = createCharacter(USER_B, { name: "Foreign Preview" });
+
+    const summaries = listCharacterSummaries(USER_A, { limit: 100, offset: 0 }, {}).data;
+    expect(summaries.find((item) => item.id === character.id)?.preview_description).toBe("Imported personality fallback");
+    expect(summaries.find((item) => item.id === canonicalDescriptionCharacter.id)?.preview_description).toBe("Canonical description wins");
 
     getDb()
       .query(
@@ -399,12 +409,14 @@ describe("character library scope", () => {
       [
         "created_at",
         "creator",
+        "description",
         "folder",
         "has_alternate_greetings",
         "id",
         "image_id",
         "library_scope",
         "name",
+        "preview_description",
         "tags",
         "updated_at",
       ].sort(),
@@ -412,6 +424,8 @@ describe("character library scope", () => {
     expect(preview!.character).toEqual({
       id: character.id,
       name: "Preview Character",
+      description: "",
+      preview_description: "Imported personality fallback",
       creator: "Creator",
       folder: "",
       tags: ["preview"],

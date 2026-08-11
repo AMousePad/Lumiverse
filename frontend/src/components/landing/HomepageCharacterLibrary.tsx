@@ -4,6 +4,14 @@ import { BookOpen, Edit3, MessageSquare, Pin, PinOff, Search, Settings, Star, X 
 import { getCharacterAvatarLargeUrlById } from '@/lib/avatarUrls'
 import { getTagColorVar } from '@/lib/tagColors'
 import {
+  fitHomepagePreviewImageSize,
+  fitHomepagePreviewPaneWidth,
+  getHomepagePreviewAvailableImageHeight,
+  getHomepagePreviewStableFrameWidth,
+  scaleHomepagePreviewImageWidth,
+} from '@/lib/homepagePreviewImageFit'
+import { layoutViewportSize } from '@/lib/uiScale'
+import {
   getCharacterGridMetrics,
   getHomepageCardMetadata,
   getHomepageVisibleTags,
@@ -13,7 +21,6 @@ import type { CharacterSummary } from '@/types/api'
 import { Button } from '@/components/shared/FormComponents'
 import { useStore } from '@/store'
 import {
-  clampHomepagePanelImageHeight,
   clampHomepagePanelWidth,
   useHomepageCharacterLibrary,
   HOMEPAGE_PANEL_IMAGE_HEIGHT_DEFAULT,
@@ -33,6 +40,9 @@ const FILTER_LABELS: Record<HomepageCharacterFilter, string> = {
 const FILTER_ORDER: readonly HomepageCharacterFilter[] = ['all', 'this-chat', 'favorites', 'shared']
 
 const PROFILE_TAG_LIMIT = 8
+const HOMEPAGE_PREVIEW_METADATA_MIN_CONTENT_WIDTH = 300
+const HOMEPAGE_PREVIEW_DESKTOP_GUTTER = 48
+const HOMEPAGE_PREVIEW_MOBILE_GUTTER = 24
 
 /**
  * Tag colour arrives as a CSS custom property, never as a painted value. The stylesheet
@@ -99,6 +109,7 @@ interface LibraryCardProps {
   footerMode: CharacterDisplaySettings['footerMode']
   showNameBackground: boolean
   showCreator: boolean
+  showDescription: boolean
   showTags: boolean
   tagRows: number
   maxVisibleTags: number
@@ -117,6 +128,7 @@ const LibraryCard = memo(function LibraryCard({
   footerMode,
   showNameBackground,
   showCreator,
+  showDescription,
   showTags,
   tagRows,
   maxVisibleTags,
@@ -152,6 +164,9 @@ const LibraryCard = memo(function LibraryCard({
         <span className={styles.cardName}>{character.name}</span>
         {showCreator && cardMetadata.creator && (
           <span className={styles.cardMeta}>{cardMetadata.creator}</span>
+        )}
+        {showDescription && character.preview_description && (
+          <span className={styles.cardDescription}>{character.preview_description}</span>
         )}
         {tagRows > 0 && showTags && visibleTags.length > 0 && (
           <span className={styles.tags}>
@@ -213,6 +228,13 @@ export function HomepageCharacterLibrary() {
   // sees the committed value on pointer-up.
   const [livePanelWidth, setLivePanelWidth] = useState<number | null>(null)
   const [liveImageHeight, setLiveImageHeight] = useState<number | null>(null)
+  const [autoImageSize, setAutoImageSize] = useState<{
+    width: number
+    height: number
+    aspectRatio: number
+    stableWidth: number
+  } | null>(null)
+  const [previewChromeWidth, setPreviewChromeWidth] = useState(0)
   const [isMobileViewport, setIsMobileViewport] = useState(
     () => window.matchMedia('(max-width: 760px)').matches,
   )
@@ -229,6 +251,10 @@ export function HomepageCharacterLibrary() {
   // so unmounting it is itself the "stop" signal — the observer below tears down with it.
   const sentinelRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<HTMLElement>(null)
+  const previewBodyRef = useRef<HTMLDivElement>(null)
+  const previewImageFrameRef = useRef<HTMLDivElement>(null)
+  const previewImageRef = useRef<HTMLImageElement>(null)
+  const previewMetadataRef = useRef<HTMLDivElement>(null)
   const closePreviewButtonRef = useRef<HTMLButtonElement>(null)
   const previewReturnFocusRef = useRef<HTMLElement | null>(null)
   const wasMobilePreviewOpenRef = useRef(false)
@@ -323,9 +349,20 @@ export function HomepageCharacterLibrary() {
   }, [closePanel, isMobileViewport])
 
   const panelWidth = livePanelWidth ?? settings.panelWidth
-  const panelImageHeight = liveImageHeight
-    ?? settings.panelImageHeight
-    ?? HOMEPAGE_PANEL_IMAGE_HEIGHT_DEFAULT
+  const preferredImageHeight = settings.panelImageHeight ?? HOMEPAGE_PANEL_IMAGE_HEIGHT_DEFAULT
+  const fittedImageHeight = autoImageSize?.height ?? preferredImageHeight
+  const panelImageHeight = Math.min(liveImageHeight ?? fittedImageHeight, fittedImageHeight)
+  const panelImageWidth = autoImageSize
+    ? scaleHomepagePreviewImageWidth(panelImageHeight, autoImageSize.aspectRatio, autoImageSize.width)
+    : null
+  const previewAutoWidth = fitHomepagePreviewPaneWidth({
+    imageWidth: autoImageSize?.stableWidth ?? null,
+    metadataMinWidth: HOMEPAGE_PREVIEW_METADATA_MIN_CONTENT_WIDTH,
+    chromeWidth: previewChromeWidth,
+    manualMaxWidth: panelWidth,
+  })
+  const panelImageHeightMin = Math.min(HOMEPAGE_PANEL_IMAGE_HEIGHT_MIN, panelImageHeight)
+  const panelImageHeightMax = Math.max(panelImageHeightMin, fittedImageHeight)
 
   const beginResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -353,7 +390,8 @@ export function HomepageCharacterLibrary() {
 
   const commitImageHeight = useCallback(() => {
     if (liveImageHeight === null) return
-    setPanelImageHeight(liveImageHeight)
+    const committedHeight = liveImageHeight
+    setPanelImageHeight(committedHeight)
     setLiveImageHeight(null)
   }, [liveImageHeight, setPanelImageHeight])
 
@@ -368,17 +406,115 @@ export function HomepageCharacterLibrary() {
   const maxVisibleTags = settings.maxVisibleTags ?? 6
   const showNameBackground = settings.showNameBackground ?? false
   const showCreator = display.visibleMetadata.includes('creator')
+  const showDescription = display.visibleMetadata.includes('description')
   const showTags = display.visibleMetadata.includes('tags')
+  const showLorebooks = display.visibleMetadata.includes('lorebooks')
+  const showLastChat = display.visibleMetadata.includes('lastChat')
   const tagRowsMaxHeight = display.tagRows > 0
     ? display.tagRows * 20 + Math.max(display.tagRows - 1, 0) * 4
     : 0
-  const compactFooterMaxHeight = 44 + tagRowsMaxHeight
+  const descriptionMaxHeight = showDescription ? 36 : 0
+  const compactFooterMaxHeight = 44 + descriptionMaxHeight + tagRowsMaxHeight
   const selectedAvatarUrl = selectedCharacter
     ? getCharacterAvatarLargeUrlById(selectedCharacter.id, selectedCharacter.image_id)
     : ''
   const selectedTagSummary = selectedCharacter
     ? getHomepageVisibleTags(selectedCharacter.tags, PROFILE_TAG_LIMIT, 1)
     : { visibleTags: [], hiddenTagCount: 0 }
+  const selectedDescription = preview?.character.preview_description || selectedCharacter?.preview_description || ''
+  const showPreviewTags = Boolean(
+    showTags && (
+      selectedCharacter?.has_alternate_greetings
+        || selectedTagSummary.visibleTags.length > 0
+        || selectedTagSummary.hiddenTagCount > 0
+    ),
+  )
+
+  const fitPreviewImage = useCallback(() => {
+    const body = previewBodyRef.current
+    const frame = previewImageFrameRef.current
+    const image = previewImageRef.current
+    const metadata = previewMetadataRef.current
+    const previewElement = previewRef.current
+    if (!body || !frame || !image || !metadata || !previewElement || !image.complete) return
+
+    const constrained = isMobileViewport || settings.panelPinned
+    const previewStyle = window.getComputedStyle(previewElement)
+    const chromeWidth = [
+      previewStyle.paddingLeft,
+      previewStyle.paddingRight,
+      previewStyle.borderLeftWidth,
+      previewStyle.borderRightWidth,
+    ].reduce((total, value) => total + (Number.parseFloat(value) || 0), 0)
+    const viewportWidth = layoutViewportSize().width
+    const gutter = isMobileViewport ? HOMEPAGE_PREVIEW_MOBILE_GUTTER : HOMEPAGE_PREVIEW_DESKTOP_GUTTER
+    const stableFrameWidth = getHomepagePreviewStableFrameWidth({
+      panelMaxWidth: panelWidth,
+      layoutViewportWidth: viewportWidth,
+      gutter,
+      chromeWidth,
+    })
+    const rowGap = Number.parseFloat(window.getComputedStyle(body).rowGap) || 0
+    const availableHeight = constrained
+      ? getHomepagePreviewAvailableImageHeight(body.clientHeight, metadata.offsetHeight, rowGap)
+      : undefined
+    const nextSize = fitHomepagePreviewImageSize({
+      frameWidth: constrained ? stableFrameWidth : (body.clientWidth || frame.clientWidth),
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+      availableHeight,
+      preferredMaxHeight: preferredImageHeight,
+      absoluteMaxHeight: HOMEPAGE_PANEL_IMAGE_HEIGHT_MAX,
+    })
+    if (nextSize === null) return
+    setPreviewChromeWidth((current) => current === chromeWidth ? current : chromeWidth)
+    setAutoImageSize((current) => (
+      current?.width === nextSize.width
+        && current.height === nextSize.height
+        && current.aspectRatio === nextSize.aspectRatio
+        && current.stableWidth === nextSize.stableWidth
+        ? current
+        : nextSize
+    ))
+  }, [isMobileViewport, panelWidth, preferredImageHeight, settings.panelPinned])
+
+  useLayoutEffect(() => {
+    setAutoImageSize(null)
+    setLiveImageHeight(null)
+  }, [selectedAvatarUrl])
+
+  useLayoutEffect(() => {
+    if (!panelOpen || !selectedCharacter) return
+    let frame = 0
+    const scheduleFit = () => {
+      if (frame) return
+      frame = window.requestAnimationFrame(() => {
+        frame = 0
+        fitPreviewImage()
+      })
+    }
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleFit)
+    if (previewBodyRef.current) observer?.observe(previewBodyRef.current)
+    if (previewMetadataRef.current) observer?.observe(previewMetadataRef.current)
+    window.addEventListener('resize', scheduleFit)
+    scheduleFit()
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame)
+      observer?.disconnect()
+      window.removeEventListener('resize', scheduleFit)
+    }
+  }, [
+    fitPreviewImage,
+    panelOpen,
+    preview,
+    selectedAvatarUrl,
+    selectedCharacter,
+    showCreator,
+    showDescription,
+    showLastChat,
+    showLorebooks,
+    showPreviewTags,
+  ])
 
   const cards = useMemo(() => characters.map((character) => (
     <LibraryCard
@@ -388,6 +524,7 @@ export function HomepageCharacterLibrary() {
       footerMode={display.footerMode}
       showNameBackground={showNameBackground}
       showCreator={showCreator}
+      showDescription={showDescription}
       showTags={showTags}
       tagRows={display.tagRows}
       maxVisibleTags={maxVisibleTags}
@@ -403,6 +540,7 @@ export function HomepageCharacterLibrary() {
     handleSelectCharacter,
     selectedCharacterId,
     showCreator,
+    showDescription,
     showNameBackground,
     showTags,
   ])
@@ -503,10 +641,12 @@ export function HomepageCharacterLibrary() {
         style={{
           '--homepage-panel-width': `${panelWidth}px`,
           '--homepage-panel-image-height': `${panelImageHeight}px`,
+          '--homepage-preview-layout-width': `${settings.panelPinned ? previewAutoWidth : panelWidth}px`,
         } as CSSProperties}
       >
         <div
           className={styles.grid}
+          data-view-mode={display.viewMode}
           style={{
             '--character-card-width': `${display.thumbnailWidth}px`,
             '--character-image-height': `${display.thumbnailHeight}px`,
@@ -537,6 +677,7 @@ export function HomepageCharacterLibrary() {
               '--homepage-preview-grid-size': pageBackground.gridSize,
               '--homepage-preview-grid-repeat': pageBackground.gridRepeat,
               '--homepage-preview-grid-opacity': pageBackground.gridOpacity,
+              '--homepage-preview-auto-width': `${previewAutoWidth}px`,
             } as CSSProperties}
             role={isMobileViewport ? 'dialog' : undefined}
             aria-modal={isMobileViewport || undefined}
@@ -608,76 +749,93 @@ export function HomepageCharacterLibrary() {
               </button>
               <button ref={closePreviewButtonRef} type="button" aria-label="Close preview" title="Close preview" onClick={closePanel}><X size={16} /></button>
             </div>
-            <div className={styles.previewBody}>
+            <div ref={previewBodyRef} className={styles.previewBody}>
               <div
+                ref={previewImageFrameRef}
                 className={styles.previewImageFrame}
-                style={{ '--preview-image-url': `url("${selectedAvatarUrl}")` } as CSSProperties}
+                style={{
+                  '--preview-image-url': `url("${selectedAvatarUrl}")`,
+                  '--homepage-preview-image-width': panelImageWidth ? `${panelImageWidth}px` : '100%',
+                } as CSSProperties}
               >
                 <img
+                  ref={previewImageRef}
                   src={selectedAvatarUrl}
                   alt={selectedCharacter.name}
+                  onLoad={fitPreviewImage}
                 />
               </div>
-              <label className={styles.imageHeightControl}>
-                <span>Image H</span>
-                <input
-                  type="range"
-                  min={HOMEPAGE_PANEL_IMAGE_HEIGHT_MIN}
-                  max={HOMEPAGE_PANEL_IMAGE_HEIGHT_MAX}
-                  value={panelImageHeight}
-                  onChange={(event) => setLiveImageHeight(
-                    clampHomepagePanelImageHeight(Number(event.target.value)),
-                  )}
-                  onPointerUp={commitImageHeight}
-                  onKeyUp={commitImageHeight}
-                  onBlur={commitImageHeight}
-                />
-                <span>{panelImageHeight}px</span>
-              </label>
-              <div className={styles.previewHeader}>
-                <div>
-                  <h3 id="homepage-character-preview-title">{selectedCharacter.name}</h3>
-                  {selectedCharacter.creator && <p>{selectedCharacter.creator}</p>}
+              <div ref={previewMetadataRef} className={styles.previewMetadata}>
+                <label className={styles.imageHeightControl}>
+                  <span>Image H</span>
+                  <input
+                    type="range"
+                    min={panelImageHeightMin}
+                    max={panelImageHeightMax}
+                    value={panelImageHeight}
+                    onChange={(event) => setLiveImageHeight(
+                      Math.min(Number(event.target.value), fittedImageHeight),
+                    )}
+                    onPointerUp={commitImageHeight}
+                    onKeyUp={commitImageHeight}
+                    onBlur={commitImageHeight}
+                  />
+                  <span>{panelImageHeight}px</span>
+                </label>
+                <div className={styles.previewHeader}>
+                  <div>
+                    <h3 id="homepage-character-preview-title">{selectedCharacter.name}</h3>
+                    {showCreator && selectedCharacter.creator && <p>{selectedCharacter.creator}</p>}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<Edit3 size={14} />}
+                    className={styles.editBtn}
+                    title="Edit character"
+                    onClick={() => editCharacter(selectedCharacter.id)}
+                  >
+                    Edit
+                  </Button>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon={<Edit3 size={14} />}
-                  className={styles.editBtn}
-                  title="Edit character"
-                  onClick={() => editCharacter(selectedCharacter.id)}
-                >
-                  Edit
-                </Button>
-              </div>
-              <div className={styles.previewTags}>
-                {selectedCharacter.has_alternate_greetings && <span><Star size={12} /> Alt greetings</span>}
-                {selectedTagSummary.visibleTags.map((tag) => (
-                  <span key={tag} className={styles.previewTag} style={tagColorStyle(tag)}>{tag}</span>
-                ))}
-                {selectedTagSummary.hiddenTagCount > 0 && <span>+{selectedTagSummary.hiddenTagCount}</span>}
-              </div>
-              {previewLoading && <div className={styles.state}>Loading preview...</div>}
-              {!previewLoading && preview && (
-                <>
-                  <div className={styles.previewSection}>
-                    <h4><BookOpen size={14} /> Lorebooks</h4>
-                    {preview.lorebooks.length > 0
-                      ? <div className={styles.lorebooks}>{preview.lorebooks.map((book) => (
-                        <button key={book.id} type="button" onClick={() => openModal('worldBookEditor', { bookId: book.id })}>
-                          {book.name}
-                        </button>
-                      ))}</div>
-                      : <p>No attached lorebooks</p>}
+                {showDescription && selectedDescription && (
+                  <p className={styles.previewDescription}>{selectedDescription}</p>
+                )}
+                {showPreviewTags && (
+                  <div className={styles.previewTags}>
+                    {selectedCharacter.has_alternate_greetings && <span><Star size={12} /> Alt greetings</span>}
+                    {showTags && selectedTagSummary.visibleTags.map((tag) => (
+                      <span key={tag} className={styles.previewTag} style={tagColorStyle(tag)}>{tag}</span>
+                    ))}
+                    {showTags && selectedTagSummary.hiddenTagCount > 0 && <span>+{selectedTagSummary.hiddenTagCount}</span>}
                   </div>
-                  <div className={styles.previewSection}>
-                    <h4><MessageSquare size={14} /> Last chat</h4>
-                    {preview.last_chat
-                      ? <div className={styles.lastChat}><strong>{preview.last_chat.name || selectedCharacter.name}</strong><p>{preview.last_chat.last_message_preview || 'No messages yet'}</p></div>
-                      : <p>No existing chat</p>}
-                  </div>
-                </>
-              )}
+                )}
+                {previewLoading && (showLorebooks || showLastChat) && <div className={styles.state}>Loading preview...</div>}
+                {!previewLoading && preview && (
+                  <>
+                    {showLorebooks && (
+                      <div className={styles.previewSection}>
+                        <h4><BookOpen size={14} /> Lorebooks</h4>
+                        {preview.lorebooks.length > 0
+                          ? <div className={styles.lorebooks}>{preview.lorebooks.map((book) => (
+                            <button key={book.id} type="button" onClick={() => openModal('worldBookEditor', { bookId: book.id })}>
+                              {book.name}
+                            </button>
+                          ))}</div>
+                          : <p>No attached lorebooks</p>}
+                      </div>
+                    )}
+                    {showLastChat && (
+                      <div className={styles.previewSection}>
+                        <h4><MessageSquare size={14} /> Last chat</h4>
+                        {preview.last_chat
+                          ? <div className={styles.lastChat}><strong>{preview.last_chat.name || selectedCharacter.name}</strong><p>{preview.last_chat.last_message_preview || 'No messages yet'}</p></div>
+                          : <p>No existing chat</p>}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
             <Button
               variant="primary"

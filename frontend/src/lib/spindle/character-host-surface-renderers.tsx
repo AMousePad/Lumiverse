@@ -91,6 +91,10 @@ function normalizeCharacterSummary(value: unknown): CharacterSummary | null {
   return {
     id: value.id,
     name: value.name,
+    description: typeof row.description === 'string' ? row.description : '',
+    preview_description: typeof row.preview_description === 'string'
+      ? row.preview_description
+      : typeof row.description === 'string' ? row.description : '',
     creator: typeof row.creator === 'string' ? row.creator : '',
     folder: typeof row.folder === 'string' ? row.folder : '',
     tags: Array.isArray(row.tags) ? row.tags.filter((tag): tag is string => typeof tag === 'string') : [],

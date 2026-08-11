@@ -112,22 +112,28 @@
  * (10014) and the command palette (10020), which are still reachable over it.
  * `10012` is asserted forbidden by tests/lore-indicator.test.ts.
  */
-@media (max-width: 900px) {
+@media (max-width: 768px) {
   .halfScreenHost {
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-lorebook-half-editor-fullbleed, 10006);
+    position: relative;
+    inset: auto;
+    z-index: auto;
     width: 100% !important;
-    max-width: none;
+    max-width: 100%;
     min-width: 0;
+    flex: 0 0 100%;
+    height: 100%;
+    max-height: 100%;
+    overflow-y: auto;
+    border-top: 1px solid var(--lumiverse-border);
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
   }
 
   .halfScreenHost[data-force-half-screen='true'] {
     position: relative;
     inset: auto;
     z-index: auto;
-    width: var(--lorebook-half-width, 50%) !important;
-    max-width: var(--lorebook-half-width, 50%);
+    width: 100% !important;
+    max-width: 100%;
   }
 
   /*

@@ -131,39 +131,51 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   useEffect(() => {
     const extensionId = settingsScrollTarget?.extensionId
+    const anchorId = settingsScrollTarget?.anchorId
     const targetNonce = settingsScrollTarget?.nonce
-    if (!extensionId || targetNonce == null || handledScrollTargetNonce.current === targetNonce) return
+    if (targetNonce == null || handledScrollTargetNonce.current === targetNonce) return
 
-    if (activeView !== 'extensions') {
-      setActiveView('extensions')
+    if (extensionId) {
+      if (activeView !== 'extensions') {
+        setActiveView('extensions')
+        return
+      }
+
+      handledScrollTargetNonce.current = targetNonce
+
+      let frame = 0
+      let attempts = 0
+      const selector = [
+        `[data-spindle-extension-root="${CSS.escape(extensionId)}"]`,
+        '[data-spindle-mount-point="settings_extensions"]',
+      ].join('')
+      const scrollToExtension = () => {
+        const container = contentRef.current
+        const el = container?.querySelector<HTMLElement>(selector)
+        if (el) {
+          el.scrollIntoView({ block: 'start', behavior: 'smooth' })
+          el.classList.add(styles.sectionFlash)
+          window.setTimeout(() => el.classList.remove(styles.sectionFlash), 1400)
+          return
+        }
+        if (++attempts < 20) frame = requestAnimationFrame(scrollToExtension)
+      }
+
+      frame = requestAnimationFrame(scrollToExtension)
+      return () => {
+        cancelAnimationFrame(frame)
+      }
+    }
+
+    if (!anchorId) return
+    if (activeView !== settingsActiveView) {
+      setActiveView(settingsActiveView)
       return
     }
 
     handledScrollTargetNonce.current = targetNonce
-
-    let frame = 0
-    let attempts = 0
-    const selector = [
-      `[data-spindle-extension-root="${CSS.escape(extensionId)}"]`,
-      '[data-spindle-mount-point="settings_extensions"]',
-    ].join('')
-    const scrollToExtension = () => {
-      const container = contentRef.current
-      const el = container?.querySelector<HTMLElement>(selector)
-      if (el) {
-        el.scrollIntoView({ block: 'start', behavior: 'smooth' })
-        el.classList.add(styles.sectionFlash)
-        window.setTimeout(() => el.classList.remove(styles.sectionFlash), 1400)
-        return
-      }
-      if (++attempts < 20) frame = requestAnimationFrame(scrollToExtension)
-    }
-
-    frame = requestAnimationFrame(scrollToExtension)
-    return () => {
-      cancelAnimationFrame(frame)
-    }
-  }, [activeView, settingsScrollTarget])
+    setScrollTarget({ anchorId, nonce: targetNonce })
+  }, [activeView, settingsActiveView, settingsScrollTarget])
 
   return createPortal(
     <div className={styles.overlay} onClick={onClose}>

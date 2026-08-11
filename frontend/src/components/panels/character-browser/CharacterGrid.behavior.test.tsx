@@ -176,6 +176,8 @@ function character(index: number): CharacterSummary {
   return {
     id: `character-${index}`,
     name: `Character ${index}`,
+    description: `Description ${index}`,
+    preview_description: `Description ${index}`,
     creator: 'Test creator',
     folder: '',
     tags: ['test'],

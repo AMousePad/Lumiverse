@@ -536,7 +536,7 @@ export default function LoreIndicatorPanel({
               </button>
             )}
             {selected && editorSettings.loreIndicatorActionEnabled && (
-              <button type="button" onClick={() => openHalfEditor(selected)} title="Open half editor" aria-label="Open half editor">
+              <button type="button" onClick={() => openHalfEditor(selected)} title="Half-Screen Lorebook Editor" aria-label="Half-Screen Lorebook Editor">
                 <PanelRightOpen size={14} />
               </button>
             )}

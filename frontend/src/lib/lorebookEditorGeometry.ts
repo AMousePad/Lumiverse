@@ -22,6 +22,8 @@ export const DEFAULT_MIN_CHAT_WIDTH = 420
 export const DEFAULT_MIN_EDITOR_PANE_WIDTH = 360
 
 export const FULL_EDITOR_MARGIN = 16
+export const MOBILE_EDITOR_MAX_WIDTH = 768
+export const DEFAULT_FULL_EDITOR_RECT = { x: 48, y: 36, width: 1540, height: 840 }
 /**
  * The full editor's floor.
  *
@@ -151,4 +153,19 @@ export function clampEditorRectToViewport(
       Math.min(rect.height, viewport.height - FULL_EDITOR_MARGIN * 2),
     ),
   }
+}
+
+/**
+ * Resolve the remembered windowed rectangle without carrying a phone-sized
+ * value back onto a desktop viewport. Mobile windowing is never persisted by
+ * the live editor, but this recovery also repairs values saved by older builds.
+ */
+export function resolveWindowedEditorRect(
+  rect: { width: number; height: number },
+  viewport: ViewportSize,
+) {
+  const recoveredRect = viewport.width > 900 && rect.width <= MOBILE_EDITOR_MAX_WIDTH
+    ? DEFAULT_FULL_EDITOR_RECT
+    : rect
+  return centerEditorRect(clampEditorRectToViewport(recoveredRect, viewport), viewport)
 }

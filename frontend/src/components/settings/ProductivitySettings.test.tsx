@@ -122,6 +122,7 @@ describe('canonical Productivity settings renderer', () => {
     expect(markup).toContain('Configure launcher, layouts, model metadata, and profile tags.')
     expect(markup).toContain('Configure compact, bottom-strip, and command-palette lore activity views.')
     expect(markup).toContain('Control homepage cards, filters, view defaults, and selected-character panel.')
+    expect(markup).toContain('id="homepage-character-library-settings"')
     expect(markup).toContain('Configure opening behavior, persistent layout, dock state, and hover controls.')
     expect(markup).toContain('Configure full-page and half-screen launch behavior, pane sizes, and entry density.')
     expect(markup).not.toContain('Quick Toolbar preview')

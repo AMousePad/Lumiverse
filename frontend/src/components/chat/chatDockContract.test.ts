@@ -135,6 +135,18 @@ describe('P12 chat dock preservation contracts', () => {
     expect(host).toMatch(/syncCanonicalSettings\(surfaceId, stateRef\.current\)[\s\S]{0,80}\[surfaceId, stateKey\]/)
   })
 
+  test('flattens the half-editor host wrapper into the chat flex row', async () => {
+    const css = await readSource('ChatView.module.css')
+    const editorCss = await readSource('../world-book-editor/LorebookHalfScreenEditor.module.css')
+
+    expect(css).toContain(
+      ":global([data-spindle-mount='lorebook_half_workspace'] > [data-spindle-extension-root] > [data-spindle-host-surface='lorebook.half.workspace'])",
+    )
+    expect(css).toMatch(/data-spindle-host-surface='lorebook\.half\.workspace'\]\)\s*\{\s*display:\s*contents;/)
+    expect(editorCss).toMatch(/@media \(max-width: 768px\)[\s\S]*?\.halfScreenHost\s*\{[^}]*flex:\s*0 0 100%;[^}]*height:\s*100%;[^}]*max-height:\s*100%;/)
+    expect(editorCss).toMatch(/\.halfScreenHost\[data-force-half-screen='true'\]\s*\{[^}]*width:\s*100%\s*!important;[^}]*max-width:\s*100%;/)
+  })
+
   test('gives a strip-mounted Quick Toolbar the remaining top-dock width', async () => {
     const css = await readSource('ChatView.module.css')
     const stripChain = css.match(

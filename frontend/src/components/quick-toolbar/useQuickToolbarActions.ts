@@ -131,6 +131,13 @@ export function quickToolbarInputActionIcon(action: QuickToolbarInputAction): To
   return action.iconSvg || action.iconUrl ? Puzzle : Zap
 }
 
+/** Keep first-party suite names stable even while an older extension instance is still registered. */
+export function quickToolbarInputActionLabel(action: Pick<InputBarActionState, 'contributionId' | 'label'>): string {
+  if (action.contributionId === EXTENSION_HALF_LOREBOOK_ACTION_ID) return 'Half-Screen Lorebook Editor'
+  if (action.contributionId === EXTENSION_ENHANCED_LOREBOOK_ACTION_ID) return 'Full-Screen Lorebook Editor'
+  return action.label
+}
+
 /**
  * Shared toolbar model. The floating toolbar, its glued customizer popover and
  * the Customize Toolbar modal all read from here so a change made in one is
@@ -239,7 +246,7 @@ export function useQuickToolbarActions() {
           // actions instead persist their contributor ids, so their quick-toolbar
           // visibility/order survives extension reloads and can be defaulted.
           id: quickToolbarInputActionId(action),
-          label: action.label,
+          label: quickToolbarInputActionLabel(action),
           // `subtitle` is the extension's own one-liner; the fallback still names the
           // extension, so two actions from different extensions never read alike.
           description: action.subtitle || `Input bar action from the ${action.extensionName} extension.`,

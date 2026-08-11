@@ -258,7 +258,7 @@ export interface UISlice {
   drawerTab: string | null
   settingsModalOpen: boolean
   settingsActiveView: string
-  settingsScrollTarget: { extensionId?: string; nonce: number } | null
+  settingsScrollTarget: { extensionId?: string; anchorId?: string; nonce: number } | null
   portraitPanelOpen: boolean
   commandPaletteOpen: boolean
   customCSSDockOpen: boolean
@@ -278,7 +278,7 @@ export interface UISlice {
   openDrawer: (tab?: string) => void
   closeDrawer: () => void
   setDrawerTab: (tab: string) => void
-  openSettings: (view?: string, target?: { extensionId?: string }) => void
+  openSettings: (view?: string, target?: { extensionId?: string; anchorId?: string }) => void
   closeSettings: () => void
   togglePortraitPanel: () => void
   openCommandPalette: () => void
@@ -609,6 +609,7 @@ export interface PortraitDockSettings {
 
 export interface LorebookEditorSettings {
   defaultVariant: 'full' | 'half'
+  fullEditorLaunchMode: 'windowed' | 'fullscreen'
   triggerDisplay: TriggerDisplayMode
   halfButtonEnabled: boolean
   loreIndicatorActionEnabled: boolean
