@@ -45,6 +45,7 @@ import DatabankPanel from '@/components/panels/databank/DatabankPanel'
 import MultiplayerPanel from '@/components/panels/multiplayer/MultiplayerPanel'
 
 import type { GuideDefinition } from '@/lib/guides/types'
+import { adaptSpindleGuide } from './guides/adapt-spindle-guide'
 
 export interface DrawerTabEntry {
   id: string
@@ -482,12 +483,7 @@ export function adaptExtensionTabs(tabs: DrawerTabState[]): DrawerTabEntry[] {
       `Open ${dt.title} extension tab`,
     tabIcon: Puzzle,
     tabHeaderTitle: dt.headerTitle,
-    guide: dt.guide
-      ? {
-          ...dt.guide,
-          kind: 'markdown',
-        }
-      : undefined,
+    guide: adaptSpindleGuide(dt.guide),
     keywords: [
       'extension',
       'spindle',
