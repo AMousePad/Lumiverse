@@ -227,6 +227,68 @@ describe('preset editor toolbar registration', () => {
 })
 
 describe('non-preset placement lifecycle', () => {
+      test('preserves contextual guide metadata across tab registrations', () => {
+    const guide = {
+      title: 'Test guide',
+      markdown: '# Hello from Spindle',
+    }
+
+    const drawer = createDrawerTabHandle(
+      extensionId,
+      {
+        id: 'guided-drawer',
+        title: 'Guided Drawer',
+        guide,
+      },
+      undefined,
+      generation,
+    )
+
+    const character = createCharacterEditorTabHandle(
+      extensionId,
+      {
+        id: 'guided-character',
+        title: 'Guided Character',
+        guide,
+      },
+      undefined,
+      generation,
+    )
+
+    const preset = createPresetEditorTabHandle(
+      extensionId,
+      {
+        id: 'guided-preset',
+        title: 'Guided Preset',
+        guide,
+      },
+      () => {},
+      generation,
+    )
+
+    expect(
+      placementStore.getState().drawerTabs.find(
+        (tab) => tab.id === drawer.tabId,
+      )?.guide,
+    ).toEqual(guide)
+
+    expect(
+      placementStore.getState().characterEditorTabs.find(
+        (tab) => tab.id === character.tabId,
+      )?.guide,
+    ).toEqual(guide)
+
+    expect(
+      placementStore.getState().presetEditorTabs.find(
+        (tab) => tab.id === preset.tabId,
+      )?.guide,
+    ).toEqual(guide)
+
+    drawer.destroy()
+    character.destroy()
+    preset.destroy()
+  })
+
   test('explicit destroy is idempotent and removes its unload disposer', () => {
     const hostId = 'placement-disposer-host'
     const otherId = 'placement-disposer-other'
