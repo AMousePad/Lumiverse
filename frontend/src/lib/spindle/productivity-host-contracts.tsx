@@ -19,6 +19,8 @@ import {
   resolveWindowedEditorRect,
 } from '@/lib/lorebookEditorGeometry'
 import { getUiScale } from '@/lib/uiScale'
+import { launchLorebookEditorThen } from '@/lib/lorebookLauncher'
+import { setLorebookWorkspaceVisibility } from '@/lib/lorebookWorkspaceVisibility'
 import modalStyles from '@/components/modals/WorldBookEditorModal.module.css'
 
 export const PRODUCTIVITY_HOST_CONTRACT_VERSION = 1
@@ -329,6 +331,12 @@ function LorebookWorkspaceSurface({
   const state = lorebookState(props)
   const generation = numberProp(props, 'generation', 0)
 
+  useEffect(() => {
+    const visibilitySurface = surfaceId === 'lorebook.half.workspace' ? 'half' : 'enhanced'
+    setLorebookWorkspaceVisibility(visibilitySurface, state.open)
+    return () => setLorebookWorkspaceVisibility(visibilitySurface, false)
+  }, [state.open, surfaceId])
+
   if (surfaceId === 'lorebook.enhanced.workspace') {
     if (!state.open) return null
     return <EnhancedLorebookWorkspaceSurface props={props} state={state} generation={generation} context={context} />
@@ -341,24 +349,11 @@ function LorebookWorkspaceSurface({
       forceHalfScreen
       onClose={() => context.emit('command', workspaceCloseCommand(props, state, generation))}
       onOpenFullEditor={(bookId, entryId) => {
-        context.emit('command', workspaceCloseCommand(props, state, generation))
-        const action = useStore.getState().inputBarActions.find(
-          candidate => candidate.contributionId === 'lumiverse_suite.lorebook.open_enhanced' && candidate.enabled,
+        if (!bookId) return
+        launchLorebookEditorThen(
+          { bookId, entryId, preferredTarget: 'full', source: 'half_editor' },
+          () => context.emit('command', workspaceCloseCommand(props, state, generation)),
         )
-        if (action) {
-          const payload = {
-            version: action.payloadVersion ?? 1,
-            bookId,
-            ...(entryId ? { entryId } : {}),
-            source: 'half_editor' as const,
-            invocationId: `lumiverse_suite.lorebook.open_enhanced:half:${Date.now()}`,
-          }
-          queueMicrotask(() => {
-            for (const handler of action.clickHandlers) {
-              try { handler(payload) } catch { /* extension callbacks are isolated */ }
-            }
-          })
-        }
       }}
     />
   )

@@ -554,6 +554,32 @@
   white-space: nowrap;
 }
 
+.entryDragHandle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+  touch-action: none;
+}
+
+.entryDragHandle:active {
+  cursor: grabbing;
+}
+
+.entryDragHandle:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.entrySortableDragging {
+  opacity: 0.65;
+}
+
 .triggerBadge {
   display: inline-flex;
   align-items: center;

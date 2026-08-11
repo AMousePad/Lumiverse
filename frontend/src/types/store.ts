@@ -513,6 +513,8 @@ export interface QuickToolbarSettings {
   rect: SurfaceRectPrefs
   verticalSize: SurfaceSizePrefs
   rectVersion: number
+  /** Undefined keeps the responsive default: hide only on mobile overlays. */
+  hideWhenOverlaid?: boolean
   modalRestoreHandle: boolean
   v2IconSize: number
   v2LabelTextSize: number
@@ -559,6 +561,8 @@ export interface LoreIndicatorSettings {
   v4GroupBy: LoreIndicatorGroupBy
   v4BookPreviewCount: number
   v5ShowShortcutHints: boolean
+  /** Chooses where Lore Indicator entry navigation opens. */
+  editorLaunchTarget?: 'native' | 'half' | 'full'
 }
 
 export interface CharacterDisplaySettings {

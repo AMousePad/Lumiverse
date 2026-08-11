@@ -527,13 +527,12 @@
 
 .previewImageFrame {
   position: relative;
-  display: grid;
-  place-items: center;
+  display: block;
   width: min(100%, var(--homepage-preview-image-width, 100%));
   margin-inline: auto;
   min-width: 0;
   max-width: 100%;
-  height: var(--homepage-panel-image-height, 320px);
+  height: auto;
   overflow: hidden;
   isolation: isolate;
   background: var(--lumiverse-card-image-bg);
@@ -550,17 +549,14 @@
 }
 
 .previewImageFrame > img {
-  position: absolute;
-  inset: 0;
+  position: relative;
   display: block;
   width: 100% !important;
-  height: 100% !important;
+  height: auto !important;
   min-width: 0 !important;
   min-height: 0 !important;
   max-width: 100% !important;
   max-height: 100% !important;
-  object-fit: contain !important;
-  object-position: center !important;
   transform: none !important;
   z-index: 2;
 }

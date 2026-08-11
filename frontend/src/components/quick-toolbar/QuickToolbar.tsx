@@ -25,6 +25,8 @@ import {
   User,
 } from 'lucide-react'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
+import { isMobileViewportOrDevice, shouldHideQuickToolbarWhenOverlaid } from '@/lib/uiProductivityDefaults'
+import { useLorebookWorkspaceOverlayOpen } from '@/lib/lorebookWorkspaceVisibility'
 import { usePersistentRect, type DragMode } from '@/hooks/usePersistentRect'
 import {
   resolveToolbarRect,
@@ -74,6 +76,24 @@ const RESIZE_HANDLE_CLASS: Record<(typeof RESIZE_HANDLES)[number], string> = {
 /** Below this width the popover is unusable, so the modal takes over. */
 const MODAL_ONLY_WIDTH = 760
 
+function useToolbarIsMobile(): boolean {
+  const [isMobile, setIsMobile] = useState(isMobileViewportOrDevice)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const pointerQuery = window.matchMedia?.('(pointer: coarse)')
+    const update = () => setIsMobile(isMobileViewportOrDevice())
+    window.addEventListener('resize', update)
+    pointerQuery?.addEventListener('change', update)
+    return () => {
+      window.removeEventListener('resize', update)
+      pointerQuery?.removeEventListener('change', update)
+    }
+  }, [])
+
+  return isMobile
+}
+
 export function QuickToolbar() {
   const {
     settings,
@@ -117,6 +137,10 @@ export function QuickToolbar() {
   const drawerTab = useStore((state) => state.drawerTab)
   const settingsModalOpen = useStore((state) => state.settingsModalOpen)
   const settingsActiveView = useStore((state) => state.settingsActiveView)
+  const characterEditorOpen = useStore((state) => Boolean(state.editingCharacterId))
+  const lorebookHalfEditorOpen = useStore((state) => state.lorebookHalfEditor.open)
+  const lorebookWorkspaceOpen = useLorebookWorkspaceOverlayOpen()
+  const isMobile = useToolbarIsMobile()
   const activeCharacter = useStore((state) => state.characters.find((character) => character.id === state.activeCharacterId))
   const profilePortraitUrl = getCharacterAvatarThumbUrl(activeCharacter)
   useEffect(() => {
@@ -1027,8 +1051,18 @@ export function QuickToolbar() {
   // `--lcs-top-dock-height`, so dropping it would reflow the chat column every
   // time any modal opened.
   if (!freePosition) return tree
-  if (activeModal && !restoredOverModal) {
+  if (shouldHideQuickToolbarWhenOverlaid({
+    hideWhenOverlaid: settings.hideWhenOverlaid,
+    isMobile,
+    activeModal,
+    settingsModalOpen,
+    drawerOpen,
+    characterEditorOpen,
+    lorebookHalfEditorOpen,
+    lorebookWorkspaceOpen,
+  }) && !(activeModal && restoredOverModal)) {
     return settings.modalRestoreHandle === true
+      && Boolean(activeModal)
       ? createPortal(restoreTab, document.body)
       : null
   }

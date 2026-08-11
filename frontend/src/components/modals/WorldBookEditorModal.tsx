@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type KeyboardEvent } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
-import { Plus, Trash2, BookOpen, Upload, User, FileUp, Search, Download, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, X, Maximize2, Minimize2 } from 'lucide-react'
+import { Plus, Trash2, BookOpen, Upload, User, FileUp, Search, Download, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, X, Maximize2 } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
@@ -24,6 +24,7 @@ import type { WorldBookExportFormat } from '@/api/world-books'
 import styles from './WorldBookEditorModal.module.css'
 import clsx from 'clsx'
 import { clearSearchOnEscape } from '@/lib/clearableSearch'
+import { canLaunchLorebookEditor, launchLorebookEditor } from '@/lib/lorebookLauncher'
 
 const BOOK_SORT_OPTIONS = [
   { value: 'updated', labelKey: 'sortRecent' },
@@ -61,6 +62,16 @@ export default function WorldBookEditorModal() {
   const [selectedBookId, setSelectedBookId] = useState<string | null>(
     (modalProps.bookId as string) || null
   )
+
+  const launchEnhancedEditor = useCallback(() => {
+    if (!selectedBookId || !canLaunchLorebookEditor('full')) {
+      setFullscreen((current) => !current)
+      return
+    }
+    const launched = launchLorebookEditor({ bookId: selectedBookId, preferredTarget: 'full' })
+    if (launched) closeModal()
+    else setFullscreen((current) => !current)
+  }, [closeModal, selectedBookId])
   const [sortBy, setSortBy] = useState<BookSortBy>('updated')
   const [sortDir, setSortDir] = useState<BookSortDir>('desc')
   const [pageSize, setPageSize] = useState<BookPageSize>(50)
@@ -524,12 +535,12 @@ export default function WorldBookEditorModal() {
             <button
               type="button"
               className={styles.fullscreenBtn}
-              onClick={() => setFullscreen((current) => !current)}
-              title={fullscreen ? 'Restore editor' : 'Fullscreen editor'}
-              aria-label={fullscreen ? 'Restore editor' : 'Fullscreen editor'}
-              aria-pressed={fullscreen}
+              onClick={launchEnhancedEditor}
+              title="Open enhanced full editor"
+              aria-label="Open enhanced full editor"
+              aria-pressed={false}
             >
-              {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+              <Maximize2 size={15} />
             </button>
             <CloseButton onClick={closeModal} />
           </div>
