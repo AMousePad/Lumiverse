@@ -946,9 +946,19 @@ app.post("/:id/entries/reorder", async (c) => {
   if (!Array.isArray(body?.ordered_ids) || body.ordered_ids.length === 0) {
     return c.json({ error: "ordered_ids is required" }, 400);
   }
-  const success = svc.reorderEntries(userId, bookId, body.ordered_ids);
-  if (!success) return c.json({ error: "Unable to reorder entries" }, 400);
-  return c.json({ success: true, count: body.ordered_ids.length });
+  try {
+    const success = svc.reorderEntries(userId, bookId, body.ordered_ids, body.expected_revisions);
+    if (!success) return c.json({ error: "Unable to reorder entries" }, 400);
+    return c.json({ success: true, count: body.ordered_ids.length });
+  } catch (error) {
+    if (error instanceof svc.WorldBookEntryConflictError) {
+      return c.json(error.payload, 409);
+    }
+    if (error instanceof svc.WorldBookEntryRevisionInvalidError) {
+      return c.json({ error: error.code, code: error.code, field: error.field }, 428);
+    }
+    throw error;
+  }
 });
 
 app.post("/:id/entries/bulk", async (c) => {
@@ -965,17 +975,33 @@ app.post("/:id/entries/bulk", async (c) => {
     const result = await svc.bulkOperateEntries(userId, bookId, body);
     if (!result) return c.json({ error: "World book not found" }, 404);
     return c.json(result);
-  } catch (err: any) {
-    return c.json({ error: err.message || "Bulk action failed" }, 400);
+  } catch (error) {
+    if (error instanceof svc.WorldBookEntryConflictError) {
+      return c.json(error.payload, 409);
+    }
+    if (error instanceof svc.WorldBookEntryRevisionInvalidError) {
+      return c.json({ error: error.code, code: error.code, field: error.field }, 428);
+    }
+    throw error;
   }
 });
 
 app.put("/:id/entries/:eid", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const entry = svc.updateEntry(userId, c.req.param("eid"), body);
-  if (!entry) return c.json({ error: "Not found" }, 404);
-  return c.json(entry);
+  try {
+    const entry = svc.updateEntry(userId, c.req.param("eid"), body);
+    if (!entry) return c.json({ error: "Not found" }, 404);
+    return c.json(entry);
+  } catch (error) {
+    if (error instanceof svc.WorldBookEntryConflictError) {
+      return c.json(error.payload, 409);
+    }
+    if (error instanceof svc.WorldBookEntryRevisionInvalidError) {
+      return c.json({ error: error.code, code: error.code, field: error.field }, 428);
+    }
+    throw error;
+  }
 });
 
 app.post("/:id/entries/:eid/duplicate", async (c) => {
@@ -986,9 +1012,43 @@ app.post("/:id/entries/:eid/duplicate", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const entry = svc.getEntry(userId, c.req.param("eid"));
   if (!entry || entry.world_book_id !== bookId) return c.json({ error: "Not found" }, 404);
-  const duplicated = svc.duplicateEntry(userId, entry.id, body);
-  if (!duplicated) return c.json({ error: "Target world book not found" }, 404);
-  return c.json(duplicated, 201);
+  try {
+    const duplicated = svc.duplicateEntry(userId, entry.id, body);
+    if (!duplicated) return c.json({ error: "Target world book not found" }, 404);
+    return c.json(duplicated, 201);
+  } catch (error) {
+    if (error instanceof svc.WorldBookEntryConflictError) {
+      return c.json(error.payload, 409);
+    }
+    if (error instanceof svc.WorldBookEntryRevisionInvalidError) {
+      return c.json({ error: error.code, code: error.code, field: error.field }, 428);
+    }
+    throw error;
+  }
+});
+
+app.patch("/:id/entries/:eid/extensions/:namespace", async (c) => {
+  const userId = c.get("userId");
+  const bookId = c.req.param("id");
+  const entry = svc.getEntry(userId, c.req.param("eid"));
+  if (!entry || entry.world_book_id !== bookId) return c.json({ error: "Not found" }, 404);
+  const body = await c.req.json();
+  try {
+    const result = svc.setEntityExtensionNamespace(
+      userId,
+      "world_book_entry",
+      entry.id,
+      c.req.param("namespace"),
+      body?.value,
+    );
+    if (!result) return c.json({ error: "Not found" }, 404);
+    return c.json(result);
+  } catch (error) {
+    if (error instanceof svc.EntityExtensionNamespaceError) {
+      return c.json({ error: error.code }, 400);
+    }
+    throw error;
+  }
 });
 
 app.delete("/:id/entries/:eid", async (c) => {
