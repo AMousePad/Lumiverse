@@ -1,10 +1,11 @@
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import { Sparkles, Settings, Puzzle } from 'lucide-react'
+import { Sparkles, Settings, Puzzle, CircleHelp } from 'lucide-react'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import { CloseButton } from '@/components/shared/CloseButton'
+import { GuideViewer } from '@/components/shared/GuideViewer'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { useLongPress } from '@/hooks/useLongPress'
 import { DRAWER_TABS, adaptExtensionTabs, applyDrawerTabOrder, sanitizeDrawerTabOrder, sanitizeHiddenDrawerTabIds } from '@/lib/drawer-tab-registry'
@@ -53,6 +54,8 @@ export default function ViewportDrawer() {
   const panelContentRef = useRef<HTMLDivElement>(null)
   const [tabListScroll, setTabListScroll] = useState({ up: false, down: false })
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
+  const [guideOpen, setGuideOpen] = useState(false)
+
 
   const updateTabListScroll = useCallback(() => {
     const el = tabListRef.current
@@ -107,6 +110,20 @@ export default function ViewportDrawer() {
   )
   const activeTab = allTabs.some((tab) => tab.id === requestedActiveTab) ? requestedActiveTab : 'profile'
   const activeTabConfig = allTabs.find((t) => t.id === activeTab) || DRAWER_TABS[0]
+const activeTabTitle =
+  activeTab === 'profile' && isGroupChat
+    ? t('group')
+    : activeTabConfig
+      ? translateDrawerField(
+          activeTabConfig.id,
+          'tabHeaderTitle',
+          activeTabConfig.tabHeaderTitle ?? activeTabConfig.tabName,
+        )
+      : t('panel', { defaultValue: 'Panel' })
+
+useEffect(() => {
+  setGuideOpen(false)
+}, [activeTab])
 
   useEffect(() => {
     if (drawerTab && drawerTab !== activeTab) {
@@ -298,26 +315,42 @@ export default function ViewportDrawer() {
           </div>
 
           <div className={styles.panel}>
-            <div className={styles.panelHeader}>
-              <h2 className={styles.panelTitle}>
-                {activeTab === 'profile' && isGroupChat
-                  ? t('group')
-                  : activeTabConfig
-                    ? translateDrawerField(
-                        activeTabConfig.id,
-                        'tabHeaderTitle',
-                        activeTabConfig.tabHeaderTitle ?? activeTabConfig.tabName,
-                      )
-                    : t('panel', { defaultValue: 'Panel' })}
-              </h2>
-              <CloseButton onClick={closeDrawer} />
-            </div>
+           <div className={styles.panelHeader}>
+            <div className={styles.panelHeaderMain}>
+             <h2 className={styles.panelTitle}>
+               {activeTabTitle}
+             </h2>
+
+              {activeTabConfig.guide && (
+             <button
+               type="button"
+               className={styles.guideButton}
+               onClick={() => setGuideOpen(true)}
+               aria-label={`Open guide for ${activeTabTitle}`}
+               title="Open guide"
+             >
+               <CircleHelp size={15} strokeWidth={1.7} />
+            </button>
+           )}
+         </div>
+
+        <CloseButton onClick={closeDrawer} />
+      </div>
             <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser' || activeTab === 'lorebook') && styles.panelContentFull)} ref={panelContentRef}>
               <TabPanelContent tabId={activeTab} location={{ kind: 'main-drawer' }} />
             </div>
           </div>
         </div>
       </div>
+
+{activeTabConfig.guide && (
+  <GuideViewer
+    isOpen={guideOpen}
+    onClose={() => setGuideOpen(false)}
+    guide={activeTabConfig.guide}
+    title={activeTabTitle}
+  />
+)}
 
       <ContextMenu
         position={contextMenu}

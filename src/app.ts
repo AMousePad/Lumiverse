@@ -42,6 +42,7 @@ import { stMigrationRoutes } from "./routes/st-migration.routes";
 import { googleDriveRoutes } from "./routes/google-drive.routes";
 import { dropboxRoutes } from "./routes/dropbox.routes";
 import { presetProfilesRoutes } from "./routes/preset-profiles.routes";
+import { docsRoutes } from "./routes/docs.routes";
 import { loadoutsRoutes } from "./routes/loadouts.routes";
 import { regexScriptsRoutes } from "./routes/regex-scripts.routes";
 import { expressionsRoutes } from "./routes/expressions.routes";
@@ -460,6 +461,7 @@ app.get("/api/v1/runtime-config", (c) => {
 app.use("/api/v1/*", requireAuth);
 
 app.route("/api/v1/settings", settingsRoutes);
+app.route("/api/v1/docs", docsRoutes);
 app.route("/api/v1/characters", charactersRoutes);
 app.route("/api/v1/chats", chatsRoutes);
 app.route("/api/v1/personas", personasRoutes);
