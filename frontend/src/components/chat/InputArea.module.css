@@ -9,12 +9,17 @@
   left: 12px;
   right: 12px;
   z-index: 20;
-  background: var(--lumiverse-bg-elevated, rgba(28, 24, 38, 0.95));
+  background:
+    radial-gradient(120% 85% at 50% -30%, color-mix(in srgb, var(--lumiverse-primary-020) 45%, transparent), transparent 58%),
+    linear-gradient(180deg, color-mix(in srgb, var(--lumiverse-text) 6%, transparent), transparent 70%),
+    var(--lumiverse-bg-elevated, rgba(28, 24, 38, 0.95));
   border: 1px solid var(--lumiverse-border);
   border-radius: var(--lcs-radius, 14px);
   overflow: hidden;
-  isolation: isolate;
-  contain: layout style paint;
+  /* Paint containment plus a stacked overlay can produce stale WebRender tiles
+     under Firefox's fractional CSS zoom. Layout/style containment retains the
+     useful isolation without forcing the composer into its own paint surface. */
+  contain: layout style;
   box-shadow: 0 4px 16px var(--lumiverse-fill-heavy);
   transition:
     opacity 180ms ease,
@@ -48,11 +53,14 @@
 }
 
 :global([data-glass]) .container {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--lcs-glass-bg) 78%, var(--lumiverse-bg-elevated) 22%),
-    color-mix(in srgb, var(--lcs-glass-bg) 70%, var(--lumiverse-bg) 30%)
-  );
+  background:
+    radial-gradient(120% 85% at 50% -30%, color-mix(in srgb, var(--lumiverse-primary-020) 45%, transparent), transparent 58%),
+    linear-gradient(180deg, color-mix(in srgb, var(--lumiverse-text) 6%, transparent), transparent 70%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--lcs-glass-bg) 78%, var(--lumiverse-bg-elevated) 22%),
+      color-mix(in srgb, var(--lcs-glass-bg) 70%, var(--lumiverse-bg) 30%)
+    );
   border-color: var(--lcs-glass-border);
   backdrop-filter: blur(var(--lcs-glass-blur));
   box-shadow:
@@ -61,39 +69,8 @@
     inset 0 -1px 0 var(--lcs-glass-border);
 }
 
-.container::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  background:
-    radial-gradient(120% 85% at 50% -30%, color-mix(in srgb, var(--lumiverse-primary-020) 45%, transparent), transparent 58%),
-    linear-gradient(180deg, color-mix(in srgb, var(--lumiverse-text) 6%, transparent), transparent 70%);
-  z-index: 0;
-}
-
-.container::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  /* Keep a little grain in the glass, but use one tiled noise raster rather
-     than two sub-pixel dot grids. At fractional browser/UI zoom, the old
-     3px/5px grids beat against each other and Firefox resolves them as visible
-     horizontal banding. The noise tile has no repeating fine-frequency lines,
-     so it remains an even texture at every scale. */
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.72' numOctaves='3' seed='14' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-  background-size: 96px 96px;
-  opacity: 0.065;
-  mix-blend-mode: soft-light;
-  z-index: 0;
-}
-
 .container > * {
   position: relative;
-  z-index: 1;
 }
 
 /* ── Drag-and-drop overlay ── */
