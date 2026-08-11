@@ -35,14 +35,22 @@ function canonicalCharacterExtensions(extensions: Record<string, any> | undefine
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
-const SUMMARY_COLUMNS = `c.id, c.library_scope, c.name, c.creator, c.folder, c.tags, c.image_id, c.created_at, c.updated_at,
+const SUMMARY_COLUMNS = `c.id, c.library_scope, c.name, c.description,
+  COALESCE(NULLIF(TRIM(c.description), ''), NULLIF(TRIM(c.personality), ''), '') AS preview_description,
+  c.creator, c.folder, c.tags, c.image_id, c.created_at, c.updated_at,
   (json_array_length(c.alternate_greetings) > 0) as has_alternate_greetings`;
+
+function getPreviewDescription(description: string | null | undefined, personality: string | null | undefined): string {
+  return description?.trim() || personality?.trim() || "";
+}
 
 function rowToSummary(row: any): CharacterSummary {
   return {
     id: row.id,
     library_scope: normalizeCharacterLibraryScope(row.library_scope),
     name: row.name,
+    description: row.description || "",
+    preview_description: row.preview_description || "",
     creator: row.creator,
     folder: row.folder || "",
     tags: JSON.parse(row.tags),
@@ -845,6 +853,8 @@ export function getCharacterPreview(userId: string, id: string): CharacterPrevie
     id: character.id,
     library_scope: character.library_scope,
     name: character.name,
+    description: character.description,
+    preview_description: getPreviewDescription(character.description, character.personality),
     creator: character.creator,
     folder: character.folder,
     tags: JSON.stringify(character.tags),
