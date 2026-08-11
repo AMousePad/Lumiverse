@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useStore } from '@/store'
 import { normalizeLoreIndicatorEntryTypeAppearance } from '@/lib/uiProductivityDefaults'
+import { launchLorebookEditor } from '@/lib/lorebookLauncher'
 import type { ActivatedWorldInfoEntry } from '@/types/api'
 import type { LoreIndicatorGroupBy } from '@/types/store'
 import {
@@ -36,7 +37,7 @@ interface LoreIndicatorPanelProps {
   groupBy?: LoreIndicatorGroupBy
   /** V4 only: entries listed per group before the "+N more" affordance. */
   previewCount?: number
-  onOpenFullView?: () => void
+  onOpenFullView?: (entry: ActivatedWorldInfoEntry | null) => void
   /**
    * Open the entry in the editor on a single click instead of selecting it.
    * The V4 popover has no detail pane, so clicking through is the only useful
@@ -93,11 +94,16 @@ function getCompactBookMarker(bookName: string) {
   return words.slice(0, 2).map((word) => word[0]).join('').toUpperCase() || 'B'
 }
 
-export function openLoreEntry(entry: ActivatedWorldInfoEntry) {
+export function openNativeLoreEntry(entry: ActivatedWorldInfoEntry): void {
   const state = useStore.getState()
   state.setPendingWorldBookEditId(entry.bookId)
   state.setPendingWorldBookEditEntryId(entry.id)
   state.openDrawer('lorebook')
+}
+
+export function openLoreEntry(entry: ActivatedWorldInfoEntry): void {
+  if (launchLorebookEditor({ bookId: entry.bookId, entryId: entry.id })) return
+  openNativeLoreEntry(entry)
 }
 
 /**
@@ -130,7 +136,6 @@ export default function LoreIndicatorPanel({
     entryTypeAppearance: normalizeLoreIndicatorEntryTypeAppearance(storedSettings.entryTypeAppearance),
   }), [storedSettings])
   const editorSettings = useStore((state) => state.lorebookEditorSettings)
-  const openLorebookHalfEditor = useStore((state) => state.openLorebookHalfEditor)
   const scanText = useLoreScanText()
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState<'all' | ActivationType>('all')
@@ -189,7 +194,14 @@ export default function LoreIndicatorPanel({
       if (event.key === 'Enter' && selected) {
         event.preventDefault()
         if ((event.metaKey || event.ctrlKey) && editorSettings.loreIndicatorActionEnabled) {
-          openLorebookHalfEditor(selected.bookId, selected.id)
+          if (!launchLorebookEditor({
+            bookId: selected.bookId,
+            entryId: selected.id,
+            preferredTarget: 'half',
+            source: 'half_editor',
+          })) {
+            openNativeLoreEntry(selected)
+          }
         } else {
           openLoreEntry(selected)
         }
@@ -202,7 +214,6 @@ export default function LoreIndicatorPanel({
     editorSettings.loreIndicatorActionEnabled,
     mode,
     onNavigate,
-    openLorebookHalfEditor,
     selected,
     visibleEntries,
   ])
@@ -226,7 +237,14 @@ export default function LoreIndicatorPanel({
   }
 
   const openHalfEditor = (entry: ActivatedWorldInfoEntry) => {
-    openLorebookHalfEditor(entry.bookId, entry.id)
+    if (!launchLorebookEditor({
+      bookId: entry.bookId,
+      entryId: entry.id,
+      preferredTarget: 'half',
+      source: 'half_editor',
+    })) {
+      openNativeLoreEntry(entry)
+    }
     onNavigate?.()
   }
 
@@ -317,7 +335,7 @@ export default function LoreIndicatorPanel({
             </span>
           </div>
           {mode === 'expanded' && onOpenFullView && (
-            <button type="button" className={styles.panelHeaderAction} onClick={onOpenFullView}>
+            <button type="button" className={styles.panelHeaderAction} onClick={() => onOpenFullView(selected)}>
               <ExternalLink size={13} /> Open full view
             </button>
           )}

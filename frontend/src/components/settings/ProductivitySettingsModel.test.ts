@@ -51,6 +51,9 @@ describe('P8 productivity panel model', () => {
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.lorebookEditorSettings).toContain('fullEditorLaunchMode')
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.connectionsPickerSettings).toContain('profileTags')
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('iconOrder')
+    expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('hideWhenOverlaid')
+    expect(PRODUCTIVITY_CONTROL_DEFINITIONS.loreIndicatorSettings).toContain('editorLaunchTarget')
+    expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.hideWhenOverlaid).toBeUndefined()
   })
 
   test('parses precise numeric edits without escaping the control range', () => {

@@ -22,6 +22,39 @@ export const DEFAULT_SURFACE_RECT: SurfaceRectPrefs = {
   height: 420,
 }
 
+export function shouldHideQuickToolbarWhenOverlaid({
+  hideWhenOverlaid,
+  isMobile,
+  activeModal,
+  settingsModalOpen,
+  drawerOpen,
+  characterEditorOpen,
+  lorebookHalfEditorOpen,
+  lorebookWorkspaceOpen,
+}: {
+  hideWhenOverlaid: boolean | undefined
+  isMobile: boolean
+  activeModal: unknown
+  settingsModalOpen: boolean
+  drawerOpen: boolean
+  characterEditorOpen: boolean
+  lorebookHalfEditorOpen: boolean
+  lorebookWorkspaceOpen: boolean
+}) {
+  const overlayOpen = Boolean(activeModal)
+    || settingsModalOpen
+    || drawerOpen
+    || characterEditorOpen
+    || lorebookHalfEditorOpen
+    || lorebookWorkspaceOpen
+  return overlayOpen && (hideWhenOverlaid ?? isMobile)
+}
+
+export function isMobileViewportOrDevice(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia?.('(pointer: coarse)').matches || window.innerWidth <= 600
+}
+
 export const DEFAULT_CHARACTER_DISPLAY_SETTINGS: CharacterDisplaySettings = {
   thumbnailWidth: 170,
   thumbnailHeight: 226,
@@ -141,6 +174,7 @@ export const DEFAULT_LORE_INDICATOR_SETTINGS: LoreIndicatorSettings = {
   v4GroupBy: 'lorebook',
   v4BookPreviewCount: 4,
   v5ShowShortcutHints: true,
+  editorLaunchTarget: 'native',
 }
 
 const LORE_APPEARANCE_TYPES = ['constant', 'sticky', 'keyword', 'vector'] as const
