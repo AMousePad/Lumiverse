@@ -22,6 +22,23 @@ export function getHomepagePreviewAvailableImageHeight(
   return bodyHeight - metadataHeight - rowGap
 }
 
+export function getHomepagePreviewAvailableImageHeightWithGrowth(
+  bodyHeight: number,
+  metadataHeight: number,
+  rowGap: number,
+  previewHeight: number,
+  maximumPreviewHeight: number,
+): number {
+  const remainingPanelGrowth = Number.isFinite(maximumPreviewHeight)
+    ? Math.max(0, maximumPreviewHeight - previewHeight)
+    : 0
+  return getHomepagePreviewAvailableImageHeight(
+    bodyHeight + remainingPanelGrowth,
+    metadataHeight,
+    rowGap,
+  )
+}
+
 export function fitHomepagePreviewImageSize({
   frameWidth,
   naturalWidth,

@@ -3,6 +3,7 @@ import {
   fitHomepagePreviewImageSize,
   fitHomepagePreviewPaneWidth,
   getHomepagePreviewAvailableImageHeight,
+  getHomepagePreviewAvailableImageHeightWithGrowth,
   getHomepagePreviewStableFrameWidth,
   scaleHomepagePreviewImageWidth,
 } from './homepagePreviewImageFit'
@@ -42,6 +43,24 @@ describe('fitHomepagePreviewImageSize', () => {
     })).toEqual({ width: 215, height: 430, aspectRatio: 0.5, stableWidth: 280 })
   })
 
+  test('keeps a 560px request available after a constrained fit renders at 180px', () => {
+    const constrained = fitHomepagePreviewImageSize({
+      ...defaults,
+      naturalWidth: 800,
+      naturalHeight: 1600,
+      availableHeight: 180,
+    })
+    const expanded = fitHomepagePreviewImageSize({
+      ...defaults,
+      naturalWidth: 800,
+      naturalHeight: 1600,
+      availableHeight: 560,
+    })
+
+    expect(constrained?.height).toBe(180)
+    expect(expanded?.height).toBe(560)
+  })
+
   test('keeps pane width stable when wrapped metadata changes available height', () => {
     const roomy = fitHomepagePreviewImageSize({
       ...defaults,
@@ -63,7 +82,13 @@ describe('fitHomepagePreviewImageSize', () => {
   test('reaches a fixed height instead of shrinking on repeated observer measurements', () => {
     const metadataHeight = 180
     const rowGap = 6
-    const firstAvailableHeight = getHomepagePreviewAvailableImageHeight(603, metadataHeight, rowGap)
+    const initialBodyHeight = 366
+    const remainingPanelGrowth = 237
+    const firstAvailableHeight = getHomepagePreviewAvailableImageHeight(
+      initialBodyHeight + remainingPanelGrowth,
+      metadataHeight,
+      rowGap,
+    )
     const first = fitHomepagePreviewImageSize({
       ...defaults,
       naturalWidth: 800,
@@ -84,6 +109,40 @@ describe('fitHomepagePreviewImageSize', () => {
 
     expect(first?.height).toBe(417)
     expect(second?.height).toBe(417)
+  })
+
+  test('keeps fractional observer measurements on the same fitted pixel', () => {
+    const firstAvailableHeight = getHomepagePreviewAvailableImageHeightWithGrowth(
+      700,
+      216,
+      6,
+      1005,
+      1006.001,
+    )
+    const secondAvailableHeight = getHomepagePreviewAvailableImageHeightWithGrowth(
+      701.001,
+      216,
+      6,
+      1006.001,
+      1006.001,
+    )
+    const first = fitHomepagePreviewImageSize({
+      ...defaults,
+      naturalWidth: 800,
+      naturalHeight: 1600,
+      availableHeight: firstAvailableHeight,
+    })
+    const second = fitHomepagePreviewImageSize({
+      ...defaults,
+      naturalWidth: 800,
+      naturalHeight: 1600,
+      availableHeight: secondAvailableHeight,
+    })
+
+    expect(firstAvailableHeight).toBeCloseTo(479.001)
+    expect(secondAvailableHeight).toBeCloseTo(479.001)
+    expect(first).toEqual(second)
+    expect(first?.height).toBe(479)
   })
 
   test('returns null until valid intrinsic image dimensions are available', () => {

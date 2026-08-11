@@ -6,7 +6,7 @@ import { getTagColorVar } from '@/lib/tagColors'
 import {
   fitHomepagePreviewImageSize,
   fitHomepagePreviewPaneWidth,
-  getHomepagePreviewAvailableImageHeight,
+  getHomepagePreviewAvailableImageHeightWithGrowth,
   getHomepagePreviewStableFrameWidth,
   scaleHomepagePreviewImageWidth,
 } from '@/lib/homepagePreviewImageFit'
@@ -350,8 +350,8 @@ export function HomepageCharacterLibrary() {
 
   const panelWidth = livePanelWidth ?? settings.panelWidth
   const preferredImageHeight = settings.panelImageHeight ?? HOMEPAGE_PANEL_IMAGE_HEIGHT_DEFAULT
-  const fittedImageHeight = autoImageSize?.height ?? preferredImageHeight
-  const panelImageHeight = Math.min(liveImageHeight ?? fittedImageHeight, fittedImageHeight)
+  const requestedImageHeight = liveImageHeight ?? preferredImageHeight
+  const panelImageHeight = autoImageSize?.height ?? requestedImageHeight
   const panelImageWidth = autoImageSize
     ? scaleHomepagePreviewImageWidth(panelImageHeight, autoImageSize.aspectRatio, autoImageSize.width)
     : null
@@ -361,8 +361,6 @@ export function HomepageCharacterLibrary() {
     chromeWidth: previewChromeWidth,
     manualMaxWidth: panelWidth,
   })
-  const panelImageHeightMin = Math.min(HOMEPAGE_PANEL_IMAGE_HEIGHT_MIN, panelImageHeight)
-  const panelImageHeightMax = Math.max(panelImageHeightMin, fittedImageHeight)
 
   const beginResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -388,9 +386,12 @@ export function HomepageCharacterLibrary() {
     window.addEventListener('pointerup', onUp, { once: true })
   }, [settings.panelWidth, setPanelWidth])
 
-  const commitImageHeight = useCallback(() => {
-    if (liveImageHeight === null) return
-    const committedHeight = liveImageHeight
+  const commitImageHeight = useCallback((requestedHeight = liveImageHeight) => {
+    if (requestedHeight === null) return
+    const committedHeight = Math.min(
+      HOMEPAGE_PANEL_IMAGE_HEIGHT_MAX,
+      Math.max(HOMEPAGE_PANEL_IMAGE_HEIGHT_MIN, requestedHeight),
+    )
     setPanelImageHeight(committedHeight)
     setLiveImageHeight(null)
   }, [liveImageHeight, setPanelImageHeight])
@@ -455,15 +456,25 @@ export function HomepageCharacterLibrary() {
       chromeWidth,
     })
     const rowGap = Number.parseFloat(window.getComputedStyle(body).rowGap) || 0
+    const maximumPreviewHeight = Number.parseFloat(previewStyle.maxHeight)
+    const bodyHeight = body.getBoundingClientRect().height
+    const metadataHeight = metadata.getBoundingClientRect().height
+    const previewHeight = previewElement.getBoundingClientRect().height
     const availableHeight = constrained
-      ? getHomepagePreviewAvailableImageHeight(body.clientHeight, metadata.offsetHeight, rowGap)
+      ? getHomepagePreviewAvailableImageHeightWithGrowth(
+          bodyHeight,
+          metadataHeight,
+          rowGap,
+          previewHeight,
+          maximumPreviewHeight,
+        )
       : undefined
     const nextSize = fitHomepagePreviewImageSize({
       frameWidth: constrained ? stableFrameWidth : (body.clientWidth || frame.clientWidth),
       naturalWidth: image.naturalWidth,
       naturalHeight: image.naturalHeight,
       availableHeight,
-      preferredMaxHeight: preferredImageHeight,
+      preferredMaxHeight: requestedImageHeight,
       absoluteMaxHeight: HOMEPAGE_PANEL_IMAGE_HEIGHT_MAX,
     })
     if (nextSize === null) return
@@ -476,11 +487,10 @@ export function HomepageCharacterLibrary() {
         ? current
         : nextSize
     ))
-  }, [isMobileViewport, panelWidth, preferredImageHeight, settings.panelPinned])
+  }, [isMobileViewport, panelWidth, requestedImageHeight, settings.panelPinned])
 
   useLayoutEffect(() => {
     setAutoImageSize(null)
-    setLiveImageHeight(null)
   }, [selectedAvatarUrl])
 
   useLayoutEffect(() => {
@@ -770,17 +780,18 @@ export function HomepageCharacterLibrary() {
                   <span>Image H</span>
                   <input
                     type="range"
-                    min={panelImageHeightMin}
-                    max={panelImageHeightMax}
-                    value={panelImageHeight}
-                    onChange={(event) => setLiveImageHeight(
-                      Math.min(Number(event.target.value), fittedImageHeight),
-                    )}
-                    onPointerUp={commitImageHeight}
-                    onKeyUp={commitImageHeight}
-                    onBlur={commitImageHeight}
+                    min={HOMEPAGE_PANEL_IMAGE_HEIGHT_MIN}
+                    max={HOMEPAGE_PANEL_IMAGE_HEIGHT_MAX}
+                    value={requestedImageHeight}
+                    onChange={(event) => setLiveImageHeight(Math.min(
+                      HOMEPAGE_PANEL_IMAGE_HEIGHT_MAX,
+                      Math.max(HOMEPAGE_PANEL_IMAGE_HEIGHT_MIN, Number(event.target.value)),
+                    ))}
+                    onPointerUp={(event) => commitImageHeight(Number(event.currentTarget.value))}
+                    onKeyUp={(event) => commitImageHeight(Number(event.currentTarget.value))}
+                    onBlur={(event) => commitImageHeight(Number(event.currentTarget.value))}
                   />
-                  <span>{panelImageHeight}px</span>
+                  <span>{requestedImageHeight}px</span>
                 </label>
                 <div className={styles.previewHeader}>
                   <div>
