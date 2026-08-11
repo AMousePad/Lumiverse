@@ -2,12 +2,14 @@ import type {
   PromptBlockDTO,
   PromptVariableValuesDTO,
   SpindleFrontendContext,
+  SpindleGuideDefinition,
   SpindlePresetEditorDraft as PublishedSpindlePresetEditorDraft,
 } from 'lumiverse-spindle-types'
 
 export interface SpindlePresetEditorTabOptions {
   id: string
   title: string
+  guide?: SpindleGuideDefinition
 }
 
 export interface SpindlePresetEditorTabHandle {

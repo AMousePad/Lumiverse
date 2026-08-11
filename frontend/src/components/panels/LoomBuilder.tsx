@@ -58,10 +58,12 @@ import {
   Unlink,
   Shield,
   Archive,
+  CircleHelp,
 } from 'lucide-react'
 import clsx from 'clsx'
 import ExpandedTextEditor, { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { ModalShell } from '@/components/shared/ModalShell'
+import { GuideViewer } from '@/components/shared/GuideViewer'
 import { RangeSlider } from '@/components/shared/RangeSlider'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
@@ -1931,6 +1933,7 @@ export default function LoomBuilder({
 
   const [view, setView] = useState<'list' | 'edit'>('list')
   const [activePresetEditorTab, setActivePresetEditorTab] = useState('preset')
+  const [guideOpen, setGuideOpen] = useState(false)
   const [editingBlock, setEditingBlock] = useState<PromptBlock | null>(null)
   const [blockValidationError, setBlockValidationError] = useState<string | null>(null)
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
@@ -2027,6 +2030,17 @@ export default function LoomBuilder({
     if (presetEditorTabs.some((tab) => tab.id === activePresetEditorTab)) return
     setActivePresetEditorTab('preset')
   }, [activePresetEditorTab, presetEditorTabs])
+
+  const activePresetExtensionTab = useMemo(
+  () =>
+    presetEditorTabs.find(
+      (tab) => tab.id === activePresetEditorTab,
+    ) ?? null,
+  [presetEditorTabs, activePresetEditorTab],
+)
+useEffect(() => {
+  setGuideOpen(false)
+}, [activePresetEditorTab])
 
   const configurableVariableCount = useMemo(() => {
     return (activePreset?.blocks ?? []).reduce((count, b) => {
@@ -2563,39 +2577,80 @@ export default function LoomBuilder({
         {presetEditorToolbar}
 
         {presetEditorTabs.length > 0 && (
-          <div className={s.extensionTabBar} role="tablist" aria-label={lb('editorTabs.ariaLabel')}>
+          <div className={s.extensionTabRow}>
+            <div
+              className={s.extensionTabBar}
+              role="tablist"
+              aria-label={lb('editorTabs.ariaLabel')}
+            >
             <button
               type="button"
               role="tab"
               aria-selected={activePresetEditorTab === 'preset'}
-              className={clsx(s.extensionTab, activePresetEditorTab === 'preset' && s.extensionTabActive)}
+              className={clsx(
+              s.extensionTab,
+              activePresetEditorTab === 'preset' &&
+              s.extensionTabActive,
+            )}
               onClick={() => setActivePresetEditorTab('preset')}
-            >
-              {lb('editorTabs.preset')}
-            </button>
-            {presetEditorTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={activePresetEditorTab === tab.id}
-                className={clsx(s.extensionTab, activePresetEditorTab === tab.id && s.extensionTabActive)}
-                onClick={() => setActivePresetEditorTab(tab.id)}
-              >
-                {tab.title}
-              </button>
-            ))}
-          </div>
-        )}
+          >
+             {lb('editorTabs.preset')}
+          </button>
 
-      {activePresetEditorTab !== 'preset' && (() => {
-        const tab = presetEditorTabs.find((entry) => entry.id === activePresetEditorTab)
-        return tab ? (
-          <div className={s.extensionTabContent} role="tabpanel">
-            <SpindlePresetEditorTabContent tab={tab} />
-          </div>
-        ) : null
-      })()}
+          {presetEditorTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activePresetEditorTab === tab.id}
+              className={clsx(
+              s.extensionTab,
+              activePresetEditorTab === tab.id &&
+              s.extensionTabActive,
+          )}
+             onClick={() => setActivePresetEditorTab(tab.id)}
+            >
+              {tab.title}
+            </button>
+          ))}
+      </div>
+
+        {activePresetExtensionTab?.guide && (
+          <button
+            type="button"
+            className={s.extensionGuideButton}
+            onClick={() => setGuideOpen(true)}
+            aria-label={`Open guide for ${activePresetExtensionTab.title}`}
+            title="Open guide"
+          >
+            <CircleHelp size={15} strokeWidth={1.7} />
+          </button>
+        )}
+      </div>
+    )}
+
+      {activePresetExtensionTab && (
+      <div
+        className={s.extensionTabContent}
+        role="tabpanel"
+      >
+        <SpindlePresetEditorTabContent
+          tab={activePresetExtensionTab}
+        />
+      </div>
+    )}
+
+    {activePresetExtensionTab?.guide && (
+  <GuideViewer
+    isOpen={guideOpen}
+    onClose={() => setGuideOpen(false)}
+    guide={{
+      kind: 'markdown',
+      ...activePresetExtensionTab.guide,
+    }}
+    title={activePresetExtensionTab.title}
+  />
+)}
 
       <div style={{ display: activePresetEditorTab === 'preset' ? 'contents' : 'none' }}>
 

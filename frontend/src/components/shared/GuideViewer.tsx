@@ -358,6 +358,22 @@ export function GuideViewer({
   )
 
   const [history, setHistory] = useState<string[]>([])
+
+  const builtinPath =
+  guide.kind === 'builtin'
+    ? guide.path
+    : null
+
+useEffect(() => {
+  if (!isOpen || builtinPath === null) {
+    return
+  }
+
+  setCurrentPath(builtinPath)
+  setHistory([])
+  setError(null)
+}, [isOpen, builtinPath])
+
   const inlineMarkdown =
   guide.kind === 'markdown'
     ? guide.markdown

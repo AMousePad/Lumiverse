@@ -627,11 +627,17 @@ export function createCharacterEditorTabHandle(
   try {
     assertActive()
     getStore().registerCharacterEditorTab({
-      id: tabId,
-      extensionId,
-      title: options.title,
-      root,
-    })
+    id: tabId,
+    extensionId,
+    title: options.title,
+    guide: options.guide
+      ? {
+          markdown: options.guide.markdown,
+          title: options.guide.title,
+        }
+      : undefined,
+    root,
+  })
     registered = true
     if (disposedDuringRegistration) {
       getStore().unregisterCharacterEditorTab(tabId)
@@ -778,7 +784,18 @@ export function createPresetEditorTabHandle(
 
   try {
     assertActive()
-    getStore().registerPresetEditorTab({ id: tabId, extensionId, title: options.title, root })
+      getStore().registerPresetEditorTab({
+    id: tabId,
+    extensionId,
+    title: options.title,
+    guide: options.guide
+      ? {
+          markdown: options.guide.markdown,
+          title: options.guide.title,
+        }
+      : undefined,
+    root,
+  })
     registered = true
     if (disposedDuringRegistration) {
       getStore().unregisterPresetEditorTab(tabId)
