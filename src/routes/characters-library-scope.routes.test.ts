@@ -189,7 +189,7 @@ app.use("*", async (c, next) => {
 });
 app.route("/", charactersRoutes);
 type LibraryScope = "mine" | "shared";
-type SummaryRow = { id: string; name: string; library_scope: LibraryScope };
+type SummaryRow = { id: string; name: string; description: string; library_scope: LibraryScope };
 type SummaryResponse = { total: number; data: SummaryRow[] };
 type TagRow = { tag: string; count: number };
 type CharacterPayload = {
@@ -242,6 +242,21 @@ describe("character summary scope filtering", () => {
     expect(all.data.map((item) => item.id).sort()).toEqual(
       [MINE_ID, SHARED_ID, SHARED_UNLISTED_ID].sort(),
     );
+    expect(Object.keys(all.data.find((item) => item.id === MINE_ID) ?? {}).sort()).toEqual([
+      "created_at",
+      "creator",
+      "description",
+      "folder",
+      "has_alternate_greetings",
+      "id",
+      "image_id",
+      "library_scope",
+      "name",
+      "preview_description",
+      "tags",
+      "updated_at",
+    ]);
+    expect(all.data.find((item) => item.id === MINE_ID)?.description).toBe("");
     expect(all.data.every((item) => item.library_scope === "mine" || item.library_scope === "shared")).toBe(true);
     expect(all.data.some((item) => item.id === OTHER_ID)).toBe(false);
 
@@ -491,12 +506,14 @@ describe("homepage character preview", () => {
     expect(Object.keys(preview.character).sort()).toEqual([
       "created_at",
       "creator",
+      "description",
       "folder",
       "has_alternate_greetings",
       "id",
       "image_id",
       "library_scope",
       "name",
+      "preview_description",
       "tags",
       "updated_at",
     ]);
@@ -504,6 +521,8 @@ describe("homepage character preview", () => {
       id: MINE_ID,
       library_scope: "mine",
       name: "Mine Character",
+      description: "",
+      preview_description: "",
       creator: "",
       folder: "Shelf",
       tags: ["mine-tag", "common"],
