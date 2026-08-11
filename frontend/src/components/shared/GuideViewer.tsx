@@ -70,7 +70,7 @@ function transformAdmonitions(markdown: string): string {
 
       break
     }
-stripFrontMatter 
+
     i -= 1
 
     const title =
