@@ -1043,6 +1043,7 @@ function ScriptRow({
   }))
   const pendingRef = useRef<Record<string, any>>({})
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const nameInputFocusedRef = useRef(false)
   const onUpdateRef = useRef(onUpdate)
   onUpdateRef.current = onUpdate
 
@@ -1057,10 +1058,27 @@ function ScriptRow({
     )
   }, [script.name, script.find_regex, script.replace_string])
 
-  const flushDraft = useCallback(() => {
+  const flushDraft = useCallback((force = false) => {
     clearTimeout(saveTimer.current)
-    const pending = pendingRef.current
-    pendingRef.current = {}
+    const pending = { ...pendingRef.current }
+
+    // The backend trims script names. If we save while the user has just typed
+    // a space, the response replaces the local draft with the trimmed value and
+    // makes it impossible to continue typing the next word after a pause. Keep
+    // that trailing space local until it becomes internal whitespace, or until
+    // the field is blurred/unmounted.
+    if (
+      !force
+      && nameInputFocusedRef.current
+      && typeof pending.name === 'string'
+      && /\s$/.test(pending.name)
+    ) {
+      pendingRef.current = { name: pending.name }
+      delete pending.name
+    } else {
+      pendingRef.current = {}
+    }
+
     if (Object.keys(pending).length === 0) return
     void Promise.resolve(onUpdateRef.current(pending)).catch((err: any) => {
       toast.error(err.body?.error || err.message || i18n.t('regexPanel.requestFailed', { ns: 'panels' }))
@@ -1076,7 +1094,7 @@ function ScriptRow({
 
   // Persist trailing edits when the row unmounts (folder collapse, scope
   // filter change, panel close).
-  useEffect(() => () => flushDraft(), [flushDraft])
+  useEffect(() => () => flushDraft(true), [flushDraft])
 
   const performance = getRegexPerformanceMetadata(script)
   const warningText = performance
@@ -1165,6 +1183,11 @@ function ScriptRow({
               className={styles.fieldInput}
               value={draft.name}
               onChange={(e) => queueDraftUpdate({ name: e.target.value })}
+              onFocus={() => { nameInputFocusedRef.current = true }}
+              onBlur={() => {
+                nameInputFocusedRef.current = false
+                flushDraft(true)
+              }}
             />
           </div>
           {performance && (
