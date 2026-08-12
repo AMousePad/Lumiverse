@@ -8,57 +8,14 @@
 import * as embeddingsSvc from "../embeddings.service";
 import * as crud from "./databank-crud.service";
 import type { DatabankRetrievalResult, DatabankSearchResult } from "./types";
+import { setCachedDatabankResult } from "./retrieval-cache.service";
 
-// ─── Cache ────────────────────────────────────────────────────
-
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-interface CachedResult {
-  result: DatabankRetrievalResult;
-  cachedAt: number;
-}
-
-const resultCache = new Map<string, CachedResult>();
-
-export function databankCacheKey(
-  userId: string,
-  chatId: string,
-  databankIds: string[],
-  queryText: string,
-  limit: number,
-): string {
-  return JSON.stringify([userId, chatId, limit, [...databankIds].sort(), queryText]);
-}
-
-/**
- * Get cached result for a chat (synchronous, for assembly hot path).
- * Keys include userId so a DB restore that reused chatIds across users (or
- * any future test fixture re-using chat ids) can never serve another user's
- * results from the in-memory cache.
- */
-export function getCachedDatabankResult(
-  userId: string,
-  chatId: string,
-  databankIds: string[],
-  queryText: string,
-  limit: number,
-): DatabankRetrievalResult | null {
-  const key = databankCacheKey(userId, chatId, databankIds, queryText, limit);
-  const cached = resultCache.get(key);
-  if (!cached) return null;
-  if (Date.now() - cached.cachedAt > CACHE_TTL_MS) {
-    resultCache.delete(key);
-    return null;
-  }
-  return cached.result;
-}
-
-export function clearCache(userId: string, chatId: string): void {
-  const prefix = JSON.stringify([userId, chatId]).slice(0, -1) + ",";
-  for (const key of resultCache.keys()) {
-    if (key.startsWith(prefix)) resultCache.delete(key);
-  }
-}
+export {
+  databankCacheKey,
+  getCachedDatabankResult,
+  clearCache,
+  invalidateDatabankCache,
+} from "./retrieval-cache.service";
 
 // ─── Search ───────────────────────────────────────────────────
 
@@ -124,10 +81,7 @@ export async function searchDatabanks(
     // A truncated or abort-interrupted result shouldn't poison the next
     // generation's warm cache.
     if (!signal?.aborted) {
-      resultCache.set(
-        databankCacheKey(userId, chatId, databankIds, queryText, limit),
-        { result, cachedAt: Date.now() },
-      );
+      setCachedDatabankResult(userId, chatId, databankIds, queryText, limit, result);
     }
 
     return result;

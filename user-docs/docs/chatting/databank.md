@@ -43,6 +43,8 @@ A chat sees all currently-attached databanks at once — global + character-boun
 
 Chat documents auto-create a chat-scoped databank the first time you upload a file in that chat — no manual setup required.
 
+Character- and chat-scoped databanks are active automatically when their matching character or chat is open. The attachment areas show both these automatic bindings and any additional banks you attached manually. Use the **Enabled** switch on a selected databank to exclude it from retrieval and `#` mentions everywhere without deleting its documents.
+
 ---
 
 ## Uploading Documents
