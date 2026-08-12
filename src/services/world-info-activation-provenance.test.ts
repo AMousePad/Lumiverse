@@ -213,4 +213,34 @@ describe("world-info admission provenance", () => {
       end: 2,
     }]);
   });
+
+  test("bounds repeated exact-match evidence once provenance is ambiguous", () => {
+    const matcher = new WorldInfoMatcher([entry({ uid: "repeated", key: ["Alice"] })]);
+    const state = makeScanState();
+    const content = Array(20).fill("Alice").join(" ");
+
+    for (let index = 0; index < 600; index++) {
+      matcher.scanChunk(content, state, undefined, {
+        kind: "message",
+        messageId: `message-${index}`,
+        messageOffset: index,
+      });
+    }
+
+    expect(state.primaryHits.get("repeated")).toEqual(new Set([0]));
+    expect(state.exactMatches.get("repeated")).toEqual([
+      {
+        configuredPattern: "Alice",
+        source: { kind: "message", messageId: "message-0", messageOffset: 0 },
+        start: 0,
+        end: 5,
+      },
+      {
+        configuredPattern: "Alice",
+        source: { kind: "message", messageId: "message-0", messageOffset: 0 },
+        start: 6,
+        end: 11,
+      },
+    ]);
+  });
 });

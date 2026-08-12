@@ -329,6 +329,59 @@ let _activeReadCount = 0;
 // run under withWriteLock(), so only one is ever active and the gate has a
 // single owner at a time.
 let _maintenanceGate: Promise<void> | null = null;
+type NativeReadWaiter = {
+  resolve: () => void;
+  reject: (error: unknown) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+};
+const _nativeReadQueue: NativeReadWaiter[] = [];
+let _nativeReadHeld = false;
+
+/**
+ * The Android/Termux LanceDB build has shown process-fatal instability when
+ * several Arrow scans settle concurrently. Keep native scans single-flight on
+ * that platform; desktop/server builds retain their normal read concurrency.
+ */
+async function acquireNativeReadSlot(signal?: AbortSignal): Promise<() => void> {
+  if (!LANCEDB_TERMUX_LIKE) return () => {};
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+
+  if (_nativeReadHeld) {
+    await new Promise<void>((resolve, reject) => {
+      const waiter: NativeReadWaiter = { resolve, reject, signal };
+      if (signal) {
+        waiter.onAbort = () => {
+          const index = _nativeReadQueue.indexOf(waiter);
+          if (index < 0) return;
+          _nativeReadQueue.splice(index, 1);
+          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+        };
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+      _nativeReadQueue.push(waiter);
+    });
+  } else {
+    _nativeReadHeld = true;
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = _nativeReadQueue.shift();
+    if (!next) {
+      _nativeReadHeld = false;
+      return;
+    }
+    if (next.signal && next.onAbort) {
+      next.signal.removeEventListener("abort", next.onAbort);
+    }
+    next.resolve();
+  };
+}
 
 /**
  * Block until any in-progress file-mutating maintenance op finishes, WITHOUT
@@ -1978,15 +2031,27 @@ const FTS_QUERY_MAX_CHARS = 4096;
  *  actually settles. Decrementing the read count before then would reopen the
  *  very unlink-during-read window the gate exists to close. */
 export async function raceWithSignal<T>(makePromise: () => Promise<T>, signal: AbortSignal | undefined): Promise<T> {
-  const endRead = await beginRead(signal);
+  const releaseNativeRead = await acquireNativeReadSlot(signal);
+  let endRead: () => void;
+  try {
+    endRead = await beginRead(signal);
+  } catch (err) {
+    releaseNativeRead();
+    throw err;
+  }
   let promise: Promise<T>;
   try {
     promise = makePromise();
   } catch (err) {
     endRead();
+    releaseNativeRead();
     throw err;
   }
-  promise.then(endRead, endRead);
+  const finishRead = () => {
+    endRead();
+    releaseNativeRead();
+  };
+  promise.then(finishRead, finishRead);
 
   if (!signal) return promise;
   if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));

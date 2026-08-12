@@ -144,3 +144,51 @@ describe("lancedb vector search distance", () => {
     }
   });
 });
+
+describe("lancedb Termux native-read safety", () => {
+  test("serializes native read thunks on Termux", () => {
+    const repoRoot = join(import.meta.dir, "../../../..");
+    const resultMarker = "__LANCEDB_TERMUX_READ_RESULT__";
+    const result = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "--eval",
+        `
+          const { raceWithSignal } = await import("./src/services/vector-store/providers/lancedb.ts");
+          let active = 0;
+          let maxActive = 0;
+          const reads = Array.from({ length: 8 }, (_, index) => raceWithSignal(async () => {
+            active++;
+            maxActive = Math.max(maxActive, active);
+            await Bun.sleep(5);
+            active--;
+            return index;
+          }, undefined));
+          const values = await Promise.all(reads);
+          console.log("${resultMarker}" + JSON.stringify({ maxActive, values }));
+        `,
+      ],
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        LUMIVERSE_IS_TERMUX: "true",
+        LUMIVERSE_LANCEDB_CROSS_PROCESS_LOCK: "false",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    if (result.exitCode !== 0) {
+      throw new Error(`LanceDB Termux read test subprocess failed:\n${result.stderr.toString()}`);
+    }
+    const resultLine = result.stdout
+      .toString()
+      .split(/\r?\n/)
+      .find((line) => line.startsWith(resultMarker));
+    expect(resultLine).toBeDefined();
+    expect(JSON.parse(resultLine!.slice(resultMarker.length))).toEqual({
+      maxActive: 1,
+      values: [0, 1, 2, 3, 4, 5, 6, 7],
+    });
+  });
+});
