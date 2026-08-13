@@ -195,6 +195,12 @@ Common fields:
 | `categoryMode` | `'radio' \| 'checkbox' \| null` | Category selection mode; meaningful only on category marker blocks |
 | `variables` | `PromptVariableDefDTO[]` | Prompt variable definitions for this block |
 
+Prompt-variable names are scoped to their defining block while Lumiverse renders
+that block. If another block defines the same name, `{{var::name}}`,
+`{{getvar::name}}`, and `{{.name}}` still resolve the current block's own saved
+instance. Runtime `{{setvar::name::value}}` writes remain effective for the rest
+of that block and the outer local-variable scope is restored afterward.
+
 ---
 
 ## Categories

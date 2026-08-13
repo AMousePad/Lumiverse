@@ -1270,7 +1270,7 @@ function resolveStoredPromptVariableValues(
 async function evaluatePromptBlockContent(
   content: string,
   macroEnv: MacroEnv,
-  block: Pick<PromptBlock, "role" | "position" | "depth">,
+  block: Pick<PromptBlock, "id" | "role" | "position" | "depth">,
 ): Promise<string> {
   return withPromptBlockContext(macroEnv, block, async () =>
     (await evaluate(content, macroEnv, registry)).text,
@@ -1303,12 +1303,16 @@ export function resolvePromptVariables(
   const values: Record<string, string | number> = {};
   const defaults: Record<string, string | number> = {};
   const byBlock: Record<string, Record<string, string | number>> = {};
+  const defaultsByBlock: Record<string, Record<string, string | number>> = {};
   const selections: Record<string, string[]> = {};
+  const selectionsByBlock: Record<string, Record<string, string[]>> = {};
 
   for (const block of blocks) {
     if (!block.enabled || !block.variables?.length) continue;
     const bucket = stored[block.id] ?? {};
     const perBlock: Record<string, string | number> = {};
+    const perBlockDefaults: Record<string, string | number> = {};
+    const perBlockSelections: Record<string, string[]> = {};
     for (const def of block.variables) {
       if (!def?.name) continue;
       const override = Object.prototype.hasOwnProperty.call(bucket, def.name)
@@ -1317,27 +1321,38 @@ export function resolvePromptVariables(
       const resolved = coercePromptVariable(def, override);
       perBlock[def.name] = resolved.rendered;
       values[def.name] = resolved.rendered;
-      defaults[def.name] = coercePromptVariable(def, undefined).rendered;
+      const defaultValue = coercePromptVariable(def, undefined).rendered;
+      perBlockDefaults[def.name] = defaultValue;
+      defaults[def.name] = defaultValue;
       if (def.type === "multiselect") {
+        perBlockSelections[def.name] = resolved.selectedIds;
         selections[def.name] = resolved.selectedIds;
       }
     }
-    if (Object.keys(perBlock).length) byBlock[block.id] = perBlock;
+    if (Object.keys(perBlock).length) {
+      byBlock[block.id] = perBlock;
+      defaultsByBlock[block.id] = perBlockDefaults;
+    }
+    if (Object.keys(perBlockSelections).length) {
+      selectionsByBlock[block.id] = perBlockSelections;
+    }
   }
 
   env.extra.promptVariables = values;
   env.extra.promptVariablesByBlock = byBlock;
   env.extra.promptVariableDefaults = defaults;
+  env.extra.promptVariableDefaultsByBlock = defaultsByBlock;
   env.extra.promptVariableSelections = selections;
+  env.extra.promptVariableSelectionsByBlock = selectionsByBlock;
 
   // Seed the local-variables Map so {{getvar::name}} resolves to the same
-  // value as {{var::name}}. Seeding happens before any block renders, so
-  // in-prompt {{setvar::name::…}} can still override mid-assembly (setvar
-  // wins because it runs later during block evaluation).
+  // value as {{var::name}} outside a defining block. While a block renders,
+  // withPromptBlockContext overlays that block's own resolved values so a
+  // same-named definition elsewhere cannot shadow it. In-block
+  // {{setvar::name::…}} writes still win for the rest of that block.
   //
   // Local variables are transient per assembly, so this is the only seed source
-  // for preset variables. In-prompt {{setvar::name::...}} can still override the
-  // value later in the same assembly, but nothing is rehydrated from chat state.
+  // for preset variables; nothing is rehydrated from chat state.
   for (const [name, value] of Object.entries(values)) {
     env.variables.local.set(name, String(value));
   }

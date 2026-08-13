@@ -4,6 +4,7 @@ import { registry } from "../macros/MacroRegistry";
 import { initMacros } from "../macros";
 import type { MacroEnv } from "../macros/types";
 import type { Preset, PromptBlock, PromptVariableDef } from "../types/preset";
+import { withPromptBlockContext } from "../macros/MacroEnv";
 import { coercePromptVariable, resolvePromptBlockPlacements, resolvePromptVariables } from "./prompt-assembly.service";
 
 // ---------------------------------------------------------------------------
@@ -437,5 +438,74 @@ describe("resolvePromptVariables", () => {
     resolvePromptVariables(env, blocks, preset, {});
 
     expect(await ev("{{var::tone}}", env)).toBe("default tone");
+  });
+
+  test("keeps same-named prompt variables scoped to their defining block", async () => {
+    const env = makeEnv();
+    const first: PromptBlock = {
+      id: "preset-block", name: "Preset block", content: "", role: "system",
+      enabled: true, position: "pre_history", depth: 0, marker: null, isLocked: false,
+      color: null, injectionTrigger: [], group: null,
+      variables: [{ id: "preset-tone", name: "tone", label: "Tone", type: "text", defaultValue: "preset default" }],
+    };
+    const later: PromptBlock = {
+      ...first,
+      id: "extension-block",
+      name: "Later extension block",
+      variables: [{ id: "extension-tone", name: "tone", label: "Tone", type: "text", defaultValue: "extension default" }],
+    };
+    const blocks = [first, later];
+    const preset = {
+      id: "preset-1", name: "Preset", provider: "test", engine: "test", parameters: {},
+      prompt_order: blocks, prompts: {},
+      metadata: {
+        promptVariables: {
+          "preset-block": { tone: "preset instance" },
+          "extension-block": { tone: "extension instance" },
+        },
+      },
+      created_at: 0, updated_at: 0,
+    } satisfies Preset;
+
+    resolvePromptVariables(env, blocks, preset);
+
+    // The compatibility-wide flat view still has deterministic last-block
+    // semantics outside a block render.
+    expect(await ev("{{var::tone}}/{{.tone}}", env)).toBe("extension instance/extension instance");
+
+    const firstRendered = await withPromptBlockContext(env, first, () =>
+      ev("{{var::tone}}/{{.tone}}", env),
+    );
+    const laterRendered = await withPromptBlockContext(env, later, () =>
+      ev("{{var::tone}}/{{.tone}}", env),
+    );
+
+    expect(firstRendered).toBe("preset instance/preset instance");
+    expect(laterRendered).toBe("extension instance/extension instance");
+    expect(await ev("{{var::tone}}/{{.tone}}", env)).toBe("extension instance/extension instance");
+  });
+
+  test("allows block-local setvar writes without leaking them into another block", async () => {
+    const env = makeEnv();
+    const block: PromptBlock = {
+      id: "preset-block", name: "Preset block", content: "", role: "system",
+      enabled: true, position: "pre_history", depth: 0, marker: null, isLocked: false,
+      color: null, injectionTrigger: [], group: null,
+      variables: [{ id: "preset-tone", name: "tone", label: "Tone", type: "text", defaultValue: "preset default" }],
+    };
+    const preset = {
+      id: "preset-1", name: "Preset", provider: "test", engine: "test", parameters: {},
+      prompt_order: [block], prompts: {},
+      metadata: { promptVariables: { "preset-block": { tone: "preset instance" } } },
+      created_at: 0, updated_at: 0,
+    } satisfies Preset;
+
+    resolvePromptVariables(env, [block], preset);
+    const rendered = await withPromptBlockContext(env, block, () =>
+      ev("{{setvar::tone::runtime}}{{var::tone}}/{{.tone}}", env),
+    );
+
+    expect(rendered).toBe("runtime/runtime");
+    expect(await ev("{{var::tone}}/{{.tone}}", env)).toBe("preset instance/preset instance");
   });
 });
