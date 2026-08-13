@@ -201,6 +201,14 @@ that block. If another block defines the same name, `{{var::name}}`,
 instance. Runtime `{{setvar::name::value}}` writes remain effective for the rest
 of that block and the outer local-variable scope is restored afterward.
 
+Declared prompt-variable reads are resolved by the host before a registered
+whole-template macro interceptor sees the block. This applies to
+`{{var::name}}`, `{{getvar::name}}`, `{{.name}}`, and the prompt-variable
+read helpers. The surrounding template is left unchanged, so an extension can
+still consume the resolved value inside its own conditionals and loops without
+shadowing the preset value with extension or chat state. Undeclared variables
+and templates that mutate the same key remain on the normal ordered macro path.
+
 ---
 
 ## Categories
