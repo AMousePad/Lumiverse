@@ -30,13 +30,51 @@ export function subscribePresetProfilePromptVariableChanges(
   return () => promptVariableChangeListeners.delete(listener)
 }
 
+function definePromptVariableEntry<T extends object>(target: T, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  })
+}
+
+/** Merge a scoped profile's explicit values over the preset configuration. */
+export function mergePromptVariableValues(
+  presetValues: PromptVariableValues,
+  profileValues?: PromptVariableValues,
+): PromptVariableValues {
+  const merged: PromptVariableValues = {}
+  for (const [blockId, values] of Object.entries(presetValues)) {
+    const bucket: PromptVariableValues[string] = {}
+    for (const [name, value] of Object.entries(values)) {
+      definePromptVariableEntry(bucket, name, structuredClone(value))
+    }
+    definePromptVariableEntry(merged, blockId, bucket)
+  }
+  for (const [blockId, values] of Object.entries(profileValues ?? {})) {
+    const inherited = Object.hasOwn(merged, blockId) ? merged[blockId] : undefined
+    const bucket: PromptVariableValues[string] = {}
+    if (inherited) {
+      for (const [name, value] of Object.entries(inherited)) {
+        definePromptVariableEntry(bucket, name, structuredClone(value))
+      }
+    }
+    for (const [name, value] of Object.entries(values)) {
+      definePromptVariableEntry(bucket, name, structuredClone(value))
+    }
+    definePromptVariableEntry(merged, blockId, bucket)
+  }
+  return merged
+}
+
 export function getEffectivePromptVariableValues(
   presetId: string | undefined,
   presetValues: PromptVariableValues,
   binding: PresetProfileBinding | null,
 ): PromptVariableValues {
   if (binding && presetId && binding.preset_id === presetId) {
-    return binding.prompt_variables ? structuredClone(binding.prompt_variables) : {}
+    return mergePromptVariableValues(presetValues, binding.prompt_variables)
   }
   return presetValues
 }

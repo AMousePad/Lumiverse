@@ -247,6 +247,19 @@ describe('useLoomBuilder prompt-variable structure persistence', () => {
       expect(hookSurface.activePreset?.blocks[0]?.enabled).toBe(true)
 
       await act(async () => {
+        hookSurface.applyRuntimeBlockProfile(presetId, { chat: false }, {})
+      })
+      expect(hookSurface.activePreset?.blocks[0]?.enabled).toBe(false)
+      expect(hookSurface.activePreset?.promptVariables).toEqual({ chat: { tone: 'legacy value' } })
+
+      await act(async () => {
+        hookSurface.applyRuntimeBlockProfile(presetId, { chat: false }, { chat: { profileOnly: 'scoped' } })
+      })
+      expect(hookSurface.activePreset?.promptVariables).toEqual({
+        chat: { tone: 'legacy value', profileOnly: 'scoped' },
+      })
+
+      await act(async () => {
         hookSurface.applyRuntimeBlockProfile(presetId, { chat: false }, { chat: { tone: 'scoped' } })
       })
       expect(hookSurface.activePreset?.blocks[0]?.enabled).toBe(false)

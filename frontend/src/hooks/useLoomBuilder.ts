@@ -35,6 +35,7 @@ import {
   pruneOrphanPromptVariables,
   validatePromptVariableSchema,
 } from '@/lib/loom/service'
+import { mergePromptVariableValues } from '@/hooks/preset-profile-prompt-variables'
 
 
 type LoomPrivateBlockFields = Pick<
@@ -97,7 +98,7 @@ export function useLoomBuilder() {
   const [runtimePresetProfile, setRuntimePresetProfile] = useState<{
     presetId: string
     blockStates: Record<string, boolean>
-    promptVariables: PromptVariableValues
+    promptVariables?: PromptVariableValues
   } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -111,7 +112,10 @@ export function useLoomBuilder() {
           ? { ...block, enabled: runtimePresetProfile.blockStates[block.id] }
           : block
       )),
-      promptVariables: runtimePresetProfile.promptVariables,
+      promptVariables: mergePromptVariableValues(
+        activePreset.promptVariables,
+        runtimePresetProfile.promptVariables,
+      ),
     }
   }, [activePreset, runtimePresetProfile])
   const effectiveActivePresetRef = useRef<LoomPreset | null>(effectiveActivePreset)
@@ -120,13 +124,13 @@ export function useLoomBuilder() {
   const applyRuntimeBlockProfile = useCallback((
     presetId: string,
     blockStates: Record<string, boolean> | null,
-    promptVariables: PromptVariableValues = {},
+    promptVariables?: PromptVariableValues,
   ) => {
     setRuntimePresetProfile(blockStates
       ? {
           presetId,
           blockStates: { ...blockStates },
-          promptVariables: structuredClone(promptVariables),
+          ...(promptVariables ? { promptVariables: structuredClone(promptVariables) } : {}),
         }
       : null)
   }, [])

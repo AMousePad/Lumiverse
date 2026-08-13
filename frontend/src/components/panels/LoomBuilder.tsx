@@ -1865,7 +1865,7 @@ export default function LoomBuilder({
 
     const changed = updatedBlocks.some((b, i) => b.enabled !== activePreset.blocks[i].enabled)
     if (changed) {
-      applyRuntimeBlockProfile(activePreset.id, binding.block_states, binding.prompt_variables ?? {})
+      applyRuntimeBlockProfile(activePreset.id, binding.block_states, binding.prompt_variables)
       addToast({ type: 'success', message: lb('profiles.reapplied') })
     } else {
       addToast({ type: 'info', message: lb('profiles.alreadyDefault') })
@@ -1910,7 +1910,7 @@ export default function LoomBuilder({
       return
     }
     lastProfileApplicationRef.current = applicationKey
-    applyRuntimeBlockProfile(activeId, binding?.block_states ?? null, binding?.prompt_variables ?? {})
+    applyRuntimeBlockProfile(activeId, binding?.block_states ?? null, binding?.prompt_variables)
     markLoomRuntimeProfileContext(
       binding ? activeId : null,
       activeChatId,

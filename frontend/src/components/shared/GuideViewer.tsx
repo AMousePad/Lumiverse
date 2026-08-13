@@ -276,6 +276,17 @@ function documentUrl(path: string): string {
   return `/api/v1/docs/file/${encodeDocumentKey(path)}`
 }
 
+function guidePageUrl(
+  path: string,
+  hash = '',
+): string {
+  const pagePath = path
+    .replace(/(?:^|\/)index\.md$/i, '')
+    .replace(/\.md$/i, '')
+
+  return `/guides/${pagePath ? `${pagePath}/` : ''}${hash}`
+}
+
 function resolveGuideLink(
   basePath: string,
   href: string,
@@ -331,6 +342,33 @@ function rewriteGuideAssetUrls(
   'src',
   documentUrl(resolved.path),
 )
+    },
+  )
+
+  document.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(
+    (anchor) => {
+      const href = anchor.getAttribute('href')
+
+      if (
+        !href ||
+        href.startsWith('#') ||
+        href.startsWith('/') ||
+        isExternalHref(href)
+      ) {
+        return
+      }
+
+      const resolved = resolveGuideLink(currentPath, href)
+
+      if (!/\.md$/i.test(resolved.path)) {
+        return
+      }
+
+      anchor.dataset.guidePath = resolved.path
+      anchor.setAttribute(
+        'href',
+        guidePageUrl(resolved.path, resolved.hash),
+      )
     },
   )
 
@@ -626,12 +664,20 @@ const parsed = marked.parse(
     if (
       guide.kind !== 'builtin' ||
       !currentPath ||
-      isExternalHref(href)
+      isExternalHref(href) ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
     ) {
       return
     }
 
-    const resolved = resolveGuideLink(currentPath, href)
+    const path = anchor.dataset.guidePath
+    const resolved = path
+      ? { path, hash: '' }
+      : resolveGuideLink(currentPath, href)
 
     if (!/\.md$/i.test(resolved.path)) {
       return

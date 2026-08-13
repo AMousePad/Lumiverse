@@ -156,7 +156,7 @@ describe('GuideViewer builtin navigation', () => {
         [
           '# CHARACTERS ROOT BODY',
           '',
-          '[Open child](child.md)',
+          '[Open child](child.md#details)',
         ].join('\n'),
         '# CHARACTERS CHILD BODY',
         '# REGEX ROOT BODY',
@@ -214,6 +214,12 @@ describe('GuideViewer builtin navigation', () => {
           container.querySelector('a')
 
         expect(childLink).not.toBeNull()
+        expect(childLink?.getAttribute('href')).toBe(
+          '/guides/characters/child/#details',
+        )
+        expect(childLink?.getAttribute('href')).not.toContain(
+          '.md',
+        )
 
         await act(async () => {
           childLink!.dispatchEvent(

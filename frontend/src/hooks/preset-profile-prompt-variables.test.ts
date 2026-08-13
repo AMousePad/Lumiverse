@@ -21,18 +21,18 @@ describe('preset profile prompt variables', () => {
     expect(getEffectivePromptVariableValues(undefined, {}, null)).toEqual({})
   })
 
-  test('uses only scope-bound values so missing variables seed from their definitions', () => {
+  test('overlays scope-bound values and inherits missing values from the preset', () => {
     expect(getEffectivePromptVariableValues(
       'preset-1',
       { block: { tone: 'shared', length: 4 } },
       binding,
-    )).toEqual({ block: { tone: 'warm' } })
+    )).toEqual({ block: { tone: 'warm', length: 4 } })
 
     expect(getEffectivePromptVariableValues(
       'preset-1',
       { block: { tone: 'shared' } },
       { ...binding, prompt_variables: undefined },
-    )).toEqual({})
+    )).toEqual({ block: { tone: 'shared' } })
   })
 
   test.each([

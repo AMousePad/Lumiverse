@@ -1251,15 +1251,48 @@ function appendBaseRole(role: string): "user" | "assistant" {
   return role === "user_append" ? "user" : "assistant";
 }
 
+function definePromptVariableEntry<T extends object>(target: T, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
 /**
- * A resolved profile owns its variable scope. Missing values use the variable
- * definition's default rather than leaking selections from the shared preset.
+ * A resolved profile is an override layer over the preset's configured values.
+ * Missing profile blocks and keys inherit from the preset, including legacy
+ * bindings created before prompt-variable snapshots existed.
  */
 function resolveStoredPromptVariableValues(
   presetValues: Record<string, Record<string, PromptVariableValue>>,
   profileValues?: PromptVariableValues,
 ): Record<string, Record<string, PromptVariableValue>> {
-  return profileValues === undefined ? presetValues : profileValues;
+  if (profileValues === undefined) return presetValues;
+
+  const merged: Record<string, Record<string, PromptVariableValue>> = {};
+  for (const [blockId, values] of Object.entries(presetValues)) {
+    const bucket: Record<string, PromptVariableValue> = {};
+    for (const [name, value] of Object.entries(values)) {
+      definePromptVariableEntry(bucket, name, value);
+    }
+    definePromptVariableEntry(merged, blockId, bucket);
+  }
+  for (const [blockId, values] of Object.entries(profileValues)) {
+    const inherited = Object.hasOwn(merged, blockId) ? merged[blockId] : undefined;
+    const bucket: Record<string, PromptVariableValue> = {};
+    if (inherited) {
+      for (const [name, value] of Object.entries(inherited)) {
+        definePromptVariableEntry(bucket, name, value);
+      }
+    }
+    for (const [name, value] of Object.entries(values)) {
+      definePromptVariableEntry(bucket, name, value);
+    }
+    definePromptVariableEntry(merged, blockId, bucket);
+  }
+  return merged;
 }
 
 /**
@@ -2440,9 +2473,7 @@ export async function assemblePrompt(
   // Prompt variables — resolve creator-defined schemas + end-user overrides and
   // surface them on env.extra so {{var::name}} / {{hasVar::name}} / {{varDefault::name}}
   // can read consistent values across every block in this assembly.
-  const profilePromptVariables = resolvedProfile.binding
-    ? resolvedProfile.binding.prompt_variables ?? {}
-    : undefined;
+  const profilePromptVariables = resolvedProfile.binding?.prompt_variables;
   resolvePromptVariables(macroEnv, blocks, preset, profilePromptVariables);
 
   // A select variable may choose an in-memory insertion profile for its own

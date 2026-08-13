@@ -201,6 +201,12 @@ that block. If another block defines the same name, `{{var::name}}`,
 instance. Runtime `{{setvar::name::value}}` writes remain effective for the rest
 of that block and the outer local-variable scope is restored afterward.
 
+When a chat, persona, character, connection, or default preset profile is
+active, its saved prompt-variable values are overrides rather than a complete
+replacement. Blocks and variable keys absent from the profile inherit the
+current values in `metadata.promptVariables`; bindings created before profile
+variable snapshots therefore continue to use the preset configuration.
+
 Declared prompt-variable reads are resolved by the host before a registered
 whole-template macro interceptor sees the block. This applies to
 `{{var::name}}`, `{{getvar::name}}`, `{{.name}}`, and the prompt-variable
