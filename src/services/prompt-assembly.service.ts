@@ -7303,9 +7303,11 @@ export function injectReasoningParams(
 ): void {
   if (providerName === "anthropic") {
     if (!params.thinking) {
-      // Claude 4.6+ models support adaptive thinking (recommended over manual budget)
+      // Claude 4.6+ and Opus 5 support adaptive thinking (recommended over manual budget)
       const isAdaptiveModel =
-        model && /claude-(opus|sonnet)-4[-.](6|7|8)/i.test(model);
+        model &&
+        (/claude-(opus|sonnet)-4[-.](6|7|8)/i.test(model) ||
+          /claude-opus-5(?:$|[-.:@])/i.test(model));
       if (isAdaptiveModel) {
         // Adaptive thinking: Claude decides when/how much to think
         params.thinking = { type: "adaptive" };

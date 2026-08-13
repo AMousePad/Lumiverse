@@ -70,9 +70,11 @@ export class AnthropicProvider implements LlmProvider {
     };
   }
 
-  /** Opus 4.7/4.8 use adaptive thinking and reject manual sampling params. */
+  /** Opus 4.7/4.8 and Opus 5 use adaptive thinking and reject manual sampling params. */
   private omitsSamplingParams(model: string): boolean {
-    return /^claude-opus-4-(?:7|8)(?:$|[-:@])/.test((model || "").trim());
+    return /^claude-opus-(?:4-(?:7|8)|5)(?:$|[-:@])/.test(
+      (model || "").trim(),
+    );
   }
 
   private shouldSuppressThinking(request: GenerationRequest): boolean {
@@ -100,7 +102,7 @@ export class AnthropicProvider implements LlmProvider {
    * tools are present (nothing to interleave otherwise) and thinking is enabled.
    * The `interleaved-thinking-2025-05-14` beta header is accepted on any model
    * and is safely ignored / deprecated where interleaved thinking is automatic
-   * (adaptive thinking on Opus 4.6+/4.7/4.8 and Sonnet 4.6), so it's safe to
+   * (adaptive thinking on Opus 4.6+/4.7/4.8/5 and Sonnet 4.6), so it's safe to
    * send whenever these conditions hold.
    */
   protected wantsInterleavedThinking(request: GenerationRequest): boolean {

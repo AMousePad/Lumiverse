@@ -31,6 +31,32 @@ describe("AnthropicProvider thinking config", () => {
       format: { type: "json_schema", name: "Example", schema: {} },
     });
   });
+
+  test("omits manual sampling params for Opus 5", () => {
+    const provider = new AnthropicProvider();
+
+    const body = (provider as any).buildBody(
+      {
+        model: "claude-opus-5-20260813",
+        messages: [{ role: "user", content: "hi" }],
+        parameters: {
+          max_tokens: 256,
+          temperature: 0.7,
+          top_p: 0.9,
+          top_k: 40,
+          thinking: { type: "adaptive" },
+          output_config: { effort: "high" },
+        },
+      },
+      false,
+    );
+
+    expect(body).not.toHaveProperty("temperature");
+    expect(body).not.toHaveProperty("top_p");
+    expect(body).not.toHaveProperty("top_k");
+    expect(body.thinking).toEqual({ type: "adaptive" });
+    expect(body.output_config).toEqual({ effort: "high" });
+  });
 });
 
 describe("AnthropicProvider caching config", () => {

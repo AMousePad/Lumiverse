@@ -103,6 +103,17 @@ describe("injectReasoningParams (bedrock)", () => {
   });
 });
 
+describe("injectReasoningParams (Anthropic)", () => {
+  test("uses adaptive thinking for Opus 5", () => {
+    const params: Record<string, any> = {};
+
+    injectReasoningParams(params, "anthropic", "max", "claude-opus-5");
+
+    expect(params.thinking).toEqual({ type: "adaptive" });
+    expect(params.output_config).toEqual({ effort: "max" });
+  });
+});
+
 describe("injectReasoningParams (OpenAI-compatible)", () => {
   test("passes xhigh through for OpenAI and custom connections", () => {
     for (const provider of ["openai", "custom"]) {
