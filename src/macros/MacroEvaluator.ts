@@ -306,11 +306,14 @@ async function evaluateMacroNode(
   state: EvaluationState,
 ): Promise<string> {
   const def = registry.getMacro(node.name);
+  const origin = registry.getMacroOrigin(node.name);
 
-  // Check dynamic macros via pre-normalized lowercase map (O(1) lookup)
+  // Preset/request macros override extension registrations, but never system
+  // macros. This keeps host behavior stable while allowing presets to define
+  // their own values without an extension globally shadowing them.
   const dynamicKey = node.name.toLowerCase();
   const dynamicLookup = env._dynamicMacrosLower;
-  if (!def && dynamicLookup && dynamicLookup.has(dynamicKey)) {
+  if (origin?.kind !== "system" && dynamicLookup && dynamicLookup.has(dynamicKey)) {
     if (env._fingerprint) env._fingerprint.cacheable = false;
     const dynamic = dynamicLookup.get(dynamicKey)!;
     let rawResult: string;

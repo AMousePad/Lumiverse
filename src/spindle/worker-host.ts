@@ -1286,10 +1286,9 @@ export class WorkerHost {
     // Drop any prompt-regex ownership claims so the host resumes its own pass
     clearPromptRegexOwner(this.extensionId);
 
-    // Unregister all macros registered by this extension
-    for (const macroName of this.registeredMacroNames) {
-      macroRegistry.unregisterMacro(macroName);
-    }
+    // Ownership-aware cleanup cannot remove a system macro or another
+    // extension's registration even if names have collided over time.
+    macroRegistry.unregisterByExtension(this.extensionId);
     this.registeredMacroNames.clear();
     this.macroValueCache.clear();
     this.interactionApi.clear();
@@ -2518,18 +2517,8 @@ export class WorkerHost {
     const macroName = String(definition.name || "").trim();
     if (!macroName) return;
 
-    // Check if this would overwrite a built-in macro before registering
-    const existing = macroRegistry.getMacro(macroName);
-    if (existing?.builtIn) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Cannot override built-in macro: ${macroName}`
-      );
-      return;
-    }
-
-    this.registeredMacroNames.add(macroName);
-
-    macroRegistry.registerMacro({
+    const macroOrigin = { kind: "extension" as const, extensionId: this.extensionId };
+    const registered = macroRegistry.registerMacro({
       name: macroName,
       category: definition.category || `extension:${this.manifest.identifier}`,
       description: definition.description || "",
@@ -2649,13 +2638,22 @@ export class WorkerHost {
           }
         });
       },
-    });
+    }, macroOrigin);
+
+    if (!registered) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Cannot override macro owned by the system or another extension: ${macroName}`
+      );
+      return;
+    }
+
+    this.registeredMacroNames.add(macroName);
   }
 
   private handleUnregisterMacro(name: string): void {
     const macroName = String(name || "").trim();
     if (!macroName) return;
-    macroRegistry.unregisterMacro(macroName);
+    macroRegistry.unregisterMacro(macroName, { kind: "extension", extensionId: this.extensionId });
     this.registeredMacroNames.delete(macroName);
     this.macroValueCache.delete(macroName);
   }

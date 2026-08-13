@@ -102,7 +102,11 @@ const IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY = "imported_script_id";
 
 interface RegexMutationContext {
   activePresetId?: string | null;
+  /** When present, restrict this mutation to unbound rows owned by this extension. */
+  extensionIdentifier?: string;
 }
+
+const EXTENSION_REGEX_OWNERSHIP_ERROR = "Regex script is not an unbound script owned by this extension";
 
 function normalizeOptionalId(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -370,6 +374,7 @@ export function rowToRegexScript(row: any): RegexScript {
     pack_id: row.pack_id || null,
     preset_id: row.preset_id || null,
     character_id: row.character_id || null,
+    owner_extension_identifier: row.owner_extension_identifier || null,
     metadata: JSON.parse(row.metadata),
     run_on_edit: !!row.run_on_edit,
     disabled: !!row.disabled,
@@ -698,49 +703,54 @@ export function createRegexScript(
   input: CreateRegexScriptInput,
   context?: RegexMutationContext,
 ): RegexScript | string {
-  const err = validateInput(input, true);
+  const extensionIdentifier = normalizeOptionalId(context?.extensionIdentifier);
+  const nextInput: CreateRegexScriptInput = extensionIdentifier
+    ? { ...input, pack_id: null, preset_id: null, character_id: null }
+    : { ...input };
+  const err = validateInput(nextInput, true);
   if (err) return err;
 
-  const regexErr = validateRegex(input.find_regex, input.flags ?? "gi", input.substitute_macros ?? "none");
+  const regexErr = validateRegex(nextInput.find_regex, nextInput.flags ?? "gi", nextInput.substitute_macros ?? "none");
   if (regexErr) return regexErr;
 
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const activePresetId = normalizeOptionalId(context?.activePresetId);
-  const disabled = resolveCreateDisabledState(input, activePresetId);
+  const disabled = resolveCreateDisabledState(nextInput, activePresetId);
 
   try {
     getDb()
       .query(
-        `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, actions, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, metadata, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, actions, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, owner_extension_identifier, metadata, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
         userId,
-        input.name.trim(),
-        input.script_id ?? "",
-        input.find_regex,
-        input.replace_string ?? "",
-        JSON.stringify(input.actions ?? []),
-        input.flags ?? "gi",
-        JSON.stringify(input.placement ?? ["ai_output"]),
-        input.scope ?? "global",
-        input.scope === "global" || !input.scope ? null : (input.scope_id ?? null),
-        JSON.stringify(input.target ?? ["response"]),
-        input.min_depth ?? null,
-        input.max_depth ?? null,
-        JSON.stringify(input.trim_strings ?? []),
-        input.run_on_edit ? 1 : 0,
-        input.substitute_macros ?? "none",
+        nextInput.name.trim(),
+        nextInput.script_id ?? "",
+        nextInput.find_regex,
+        nextInput.replace_string ?? "",
+        JSON.stringify(nextInput.actions ?? []),
+        nextInput.flags ?? "gi",
+        JSON.stringify(nextInput.placement ?? ["ai_output"]),
+        nextInput.scope ?? "global",
+        nextInput.scope === "global" || !nextInput.scope ? null : (nextInput.scope_id ?? null),
+        JSON.stringify(nextInput.target ?? ["response"]),
+        nextInput.min_depth ?? null,
+        nextInput.max_depth ?? null,
+        JSON.stringify(nextInput.trim_strings ?? []),
+        nextInput.run_on_edit ? 1 : 0,
+        nextInput.substitute_macros ?? "none",
         disabled ? 1 : 0,
-        input.sort_order ?? 0,
-        input.description ?? "",
-        input.folder ?? "",
-        input.pack_id ?? null,
-        input.preset_id ?? null,
-        input.character_id ?? null,
-        JSON.stringify(input.metadata ?? {}),
+        nextInput.sort_order ?? 0,
+        nextInput.description ?? "",
+        nextInput.folder ?? "",
+        nextInput.pack_id ?? null,
+        nextInput.preset_id ?? null,
+        nextInput.character_id ?? null,
+        extensionIdentifier,
+        JSON.stringify(nextInput.metadata ?? {}),
         now,
         now
       );
@@ -767,9 +777,24 @@ export function updateRegexScript(
   const existing = getRegexScript(userId, id);
   if (!existing) return null;
 
+  const extensionIdentifier = normalizeOptionalId(context?.extensionIdentifier);
+  if (extensionIdentifier && (
+    existing.owner_extension_identifier !== extensionIdentifier
+    || existing.preset_id !== null
+  )) {
+    return EXTENSION_REGEX_OWNERSHIP_ERROR;
+  }
+
   const activePresetId = normalizeOptionalId(context?.activePresetId);
   const isPresetBound = !!existing.preset_id;
   const nextInput: UpdateRegexScriptInput = { ...input };
+  if (extensionIdentifier) {
+    // These links are host-owned. A script that becomes preset-bound through a
+    // native flow automatically becomes read-only to its creating extension.
+    delete nextInput.pack_id;
+    delete nextInput.preset_id;
+    delete nextInput.character_id;
+  }
   if (nextInput.scope !== undefined) {
     if (nextInput.scope === "global") {
       nextInput.scope_id = null;
@@ -854,8 +879,17 @@ export function updateRegexScript(
   return updated;
 }
 
-export function deleteRegexScript(userId: string, id: string): boolean {
+export function deleteRegexScript(userId: string, id: string): boolean;
+export function deleteRegexScript(userId: string, id: string, context: RegexMutationContext): boolean | string;
+export function deleteRegexScript(userId: string, id: string, context?: RegexMutationContext): boolean | string {
   const existing = getRegexScript(userId, id);
+  const extensionIdentifier = normalizeOptionalId(context?.extensionIdentifier);
+  if (extensionIdentifier && existing && (
+    existing.owner_extension_identifier !== extensionIdentifier
+    || existing.preset_id !== null
+  )) {
+    return EXTENSION_REGEX_OWNERSHIP_ERROR;
+  }
   const result = getDb()
     .query("DELETE FROM regex_scripts WHERE id = ? AND user_id = ?")
     .run(id, userId);

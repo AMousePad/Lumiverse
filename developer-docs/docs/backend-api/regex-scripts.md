@@ -2,7 +2,9 @@
 
 !!! warning "Permission required: `regex_scripts`"
 
-Full CRUD access to the user's regex scripts plus a context-aware active-rule resolver. Use this for extensions that manage, analyze, or batch-edit find/replace rules — card-format compatibility shims, regex analytics, debug tooling, or anything that needs to mirror the resolution Lumiverse uses internally during prompt assembly, response baking, and display rendering.
+Read access to the user's regex scripts, CRUD access to scripts created by the calling extension, plus a context-aware active-rule resolver. Use this for extensions that manage their own find/replace rules, analyze existing rules, or mirror the resolution Lumiverse uses internally during prompt assembly, response baking, and display rendering.
+
+Extension-created scripts are attributed by the host. An extension cannot update or delete legacy/unattributed scripts, another extension's scripts, or preset-bound scripts. Those scripts remain visible through `list`, `get`, and `getActive` and continue to execute normally.
 
 ## Usage
 
@@ -22,7 +24,7 @@ const displayRules = await spindle.regex_scripts.list({ target: 'display' })
 // Get a single script
 const script = await spindle.regex_scripts.get('script-id')
 if (script) {
-  spindle.log.info(`${script.name}: /${script.find_regex}/${script.flags}`)
+  spindle.log.info(`${script.name}: /${script.find_regex}/${script.flags} (writable: ${script.can_mutate})`)
 }
 
 // Create a script
@@ -81,8 +83,8 @@ const active = await spindle.regex_scripts.getActive({
 | `list(options?)` | `Promise<{ data: RegexScriptDTO[], total: number }>` | List scripts with strict scope filtering. Options: `{ scope?, scopeId?, target?, limit?, offset?, userId? }`. Defaults: limit 50, max 200. |
 | `get(scriptId)` | `Promise<RegexScriptDTO \| null>` | Get a script by ID. Returns `null` if not found. |
 | `create(input)` | `Promise<RegexScriptDTO>` | Create a new regex script. `name` and `find_regex` are required. |
-| `update(scriptId, input)` | `Promise<RegexScriptDTO>` | Update a script. All fields are optional. Throws if the script is not found. |
-| `delete(scriptId)` | `Promise<boolean>` | Delete a script. Returns `true` if deleted. |
+| `update(scriptId, input)` | `Promise<RegexScriptDTO>` | Update an unbound script created by this extension. All fields are optional. Throws for protected scripts. |
+| `delete(scriptId)` | `Promise<boolean>` | Delete an unbound script created by this extension. Throws for protected scripts; returns `true` if deleted. |
 | `getActive(options)` | `Promise<RegexScriptDTO[]>` | Resolve enabled scripts that would fire for a given target plus character/chat context. Merges global + character + chat scopes and orders them by scope tier then `sort_order`. |
 
 ## RegexScriptListOptionsDTO
@@ -162,6 +164,7 @@ Multi-select options toggle in a provisional client-side pool. They can be remov
 ```ts
 {
   id: string
+  can_mutate: boolean          // calling extension may update/delete this row
   name: string
   script_id: string             // stable, normalized identifier (lowercase, _-only)
   find_regex: string

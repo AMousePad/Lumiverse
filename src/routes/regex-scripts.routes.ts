@@ -89,6 +89,9 @@ function normalizeDisplayScripts(value: unknown, userId: string): RegexScript[] 
       pack_id: typeof raw.pack_id === "string" ? raw.pack_id : null,
       preset_id: typeof raw.preset_id === "string" ? raw.preset_id : null,
       character_id: typeof raw.character_id === "string" ? raw.character_id : null,
+      // Request-supplied display scripts are transient and never acquire
+      // persisted extension ownership.
+      owner_extension_identifier: null,
       metadata: isStringRecord(raw.metadata) ? raw.metadata : {},
       created_at: typeof raw.created_at === "number" ? raw.created_at : 0,
       updated_at: typeof raw.updated_at === "number" ? raw.updated_at : 0,

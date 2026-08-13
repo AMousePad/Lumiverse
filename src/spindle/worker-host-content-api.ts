@@ -78,6 +78,14 @@ type ActivationProjectionInput = {
   firstTriggeredForBook?: unknown;
 };
 
+export function canExtensionMutateRegexScript(
+  script: { owner_extension_identifier?: unknown; preset_id?: unknown },
+  extensionIdentifier: string,
+): boolean {
+  return script.owner_extension_identifier === extensionIdentifier
+    && script.preset_id == null;
+}
+
 export type SpindleBatchJsonValue =
   | null
   | boolean
@@ -1505,6 +1513,7 @@ export class WorkerHostContentApi {
         userId,
         scriptId,
         this.asBatchRecord(args.input ?? {}, "input") as unknown as Parameters<typeof regexScriptsSvc.updateRegexScript>[2],
+        { extensionIdentifier: this.manifest.identifier },
       );
       if (script === null) throw new Error("Regex script not found");
       if (typeof script === "string") throw new Error(script);
@@ -2351,6 +2360,7 @@ export class WorkerHostContentApi {
   private toRegexScriptDTO(s: any): RegexScriptDTO {
     return {
       id: s.id,
+      can_mutate: canExtensionMutateRegexScript(s, this.manifest.identifier),
       name: s.name,
       script_id: s.script_id || "",
       find_regex: s.find_regex,
@@ -2485,7 +2495,9 @@ export class WorkerHostContentApi {
         throw new Error("find_regex is required");
       }
 
-      const result = regexScriptsSvc.createRegexScript(resolvedUserId, input);
+      const result = regexScriptsSvc.createRegexScript(resolvedUserId, input, {
+        extensionIdentifier: this.manifest.identifier,
+      });
       if (typeof result === "string") throw new Error(result);
       this.postToWorker({ type: "response", requestId, result: this.toRegexScriptDTO(result) });
     } catch (err: any) {
@@ -2502,7 +2514,9 @@ export class WorkerHostContentApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const result = regexScriptsSvc.updateRegexScript(resolvedUserId, scriptId, input || {});
+      const result = regexScriptsSvc.updateRegexScript(resolvedUserId, scriptId, input || {}, {
+        extensionIdentifier: this.manifest.identifier,
+      });
       if (result === null) throw new Error("Regex script not found");
       if (typeof result === "string") throw new Error(result);
       this.postToWorker({ type: "response", requestId, result: this.toRegexScriptDTO(result) });
@@ -2520,7 +2534,10 @@ export class WorkerHostContentApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const deleted = regexScriptsSvc.deleteRegexScript(resolvedUserId, scriptId);
+      const deleted = regexScriptsSvc.deleteRegexScript(resolvedUserId, scriptId, {
+        extensionIdentifier: this.manifest.identifier,
+      });
+      if (typeof deleted === "string") throw new Error(deleted);
       this.postToWorker({ type: "response", requestId, result: deleted });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
