@@ -22,7 +22,7 @@ import { connect, Index, type Connection, type Table } from "@lancedb/lancedb";
 
 export type { Table } from "@lancedb/lancedb";
 import { dirname, join } from "path";
-import { mkdirSync, readdirSync, renameSync, rmSync, existsSync, readFileSync, statSync, writeFileSync } from "fs";
+import { mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, existsSync, readFileSync, statSync, writeFileSync, type Dirent } from "fs";
 import { env } from "../../../env";
 import { getDb } from "../../../db/connection";
 import { embeddingCache } from "../../embedding-cache";
@@ -125,9 +125,61 @@ let lancedbPathDiagnosticsLogged = false;
 let optimizeTimer: ReturnType<typeof setTimeout> | null = null;
 const OPTIMIZE_DEBOUNCE_MS = 15_000; // 15 seconds after last write (reduced from 30s)
 /** Grace period for version cleanup — keeps old versions alive long enough for
- *  in-flight reads to complete. Without this, optimize() can delete manifests
- *  that concurrent queries still reference, causing "Object not found" errors. */
-const CLEANUP_GRACE_PERIOD_MS = 2 * 60_000;
+ *  in-flight reads and eventually-consistent handles to advance. Without this,
+ *  optimize() can delete manifests that concurrent queries still reference,
+ *  causing "Object not found" errors. */
+const CLEANUP_GRACE_PERIOD_MS = 5 * 60_000;
+const READ_CONSISTENCY_INTERVAL_SECONDS = 5;
+const LANCE_INDEX_UUID_DIR_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Lance's object-store cleanup removes orphaned index files but local object
+ * stores leave the now-empty UUID directory behind. Reclaim only direct UUID
+ * children which have remained empty beyond the cleanup grace period.
+ *
+ * rmdirSync is intentionally used instead of recursive removal: if a native
+ * index build creates a file between the directory scan and removal, rmdirSync
+ * fails without deleting any index data.
+ */
+export function sweepEmptyIndexDirs(
+  indicesDir: string,
+  gracePeriodMs = CLEANUP_GRACE_PERIOD_MS,
+  now = Date.now(),
+): number {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(indicesDir, { withFileTypes: true });
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return 0;
+    console.warn(`[embeddings] Failed to inspect LanceDB index directory ${indicesDir}:`, err);
+    return 0;
+  }
+
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !LANCE_INDEX_UUID_DIR_RE.test(entry.name)) continue;
+    const indexDir = join(indicesDir, entry.name);
+    try {
+      const ageMs = now - statSync(indexDir).mtimeMs;
+      if (ageMs <= gracePeriodMs) continue;
+      rmdirSync(indexDir);
+      removed += 1;
+    } catch (err: any) {
+      // ENOTEMPTY/EEXIST means the directory is live (or became live while we
+      // inspected it). ENOENT means another cleanup already won the race.
+      if (err?.code === "ENOTEMPTY" || err?.code === "EEXIST" || err?.code === "ENOENT") continue;
+      console.warn(`[embeddings] Failed to remove empty LanceDB index directory ${indexDir}:`, err);
+    }
+  }
+  return removed;
+}
+
+function sweepTableEmptyIndexDirs(tableName: string): void {
+  const removed = sweepEmptyIndexDirs(join(LANCEDB_PATH, `${tableName}.lance`, "_indices"));
+  if (removed > 0) {
+    console.info(`[embeddings] Reclaimed ${removed} empty LanceDB index director${removed === 1 ? "y" : "ies"} for ${tableName}`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Write serialization — prevents concurrent LanceDB mutations from racing.
@@ -812,7 +864,11 @@ async function getConnection(): Promise<Connection> {
   const generation = connGeneration;
   logLanceDbPathDiagnostics();
   cleanupBrokenTermuxLanceDbMirror();
-  if (!connPromise) connPromise = connect(LANCEDB_URI);
+  if (!connPromise) {
+    connPromise = connect(LANCEDB_URI, {
+      readConsistencyInterval: READ_CONSISTENCY_INTERVAL_SECONDS,
+    });
+  }
 
   const conn = await connPromise;
   if (generation !== connGeneration) {
@@ -986,11 +1042,14 @@ export async function ensureVectorIndex(tableName: string, table: Table): Promis
       activeTable = await reopenTableForWrite(tableName);
       await activeTable.createIndex("vector", {
         config: indexConfig,
+        replace: true,
       } as any);
     });
     rebuilt = true;
-  } catch {
-    // Index may already exist - that's fine
+  } catch (err) {
+    state.vectorIndexReady = false;
+    console.warn(`[embeddings] Failed to ensure vector index for ${tableName}:`, err);
+    return activeTable;
   }
   state.vectorIndexReady = true;
   state.lastIndexRebuildAt = Date.now();
@@ -1005,16 +1064,61 @@ export async function ensureVectorIndex(tableName: string, table: Table): Promis
   }
 }
 
+type IndexProbe =
+  | { status: "present"; stats: any }
+  | { status: "missing" }
+  | { status: "error"; error: unknown };
+
+async function probeIndex(table: Table, indexName: string): Promise<IndexProbe> {
+  try {
+    const stats = await (table as any).indexStats(indexName);
+    return stats ? { status: "present", stats } : { status: "missing" };
+  } catch (error) {
+    return { status: "error", error };
+  }
+}
+
+function expectedScalarIndexNames(tableName: string): string[] {
+  const names = ["id_idx", "user_id_idx", "owner_id_idx", "source_id_idx"];
+  if (tableName !== WORLD_BOOK_EMBEDDINGS_TABLE) names.push("source_type_idx");
+  return names;
+}
+
+async function probeIndexesWithRefresh(
+  tableName: string,
+  table: Table,
+  indexNames: string[],
+): Promise<Map<string, IndexProbe>> {
+  const run = async (handle: Table) => new Map(
+    await Promise.all(indexNames.map(async (name) => [name, await probeIndex(handle, name)] as const)),
+  );
+
+  let activeTable = table;
+  let probes = await run(activeTable);
+  if (Array.from(probes.values()).every((probe) => probe.status === "present")) {
+    return probes;
+  }
+
+  // A cached handle can legitimately be behind another process. Retry every
+  // suspect result against a newly opened handle before deciding to rebuild.
+  invalidateTableHandle(tableName);
+  const refreshed = await getTableIfExists(tableName);
+  if (refreshed) {
+    activeTable = refreshed;
+    probes = await run(activeTable);
+  }
+  return probes;
+}
+
 /**
  * Ensure scalar indexes exist on filter columns for fast prefiltering.
  * BTree for high-cardinality (user_id, owner_id, id), Bitmap for low-cardinality (source_type).
  * The `id` BTree is critical for mergeInsert performance — without it, every upsert
  * does a full table scan to find matching rows.
  *
- * When `force` is true, indexes are rebuilt with `replace: true` even if they already
- * exist. This is needed after compaction cleanup, which can leave stale index files
- * referencing deleted data versions (manifests as "Object not found" errors on Windows
- * and other platforms).
+ * When `force` is true, indexes are rebuilt with `replace: true` even if they
+ * already exist. Startup maintenance uses this to recover installations which
+ * already contain an unreadable or incomplete index generation.
  */
 export async function ensureScalarIndexes(tableName: string, table: Table, force = false): Promise<Table> {
   const state = getTableState(tableName);
@@ -1022,44 +1126,31 @@ export async function ensureScalarIndexes(tableName: string, table: Table, force
 
   let activeTable = table;
   let rebuilt = false;
-
-  let indexNames: Set<string>;
+  let failed = false;
   try {
     activeTable = await reopenTableForWrite(tableName);
-    indexNames = new Set((await activeTable.listIndices()).map((i: any) => i.name || i.indexName || ""));
-  } catch {
-    // listIndices can fail if index files are orphaned from a previous compaction.
-    // Treat as empty so every index gets (re)created below.
-    indexNames = new Set();
-  }
+  } catch {}
 
   const create = async (col: string, config?: any) => {
     // LanceDB names indexes as {col}_idx by convention
     const indexName = `${col}_idx`;
-    const hasExistingIndex = indexNames.has(indexName);
-    if (!force && hasExistingIndex) return;
-    const build = async (replace: boolean) => {
+    if (!force) {
+      const probe = await probeIndex(activeTable, indexName);
+      if (probe.status === "present") return;
+    }
+    const build = async () => {
       await withRetryableLanceWriteConflictRetry(`${tableName}: create scalar index ${col}`, tableName, async () => {
         activeTable = await reopenTableForWrite(tableName);
-        const opts: any = config ? { config } : {};
-        if (replace) opts.replace = true;
+        const opts: any = config ? { config, replace: true } : { replace: true };
         await activeTable.createIndex(col, opts);
       });
       rebuilt = true;
-      indexNames.add(indexName);
     };
     try {
-      await build(force && hasExistingIndex);
+      await build();
     } catch (err) {
-      // replace: true can fail when the old index references orphaned files.
-      // Fall back to a plain create (LanceDB overwrites by column name).
-      if (force) {
-        try {
-          await build(false);
-        } catch {
-          // Index may already exist in a usable state
-        }
-      }
+      failed = true;
+      console.warn(`[embeddings] Failed to ensure scalar index ${indexName} for ${tableName}:`, err);
     }
   };
   await create("id"); // Critical for mergeInsert("id") join performance
@@ -1069,7 +1160,7 @@ export async function ensureScalarIndexes(tableName: string, table: Table, force
   if (tableName !== WORLD_BOOK_EMBEDDINGS_TABLE) {
     await create("source_type", Index.bitmap());
   }
-  state.scalarIndexReady = true;
+  state.scalarIndexReady = !failed;
   if (!rebuilt) return activeTable;
   try {
     return await reopenTableForWrite(tableName);
@@ -1088,41 +1179,29 @@ export async function ensureFtsIndex(tableName: string, table: Table, force = fa
 
   let activeTable = table;
   let rebuilt = false;
-
-  let indexNames: Set<string>;
+  let failed = false;
   try {
     activeTable = await reopenTableForWrite(tableName);
-    indexNames = new Set((await activeTable.listIndices()).map((i: any) => i.name || i.indexName || ""));
-  } catch {
-    indexNames = new Set();
-  }
+  } catch {}
 
-  if (!force && indexNames.has("content_idx")) {
-    state.ftsIndexReady = true;
-    return activeTable;
+  if (!force) {
+    const probe = await probeIndex(activeTable, "content_idx");
+    if (probe.status === "present") {
+      state.ftsIndexReady = true;
+      return activeTable;
+    }
   }
   try {
     await withRetryableLanceWriteConflictRetry(`${tableName}: create FTS index`, tableName, async () => {
       activeTable = await reopenTableForWrite(tableName);
-      const opts: any = { config: Index.fts() };
-      if (force && indexNames.has("content_idx")) opts.replace = true;
-      await activeTable.createIndex("content", opts);
+      await activeTable.createIndex("content", { config: Index.fts(), replace: true });
     });
     rebuilt = true;
-  } catch {
-    if (force) {
-      try {
-        await withRetryableLanceWriteConflictRetry(`${tableName}: create FTS index`, tableName, async () => {
-          activeTable = await reopenTableForWrite(tableName);
-          await activeTable.createIndex("content", { config: Index.fts() });
-        });
-        rebuilt = true;
-      } catch {
-        // Index may already exist in a usable state
-      }
-    }
+  } catch (err) {
+    failed = true;
+    console.warn(`[embeddings] Failed to ensure FTS index content_idx for ${tableName}:`, err);
   }
-  state.ftsIndexReady = true;
+  state.ftsIndexReady = !failed;
   if (!rebuilt) return activeTable;
   try {
     return await reopenTableForWrite(tableName);
@@ -1132,9 +1211,9 @@ export async function ensureFtsIndex(tableName: string, table: Table, force = fa
 }
 
 /**
- * Periodic index health monitor. Checks unindexed row count and triggers
- * a vector index rebuild when too many rows have drifted out of the index
- * (which happens naturally with mergeInsert updates).
+ * Periodic index health monitor. It retries suspect results through a fresh
+ * handle, repairs missing/unreadable scalar and FTS indexes, and rebuilds the
+ * vector index when it is damaged or too many rows have drifted out of it.
  */
 function startIndexHealthMonitor(tableName = EMBEDDINGS_TABLE): void {
   const state = getTableState(tableName);
@@ -1172,57 +1251,54 @@ async function checkAndRebuildIndexes(tableName: string, table: Table): Promise<
   if (now - state.lastIndexRebuildAt < INDEX_REBUILD_COOLDOWN_MS) return;
 
   try {
-    const indices = await table.listIndices();
-    const vectorIdx = indices.find((i: any) => {
-      const name = i.name || i.indexName || "";
-      return name.includes("vector");
-    });
-    if (!vectorIdx) return;
-
-    const idxName = vectorIdx.name || (vectorIdx as any).indexName;
-    let unindexed = 0;
-    try {
-      const stats = await (table as any).indexStats(idxName);
-      if (stats) {
-        unindexed = (stats as any).num_unindexed_rows ?? (stats as any).numUnindexedRows ?? 0;
-      }
-    } catch {
-      // indexStats may not be supported for this index type — fall back to
-      // heuristic: rebuild if enough time has passed since last rebuild and
-      // we've been writing (optimizeQueuedAt !== null indicates recent writes).
-      if (optimizeQueuedAt !== null && now - state.lastIndexRebuildAt > INDEX_REBUILD_COOLDOWN_MS * 3) {
-        unindexed = UNINDEXED_ROW_THRESHOLD; // Force rebuild
-      }
-    }
+    const rowCount = await table.countRows();
+    const scalarIndexNames = expectedScalarIndexNames(tableName);
+    const expectsVectorIndex = getVectorIndexConfig(rowCount) !== null;
+    const expectedIndexNames = [
+      ...scalarIndexNames,
+      "content_idx",
+      ...(expectsVectorIndex ? ["vector_idx"] : []),
+    ];
+    const probes = await probeIndexesWithRefresh(tableName, table, expectedIndexNames);
+    const scalarNeedsRepair = scalarIndexNames.some((name) => probes.get(name)?.status !== "present");
+    const ftsNeedsRepair = probes.get("content_idx")?.status !== "present";
+    const vectorProbe = expectsVectorIndex ? probes.get("vector_idx") : undefined;
+    const vectorNeedsRepair = expectsVectorIndex && vectorProbe?.status !== "present";
+    const vectorStats = vectorProbe?.status === "present" ? vectorProbe.stats : undefined;
+    const unindexed = vectorStats
+      ? (vectorStats.num_unindexed_rows ?? vectorStats.numUnindexedRows ?? 0)
+      : 0;
     state.unindexedRowEstimate = unindexed;
 
-    if (unindexed >= UNINDEXED_ROW_THRESHOLD) {
-      console.info(`[embeddings] ${unindexed} unindexed rows detected, rebuilding vector index...`);
+    if (scalarNeedsRepair || ftsNeedsRepair || vectorNeedsRepair || unindexed >= UNINDEXED_ROW_THRESHOLD) {
+      const reasons = [
+        scalarNeedsRepair ? "scalar" : null,
+        ftsNeedsRepair ? "FTS" : null,
+        vectorNeedsRepair ? "vector" : null,
+        unindexed >= UNINDEXED_ROW_THRESHOLD ? `${unindexed} unindexed rows` : null,
+      ].filter(Boolean).join(", ");
+      console.info(`[embeddings] Repairing indexes for ${tableName} (${reasons})...`);
       await withWriteLock(async () => {
-        let tableForRebuild = await getTableIfExists(tableName, true);
+        const tableForRebuild = await getTableIfExists(tableName, true);
         if (!tableForRebuild) return;
-        const rowCount = await tableForRebuild.countRows();
-        const indexConfig = getVectorIndexConfig(rowCount);
-        if (indexConfig === null) {
-          state.vectorIndexReady = true;
-          state.unindexedRowEstimate = 0;
-          state.lastIndexRebuildAt = Date.now();
-          return;
-        }
-        // createIndex(replace) rewrites index files out from under any reader —
-        // the periodic rebuild fires mid-chat, exactly when retrieval is busy.
+        let activeRepairTable: Table = tableForRebuild;
         await withMaintenanceExclusive(async () => {
-          await withRetryableLanceWriteConflictRetry(`${tableName}: rebuild vector index`, tableName, async () => {
-            tableForRebuild = await reopenTableForWrite(tableName);
-            await tableForRebuild.createIndex("vector", {
-              config: indexConfig,
-              replace: true,
-            } as any);
-          });
+          if (scalarNeedsRepair) {
+            state.scalarIndexReady = false;
+            activeRepairTable = await ensureScalarIndexes(tableName, activeRepairTable);
+          }
+          if (ftsNeedsRepair) {
+            state.ftsIndexReady = false;
+            activeRepairTable = await ensureFtsIndex(tableName, activeRepairTable);
+          }
+          if (vectorNeedsRepair || unindexed >= UNINDEXED_ROW_THRESHOLD) {
+            state.vectorIndexReady = false;
+            activeRepairTable = await ensureVectorIndex(tableName, activeRepairTable);
+          }
         });
         state.lastIndexRebuildAt = Date.now();
         state.unindexedRowEstimate = 0;
-        console.info(`[embeddings] Vector index rebuilt (${rowCount} rows)`);
+        console.info(`[embeddings] Index repair completed for ${tableName} (${rowCount} rows)`);
       });
     }
   } catch (err) {
@@ -1312,6 +1388,7 @@ export async function runStartupVectorMaintenance(): Promise<void> {
           activeTable = await ensureScalarIndexes(tableName, activeTable, true);
           activeTable = await ensureFtsIndex(tableName, activeTable, true);
           activeTable = await ensureVectorIndex(tableName, activeTable);
+          sweepTableEmptyIndexDirs(tableName);
         });
       } catch (err) {
         console.warn(`[embeddings] Startup maintenance failed for ${tableName}:`, err);
@@ -1333,9 +1410,9 @@ export async function optimizeTable(tableNames?: string[]): Promise<void> {
         if (!table) continue;
         let activeTable: Table = table;
 
-        // Block new reads and drain in-flight ones, then compact: optimize()
-        // unlinks superseded version files and the forced index rebuilds rewrite
-        // index files — either is fatal to a read scanning them concurrently.
+        // Block new reads and drain in-flight ones, then compact. Lance's
+        // optimize already updates indexes; rebuilding every scalar/FTS index
+        // again here only creates a second orphaned UUID generation.
         await withMaintenanceExclusive(async () => {
           await withRetryableLanceWriteConflictRetry(`${tableName}: optimize`, tableName, async () => {
             activeTable = await reopenTableForWrite(tableName);
@@ -1343,8 +1420,7 @@ export async function optimizeTable(tableNames?: string[]): Promise<void> {
               cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS),
             });
           });
-          activeTable = await ensureScalarIndexes(tableName, activeTable, true);
-          activeTable = await ensureFtsIndex(tableName, activeTable, true);
+          sweepTableEmptyIndexDirs(tableName);
         });
       } catch (err) {
         console.warn(`[embeddings] Optimize failed for ${tableName}:`, err);
