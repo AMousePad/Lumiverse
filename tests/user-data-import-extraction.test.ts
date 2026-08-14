@@ -7,17 +7,26 @@ import { closeDatabase, getDb, initDatabase } from "../src/db/connection";
 import { env } from "../src/env";
 import { buildExportStream } from "../src/services/user-data/export.service";
 import { cancelJob, getJob, startImport } from "../src/services/user-data/import.service";
+import { NDJSON_MAX_RECORD_BYTES } from "../src/services/user-data/manifest";
 
 const USER_ID = "bounded-import-user";
 
-function manifest({ modern = true }: { modern?: boolean } = {}): Record<string, unknown> {
+function manifest({
+  modern = true,
+  maxRecordBytes = NDJSON_MAX_RECORD_BYTES,
+}: {
+  modern?: boolean;
+  maxRecordBytes?: number;
+} = {}): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: modern ? 2 : 1,
     producer: "lumiverse",
     exportedAt: 0,
     archiveId: crypto.randomUUID(),
     producerVersion: "test",
-    ...(modern ? { ndjsonFormatVersion: 1 } : {}),
+    ...(modern
+      ? { ndjsonFormatVersion: 2, ndjsonMaxRecordBytes: maxRecordBytes }
+      : {}),
     includeVectors: false,
     embeddingConfig: { provider: null, model: null, dimension: null },
     counts: {},
@@ -147,18 +156,28 @@ describe("user-data import bounded extraction", () => {
     expect(existsSync(join(workDir, "images", "11111111-1111-1111-1111-111111111111.png"))).toBe(true);
   });
 
-  test("extracts the ZIP64 archive produced by the exporter", async () => {
+  test("round-trips a ZIP64 export containing a record larger than 4 MiB", async () => {
     const archivePath = join(workDir, "exported.lvbak");
+    const value = "x".repeat(5 * 1024 * 1024);
+    getDb()
+      .query("INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, 0)")
+      .run("large_current_setting", value, USER_ID);
     writeFileSync(
       archivePath,
       await streamToBytes(
         buildExportStream({ userId: USER_ID, includeVectors: false, producerVersion: "test" }),
       ),
     );
+    getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run("large_current_setting", USER_ID);
 
     const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("complete");
+    expect(
+      getDb()
+        .query("SELECT length(value) AS length FROM settings WHERE key = ? AND user_id = ?")
+        .get("large_current_setting", USER_ID),
+    ).toEqual({ length: value.length });
   });
 
   test("recovers a duplicated legacy NDJSON entry when its original ZIP metadata matches", async () => {
@@ -269,7 +288,7 @@ describe("user-data import bounded extraction", () => {
     writeFileSync(
       archivePath,
       zipSync({
-        "manifest.json": strToU8(JSON.stringify(manifest())),
+        "manifest.json": strToU8(JSON.stringify(manifest({ maxRecordBytes: 4 * 1024 * 1024 }))),
         "database/settings.ndjson": oversized,
       }),
     );
@@ -304,6 +323,35 @@ describe("user-data import bounded extraction", () => {
       getDb()
         .query("SELECT length(value) AS length FROM settings WHERE key = ? AND user_id = ?")
         .get("legacy_large_setting", USER_ID),
+    ).toEqual({ length: value.length });
+  });
+
+  test("imports an oversized record from a format-1 archive whose 4 MiB claim was unenforced", async () => {
+    const archivePath = join(workDir, "format-v1-oversized-line.lvbak");
+    const value = "y".repeat(5 * 1024 * 1024);
+    const row = JSON.stringify({
+      key: "format_v1_large_setting",
+      value,
+      user_id: "source-user",
+      updated_at: 0,
+    });
+    writeFileSync(
+      archivePath,
+      zipSync({
+        "manifest.json": strToU8(
+          JSON.stringify({ ...manifest({ modern: false }), ndjsonFormatVersion: 1 }),
+        ),
+        "database/settings.ndjson": strToU8(`${row}\n`),
+      }),
+    );
+
+    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const finished = await waitForTerminal(job.jobId);
+    expect(finished.status).toBe("complete");
+    expect(
+      getDb()
+        .query("SELECT length(value) AS length FROM settings WHERE key = ? AND user_id = ?")
+        .get("format_v1_large_setting", USER_ID),
     ).toEqual({ length: value.length });
   });
 

@@ -6,16 +6,23 @@
 // snapshot used to decide whether to restore LanceDB vectors verbatim or
 // queue re-vectorization.
 
-export const ARCHIVE_SCHEMA_VERSION = 1;
+/**
+ * Schema 2 makes the per-record NDJSON limit an explicit archive capability.
+ * Schema 1 archives remain readable through the bounded compatibility path.
+ */
+export const ARCHIVE_SCHEMA_VERSION = 2;
 
 export const ARCHIVE_PRODUCER = "lumiverse";
 
 /**
- * Marker written by exports that use the bounded fixed-window NDJSON path.
- * Its absence identifies archives created before this compatibility marker
- * existed; the importer then uses its separately bounded legacy reader.
+ * Format 1 claimed a 4 MiB record limit, but its exporter never enforced it.
+ * Format 2 advertises a limit in the manifest and enforces the same value on
+ * both export and import.
  */
-export const NDJSON_FORMAT_VERSION = 1;
+export const NDJSON_FORMAT_VERSION = 2;
+
+/** Largest JSON record emitted by the current ZIP64 exporter. */
+export const NDJSON_MAX_RECORD_BYTES = 64 * 1024 * 1024;
 
 export interface ArchiveEmbeddingConfig {
   provider: string | null;
@@ -38,10 +45,12 @@ export interface ArchiveManifest {
   /** Lumiverse server version that produced the archive, if known. */
   producerVersion: string | null;
   /**
-   * Optional so archives exported before this marker remain valid. A value of
-   * 1 or newer means individual NDJSON records obey the modern 4 MiB cap.
+   * Optional for schema-1 compatibility. Format 2 guarantees that
+   * every record obeys `ndjsonMaxRecordBytes`.
    */
   ndjsonFormatVersion?: number;
+  /** Per-record UTF-8 byte ceiling for format-2 NDJSON entries. */
+  ndjsonMaxRecordBytes?: number;
   /** Did the export include LanceDB vectors? */
   includeVectors: boolean;
   /**
@@ -81,6 +90,7 @@ export function createManifest(input: {
     archiveId: input.archiveId,
     producerVersion: input.producerVersion,
     ndjsonFormatVersion: NDJSON_FORMAT_VERSION,
+    ndjsonMaxRecordBytes: NDJSON_MAX_RECORD_BYTES,
     includeVectors: input.includeVectors,
     embeddingConfig: input.embeddingConfig,
     counts: input.counts,
@@ -121,9 +131,31 @@ export function parseManifest(raw: unknown): ArchiveManifest {
   const ndjsonFormatVersion =
     typeof m.ndjsonFormatVersion === "number" &&
     Number.isInteger(m.ndjsonFormatVersion) &&
-    m.ndjsonFormatVersion >= NDJSON_FORMAT_VERSION
+    m.ndjsonFormatVersion >= 1
       ? m.ndjsonFormatVersion
       : undefined;
+  const ndjsonMaxRecordBytes =
+    typeof m.ndjsonMaxRecordBytes === "number" &&
+    Number.isSafeInteger(m.ndjsonMaxRecordBytes) &&
+    m.ndjsonMaxRecordBytes > 0
+      ? m.ndjsonMaxRecordBytes
+      : undefined;
+
+  if (schemaVersion >= 2) {
+    if (ndjsonFormatVersion !== NDJSON_FORMAT_VERSION) {
+      throw new Error(
+        `archive schemaVersion ${schemaVersion} requires ndjsonFormatVersion ${NDJSON_FORMAT_VERSION}`,
+      );
+    }
+    if (ndjsonMaxRecordBytes === undefined) {
+      throw new Error("archive is missing a valid ndjsonMaxRecordBytes capability");
+    }
+    if (ndjsonMaxRecordBytes > NDJSON_MAX_RECORD_BYTES) {
+      throw new Error(
+        `archive requires ${ndjsonMaxRecordBytes}-byte NDJSON records; this server supports ${NDJSON_MAX_RECORD_BYTES}`,
+      );
+    }
+  }
 
   return {
     schemaVersion,
@@ -132,6 +164,7 @@ export function parseManifest(raw: unknown): ArchiveManifest {
     archiveId: String(m.archiveId || ""),
     producerVersion: m.producerVersion ?? null,
     ndjsonFormatVersion,
+    ndjsonMaxRecordBytes,
     includeVectors,
     embeddingConfig,
     counts,
