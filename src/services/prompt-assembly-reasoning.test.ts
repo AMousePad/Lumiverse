@@ -104,14 +104,21 @@ describe("injectReasoningParams (bedrock)", () => {
 });
 
 describe("injectReasoningParams (Anthropic)", () => {
-  test("uses adaptive thinking for Opus 5", () => {
-    const params: Record<string, any> = {};
+  for (const model of [
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-future-family-5.1",
+  ]) {
+    test(`uses adaptive thinking for ${model}`, () => {
+      const params: Record<string, any> = {};
 
-    injectReasoningParams(params, "anthropic", "max", "claude-opus-5");
+      injectReasoningParams(params, "anthropic", "max", model);
 
-    expect(params.thinking).toEqual({ type: "adaptive" });
-    expect(params.output_config).toEqual({ effort: "max" });
-  });
+      expect(params.thinking).toEqual({ type: "adaptive" });
+      expect(params.output_config).toEqual({ effort: "max" });
+    });
+  }
 });
 
 describe("injectReasoningParams (OpenAI-compatible)", () => {
