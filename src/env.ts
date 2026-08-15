@@ -38,6 +38,15 @@ export interface EnvConfig {
   trustedOrigins: string[];
   trustedOriginsSet: Set<string>;
   trustAnyOrigin: boolean;
+  /**
+   * Reverse proxies (IPs or CIDRs) whose forwarded-client headers
+   * (Forwarded / X-Forwarded-For / X-Real-IP) may be trusted, as a strict
+   * allowlist. Empty = legacy behavior (trust headers from any private-range
+   * peer). When set, ONLY listed peers are trusted — this is how you safely
+   * honor headers from a cloud proxy with a public address, and how you close
+   * the "any LAN device can spoof X-Forwarded-For" hole.
+   */
+  trustedProxies: string[];
   /** Suppress user custom CSS and component overrides without deleting them. */
   safeThemeMode: boolean;
   spindleEphemeralGlobalMaxBytes: number;
@@ -182,6 +191,11 @@ export function loadEnv(): EnvConfig {
       ];
   const trustedOriginsSet = new Set(trustedOrigins);
 
+  const trustedProxies = (process.env.TRUSTED_PROXIES ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
   const spindleEphemeralGlobalMaxBytes = parsePositiveIntEnv(
     "SPINDLE_EPHEMERAL_GLOBAL_MAX_BYTES",
     500 * 1024 * 1024
@@ -239,6 +253,7 @@ export function loadEnv(): EnvConfig {
     trustedOrigins,
     trustedOriginsSet,
     trustAnyOrigin,
+    trustedProxies,
     safeThemeMode,
     spindleEphemeralGlobalMaxBytes,
     spindleEphemeralExtensionDefaultMaxBytes,

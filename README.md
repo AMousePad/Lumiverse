@@ -261,6 +261,7 @@ Configuration is managed through `.env` (see `.env.example` for all options). Se
 | `AUTH_SECRET` | No | *derived* | Session signing secret (auto-derived from identity file) |
 | `FRONTEND_DIR` | No | — | Path to built frontend dist for static serving |
 | `TRUSTED_ORIGINS` | No | `localhost` | Comma-separated CORS origins |
+| `TRUSTED_PROXIES` | No | *private ranges* | Reverse proxies allowed to supply client IPs via `X-Forwarded-For`/`Forwarded`/`X-Real-IP`, as IPs or CIDRs (e.g. `203.0.113.10,10.0.0.0/8`). When set, ONLY listed peers are trusted — required for proxies with public addresses; also closes LAN XFF spoofing. |
 
 Owner password is stored hashed in `data/owner.credentials` (created by the setup wizard). To reset: `bun run reset-password`.
 
