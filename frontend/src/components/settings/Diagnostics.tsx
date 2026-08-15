@@ -122,13 +122,13 @@ function buildMarkdown(
     lines.push(`- **${t('diagnostics.reportStatus')}:** ${t('diagnostics.reportUnreachable', { error: backendError })}`)
   } else if (backend) {
     lines.push(`- **${t('diagnostics.version')}:** ${backend.backend.version}`)
-    lines.push(`- **${t('diagnostics.branch')}:** ${backend.git.branch}`)
-    lines.push(`- **${t('diagnostics.commit')}:** ${backend.git.commit}`)
+    if (backend.git.branch) lines.push(`- **${t('diagnostics.branch')}:** ${backend.git.branch}`)
+    if (backend.git.commit) lines.push(`- **${t('diagnostics.commit')}:** ${backend.git.commit}`)
     lines.push(`- **${t('diagnostics.runtime')}:** ${backend.backend.runtime}`)
-    lines.push(`- **${t('diagnostics.os')}:** ${getPlatformLabel(backend.os.platform)} ${backend.os.release} (${backend.os.arch})`)
-    lines.push(`- **${t('diagnostics.host')}:** ${backend.os.hostname}`)
-    lines.push(`- **${t('diagnostics.cpu')}:** ${t('diagnostics.cpuCores', { model: backend.cpu.model, count: backend.cpu.cores })}`)
-    lines.push(`- **${t('diagnostics.ram')}:** ${formatBytes(backend.memory.total - backend.memory.free)} / ${formatBytes(backend.memory.total)}`)
+    lines.push(`- **${t('diagnostics.os')}:** ${getPlatformLabel(backend.os.platform)}${backend.os.release ? ` ${backend.os.release}` : ''} (${backend.os.arch})`)
+    if (backend.os.hostname) lines.push(`- **${t('diagnostics.host')}:** ${backend.os.hostname}`)
+    if (backend.cpu.cores > 0) lines.push(`- **${t('diagnostics.cpu')}:** ${t('diagnostics.cpuCores', { model: backend.cpu.model, count: backend.cpu.cores })}`)
+    if (backend.memory.total > 0) lines.push(`- **${t('diagnostics.ram')}:** ${formatBytes(backend.memory.total - backend.memory.free)} / ${formatBytes(backend.memory.total)}`)
     if (backend.disk) {
       lines.push(`- **${t('diagnostics.storage')}:** ${formatBytes(backend.disk.used)} / ${formatBytes(backend.disk.total)}`)
     }
@@ -254,13 +254,16 @@ export default function Diagnostics() {
         ) : backend && (
           <div className={styles.grid}>
             <InfoRow label={t('diagnostics.version')} value={backend.backend.version} />
-            <InfoRow label={t('diagnostics.branch')} value={backend.git.branch} />
-            <InfoRow label={t('diagnostics.commit')} value={backend.git.commit} />
+            {/* Sensitive backend fields are redacted server-side for non-admin
+                sessions and arrive empty — hide those rows rather than show
+                blank labels or misleading "0 B" placeholders. */}
+            {backend.git.branch && <InfoRow label={t('diagnostics.branch')} value={backend.git.branch} />}
+            {backend.git.commit && <InfoRow label={t('diagnostics.commit')} value={backend.git.commit} />}
             <InfoRow label={t('diagnostics.runtime')} value={backend.backend.runtime} />
-            <InfoRow label={t('diagnostics.os')} value={`${getPlatformLabel(backend.os.platform)} ${backend.os.release} (${backend.os.arch})`} />
-            <InfoRow label={t('diagnostics.host')} value={backend.os.hostname} />
-            <InfoRow label={t('diagnostics.cpu')} value={t('diagnostics.cpuCores', { model: backend.cpu.model, count: backend.cpu.cores })} />
-            <InfoRow label={t('diagnostics.ram')} value={`${formatBytes(backend.memory.total - backend.memory.free)} / ${formatBytes(backend.memory.total)}`} />
+            <InfoRow label={t('diagnostics.os')} value={`${getPlatformLabel(backend.os.platform)}${backend.os.release ? ` ${backend.os.release}` : ''} (${backend.os.arch})`} />
+            {backend.os.hostname && <InfoRow label={t('diagnostics.host')} value={backend.os.hostname} />}
+            {backend.cpu.cores > 0 && <InfoRow label={t('diagnostics.cpu')} value={t('diagnostics.cpuCores', { model: backend.cpu.model, count: backend.cpu.cores })} />}
+            {backend.memory.total > 0 && <InfoRow label={t('diagnostics.ram')} value={`${formatBytes(backend.memory.total - backend.memory.free)} / ${formatBytes(backend.memory.total)}`} />}
             {backend.disk && (
               <InfoRow label={t('diagnostics.storage')} value={`${formatBytes(backend.disk.used)} / ${formatBytes(backend.disk.total)}`} />
             )}

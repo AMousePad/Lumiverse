@@ -5,6 +5,9 @@ import * as characters from "../services/characters.service";
 import * as chats from "../services/chats.service";
 import * as images from "../services/images.service";
 import { parsePagination } from "../services/pagination";
+import { rateLimit } from "../middleware/rate-limit";
+import { authLockoutService } from "../services/auth-lockout.service";
+import { getClientIp } from "../utils/client-ip";
 import sharp from "sharp";
 
 const management = new Hono();
@@ -32,11 +35,40 @@ declare module "hono" {
   }
 }
 
+// Loose cap for this unauthenticated surface. The plugin fires bursts when a
+// profile appears (one request per visible key), not a continuous poll, so
+// 120/min per IP is generous for real traffic while blunting request floods.
+const integrationLimiter = rateLimit({
+  bucket: "stream-deck-integration",
+  max: 120,
+  windowMs: 60 * 1000,
+  message: "Too many Stream Deck integration requests. Try again shortly.",
+});
+
+integration.use("/*", integrationLimiter);
+
 integration.use("/*", async (c: Context, next: Next) => {
   const authorization = c.req.header("authorization") ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(authorization);
   const auth = match ? tokens.authenticateToken(match[1]) : null;
-  if (!auth) return c.json({ error: "Unauthorized" }, 401);
+  if (!auth) {
+    // Feed failed bearer attempts into the shared IP lockout so a remote
+    // token brute-force escalates exactly like failed /api/v1 auth would.
+    const clientId = getClientIp(c);
+    const result = authLockoutService.recordFailure(clientId, "unauthorized", {
+      method: c.req.method,
+      path: c.req.path,
+    });
+    if (result.lockout) {
+      c.header("Retry-After", String(Math.max(1, Math.ceil(result.lockout.retryAfterMs / 1000))));
+      return c.json(
+        authLockoutService.buildPayload(result.lockout, "Too many invalid token attempts. Try again later."),
+        429,
+      );
+    }
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  authLockoutService.recordSuccess(getClientIp(c), "unauthorized");
   c.set("userId", auth.userId);
   c.set("streamDeckScopes", auth.scopes);
   c.header("Cache-Control", "no-store");
