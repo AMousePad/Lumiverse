@@ -798,4 +798,23 @@ describe("avatar-bound appearance", () => {
     });
     expect(result?.chat.metadata.active_avatar_id).toBeUndefined();
   });
+
+  test("applies an avatar selection to the addressed group member, not the chat owner", () => {
+    seedCharacterWithExtensions("char1", appearanceExtensions);
+    seedCharacterWithExtensions("char2", appearanceExtensions);
+    getDb().query("UPDATE characters SET alternate_greetings = ? WHERE id IN (?, ?)")
+      .run(JSON.stringify(["Winter hello"]), "char1", "char2");
+    seedChat("chat1", "char1", "Group", JSON.stringify({ group: true, character_ids: ["char1", "char2"] }), 1);
+
+    const result = applyChatAppearance("u1", "chat1", {
+      type: "avatar",
+      avatar_entry_id: "winter-avatar",
+      character_id: "char2",
+    });
+
+    expect(result?.chat.metadata.group_active_avatar_ids).toEqual({ char2: "winter-image" });
+    expect(result?.chat.metadata.group_active_avatar_entry_ids).toEqual({ char2: "winter-avatar" });
+    expect(result?.chat.metadata.group_active_greeting_indices).toEqual({ char2: 1 });
+    expect(result?.chat.metadata.active_avatar_id).toBeUndefined();
+  });
 });
