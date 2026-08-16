@@ -15,7 +15,7 @@ import type {
   RegexActionEffect,
 } from "../types/regex-script";
 import type { MacroEnv } from "../macros/types";
-import { evaluate } from "../macros/MacroEvaluator";
+import { evaluate, type EvaluateOptions } from "../macros/MacroEvaluator";
 import { registry } from "../macros/MacroRegistry";
 import {
   regexCollectSandboxed,
@@ -1347,14 +1347,22 @@ function foldFingerprint(
   if (!result.cacheable) acc.cacheable = false;
 }
 
+function macroOptionsForRegexScript(script: RegexScript): EvaluateOptions | undefined {
+  if (script.preset_id) {
+    return { sourceOwner: "host", sourceHint: "regex_script:preset" };
+  }
+  return undefined;
+}
+
 async function resolveFindMacros(
   findRegex: string,
   mode: RegexScript["substitute_macros"],
   macroEnv: MacroEnv,
   outFingerprint?: { touchedVars: Set<string>; cacheable: boolean },
+  macroOptions?: EvaluateOptions,
 ): Promise<string> {
   if (mode === "none") return findRegex;
-  const result = await evaluate(findRegex, macroEnv, registry);
+  const result = await evaluate(findRegex, macroEnv, registry, macroOptions);
   foldFingerprint(outFingerprint, result);
   return result.text;
 }
@@ -1370,10 +1378,11 @@ async function resolveReplacementMacros(
   mode: RegexScript["substitute_macros"],
   macroEnv: MacroEnv,
   outFingerprint?: { touchedVars: Set<string>; cacheable: boolean },
+  macroOptions?: EvaluateOptions,
 ): Promise<string> {
   if (mode === "none" || mode === "find") return replaceString;
 
-  const result = await evaluate(replaceString, macroEnv, registry);
+  const result = await evaluate(replaceString, macroEnv, registry, macroOptions);
   foldFingerprint(outFingerprint, result);
   const resolved = result.text;
 
@@ -1422,6 +1431,7 @@ export async function applyRegexScripts(
 
     const startedAt = Date.now();
     try {
+      const macroOptions = macroOptionsForRegexScript(script);
       let findRegex = script.find_regex;
       const preResolvedFind = resolvedTemplates?.resolvedFindPatterns?.get(script.id);
       if (preResolvedFind !== undefined) {
@@ -1432,6 +1442,7 @@ export async function applyRegexScripts(
           script.substitute_macros,
           macroEnv,
           options?.outFingerprint,
+          macroOptions,
         );
       }
 
@@ -1499,7 +1510,7 @@ export async function applyRegexScripts(
         if (matches.length > 0) {
           const replacements = await Promise.all(
             matches.map(async ({ replacement }) => {
-              const evalResult = await evaluate(replacement, macroEnv, registry);
+              const evalResult = await evaluate(replacement, macroEnv, registry, macroOptions);
               foldFingerprint(options?.outFingerprint, evalResult);
               return evalResult.text;
             }),
@@ -1528,7 +1539,7 @@ export async function applyRegexScripts(
             ? decorateRegexActionReplacements(replacements, actionMatches, actionCapture.unpack, script.id)
             : replacements,
         );
-        const evalResult = await evaluate(substituted, macroEnv, registry);
+        const evalResult = await evaluate(substituted, macroEnv, registry, macroOptions);
         foldFingerprint(options?.outFingerprint, evalResult);
         result = evalResult.text;
       } else {
@@ -1545,7 +1556,13 @@ export async function applyRegexScripts(
           && script.substitute_macros !== "none"
           && script.substitute_macros !== "find"
         ) {
-          replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv, options?.outFingerprint);
+          replaceString = await resolveReplacementMacros(
+            replaceString,
+            script.substitute_macros,
+            macroEnv,
+            options?.outFingerprint,
+            macroOptions,
+          );
         }
         if (actionCapture) {
           const matches = await regexCaptureReplacementsSandboxed(
@@ -1680,6 +1697,7 @@ async function resolveRepeatedMatchReplacement(
   options: ApplyRegexScriptOptions | undefined,
 ): Promise<string> {
   let replacement = script.replace_string;
+  const macroOptions = macroOptionsForRegexScript(script);
 
   if (script.substitute_macros === "raw" || script.substitute_macros === "after") {
     replacement = substituteRegexCapturesCore(
@@ -1691,7 +1709,7 @@ async function resolveRepeatedMatchReplacement(
       match.namedGroups,
     );
     if (macroEnv) {
-      const evaluated = await evaluate(replacement, macroEnv, registry);
+      const evaluated = await evaluate(replacement, macroEnv, registry, macroOptions);
       foldFingerprint(options?.outFingerprint, evaluated);
       replacement = evaluated.text;
     }
@@ -1711,6 +1729,7 @@ async function resolveRepeatedMatchReplacement(
         script.substitute_macros,
         macroEnv,
         options?.outFingerprint,
+        macroOptions,
       );
     }
     replacement = substituteRegexCapturesCore(

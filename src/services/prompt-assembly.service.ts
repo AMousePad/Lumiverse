@@ -1300,13 +1300,25 @@ function resolveStoredPromptVariableValues(
  * wraps the existing single macro evaluation rather than scheduling a second
  * pass, so the placement macros are strictly observational.
  */
+async function evaluateHostPromptSource(
+  content: string,
+  macroEnv: MacroEnv,
+  sourceHint = "prompt_source:preset_setting",
+): Promise<string> {
+  return (await evaluate(content, macroEnv, registry, {
+    phase: "prompt",
+    sourceHint,
+    sourceOwner: "host",
+  })).text;
+}
+
 async function evaluatePromptBlockContent(
   content: string,
   macroEnv: MacroEnv,
   block: Pick<PromptBlock, "id" | "role" | "position" | "depth">,
 ): Promise<string> {
   return withPromptBlockContext(macroEnv, block, async () =>
-    (await evaluate(content, macroEnv, registry)).text,
+    evaluateHostPromptSource(content, macroEnv, "prompt_source:preset_block"),
   );
 }
 
@@ -3029,8 +3041,7 @@ export async function assemblePrompt(
           chat.metadata?.group === true,
         );
         if (newChatPrompt) {
-          const resolved = (await evaluate(newChatPrompt, macroEnv, registry))
-            .text;
+          const resolved = await evaluateHostPromptSource(newChatPrompt, macroEnv);
           const trimmed = resolved.trim();
           if (trimmed && !isDecorativeNewChatSeparator(trimmed)) {
             result.push({ role: "system", content: trimmed });
@@ -3463,13 +3474,11 @@ export async function assemblePrompt(
   // ---- Post-history instructions ----
   phaseStartedAt = performance.now();
   if (!phiMacroReferenced && effectiveCharacter.post_history_instructions) {
-    const resolved = (
-      await evaluate(
-        effectiveCharacter.post_history_instructions,
-        macroEnv,
-        registry,
-      )
-    ).text.trim();
+    const resolved = (await evaluateHostPromptSource(
+      "{{charPostHistoryInstructions}}",
+      macroEnv,
+      "prompt_source:character_wrapper",
+    )).trim();
     if (resolved) {
       result.push({ role: "system", content: resolved });
       breakdown.push({
@@ -3750,7 +3759,7 @@ export async function assemblePrompt(
   ) {
     const nudge = promptBehavior.continueNudge;
     if (nudge) {
-      const resolved = (await evaluate(nudge, macroEnv, registry)).text;
+      const resolved = await evaluateHostPromptSource(nudge, macroEnv);
       if (resolved) {
         result.push(markAsContinueNudge({ role: "system", content: resolved }));
         breakdown.push({
@@ -3772,7 +3781,7 @@ export async function assemblePrompt(
         : "";
     let resolved = "";
     if (prompt) {
-      resolved = (await evaluate(prompt, macroEnv, registry)).text;
+      resolved = await evaluateHostPromptSource(prompt, macroEnv);
     }
     if (userInput) {
       resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
@@ -3796,9 +3805,10 @@ export async function assemblePrompt(
       typeof last.content === "string" &&
       !last.content.trim()
     ) {
-      const resolved = (
-        await evaluate(promptBehavior.sendIfEmpty, macroEnv, registry)
-      ).text;
+      const resolved = await evaluateHostPromptSource(
+        promptBehavior.sendIfEmpty,
+        macroEnv,
+      );
       if (resolved) {
         result.push({ role: "user", content: resolved });
         breakdown.push({
@@ -3824,7 +3834,7 @@ export async function assemblePrompt(
   ) {
     const nudge = promptBehavior.emptySendNudge;
     if (nudge) {
-      const resolved = (await evaluate(nudge, macroEnv, registry)).text;
+      const resolved = await evaluateHostPromptSource(nudge, macroEnv);
       if (resolved) {
         result.push({ role: "user", content: resolved });
         breakdown.push({
@@ -3852,7 +3862,7 @@ export async function assemblePrompt(
   ) {
     const groupNudge = promptBehavior.groupNudge;
     if (groupNudge) {
-      const resolved = (await evaluate(groupNudge, macroEnv, registry)).text;
+      const resolved = await evaluateHostPromptSource(groupNudge, macroEnv);
       if (resolved) {
         result.push({ role: "user", content: resolved });
         breakdown.push({
@@ -3886,8 +3896,11 @@ export async function assemblePrompt(
     typeof promptBiasVal === "string" &&
     promptBiasVal.trim()
   ) {
-    const resolvedBias = (await evaluate(promptBiasVal, macroEnv, registry))
-      .text;
+    const resolvedBias = await evaluateHostPromptSource(
+      promptBiasVal,
+      macroEnv,
+      "prompt_source:host_setting",
+    );
     if (resolvedBias) prefillParts.push(resolvedBias);
   }
 
@@ -3898,8 +3911,7 @@ export async function assemblePrompt(
         ? completionSettings.assistantImpersonation
         : completionSettings.assistantPrefill;
   if (csPrefill) {
-    const resolvedPrefill = (await evaluate(csPrefill, macroEnv, registry))
-      .text;
+    const resolvedPrefill = await evaluateHostPromptSource(csPrefill, macroEnv);
     if (resolvedPrefill) prefillParts.push(resolvedPrefill);
   }
 
@@ -3912,9 +3924,10 @@ export async function assemblePrompt(
     connection?.provider === "moonshot" &&
     completionSettings.reasoningPrefill
   ) {
-    const resolvedReasoningPrefill = (
-      await evaluate(completionSettings.reasoningPrefill, macroEnv, registry)
-    ).text;
+    const resolvedReasoningPrefill = await evaluateHostPromptSource(
+      completionSettings.reasoningPrefill,
+      macroEnv,
+    );
     if (resolvedReasoningPrefill) {
       assistantReasoningPrefill = resolvedReasoningPrefill;
     }
@@ -7640,7 +7653,7 @@ async function onelinerImpersonation(
     typeof ctx.impersonateInput === "string" ? ctx.impersonateInput.trim() : "";
   let resolved = "";
   if (prompt) {
-    resolved = (await evaluate(prompt, macroEnv, registry)).text;
+    resolved = await evaluateHostPromptSource(prompt, macroEnv);
   }
   if (userInput) {
     resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
@@ -7662,8 +7675,7 @@ async function onelinerImpersonation(
     completionSettings.assistantImpersonation ||
     completionSettings.assistantPrefill;
   if (csPrefill) {
-    const resolvedPrefill = (await evaluate(csPrefill, macroEnv, registry))
-      .text;
+    const resolvedPrefill = await evaluateHostPromptSource(csPrefill, macroEnv);
     if (resolvedPrefill) {
       assistantPrefill = resolvedPrefill;
       result.push({ role: "assistant", content: assistantPrefill, partial: true });
@@ -7677,9 +7689,10 @@ async function onelinerImpersonation(
   }
 
   if (connection?.provider === "moonshot" && completionSettings.reasoningPrefill) {
-    const resolvedReasoningPrefill = (
-      await evaluate(completionSettings.reasoningPrefill, macroEnv, registry)
-    ).text;
+    const resolvedReasoningPrefill = await evaluateHostPromptSource(
+      completionSettings.reasoningPrefill,
+      macroEnv,
+    );
     if (resolvedReasoningPrefill) {
       assistantReasoningPrefill = resolvedReasoningPrefill;
       const prefillMessage = result.findLast(
