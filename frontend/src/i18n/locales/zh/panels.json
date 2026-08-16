@@ -3072,9 +3072,11 @@
       "expand": "展开类别",
       "collapse": "折叠类别",
       "pickOne": "单选",
+      "enableAll": "启用分类及内容",
+      "disableAll": "禁用分类及内容",
       "multi": "多选",
-      "enable": "启用类别",
-      "disable": "禁用类别",
+      "enable": "启用分类块",
+      "disable": "禁用分类块",
       "rename": "重命名",
       "deleteCategory": "删除类别"
     },

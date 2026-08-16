@@ -245,12 +245,14 @@ interface SortableCategoryItemProps {
   onEdit: (block: PromptBlock) => void
   onDelete: (id: string) => void
   onToggle: (id: string) => void
+  /** Blanket enable/disable of the category and all of its children. */
+  onToggleChildren: (id: string) => void
   childCount: number
   dragDisabled?: boolean
 }
 
 function SortableCategoryItem({
-  block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, childCount, dragDisabled = false,
+  block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, onToggleChildren, childCount, dragDisabled = false,
 }: SortableCategoryItemProps) {
   const { t } = useLb()
   const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
@@ -290,6 +292,9 @@ function SortableCategoryItem({
       </div>
       <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? t('category.disable') : t('category.enable')}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
+      </Button>
+      <Button size="icon-sm" variant="ghost" onClick={() => onToggleChildren(block.id)} title={block.enabled ? t('category.disableAll') : t('category.enableAll')}>
+        <Layers size={14} />
       </Button>
       <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={t('category.rename')}>
         <Edit2 size={14} />
@@ -371,14 +376,14 @@ function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, o
       <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? t('block.disable') : t('block.enable')}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
       </Button>
-      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={tc('actions.edit')}>
-        <Edit2 size={14} />
-      </Button>
       {!isMarker && !block.stashId && onStash && (
         <Button size="icon-sm" variant="ghost" onClick={() => onStash(block)} title={t('actions.addToStash')}>
           <Archive size={14} />
         </Button>
       )}
+      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={tc('actions.edit')}>
+        <Edit2 size={14} />
+      </Button>
       {!block.isLocked && (
         <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title={tc('actions.delete')}>
           <Trash2 size={14} />
@@ -1793,6 +1798,7 @@ export default function LoomBuilder({
     removeBlock,
     updateBlock,
     toggleBlock,
+    toggleCategoryChildren,
     saveSamplerOverrides,
     savePromptBehavior,
     saveCompletionSettings,
@@ -2945,6 +2951,7 @@ useEffect(() => {
                         onEdit={handleEdit}
                         onDelete={handleDelete}
                         onToggle={toggleBlock}
+                        onToggleChildren={toggleCategoryChildren}
                         childCount={group.children.length}
                         dragDisabled={isSearchActive}
                       />

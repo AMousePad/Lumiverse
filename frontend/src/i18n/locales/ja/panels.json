@@ -3072,9 +3072,11 @@
       "expand": "カテゴリを展開",
       "collapse": "カテゴリを折りたたむ",
       "pickOne": "1 つ選択",
+      "enableAll": "カテゴリと内容を有効化",
+      "disableAll": "カテゴリと内容を無効化",
       "multi": "マルチ",
-      "enable": "カテゴリを有効にする",
-      "disable": "カテゴリを無効にする",
+      "enable": "カテゴリブロックを有効化",
+      "disable": "カテゴリブロックを無効化",
       "rename": "名前変更",
       "deleteCategory": "カテゴリを削除"
     },

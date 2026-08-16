@@ -3072,9 +3072,11 @@
       "expand": "展開類別",
       "collapse": "摺疊類別",
       "pickOne": "單選",
+      "enableAll": "啟用分類及內容",
+      "disableAll": "停用分類及內容",
       "multi": "多選",
-      "enable": "啟用類別",
-      "disable": "禁用類別",
+      "enable": "啟用分類區塊",
+      "disable": "停用分類區塊",
       "rename": "重命名",
       "deleteCategory": "刪除類別"
     },

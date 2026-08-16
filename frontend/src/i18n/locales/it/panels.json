@@ -3080,9 +3080,11 @@
       "expand": "Espandi categoria",
       "collapse": "Comprimi categoria",
       "pickOne": "scegli uno",
+      "enableAll": "Attiva categoria e contenuti",
+      "disableAll": "Disattiva categoria e contenuti",
       "multi": "multi",
-      "enable": "Abilita categoria",
-      "disable": "Disabilita categoria",
+      "enable": "Attiva blocco categoria",
+      "disable": "Disattiva blocco categoria",
       "rename": "Rinomina",
       "deleteCategory": "Elimina categoria"
     },
