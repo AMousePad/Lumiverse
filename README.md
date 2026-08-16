@@ -363,4 +363,4 @@ scripts/
 
 ## License
 
-[Lumiverse Community License v2.0](LICENSE.md) — source-available for personal, academic, and non-profit use. See the license for full terms.
+[Lumiverse Community License v2.1](LICENSE.md) — source-available for personal, academic, and non-profit use. See the license for full terms.
