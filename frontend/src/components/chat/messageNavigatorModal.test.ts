@@ -16,4 +16,15 @@ describe('message navigator modal contract', () => {
     expect(css).not.toContain('backdrop-filter')
     expect(css).not.toContain('.backdrop')
   })
+
+  test('keeps persistent history navigation in the toolbar, outside message content', () => {
+    const chatView = readFileSync(join(chatDir, 'ChatView.tsx'), 'utf8')
+    const scrollToBottom = readFileSync(join(chatDir, 'ScrollToBottom.tsx'), 'utf8')
+
+    expect(chatView).toContain('className={styles.chatToolbar}')
+    expect(chatView).toContain("title={t('messageNavigator.open')}")
+    expect(chatView).toContain('onClick={() => void navigateToOldestMessage()}')
+    expect(scrollToBottom).not.toContain('messageNavigator')
+    expect(scrollToBottom).not.toContain('ArrowUp')
+  })
 })

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router'
-import { UserRound, ListChecks } from 'lucide-react'
+import { ArrowUp, List, ListChecks, LoaderCircle, Pencil, UserRound } from 'lucide-react'
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
 import { chatsApi, messagesApi } from '@/api/chats'
@@ -212,11 +212,15 @@ export default function ChatView() {
   const [chatFindQuery, setChatFindQuery] = useState('')
   const [chatFindTarget, setChatFindTarget] = useState<ChatFindNavigationTarget | null>(null)
   const [messageNavigatorOpen, setMessageNavigatorOpen] = useState(false)
+  const [loadingOldestMessage, setLoadingOldestMessage] = useState(false)
   const setActiveChat = useStore((s) => s.setActiveChat)
   const setMessages = useStore((s) => s.setMessages)
   const messages = useStore((s) => s.messages)
   const isStreaming = useStore((s) => s.isStreaming)
   const activeChatId = useStore((s) => s.activeChatId)
+  const messageEditDraft = useStore((s) => s.messageEditDraft)
+  const resumeMessageEdit = useStore((s) => s.resumeMessageEdit)
+  const totalChatLength = useStore((s) => s.totalChatLength)
   const portraitPanelOpen = useStore((s) => s.portraitPanelOpen)
   const togglePortraitPanel = useStore((s) => s.togglePortraitPanel)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
@@ -279,6 +283,39 @@ export default function ChatView() {
   const clearChatFindTarget = useCallback(() => {
     setChatFindTarget(null)
   }, [])
+
+  const navigateToOldestMessage = useCallback(async () => {
+    if (!chatId || loadingOldestMessage) return
+    setLoadingOldestMessage(true)
+    try {
+      const page = await messagesApi.list(chatId, { limit: 1, offset: 0 })
+      const first = page.data[0]
+      if (!first) return
+      setChatFindTarget({
+        id: first.id,
+        index_in_chat: first.index_in_chat,
+        offset: 0,
+        messageTotal: page.total,
+        requestId: Date.now(),
+      })
+    } catch {
+      // Best-effort navigation: leave the current viewport untouched.
+    } finally {
+      setLoadingOldestMessage(false)
+    }
+  }, [chatId, loadingOldestMessage])
+
+  const returnToEditedMessage = useCallback(() => {
+    if (!chatId || !messageEditDraft || messageEditDraft.chatId !== chatId) return
+    resumeMessageEdit()
+    setChatFindTarget({
+      id: messageEditDraft.messageId,
+      index_in_chat: messageEditDraft.messageIndexInChat,
+      offset: messageEditDraft.messageOffset,
+      messageTotal: totalChatLength,
+      requestId: Date.now(),
+    })
+  }, [chatId, messageEditDraft, resumeMessageEdit, totalChatLength])
 
   useEffect(() => {
     const handleFindShortcut = (event: KeyboardEvent) => {
@@ -1098,12 +1135,48 @@ export default function ChatView() {
             <div ref={chatTopDockRef} className={styles.chatToolbar} data-spindle-mount="chat_top_dock" data-dock-request="floating">
               <button
                 type="button"
-                className={clsx(styles.toolbarBtn, messageSelectMode && styles.toolbarBtnActive)}
+                className={clsx(styles.toolbarBtn, styles.toolbarBtnPrimary, messageSelectMode && styles.toolbarBtnActive)}
                 onClick={toggleSelectMode}
                 title={messageSelectMode ? t('chatView.exitSelectionMode') : t('chatView.selectMessages')}
               >
                 <ListChecks size={14} />
               </button>
+              {totalChatLength > 1 && (
+                <button
+                  type="button"
+                  className={styles.toolbarBtn}
+                  onClick={() => void navigateToOldestMessage()}
+                  disabled={loadingOldestMessage}
+                  title={t('scrollToTop')}
+                  aria-label={t('scrollToTop')}
+                >
+                  {loadingOldestMessage
+                    ? <LoaderCircle size={14} className={styles.toolbarSpinner} />
+                    : <ArrowUp size={14} />}
+                </button>
+              )}
+              {totalChatLength > 0 && (
+                <button
+                  type="button"
+                  className={styles.toolbarBtn}
+                  onClick={() => setMessageNavigatorOpen(true)}
+                  title={t('messageNavigator.open')}
+                  aria-label={t('messageNavigator.open')}
+                >
+                  <List size={14} />
+                </button>
+              )}
+              {messageEditDraft?.chatId === chatId && (
+                <button
+                  type="button"
+                  className={clsx(styles.toolbarBtn, styles.toolbarBtnActive)}
+                  onClick={returnToEditedMessage}
+                  title={t('messageNavigator.returnToEdit')}
+                  aria-label={t('messageNavigator.returnToEdit')}
+                >
+                  <Pencil size={14} />
+                </button>
+              )}
             </div>
             <ChatFindBar
               chatId={chatId}
@@ -1127,11 +1200,7 @@ export default function ChatView() {
               findTarget={chatFindTarget}
               findQuery={chatFindQuery}
             />
-            <ScrollToBottom
-              chatId={chatId}
-              onOpenNavigator={() => setMessageNavigatorOpen(true)}
-              onNavigate={setChatFindTarget}
-            />
+            <ScrollToBottom />
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
             <div data-spindle-mount="chat_bottom_dock" data-dock-request="strip" />
