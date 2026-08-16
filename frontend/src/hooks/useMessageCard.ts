@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react'
+import { useCallback, useMemo, useEffect, useLayoutEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useStore } from '@/store'
@@ -57,15 +57,25 @@ export function useMessageCard(message: Message, chatId: string) {
   const { t: tc } = useTranslation('chat', { keyPrefix: 'messageCard' })
   const navigate = useNavigate()
   const editingMessageId = useStore((s) => s.editingMessageId)
-  const setEditingMessageId = useStore((s) => s.setEditingMessageId)
+  const messageEditDraft = useStore((s) => s.messageEditDraft)
+  const beginMessageEdit = useStore((s) => s.beginMessageEdit)
+  const updateMessageEditDraft = useStore((s) => s.updateMessageEditDraft)
+  const clearMessageEdit = useStore((s) => s.clearMessageEdit)
   const updateMessage = useStore((s) => s.updateMessage)
   const addToast = useStore((s) => s.addToast)
   const isEditing = editingMessageId === message.id
-  const [editContent, setEditContent] = useState('')
-  const [editReasoning, setEditReasoning] = useState('')
-  const [showReasoningEditor, setShowReasoningEditor] = useState(false)
-  const hadReasoningRef = useRef(false)
-  const wasEditingRef = useRef(false)
+  const activeDraft = messageEditDraft?.chatId === chatId && messageEditDraft.messageId === message.id
+    ? messageEditDraft
+    : null
+  const editContent = activeDraft?.content ?? ''
+  const editReasoning = activeDraft?.reasoning ?? ''
+  const showReasoningEditor = activeDraft?.showReasoningEditor ?? false
+  const setEditContent = useCallback((content: string) => {
+    updateMessageEditDraft({ content })
+  }, [updateMessageEditDraft])
+  const setEditReasoning = useCallback((reasoning: string) => {
+    updateMessageEditDraft({ reasoning })
+  }, [updateMessageEditDraft])
   const removeMessage = useStore((s) => s.removeMessage)
   const openModal = useStore((s) => s.openModal)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
@@ -311,40 +321,56 @@ export function useMessageCard(message: Message, chatId: string) {
   }, [messages, message.id, message.name, isUser, activePersona])
 
   const initializeEdit = useCallback(() => {
+    const persistedMessages = messages.filter((entry) => (
+      !entry.id.startsWith('__stream_placeholder_') && !entry.id.startsWith('__regen_placeholder_')
+    ))
+    const loadedOffset = Math.max(0, useStore.getState().totalChatLength - persistedMessages.length)
+    const loadedIndex = persistedMessages.findIndex((entry) => entry.id === message.id)
+    const messageOffset = loadedOffset + Math.max(0, loadedIndex)
+
     if (!message.is_user) {
       // For assistant messages, separate reasoning from content
       const apiReasoning = typeof message.extra?.reasoning === 'string' ? message.extra.reasoning : ''
       const { cleaned, thoughts } = parseThinkingTags(message.content)
       const reasoningText = apiReasoning || thoughts
       const hasReasoning = !!reasoningText
-      hadReasoningRef.current = hasReasoning
-      setShowReasoningEditor(hasReasoning)
-      setEditReasoning(reasoningText)
-      // Clean content: strip think tags and leading blank lines
-      setEditContent(cleaned.replace(/^\n{2,}/, ''))
+      beginMessageEdit({
+        chatId,
+        messageId: message.id,
+        messageOffset,
+        messageIndexInChat: message.index_in_chat,
+        content: cleaned.replace(/^\n{2,}/, ''),
+        reasoning: reasoningText,
+        showReasoningEditor: hasReasoning,
+        hadReasoning: hasReasoning,
+      })
     } else {
-      setEditContent(message.content)
-      setEditReasoning('')
-      setShowReasoningEditor(false)
-      hadReasoningRef.current = false
+      beginMessageEdit({
+        chatId,
+        messageId: message.id,
+        messageOffset,
+        messageIndexInChat: message.index_in_chat,
+        content: message.content,
+        reasoning: '',
+        showReasoningEditor: false,
+        hadReasoning: false,
+      })
     }
-  }, [message.content, message.is_user, message.extra])
+  }, [beginMessageEdit, chatId, message.content, message.extra, message.id, message.index_in_chat, message.is_user, messages])
 
-  // Populate edit fields on the false→true transition of isEditing,
-  // so externally-triggered edits (keyboard shortcut) seed the fields too.
-  // useLayoutEffect so the content is populated before paint — useEffect
-  // leaves a frame where the textarea is empty (min-height 220px) which
-  // the virtualizer measures as a height spike ("void").
+  // Keyboard-triggered edits only publish the target id. Initialize the
+  // durable draft before paint if this target does not have one yet. A row
+  // remount caused by virtualization sees the matching draft and leaves it
+  // untouched.
   useLayoutEffect(() => {
-    if (isEditing && !wasEditingRef.current) {
+    if (isEditing && !activeDraft) {
       initializeEdit()
     }
-    wasEditingRef.current = isEditing
-  }, [isEditing, initializeEdit])
+  }, [activeDraft, isEditing, initializeEdit])
 
   const handleEdit = useCallback(() => {
-    setEditingMessageId(message.id)
-  }, [message.id, setEditingMessageId])
+    initializeEdit()
+  }, [initializeEdit])
 
   const handleSaveEdit = useCallback(async () => {
     try {
@@ -352,7 +378,7 @@ export function useMessageCard(message: Message, chatId: string) {
       const cleanContent = editContent.trim()
       let updated: Message
 
-      if (!message.is_user && hadReasoningRef.current) {
+      if (!message.is_user && activeDraft?.hadReasoning) {
         // Let the WS MESSAGE_EDITED payload reconcile the final stored message so
         // extension-postprocessed content is not overwritten by a late local merge.
         const extra = {
@@ -365,20 +391,16 @@ export function useMessageCard(message: Message, chatId: string) {
         updated = await messagesApi.update(chatId, message.id, { content: cleanContent })
       }
       updateMessage(updated.id, updated)
-      setEditingMessageId(null)
+      clearMessageEdit()
     } catch (err) {
       console.error('[MessageCard] Failed to save edit:', err)
       addToast({ type: 'error', message: t('failedSaveMessageEdit') })
     }
-  }, [chatId, message.id, editContent, editReasoning, message.is_user, message.extra, setEditingMessageId, updateMessage, addToast, t])
+  }, [activeDraft?.hadReasoning, chatId, message.id, editContent, editReasoning, message.is_user, message.extra, clearMessageEdit, updateMessage, addToast, t])
 
   const handleCancelEdit = useCallback(() => {
-    setEditingMessageId(null)
-    setEditContent('')
-    setEditReasoning('')
-    setShowReasoningEditor(false)
-    hadReasoningRef.current = false
-  }, [setEditingMessageId])
+    clearMessageEdit()
+  }, [clearMessageEdit])
 
   const doDeleteMessage = useCallback(async () => {
     try {

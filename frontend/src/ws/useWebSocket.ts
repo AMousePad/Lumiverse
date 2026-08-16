@@ -924,7 +924,7 @@ export function useWebSocket() {
                 const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
                 const s = store.getState()
                 if (s.activeChatId === payload.chatId) {
-                  s.setMessages(messages, res.total)
+                  s.reconcileMessagesTail({ ...res, data: messages })
                 }
               }).catch(() => { /* ignore */ })
             }
@@ -1045,9 +1045,9 @@ export function useWebSocket() {
                         )
                       : message)
                   : res.data
-                s.setMessages(messages, res.total)
-                // Deferred metrics may have arrived (and been wiped by the
-                // setMessages above) before this re-fetch could read them —
+                s.reconcileMessagesTail({ ...res, data: messages })
+                // Deferred metrics may have arrived (and been replaced in the
+                // reconciled tail above) before this re-fetch could read them —
                 // re-apply from the buffer so the pill/hover survive the race.
                 if (completedMessageId) {
                   const buffered = pendingGenerationMetrics.get(completedMessageId)
@@ -1266,7 +1266,7 @@ export function useWebSocket() {
             const s = store.getState()
             if (s.activeChatId === chatId) {
               s.stopStreaming()
-              s.setMessages(messages, res.total)
+              s.reconcileMessagesTail({ ...res, data: messages })
             } else {
               s.stopStreaming()
             }
@@ -2117,7 +2117,7 @@ export function useWebSocket() {
           const fresh = await fetchLatestMessages(activeChatId)
           const after = store.getState()
           if (after.activeChatId === activeChatId && !after.isStreaming) {
-            after.setMessages(fresh.data, fresh.total)
+            after.reconcileMessagesTail(fresh)
           }
         } catch {
           /* best-effort */
