@@ -1,9 +1,12 @@
 import type {
+  Chat,
   ChatSummary,
   ConnectionModelsResult,
   ConnectionProfile,
+  GroupedRecentChat,
   Message,
   PaginatedResult,
+  RecentChat,
   UpdateConnectionProfileInput,
   WorldBook,
   WorldBookEntry,
@@ -30,12 +33,25 @@ export interface FrontendConnectionsAPI {
   update(id: string, input: UpdateConnectionProfileInput): Promise<ConnectionProfile>
 }
 
+export interface RecentChatsQuery {
+  limit?: number
+  offset?: number
+  search?: string
+  sort?: 'name' | 'recent' | 'created'
+  direction?: 'asc' | 'desc'
+}
+
 export interface FrontendChatsAPI {
   listForCharacter(characterId: string): Promise<ChatSummary[]>
   getMessages(
     chatId: string,
     options?: { limit?: number; tail?: boolean },
   ): Promise<PaginatedResult<Message>>
+  /** Flat one-row-per-chat recent list with server-side search/sort and per-row preview enrichment. */
+  listRecent(options?: RecentChatsQuery): Promise<PaginatedResult<RecentChat>>
+  listRecentGrouped(options?: RecentChatsQuery): Promise<PaginatedResult<GroupedRecentChat>>
+  update(chatId: string, input: Partial<{ name: string; metadata: Record<string, unknown> }>): Promise<Chat>
+  delete(chatId: string): Promise<void>
   updateMessage?(chatId: string, messageId: string, input: { content?: string }): Promise<unknown>
 }
 
@@ -92,6 +108,10 @@ export interface FrontendDomainDependencies {
   chats: {
     listForCharacter(characterId: string): Promise<ChatSummary[]>
     getMessages(chatId: string, options?: { limit?: number; tail?: boolean }): Promise<PaginatedResult<Message>>
+    listRecent(options?: RecentChatsQuery): Promise<PaginatedResult<RecentChat>>
+    listRecentGrouped(options?: RecentChatsQuery): Promise<PaginatedResult<GroupedRecentChat>>
+    update(chatId: string, input: Partial<{ name: string; metadata: Record<string, unknown> }>): Promise<Chat>
+    delete(chatId: string): Promise<void>
   }
   worldBooks: {
     list(): Promise<WorldBook[]>
@@ -329,6 +349,39 @@ export function createFrontendDomainApi(
       })
       assertUsable()
       return result
+    },
+
+    async listRecent(options) {
+      assertUsable()
+      const result = await dependencies.chats.listRecent({
+        ...options,
+        limit: safeRecentLimit(options?.limit ?? 50),
+      })
+      assertUsable()
+      return result
+    },
+
+    async listRecentGrouped(options) {
+      assertUsable()
+      const result = await dependencies.chats.listRecentGrouped({
+        ...options,
+        limit: safeRecentLimit(options?.limit ?? 50),
+      })
+      assertUsable()
+      return result
+    },
+
+    async update(chatId, input) {
+      requirePermission('chats', 'ctx.chats.update')
+      const result = await dependencies.chats.update(chatId, input)
+      assertUsable()
+      return result
+    },
+
+    async delete(chatId) {
+      requirePermission('chats', 'ctx.chats.delete')
+      await dependencies.chats.delete(chatId)
+      assertUsable()
     },
   }
 
