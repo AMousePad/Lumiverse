@@ -163,8 +163,11 @@ interface MacroSourceReplacement {
 }
 
 /**
- * Resolve only static reads of prompt-variable keys owned by the current
- * preset block before a whole-template extension interceptor runs.
+ * Resolve only static reads of prompt-variable keys owned by the active
+ * preset before a whole-template extension interceptor runs. This includes
+ * variables declared by other blocks because native preset macros can read
+ * those values across blocks. The current block context still determines the
+ * value when multiple blocks declare the same key.
  *
  * Replacements are applied by source offset rather than reconstructing the
  * AST. That is important for compatibility interpreters: surrounding Risu
@@ -239,16 +242,20 @@ function getProtectedPromptVariableKeys(env: MacroEnv): Set<string> {
   const defaultsByBlock = env.extra.promptVariableDefaultsByBlock as
     | Record<string, Record<string, string | number>>
     | undefined;
-  const values = blockId && valuesByBlock?.[blockId]
-    ? valuesByBlock[blockId]
-    : env.extra.promptVariables as Record<string, string | number> | undefined;
-  const defaults = blockId && defaultsByBlock?.[blockId]
-    ? defaultsByBlock[blockId]
-    : env.extra.promptVariableDefaults as Record<string, string | number> | undefined;
+  const values = env.extra.promptVariables as
+    | Record<string, string | number>
+    | undefined;
+  const defaults = env.extra.promptVariableDefaults as
+    | Record<string, string | number>
+    | undefined;
+  const blockValues = blockId ? valuesByBlock?.[blockId] : undefined;
+  const blockDefaults = blockId ? defaultsByBlock?.[blockId] : undefined;
 
   return new Set([
     ...Object.keys(values ?? {}),
     ...Object.keys(defaults ?? {}),
+    ...Object.keys(blockValues ?? {}),
+    ...Object.keys(blockDefaults ?? {}),
   ]);
 }
 

@@ -172,6 +172,40 @@ describe("prompt-variable protection before extension macro interceptors", () =>
     expect(env.variables.local.get("tone")).toBe("later-block");
   });
 
+  test("protects a preset variable read from a different block", async () => {
+    const seen: string[] = [];
+    const env = makeEnv({
+      promptVariables: { words_target: 850, cot_mode: 0 },
+      local: { words_target: "850", cot_mode: "0" },
+    });
+    env.extra.promptVariablesByBlock = {
+      "length-target": { words_target: 850 },
+      "full-cot": { cot_mode: 0 },
+    };
+    env.extra.promptVariableDefaultsByBlock = env.extra.promptVariablesByBlock;
+
+    const template = "{{floor::{{calc::{{var::words_target}} / 100}}}} to {{ceil::{{calc::{{var::words_target}} / 75}}}}";
+    const text = await withInterceptor((ctx) => {
+      seen.push(ctx.template);
+      return {
+        text: ctx.template.includes("{{var::words_target}}")
+          ? "0 to 0"
+          : ctx.template,
+      };
+    }, () =>
+      withPromptBlockContext(
+        env,
+        { id: "full-cot", role: "system", position: "pre_history", depth: 0 },
+        async () => (await evaluate(template, env, registry)).text,
+      ),
+    );
+
+    expect(seen).toEqual([
+      "{{floor::{{calc::850 / 100}}}} to {{ceil::{{calc::850 / 75}}}}",
+    ]);
+    expect(text).toBe("8 to 12");
+  });
+
   test("does not pre-resolve undeclared extension variables", async () => {
     const seen: string[] = [];
     const env = makeEnv({
