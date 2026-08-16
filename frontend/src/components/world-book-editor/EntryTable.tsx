@@ -37,6 +37,10 @@ import { buildEntryIndexMap, planEntryReveal } from '@/lib/entryReveal'
 import { getUiScale as readUiScale } from '@/lib/uiScale'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { estimateTokens } from '@/lib/tokenEstimate'
+import type {
+  EntrySearchResult,
+  EntrySearchTextRange,
+} from '@/lib/lorebookEntrySearch'
 import type { LorebookResolvedTokenCount as ResolvedTokenCount } from './useLorebookTokenCounts'
 import type { WorldBookEntry } from '@/types/api'
 import styles from './LorebookEditorLayout.module.css'
@@ -320,6 +324,13 @@ export interface EntryTableProps {
   /** Every entry in the open book — only the empty state distinguishes the two lists. */
   entries: WorldBookEntry[]
   filteredEntries: WorldBookEntry[]
+  /** Ranked-match metadata, present only while a meaningful query is active. */
+  searchResultsById?: ReadonlyMap<string, EntrySearchResult<WorldBookEntry>>
+  searchActive?: boolean
+  searchQuery?: string
+  typeFilter?: 'all' | TriggerType
+  onClearSearch?: () => void
+  onClearTypeFilter?: () => void
   loading: boolean
   /** Reordering is only safe for the complete, unfiltered custom-order list. */
   reorderEnabled?: boolean
@@ -361,6 +372,7 @@ const NO_TOKENS: ResolvedTokenCount = { value: 0, exact: false }
 
 interface EntryRowProps {
   entry: WorldBookEntry
+  searchResult?: EntrySearchResult<WorldBookEntry>
   responsiveColumns: EntryColumn[]
   selected: boolean
   checked: boolean
@@ -382,6 +394,59 @@ interface EntryRowProps {
   dragEnabled?: boolean
 }
 
+function mergeTextRanges(ranges: EntrySearchTextRange[]): EntrySearchTextRange[] {
+  const merged: EntrySearchTextRange[] = []
+  const sorted = ranges
+    .filter((range) => range.end > range.start)
+    .sort((left, right) => left.start - right.start || left.end - right.end)
+  for (const range of sorted) {
+    const previous = merged[merged.length - 1]
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end)
+      previous.fuzzy = previous.fuzzy || range.fuzzy
+    } else {
+      merged.push({ ...range })
+    }
+  }
+  return merged
+}
+
+function HighlightedText({ text, ranges }: { text: string; ranges: EntrySearchTextRange[] }) {
+  const safeRanges = mergeTextRanges(ranges).map((range) => ({
+    ...range,
+    start: Math.max(0, Math.min(text.length, range.start)),
+    end: Math.max(0, Math.min(text.length, range.end)),
+  }))
+  if (safeRanges.length === 0) return <>{text}</>
+
+  const parts: React.ReactNode[] = []
+  let cursor = 0
+  safeRanges.forEach((range, index) => {
+    if (range.start > cursor) parts.push(text.slice(cursor, range.start))
+    parts.push(
+      <mark
+        key={`${range.start}:${range.end}:${index}`}
+        className={clsx(styles.entrySearchMark, range.fuzzy && styles.entrySearchMarkFuzzy)}
+      >
+        {text.slice(range.start, range.end)}
+      </mark>,
+    )
+    cursor = Math.max(cursor, range.end)
+  })
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return <>{parts}</>
+}
+
+function rangesFor(
+  result: EntrySearchResult<WorldBookEntry> | undefined,
+  field: 'comment' | 'primaryKey',
+  valueIndex = 0,
+): EntrySearchTextRange[] {
+  return result?.matches
+    .filter((match) => match.field === field && match.valueIndex === valueIndex)
+    .map((match) => ({ start: match.start, end: match.end, fuzzy: match.fuzzy })) ?? []
+}
+
 /**
  * One row, memoised on its own data.
  *
@@ -401,6 +466,7 @@ interface EntryRowProps {
  */
 const EntryRow = memo(function EntryRow({
   entry,
+  searchResult,
   responsiveColumns,
   selected,
   checked,
@@ -444,7 +510,12 @@ const EntryRow = memo(function EntryRow({
         >
           <GripVertical size={12} />
         </button>
-        {entry.comment || 'Untitled entry'}
+        <span className={styles.entryNameText}>
+          <HighlightedText
+            text={entry.comment || 'Untitled entry'}
+            ranges={entry.comment ? rangesFor(searchResult, 'comment') : []}
+          />
+        </span>
       </span>
       {responsiveColumns.map((column) => {
         const name = entry.comment || 'entry'
@@ -494,7 +565,16 @@ const EntryRow = memo(function EntryRow({
         }
         if (column.id === 'keys') {
           const keys = entry.key.join(', ')
-          return <span key={column.id} className={styles.rowKeys} title={keys || 'No primary keys'}>{keys || '—'}</span>
+          return (
+            <span key={column.id} className={styles.rowKeys} title={keys || 'No primary keys'}>
+              {entry.key.length === 0 ? '—' : entry.key.map((key, index) => (
+                <span key={`${index}:${key}`}>
+                  {index > 0 && ', '}
+                  <HighlightedText text={key} ranges={rangesFor(searchResult, 'primaryKey', index)} />
+                </span>
+              ))}
+            </span>
+          )
         }
         // `tokens` is only in `visibleColumns` when the column is on, so the
         // header and the row always emit the same cell count. The count itself
@@ -519,6 +599,16 @@ const EntryRow = memo(function EntryRow({
           title={entry.disabled ? 'Disabled' : 'Enabled'}
         />
       </span>
+      {searchResult?.snippet && (
+        <span className={styles.entrySearchSnippet}>
+          <b>{searchResult.snippet.label}</b>
+          <span className={styles.entrySearchSnippetText}>
+            {searchResult.snippet.leadingEllipsis && '…'}
+            <HighlightedText text={searchResult.snippet.text} ranges={searchResult.snippet.ranges} />
+            {searchResult.snippet.trailingEllipsis && '…'}
+          </span>
+        </span>
+      )}
     </div>
   )
 })
@@ -555,6 +645,12 @@ function SortableEntryRow({
 export default function EntryTable({
   entries,
   filteredEntries,
+  searchResultsById,
+  searchActive = false,
+  searchQuery = '',
+  typeFilter = 'all',
+  onClearSearch,
+  onClearTypeFilter,
   loading,
   reorderEnabled = false,
   onReorder,
@@ -733,6 +829,13 @@ export default function EntryTable({
     virtualizer.measure()
   }, [rowMetrics.density, rowMetrics.fontScale, virtualizer])
 
+  // Search snippets add a measured second grid row. Clear cached heights whenever
+  // the query result objects change so off-screen estimates and revealed rows
+  // agree immediately, before ResizeObserver sees each mounted row individually.
+  useEffect(() => {
+    virtualizer.measure()
+  }, [searchResultsById, virtualizer])
+
   /** id -> row index in the rendered list; consulted once per selection change. */
   const filteredIndexById = useMemo(() => buildEntryIndexMap(filteredEntries), [filteredEntries])
   /** Distinguishes "filtered out of view" from "the book has not arrived yet". */
@@ -836,7 +939,21 @@ export default function EntryTable({
           </div>
           {loading && <div className={styles.empty}>Loading entries...</div>}
           {!loading && filteredEntries.length === 0 && (
-            <div className={styles.empty}>{entries.length === 0 ? 'This lorebook has no entries yet.' : 'No entries match this filter.'}</div>
+            <div className={styles.empty}>
+              <span>
+                {entries.length === 0
+                  ? 'This lorebook has no entries yet.'
+                  : searchActive
+                    ? `No entries match “${searchQuery.trim()}”${typeFilter === 'all' ? '.' : ' with the current type filter.'}`
+                    : 'No entries match the current type filter.'}
+              </span>
+              {entries.length > 0 && (
+                <span className={styles.emptyActions}>
+                  {searchActive && onClearSearch && <button type="button" onClick={onClearSearch}>Clear search</button>}
+                  {typeFilter !== 'all' && onClearTypeFilter && <button type="button" onClick={onClearTypeFilter}>Show all types</button>}
+                </span>
+              )}
+            </div>
           )}
           {selectionHiddenByFilter && (
             <div className={styles.entrySelectionNotice}>
@@ -876,6 +993,7 @@ export default function EntryTable({
                     >
                       <SortableEntryRow
                         entry={entry}
+                        searchResult={searchResultsById?.get(entry.id)}
                         responsiveColumns={responsiveColumns}
                         selected={entry.id === selectedEntryId}
                         checked={selectedIdSet.has(entry.id)}
