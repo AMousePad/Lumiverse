@@ -429,6 +429,7 @@ type RuntimeWorkerToHost =
       userId?: string;
     }
   | { type: "uploads_get"; requestId: string; uploadId: string; userId?: string }
+  | { type: "uploads_read_chunk"; requestId: string; uploadId: string; offset: number; userId?: string }
   | { type: "uploads_delete"; requestId: string; uploadId: string; userId?: string }
   | { type: "images_upload"; requestId: string; input: ImageUploadDTO; userId?: string }
   | {
@@ -2297,6 +2298,9 @@ export class WorkerHost {
       // ─── Resumable uploads (free tier) ────────────────────────────────
       case "uploads_get":
         this.handleUploadsGet(msg.requestId, msg.uploadId, msg.userId);
+        break;
+      case "uploads_read_chunk":
+        this.handleUploadsReadChunk(msg.requestId, msg.uploadId, msg.offset, msg.userId);
         break;
       case "uploads_delete":
         this.handleUploadsDelete(msg.requestId, msg.uploadId, msg.userId);
@@ -4464,6 +4468,33 @@ export class WorkerHost {
       }
       const data = await spindleUploads.readUploadBytes(uploadId);
       this.postToWorker({ type: "response", requestId, result: { fileName: rec.fileName, size: data.byteLength, data } });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleUploadsReadChunk(requestId: string, uploadId: string, offset: number, userId?: string): Promise<void> {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const rec = spindleUploads.getUpload(uploadId);
+      if (!rec || rec.ownerUserId !== resolvedUserId || rec.extensionIdentifier !== this.manifest.identifier) {
+        this.postToWorker({ type: "response", requestId, result: null });
+        return;
+      }
+      const data = await spindleUploads.readUploadChunk(uploadId, offset);
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          fileName: rec.fileName,
+          size: rec.declaredSize,
+          offset,
+          data,
+          eof: offset + data.byteLength >= rec.declaredSize,
+        },
+      });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
