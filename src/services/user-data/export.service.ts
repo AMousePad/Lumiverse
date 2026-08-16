@@ -40,6 +40,7 @@ import {
 import {
   createManifest,
   ARCHIVE_SCHEMA_VERSION,
+  NDJSON_MAX_RECORD_BYTES,
   type ArchiveEmbeddingConfig,
 } from "./manifest";
 import { getCompletionSound } from "../notification-sounds.service";
@@ -339,7 +340,15 @@ function openNdjsonEntry(archive: ZipArchive, archivePath: string) {
 
   return {
     write(row: Record<string, any>): void {
-      const line = encoder.encode(JSON.stringify(row) + "\n");
+      const json = JSON.stringify(row);
+      const recordBytes = Buffer.byteLength(json, "utf8");
+      if (recordBytes > NDJSON_MAX_RECORD_BYTES) {
+        throw new Error(
+          `NDJSON record in ${archivePath} is ${recordBytes} bytes; ` +
+            `the portable archive limit is ${NDJSON_MAX_RECORD_BYTES} bytes`,
+        );
+      }
+      const line = encoder.encode(`${json}\n`);
       pending.push(line);
       pendingBytes += line.byteLength;
       rowCount++;

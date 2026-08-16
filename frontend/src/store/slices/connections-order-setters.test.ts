@@ -27,6 +27,7 @@ type ProfileSetterHarness = Pick<
   | 'sttProfiles'
   | 'ttsProfiles'
   | 'setProfiles'
+  | 'addProfile'
   | 'setImageGenProfiles'
   | 'addImageGenProfile'
   | 'setSttProfiles'
@@ -156,6 +157,23 @@ describe('profile replacement ordering', () => {
 
     expect(profileIds(store.profiles)).toEqual(['llm-third', 'llm-first', 'llm-new-first', 'llm-new-second'])
     expect(store.connectionsOrder).toEqual(persistedDragOrder())
+  })
+
+  test('reconciles duplicate WebSocket and REST deliveries of an added LLM profile', () => {
+    const store = createHarness(persistedDragOrder())
+    store.profiles = [llmProfile('llm-first')]
+
+    store.addProfile({ ...llmProfile('llm-copy'), name: 'WebSocket copy' })
+    store.addProfile({ ...llmProfile('llm-copy'), name: 'REST copy' })
+
+    expect(profileIds(store.profiles)).toEqual(['llm-first', 'llm-copy'])
+    expect(store.profiles[1]?.name).toBe('REST copy')
+    expect(store.connectionsOrder.llm).toEqual([
+      'llm-third',
+      'llm-first',
+      'removed-llm',
+      'llm-copy',
+    ])
   })
 
   test('keeps image manager refreshes in persisted drag order and appends new profiles in backend order', () => {

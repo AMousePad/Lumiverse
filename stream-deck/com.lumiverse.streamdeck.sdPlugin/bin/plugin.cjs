@@ -4860,12 +4860,12 @@ var NEVER = Object.freeze({
 // @__NO_SIDE_EFFECTS__
 function $constructor(name, initializer2, params) {
   function init(inst, def) {
-    var _a3;
+    var _a6;
     Object.defineProperty(inst, "_zod", {
       value: inst._zod ?? {},
       enumerable: false
     });
-    (_a3 = inst._zod).traits ?? (_a3.traits = /* @__PURE__ */ new Set());
+    (_a6 = inst._zod).traits ?? (_a6.traits = /* @__PURE__ */ new Set());
     inst._zod.traits.add(name);
     initializer2(inst, def);
     for (const k in _.prototype) {
@@ -4880,10 +4880,10 @@ function $constructor(name, initializer2, params) {
   }
   Object.defineProperty(Definition, "name", { value: name });
   function _(def) {
-    var _a3;
+    var _a6;
     const inst = params?.Parent ? new Definition() : this;
     init(inst, def);
-    (_a3 = inst._zod).deferred ?? (_a3.deferred = []);
+    (_a6 = inst._zod).deferred ?? (_a6.deferred = []);
     for (const fn of inst._zod.deferred) {
       fn();
     }
@@ -5374,8 +5374,8 @@ function aborted(x, startIndex = 0) {
 }
 function prefixIssues(path5, issues) {
   return issues.map((iss) => {
-    var _a3;
-    (_a3 = iss).path ?? (_a3.path = []);
+    var _a6;
+    (_a6 = iss).path ?? (_a6.path = []);
     iss.path.unshift(path5);
     return iss;
   });
@@ -5514,7 +5514,7 @@ function treeifyError(error40, _mapper) {
   };
   const result = { errors: [] };
   const processError = (error41, path5 = []) => {
-    var _a3, _b;
+    var _a6, _b;
     for (const issue2 of error41.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
         issue2.errors.map((issues) => processError({ issues }, issue2.path));
@@ -5535,7 +5535,7 @@ function treeifyError(error40, _mapper) {
           const terminal = i === fullpath.length - 1;
           if (typeof el === "string") {
             curr.properties ?? (curr.properties = {});
-            (_a3 = curr.properties)[el] ?? (_a3[el] = { errors: [] });
+            (_a6 = curr.properties)[el] ?? (_a6[el] = { errors: [] });
             curr = curr.properties[el];
           } else {
             curr.items ?? (curr.items = []);
@@ -5748,10 +5748,10 @@ var uppercase = /^[^a-z]*$/;
 
 // node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
-  var _a3;
+  var _a6;
   inst._zod ?? (inst._zod = {});
   inst._zod.def = def;
-  (_a3 = inst._zod).onattach ?? (_a3.onattach = []);
+  (_a6 = inst._zod).onattach ?? (_a6.onattach = []);
 });
 var numericOriginMap = {
   number: "number",
@@ -5817,8 +5817,8 @@ var $ZodCheckGreaterThan = /* @__PURE__ */ $constructor("$ZodCheckGreaterThan", 
 var $ZodCheckMultipleOf = /* @__PURE__ */ $constructor("$ZodCheckMultipleOf", (inst, def) => {
   $ZodCheck.init(inst, def);
   inst._zod.onattach.push((inst2) => {
-    var _a3;
-    (_a3 = inst2._zod.bag).multipleOf ?? (_a3.multipleOf = def.value);
+    var _a6;
+    (_a6 = inst2._zod.bag).multipleOf ?? (_a6.multipleOf = def.value);
   });
   inst._zod.check = (payload) => {
     if (typeof payload.value !== typeof def.value)
@@ -5944,9 +5944,9 @@ var $ZodCheckBigIntFormat = /* @__PURE__ */ $constructor("$ZodCheckBigIntFormat"
   };
 });
 var $ZodCheckMaxSize = /* @__PURE__ */ $constructor("$ZodCheckMaxSize", (inst, def) => {
-  var _a3;
+  var _a6;
   $ZodCheck.init(inst, def);
-  (_a3 = inst._zod.def).when ?? (_a3.when = (payload) => {
+  (_a6 = inst._zod.def).when ?? (_a6.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.size !== void 0;
   });
@@ -5971,9 +5971,9 @@ var $ZodCheckMaxSize = /* @__PURE__ */ $constructor("$ZodCheckMaxSize", (inst, d
   };
 });
 var $ZodCheckMinSize = /* @__PURE__ */ $constructor("$ZodCheckMinSize", (inst, def) => {
-  var _a3;
+  var _a6;
   $ZodCheck.init(inst, def);
-  (_a3 = inst._zod.def).when ?? (_a3.when = (payload) => {
+  (_a6 = inst._zod.def).when ?? (_a6.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.size !== void 0;
   });
@@ -5998,9 +5998,9 @@ var $ZodCheckMinSize = /* @__PURE__ */ $constructor("$ZodCheckMinSize", (inst, d
   };
 });
 var $ZodCheckSizeEquals = /* @__PURE__ */ $constructor("$ZodCheckSizeEquals", (inst, def) => {
-  var _a3;
+  var _a6;
   $ZodCheck.init(inst, def);
-  (_a3 = inst._zod.def).when ?? (_a3.when = (payload) => {
+  (_a6 = inst._zod.def).when ?? (_a6.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.size !== void 0;
   });
@@ -6028,9 +6028,9 @@ var $ZodCheckSizeEquals = /* @__PURE__ */ $constructor("$ZodCheckSizeEquals", (i
   };
 });
 var $ZodCheckMaxLength = /* @__PURE__ */ $constructor("$ZodCheckMaxLength", (inst, def) => {
-  var _a3;
+  var _a6;
   $ZodCheck.init(inst, def);
-  (_a3 = inst._zod.def).when ?? (_a3.when = (payload) => {
+  (_a6 = inst._zod.def).when ?? (_a6.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.length !== void 0;
   });
@@ -6057,9 +6057,9 @@ var $ZodCheckMaxLength = /* @__PURE__ */ $constructor("$ZodCheckMaxLength", (ins
   };
 });
 var $ZodCheckMinLength = /* @__PURE__ */ $constructor("$ZodCheckMinLength", (inst, def) => {
-  var _a3;
+  var _a6;
   $ZodCheck.init(inst, def);
-  (_a3 = inst._zod.def).when ?? (_a3.when = (payload) => {
+  (_a6 = inst._zod.def).when ?? (_a6.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.length !== void 0;
   });
@@ -6086,9 +6086,9 @@ var $ZodCheckMinLength = /* @__PURE__ */ $constructor("$ZodCheckMinLength", (ins
   };
 });
 var $ZodCheckLengthEquals = /* @__PURE__ */ $constructor("$ZodCheckLengthEquals", (inst, def) => {
-  var _a3;
+  var _a6;
   $ZodCheck.init(inst, def);
-  (_a3 = inst._zod.def).when ?? (_a3.when = (payload) => {
+  (_a6 = inst._zod.def).when ?? (_a6.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.length !== void 0;
   });
@@ -6117,7 +6117,7 @@ var $ZodCheckLengthEquals = /* @__PURE__ */ $constructor("$ZodCheckLengthEquals"
   };
 });
 var $ZodCheckStringFormat = /* @__PURE__ */ $constructor("$ZodCheckStringFormat", (inst, def) => {
-  var _a3, _b;
+  var _a6, _b;
   $ZodCheck.init(inst, def);
   inst._zod.onattach.push((inst2) => {
     const bag = inst2._zod.bag;
@@ -6128,7 +6128,7 @@ var $ZodCheckStringFormat = /* @__PURE__ */ $constructor("$ZodCheckStringFormat"
     }
   });
   if (def.pattern)
-    (_a3 = inst._zod).check ?? (_a3.check = (payload) => {
+    (_a6 = inst._zod).check ?? (_a6.check = (payload) => {
       def.pattern.lastIndex = 0;
       if (def.pattern.test(payload.value))
         return;
@@ -6329,7 +6329,7 @@ var version = {
 
 // node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
-  var _a3;
+  var _a6;
   inst ?? (inst = {});
   inst._zod.def = def;
   inst._zod.bag = inst._zod.bag || {};
@@ -6344,7 +6344,7 @@ var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
     }
   }
   if (checks.length === 0) {
-    (_a3 = inst._zod).deferred ?? (_a3.deferred = []);
+    (_a6 = inst._zod).deferred ?? (_a6.deferred = []);
     inst._zod.deferred?.push(() => {
       inst._zod.run = inst._zod.parse;
     });
@@ -13710,7 +13710,7 @@ var JSONSchemaGenerator = class {
     this.seen = /* @__PURE__ */ new Map();
   }
   process(schema, _params = { path: [], schemaPath: [] }) {
-    var _a3;
+    var _a6;
     const def = schema._zod.def;
     const formatMap = {
       guid: "uuid",
@@ -14172,7 +14172,7 @@ var JSONSchemaGenerator = class {
       delete result.schema.default;
     }
     if (this.io === "input" && result.schema._prefault)
-      (_a3 = result.schema).default ?? (_a3.default = result.schema._prefault);
+      (_a6 = result.schema).default ?? (_a6.default = result.schema._prefault);
     delete result.schema._prefault;
     const _result = this.seen.get(schema);
     return _result.schema;
@@ -17311,7 +17311,36 @@ async function request(path5) {
   return response.json();
 }
 async function listCharacters() {
-  return (await request("/api/integrations/stream-deck/v1/characters")).data;
+  const characters = [];
+  const pageSize = 500;
+  while (true) {
+    const page = await request(
+      `/api/integrations/stream-deck/v1/characters?limit=${pageSize}&offset=${characters.length}`
+    );
+    characters.push(...page.data);
+    if (page.limit === void 0 || characters.length >= page.total || page.data.length === 0) return characters;
+  }
+}
+function listCharacterPage(limit, offset) {
+  return request(`/api/integrations/stream-deck/v1/characters?limit=${limit}&offset=${offset}`);
+}
+function listRecentChats(limit, offset) {
+  return request(`/api/integrations/stream-deck/v1/recent-chats?limit=${limit}&offset=${offset}`);
+}
+var imageCache = /* @__PURE__ */ new Map();
+async function getCharacterImage(imageUrl) {
+  const cached2 = imageCache.get(imageUrl);
+  if (cached2) return cached2;
+  const settings2 = await plugin_default.settings.getGlobalSettings();
+  if (!settings2.token) throw new Error("Configure a Lumiverse integration token");
+  const response = await fetch(`${normalizeServerUrl(settings2.serverUrl)}${imageUrl}`, {
+    headers: { Authorization: `Bearer ${settings2.token}` }
+  });
+  if (!response.ok) throw new Error(`Lumiverse image returned ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  const image = `data:image/png;base64,${Buffer.from(buffer).toString("base64")}`;
+  imageCache.set(imageUrl, image);
+  return image;
 }
 async function getRecentChat(characterId) {
   const query = characterId ? `?characterId=${encodeURIComponent(characterId)}` : "";
@@ -17321,11 +17350,38 @@ async function openChat(characterId) {
   const chat = await getRecentChat(characterId);
   if (!chat) return false;
   const settings2 = await plugin_default.settings.getGlobalSettings();
-  await plugin_default.system.openUrl(`${normalizeServerUrl(settings2.serverUrl)}/chat/${encodeURIComponent(chat.id)}`);
+  await plugin_default.system.openUrl(
+    `${normalizeServerUrl(settings2.serverUrl)}/stream-deck/open/chat/${encodeURIComponent(chat.id)}`
+  );
   return true;
+}
+async function openChatById(chatId) {
+  const settings2 = await plugin_default.settings.getGlobalSettings();
+  await plugin_default.system.openUrl(
+    `${normalizeServerUrl(settings2.serverUrl)}/stream-deck/open/chat/${encodeURIComponent(chatId)}`
+  );
 }
 
 // src/plugin.ts
+async function applyCharacterAppearance(action2, settings2) {
+  if (settings2.characterImageUrl) {
+    try {
+      plugin_default.logger.info("Loading selected character artwork");
+      const image = await getCharacterImage(settings2.characterImageUrl);
+      plugin_default.logger.info(`Applying character artwork (${image.length} characters)`);
+      await action2.setImage(image);
+      await action2.setTitle("");
+      plugin_default.logger.info("Character artwork command sent");
+      return;
+    } catch (error40) {
+      plugin_default.logger.error(`Failed to load character image: ${String(error40)}`);
+      await action2.showAlert();
+      return;
+    }
+  }
+  await action2.setImage();
+  await action2.setTitle(settings2.characterName || "Choose\ncharacter");
+}
 var _OpenRecentChat_decorators, _init, _a;
 _OpenRecentChat_decorators = [action({ UUID: "com.lumiverse.streamdeck.openrecent" })];
 var OpenRecentChat = class extends (_a = SingletonAction) {
@@ -17345,13 +17401,16 @@ var _OpenCharacterChat_decorators, _init2, _a2;
 _OpenCharacterChat_decorators = [action({ UUID: "com.lumiverse.streamdeck.opencharacter" })];
 var OpenCharacterChat = class extends (_a2 = SingletonAction) {
   async onWillAppear(event) {
-    await event.action.setTitle(event.payload.settings.characterName || "Choose\ncharacter");
+    if (!event.action.isKey()) return;
+    await applyCharacterAppearance(event.action, event.payload.settings);
   }
   async onDidReceiveSettings(event) {
-    await event.action.setTitle(event.payload.settings.characterName || "Choose\ncharacter");
+    if (!event.action.isKey()) return;
+    await applyCharacterAppearance(event.action, event.payload.settings);
   }
   async onKeyDown(event) {
     try {
+      if (event.action.isKey()) await applyCharacterAppearance(event.action, event.payload.settings);
       const { characterId } = event.payload.settings;
       if (!characterId || !await openChat(characterId)) await event.action.showAlert();
     } catch (error40) {
@@ -17360,6 +17419,11 @@ var OpenCharacterChat = class extends (_a2 = SingletonAction) {
     }
   }
   async onSendToPlugin(event) {
+    if (event.payload.request === "selectCharacter" && event.payload.settings) {
+      await event.action.setSettings(event.payload.settings);
+      if (event.action.isKey()) await applyCharacterAppearance(event.action, event.payload.settings);
+      return;
+    }
     if (event.payload.request !== "characters") return;
     try {
       await plugin_default.ui.sendToPropertyInspector({ characters: await listCharacters() });
@@ -17371,8 +17435,149 @@ var OpenCharacterChat = class extends (_a2 = SingletonAction) {
 _init2 = __decoratorStart(_a2);
 OpenCharacterChat = __decorateElement(_init2, 0, "OpenCharacterChat", _OpenCharacterChat_decorators, OpenCharacterChat);
 __runInitializers(_init2, 1, OpenCharacterChat);
+var browserStates = /* @__PURE__ */ new Map();
+function browserState(deviceId) {
+  let state = browserStates.get(deviceId);
+  if (!state) {
+    state = { view: "characters", page: 0, total: 0, items: [], slots: /* @__PURE__ */ new Map(), generation: 0 };
+    browserStates.set(deviceId, state);
+  }
+  return state;
+}
+function itemImageUrl(item) {
+  return "image_url" in item ? item.image_url : null;
+}
+function itemTitle(item) {
+  return "character_name" in item ? item.character_name || item.name || "Recent chat" : item.name;
+}
+async function renderBrowser(deviceId) {
+  const state = browserState(deviceId);
+  const slots = [...state.slots.entries()].sort(([a], [b]) => a - b);
+  if (slots.length === 0) return;
+  const generation = ++state.generation;
+  const offset = state.page * slots.length;
+  try {
+    const result = state.view === "characters" ? await listCharacterPage(slots.length, offset) : await listRecentChats(slots.length, offset);
+    if (generation !== state.generation) return;
+    state.items = result.data;
+    state.total = result.total;
+    await Promise.all(slots.map(async ([slot, key]) => {
+      const item = state.items[slot];
+      if (!item) {
+        await key.setImage();
+        await key.setTitle("");
+        return;
+      }
+      const imageUrl = itemImageUrl(item);
+      if (imageUrl) {
+        try {
+          await key.setImage(await getCharacterImage(imageUrl));
+        } catch (error40) {
+          plugin_default.logger.warn(`Browser artwork failed: ${String(error40)}`);
+          await key.setImage();
+        }
+      } else {
+        await key.setImage();
+      }
+      await key.setTitle(itemTitle(item));
+    }));
+  } catch (error40) {
+    plugin_default.logger.error(`Lumiverse browser failed: ${String(error40)}`);
+    await Promise.all(slots.map(async ([, key]) => {
+      await key.setImage();
+      await key.setTitle("Load\nfailed");
+    }));
+  }
+}
+function scheduleBrowserRender(deviceId) {
+  const state = browserState(deviceId);
+  if (state.renderTimer) clearTimeout(state.renderTimer);
+  state.renderTimer = setTimeout(() => void renderBrowser(deviceId), 75);
+}
+var _OpenLumiverseBrowser_decorators, _init3, _a3;
+_OpenLumiverseBrowser_decorators = [action({ UUID: "com.lumiverse.streamdeck.browser" })];
+var OpenLumiverseBrowser = class extends (_a3 = SingletonAction) {
+  async onKeyDown(event) {
+    const profiles = {
+      [DeviceType.StreamDeck]: "profiles/Lumiverse Browser",
+      [DeviceType.StreamDeckMini]: "profiles/Lumiverse Browser Mini",
+      [DeviceType.StreamDeckXL]: "profiles/Lumiverse Browser XL",
+      [DeviceType.StreamDeckPlus]: "profiles/Lumiverse Browser Plus"
+    };
+    const profile = profiles[event.action.device.type];
+    if (!profile) {
+      await event.action.showAlert();
+      return;
+    }
+    const state = browserState(event.action.device.id);
+    state.page = 0;
+    await plugin_default.profiles.switchToProfile(event.action.device.id, profile, 0);
+  }
+};
+_init3 = __decoratorStart(_a3);
+OpenLumiverseBrowser = __decorateElement(_init3, 0, "OpenLumiverseBrowser", _OpenLumiverseBrowser_decorators, OpenLumiverseBrowser);
+__runInitializers(_init3, 1, OpenLumiverseBrowser);
+var _LumiverseBrowserSlot_decorators, _init4, _a4;
+_LumiverseBrowserSlot_decorators = [action({ UUID: "com.lumiverse.streamdeck.browserslot" })];
+var LumiverseBrowserSlot = class extends (_a4 = SingletonAction) {
+  async onWillAppear(event) {
+    if (!event.action.isKey()) return;
+    const slot = event.payload.settings.slot ?? 0;
+    browserState(event.action.device.id).slots.set(slot, event.action);
+    scheduleBrowserRender(event.action.device.id);
+  }
+  async onKeyDown(event) {
+    const state = browserState(event.action.device.id);
+    const item = state.items[event.payload.settings.slot ?? 0];
+    if (!item) return;
+    try {
+      if ("character_name" in item) await openChatById(item.id);
+      else if (!await openChat(item.id)) await event.action.showAlert();
+    } catch (error40) {
+      plugin_default.logger.error(String(error40));
+      await event.action.showAlert();
+    }
+  }
+};
+_init4 = __decoratorStart(_a4);
+LumiverseBrowserSlot = __decorateElement(_init4, 0, "LumiverseBrowserSlot", _LumiverseBrowserSlot_decorators, LumiverseBrowserSlot);
+__runInitializers(_init4, 1, LumiverseBrowserSlot);
+var _LumiverseBrowserControl_decorators, _init5, _a5;
+_LumiverseBrowserControl_decorators = [action({ UUID: "com.lumiverse.streamdeck.browsercontrol" })];
+var LumiverseBrowserControl = class extends (_a5 = SingletonAction) {
+  async onWillAppear(event) {
+    if (!event.action.isKey()) return;
+    const labels = { back: "Back", toggle: "Characters\n/ Recent", previous: "Previous", next: "Next" };
+    await event.action.setTitle(labels[event.payload.settings.control ?? "toggle"]);
+  }
+  async onKeyDown(event) {
+    const control = event.payload.settings.control ?? "toggle";
+    const deviceId = event.action.device.id;
+    const state = browserState(deviceId);
+    if (control === "back") {
+      await plugin_default.profiles.switchToProfile(deviceId);
+      return;
+    }
+    if (control === "toggle") {
+      state.view = state.view === "characters" ? "recent" : "characters";
+      state.page = 0;
+    } else if (control === "previous") {
+      state.page = Math.max(0, state.page - 1);
+    } else {
+      const pageSize = Math.max(1, state.slots.size);
+      if ((state.page + 1) * pageSize < state.total) state.page += 1;
+    }
+    await renderBrowser(deviceId);
+  }
+};
+_init5 = __decoratorStart(_a5);
+LumiverseBrowserControl = __decorateElement(_init5, 0, "LumiverseBrowserControl", _LumiverseBrowserControl_decorators, LumiverseBrowserControl);
+__runInitializers(_init5, 1, LumiverseBrowserControl);
 plugin_default.actions.registerAction(new OpenRecentChat());
 plugin_default.actions.registerAction(new OpenCharacterChat());
+plugin_default.actions.registerAction(new OpenLumiverseBrowser());
+plugin_default.actions.registerAction(new LumiverseBrowserSlot());
+plugin_default.actions.registerAction(new LumiverseBrowserControl());
 plugin_default.connect();
 /*! Bundled license information:
 

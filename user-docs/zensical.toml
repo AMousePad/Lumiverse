@@ -13,6 +13,7 @@ Copyright &copy; 2026 Lumiverse
 """
 
 extra_css = ["stylesheets/extra.css"]
+extra_javascript = ["javascripts/redirect-legacy-markdown-urls.js"]
 
 nav = [
   { "Home" = "index.md" },

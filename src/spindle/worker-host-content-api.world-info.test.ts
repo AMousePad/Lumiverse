@@ -1,9 +1,31 @@
 import { describe, expect, test } from "bun:test";
 import {
+  canExtensionMutateRegexScript,
   getEntityExtensionPermission,
   projectActivatedWorldInfoEntryForRpc,
   WorkerHostContentApi,
 } from "./worker-host-content-api";
+
+describe("worker regex-script mutation projection", () => {
+  test("exposes mutation capability only for the caller's non-preset scripts", () => {
+    expect(canExtensionMutateRegexScript({
+      owner_extension_identifier: "extension.a",
+      preset_id: null,
+    }, "extension.a")).toBe(true);
+    expect(canExtensionMutateRegexScript({
+      owner_extension_identifier: null,
+      preset_id: null,
+    }, "extension.a")).toBe(false);
+    expect(canExtensionMutateRegexScript({
+      owner_extension_identifier: "extension.b",
+      preset_id: null,
+    }, "extension.a")).toBe(false);
+    expect(canExtensionMutateRegexScript({
+      owner_extension_identifier: "extension.a",
+      preset_id: "preset-1",
+    }, "extension.a")).toBe(false);
+  });
+});
 
 const baseEntry = {
   id: "entry-1",

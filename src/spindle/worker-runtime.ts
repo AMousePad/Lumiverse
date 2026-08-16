@@ -685,7 +685,15 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"
       phase: "prompt" | "display" | "response" | "other";
       sourceHint?: string;
       userId?: string;
-    }) => Promise<string | void>,
+    }) => Promise<
+      | string
+      | {
+          text: string;
+          touchedVars?: readonly string[];
+          volatile?: boolean;
+        }
+      | void
+    >,
     priority?: number
   ): void;
   registerWorldInfoInterceptor(

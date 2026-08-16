@@ -35,14 +35,22 @@ function canonicalCharacterExtensions(extensions: Record<string, any> | undefine
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
-const SUMMARY_COLUMNS = `c.id, c.library_scope, c.name, c.creator, c.folder, c.tags, c.image_id, c.created_at, c.updated_at,
+const SUMMARY_COLUMNS = `c.id, c.library_scope, c.name, c.description,
+  COALESCE(NULLIF(TRIM(c.description), ''), NULLIF(TRIM(c.personality), ''), '') AS preview_description,
+  c.creator, c.folder, c.tags, c.image_id, c.created_at, c.updated_at,
   (json_array_length(c.alternate_greetings) > 0) as has_alternate_greetings`;
+
+function getPreviewDescription(description: string | null | undefined, personality: string | null | undefined): string {
+  return description?.trim() || personality?.trim() || "";
+}
 
 function rowToSummary(row: any): CharacterSummary {
   return {
     id: row.id,
     library_scope: normalizeCharacterLibraryScope(row.library_scope),
     name: row.name,
+    description: row.description || "",
+    preview_description: row.preview_description || "",
     creator: row.creator,
     folder: row.folder || "",
     tags: JSON.parse(row.tags),
@@ -257,8 +265,55 @@ export function listCharacterSummaries(
 
   const whereStr = whereClauses.join(" AND ");
 
+  const chatRecencyJoin = `
+    LEFT JOIN (
+      SELECT character_id, MAX(last_chatted_at) AS last_chatted_at
+      FROM (
+        SELECT character_id, MAX(updated_at) AS last_chatted_at
+        FROM chats
+        WHERE user_id = ?
+          AND character_id IS NOT NULL
+          AND COALESCE(
+            CASE WHEN json_valid(metadata)
+              THEN json_extract(metadata, '$.hidden_from_recent')
+            END,
+            0
+          ) NOT IN (1, 'true')
+          AND COALESCE(
+            CASE WHEN json_valid(metadata)
+              THEN json_extract(metadata, '$.group')
+            END,
+            0
+          ) NOT IN (1, 'true')
+        GROUP BY character_id
+
+        UNION ALL
+
+        SELECT participant.value AS character_id, MAX(group_chat.updated_at) AS last_chatted_at
+        FROM chats group_chat
+        JOIN json_each(
+          CASE WHEN json_valid(group_chat.metadata)
+            THEN COALESCE(json_extract(group_chat.metadata, '$.character_ids'), '[]')
+            ELSE '[]'
+          END
+        ) participant
+        WHERE group_chat.user_id = ?
+          AND COALESCE(
+            CASE WHEN json_valid(group_chat.metadata)
+              THEN json_extract(group_chat.metadata, '$.hidden_from_recent')
+            END,
+            0
+          ) NOT IN (1, 'true')
+        GROUP BY participant.value
+      ) recent_activity
+      GROUP BY character_id
+    ) cs ON cs.character_id = c.id
+  `;
+
   // Sort
   let orderBy: string;
+  let extraJoin = "";
+  let queryParams = whereParams;
   if (usedFts && !sort) {
     orderBy = "ORDER BY rank"; // FTS5 relevance — only valid when MATCH was used
   } else if (search && !sort) {
@@ -274,15 +329,17 @@ export function listCharacterSummaries(
         break;
       case "recent":
       default:
-        orderBy = `ORDER BY c.updated_at ${dir}, c.id ASC`;
+        extraJoin = chatRecencyJoin;
+        queryParams = [userId, userId, ...whereParams];
+        orderBy = `ORDER BY MAX(c.updated_at, COALESCE(cs.last_chatted_at, c.updated_at)) ${dir}, c.updated_at ${dir}, c.id ASC`;
         break;
       }
   }
 
   return paginatedQuery(
-    `SELECT ${SUMMARY_COLUMNS} FROM ${fromClause} WHERE ${whereStr} ${orderBy}`,
-    `SELECT COUNT(*) as count FROM ${fromClause} WHERE ${whereStr}`,
-    whereParams,
+    `SELECT ${SUMMARY_COLUMNS} FROM ${fromClause} ${extraJoin} WHERE ${whereStr} ${orderBy}`,
+    `SELECT COUNT(*) as count FROM ${fromClause} ${extraJoin} WHERE ${whereStr}`,
+    queryParams,
     pagination,
     rowToSummary
   );
@@ -796,6 +853,8 @@ export function getCharacterPreview(userId: string, id: string): CharacterPrevie
     id: character.id,
     library_scope: character.library_scope,
     name: character.name,
+    description: character.description,
+    preview_description: getPreviewDescription(character.description, character.personality),
     creator: character.creator,
     folder: character.folder,
     tags: JSON.stringify(character.tags),

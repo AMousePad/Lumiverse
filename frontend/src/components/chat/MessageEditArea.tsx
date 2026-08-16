@@ -2,6 +2,7 @@ import { Brain, Maximize2 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
+import { useStore } from '@/store'
 import styles from './MessageEditArea.module.css'
 
 interface MessageEditAreaProps {
@@ -83,6 +84,8 @@ export default function MessageEditArea({
   const hasReasoning = editReasoning != null && onChangeReasoning != null
   const contentRef = useRef<HTMLTextAreaElement>(null)
   const reasoningRef = useRef<HTMLTextAreaElement>(null)
+  const focusRequested = useStore((s) => s.messageEditDraft?.focusRequested === true)
+  const consumeFocusRequest = useStore((s) => s.consumeMessageEditFocusRequest)
   const contentRevealFrameRef = useRef(0)
   const reasoningRevealFrameRef = useRef(0)
   const focusCorrectionTimersRef = useRef<number[]>([])
@@ -120,6 +123,12 @@ export default function MessageEditArea({
   useLayoutEffect(() => {
     autoResize(reasoningRef.current)
   }, [editReasoning])
+
+  useLayoutEffect(() => {
+    if (!focusRequested) return
+    contentRef.current?.focus({ preventScroll: true })
+    consumeFocusRequest()
+  }, [consumeFocusRequest, focusRequested])
 
   useEffect(() => {
     if (navigator.maxTouchPoints <= 0) return
@@ -231,7 +240,6 @@ export default function MessageEditArea({
             value={editContent}
             onChange={handleContentChange}
             onFocus={handleContentFocus}
-            autoFocus
           />
           <button
             type="button"

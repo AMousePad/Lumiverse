@@ -1,5 +1,5 @@
-import { useMemo, type Dispatch, type SetStateAction } from 'react'
-import { Plus, Search, SlidersHorizontal } from 'lucide-react'
+import { useMemo, type Dispatch, type RefObject, type SetStateAction } from 'react'
+import { Plus, Search, SlidersHorizontal, X } from 'lucide-react'
 import clsx from 'clsx'
 import type { WorldBook } from '@/types/api'
 import SearchableSelect, { type SearchableSelectOption } from '@/components/shared/SearchableSelect'
@@ -25,6 +25,10 @@ export interface EntriesToolbarProps {
   onCreateBook?: () => void
   entrySearch: string
   setEntrySearch: (value: string) => void
+  entrySearchInputRef: RefObject<HTMLInputElement | null>
+  searchActive: boolean
+  matchCount: number
+  totalEntryCount: number
   bulkVisible: boolean
   setBulkVisible: Dispatch<SetStateAction<boolean>>
   /** Total entries in the open book — the count on the "All" filter chip. */
@@ -59,6 +63,10 @@ export default function EntriesToolbar({
   onCreateBook,
   entrySearch,
   setEntrySearch,
+  entrySearchInputRef,
+  searchActive,
+  matchCount,
+  totalEntryCount,
   bulkVisible,
   setBulkVisible,
   entryCount,
@@ -141,10 +149,43 @@ export default function EntriesToolbar({
             )}
           </>
         )}
-        <label className={styles.searchField}>
-          <Search size={14} />
-          <input value={entrySearch} onChange={(event) => setEntrySearch(event.target.value)} placeholder="Search entries..." />
-        </label>
+        <div className={styles.searchField}>
+          <Search size={14} aria-hidden />
+          <input
+            ref={entrySearchInputRef}
+            type="search"
+            value={entrySearch}
+            onChange={(event) => setEntrySearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape' || entrySearch.length === 0) return
+              event.preventDefault()
+              event.stopPropagation()
+              setEntrySearch('')
+            }}
+            placeholder="Search entries..."
+            aria-label="Search lorebook entries"
+          />
+          {(searchActive || typeFilter !== 'all') && (
+            <span
+              className={styles.entrySearchCount}
+              aria-live="polite"
+              aria-label={`${matchCount} of ${totalEntryCount} entries shown`}
+            >
+              {matchCount}/{totalEntryCount}
+            </span>
+          )}
+          {entrySearch.length > 0 && (
+            <button
+              type="button"
+              className={styles.entrySearchClear}
+              onClick={() => setEntrySearch('')}
+              title="Clear entry search"
+              aria-label="Clear entry search"
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
         <button
           type="button"
           className={clsx(styles.toolbarToggle, bulkVisible && styles.toolbarToggleActive)}

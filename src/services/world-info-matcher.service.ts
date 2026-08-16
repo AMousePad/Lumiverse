@@ -224,9 +224,25 @@ export class WorldInfoMatcher {
     if (!chunk) return;
 
     const runAC = (ac: Automaton, text: string, offsets?: FoldedText) => {
+      if (ac.empty) return;
+      const active = new Uint8Array(ac.meta.length);
+      let remaining = 0;
+      for (let id = 0; id < ac.meta.length; id++) {
+        const meta = ac.meta[id];
+        if (scope && !scope.has(meta.entryUid)) continue;
+        const bucket = meta.role === "primary" ? state.primaryHits : state.secondaryHits;
+        const keyAlreadyMatched = bucket.get(meta.entryUid)?.has(meta.keyIndex) === true;
+        const hasEnoughLocatorEvidence =
+          !source || (state.exactMatches.get(meta.entryUid)?.length ?? 0) >= 2;
+        if (keyAlreadyMatched && hasEnoughLocatorEvidence) continue;
+        active[id] = 1;
+        remaining++;
+      }
+      if (remaining === 0) return;
+
       for (const { id, end } of runAutomaton(ac, text)) {
+        if (active[id] === 0) continue;
         const m = ac.meta[id];
-        if (scope && !scope.has(m.entryUid)) continue;
         const foldedStart = end - m.patternLen + 1;
         const foldedEnd = end + 1;
         const originalStart = offsets
@@ -240,6 +256,13 @@ export class WorldInfoMatcher {
           if (!verifyWordBoundary(boundaryText, originalStart, originalEnd - 1)) continue;
         }
         this.recordHit(state, m, source, originalStart, originalEnd);
+        const hasEnoughLocatorEvidence =
+          !source || (state.exactMatches.get(m.entryUid)?.length ?? 0) >= 2;
+        if (hasEnoughLocatorEvidence) {
+          active[id] = 0;
+          remaining--;
+          if (remaining === 0) break;
+        }
       }
     };
 
@@ -268,6 +291,12 @@ export class WorldInfoMatcher {
     set.add(m.keyIndex);
     if (source && start !== undefined && end !== undefined) {
       const matches = state.exactMatches.get(m.entryUid) ?? [];
+      // Provenance only distinguishes one unambiguous locator from multiple
+      // possible locators. Once two distinct matches exist, retaining every
+      // later occurrence adds no information and makes common keys in long
+      // chats quadratic: each new occurrence scanned the full accumulated
+      // array. Keep the evidence bounded at the semantic threshold instead.
+      if (matches.length >= 2) return;
       const duplicate = matches.some((match) => {
         if (match.configuredPattern !== m.configuredPattern || match.start !== start || match.end !== end) return false;
         if (match.source.kind !== source.kind) return false;
@@ -298,6 +327,11 @@ export class WorldInfoMatcher {
       for (let i = 0; i < keys.length; i++) {
         const k = keys[i];
         if (!k) continue;
+        const bucket = role === "primary" ? state.primaryHits : state.secondaryHits;
+        const keyAlreadyMatched = bucket.get(entry.uid)?.has(i) === true;
+        const hasEnoughLocatorEvidence =
+          !source || (state.exactMatches.get(entry.uid)?.length ?? 0) >= 2;
+        if (keyAlreadyMatched && hasEnoughLocatorEvidence) continue;
         const pattern = wholeWord
           ? `\\b${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`
           : k;

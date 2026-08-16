@@ -4,11 +4,15 @@ const componentSource = await Bun.file(new URL('./WorldBookEditorModal.tsx', imp
 const cssSource = await Bun.file(new URL('./WorldBookEditorModal.module.css', import.meta.url)).text()
 
 describe('WorldBookEditorModal fullscreen contract', () => {
-  test('toggles the fullscreen class from local editor state', () => {
+  test('closes only after launching the enhanced full editor, with a native fullscreen fallback', () => {
     expect(componentSource).toContain('const [fullscreen, setFullscreen] = useState(false)')
     expect(componentSource).toContain('className={clsx(styles.modal, fullscreen && styles.fullscreen)}')
-    expect(componentSource).toContain('onClick={() => setFullscreen((current) => !current)}')
-    expect(componentSource).toContain("aria-pressed={fullscreen}")
+    expect(componentSource).toContain("canLaunchLorebookEditor('full')")
+    expect(componentSource).toContain('if (launched) closeModal()')
+    expect(componentSource).toContain("preferredTarget: 'full'")
+    expect(componentSource.indexOf("preferredTarget: 'full'")).toBeLessThan(componentSource.indexOf('if (launched) closeModal()'))
+    expect(componentSource).toContain('onClick={launchEnhancedEditor}')
+    expect(componentSource).toContain('setFullscreen((current) => !current)')
   })
 
   test('uses the scale-compensated viewport height exactly once', () => {

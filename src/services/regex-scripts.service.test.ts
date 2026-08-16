@@ -4,6 +4,7 @@ import {
   activatePresetBoundRegexScripts,
   applyRegexScripts,
   createRegexScript,
+  deleteRegexScript,
   exportRegexScripts,
   getCharacterBoundScripts,
   getRegexScript,
@@ -54,6 +55,7 @@ function runtimeScript(overrides: Partial<RegexScript>): RegexScript {
     pack_id: null,
     preset_id: null,
     character_id: null,
+    owner_extension_identifier: null,
     metadata: {},
     created_at: 0,
     updated_at: 0,
@@ -100,6 +102,7 @@ beforeAll(() => {
     pack_id TEXT,
     preset_id TEXT,
     character_id TEXT,
+    owner_extension_identifier TEXT,
     metadata TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -114,6 +117,58 @@ beforeEach(() => {
   const db = getDb();
   db.query("DELETE FROM regex_scripts").run();
   db.query("DELETE FROM settings").run();
+});
+
+describe("extension regex ownership", () => {
+  test("stamps extension-created scripts and strips host-owned bindings", () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Owned",
+      find_regex: "owned",
+      preset_id: "attempted-preset",
+      pack_id: "attempted-pack",
+      character_id: "attempted-character",
+    }, { extensionIdentifier: "extension.a" });
+
+    expect(typeof created).not.toBe("string");
+    const script = created as RegexScript;
+    expect(script.owner_extension_identifier).toBe("extension.a");
+    expect(script.preset_id).toBeNull();
+    expect(script.pack_id).toBeNull();
+    expect(script.character_id).toBeNull();
+
+    const updated = updateRegexScript(USER_ID, script.id, { name: "Updated" }, {
+      extensionIdentifier: "extension.a",
+    });
+    expect(typeof updated).not.toBe("string");
+    expect((updated as RegexScript).name).toBe("Updated");
+  });
+
+  test("treats unattributed, foreign, and preset-bound scripts as read-only without disabling them", async () => {
+    const legacy = createRegexScript(USER_ID, { name: "Legacy", find_regex: "legacy" }) as RegexScript;
+    const foreign = createRegexScript(USER_ID, { name: "Foreign", find_regex: "foreign" }, {
+      extensionIdentifier: "extension.b",
+    }) as RegexScript;
+    const bound = createRegexScript(USER_ID, { name: "Bound", find_regex: "bound" }, {
+      extensionIdentifier: "extension.a",
+    }) as RegexScript;
+    updateRegexScript(USER_ID, bound.id, { preset_id: "preset-1" });
+
+    for (const script of [legacy, foreign, bound]) {
+      expect(updateRegexScript(USER_ID, script.id, { name: "Hijacked" }, {
+        extensionIdentifier: "extension.a",
+      })).toBe("Regex script is not an unbound script owned by this extension");
+      expect(deleteRegexScript(USER_ID, script.id, {
+        extensionIdentifier: "extension.a",
+      })).toBe("Regex script is not an unbound script owned by this extension");
+      expect(getRegexScript(USER_ID, script.id)).not.toBeNull();
+    }
+
+    expect(await applyRegexScripts(
+      "legacy",
+      [mustGetScript(legacy.id)],
+      "ai_output",
+    )).toBe("");
+  });
 });
 
 describe("regex export", () => {
@@ -774,6 +829,7 @@ describe("raw capture processing", () => {
       pack_id: null,
       preset_id: null,
       character_id: null,
+      owner_extension_identifier: null,
       metadata: {},
       created_at: 0,
       updated_at: 0,

@@ -17,6 +17,10 @@ describe("database migrations", () => {
       ).toEqual({ name: "094_regex_actions.sql" });
       const regexColumns = db.query("PRAGMA table_info(regex_scripts)").all() as Array<{ name: string }>;
       expect(regexColumns.some((column) => column.name === "actions")).toBe(true);
+      expect(regexColumns.some((column) => column.name === "owner_extension_identifier")).toBe(true);
+      expect(
+        db.query("SELECT name FROM _migrations WHERE name = ?").get("101_regex_script_extension_ownership.sql"),
+      ).toEqual({ name: "101_regex_script_extension_ownership.sql" });
       const linkColumns = db.query("PRAGMA table_info(lumihub_link)").all() as Array<{ name: string }>;
       expect(linkColumns.some((column) => column.name === "user_id")).toBe(true);
       expect(

@@ -2,6 +2,8 @@
 
 Register custom macros that users can use in their prompts and preset blocks with `{{macro_name}}` syntax.
 
+Macro names are ownership-protected. An extension may replace or unregister only its own registrations. System macros always take precedence; preset/request dynamic macros take precedence over extension macros with the same name.
+
 Built-in macro resolution supports scoped blocks and control flow:
 
 ```txt

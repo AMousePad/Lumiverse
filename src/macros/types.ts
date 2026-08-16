@@ -119,6 +119,10 @@ export interface MacroExecContext {
   env: MacroEnv;
   resolve: (text: string) => string | Promise<string>;
   resolveNodes: (nodes: AstNode[]) => string | Promise<string>;
+  resolvePromptSource?: (
+    input: string,
+    sourceHint: string,
+  ) => Promise<string | undefined>;
   warn: (message: string) => void;
 }
 
@@ -233,6 +237,8 @@ export interface MacroEnv {
 
 /** Read-only placement configuration for the preset block currently rendering. */
 export interface PromptBlockMacroContext {
+  /** Stable block identity used to resolve block-scoped prompt variables. */
+  id?: string;
   role: string;
   position: string;
   depth: number;

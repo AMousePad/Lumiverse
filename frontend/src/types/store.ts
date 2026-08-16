@@ -55,6 +55,7 @@ export interface ChatSlice {
   setActiveChatDisplayOwner: (owner: string | null) => void
   setActiveChatName: (name: string | null) => void
   setMessages: (messages: Message[], total?: number) => void
+  reconcileMessagesTail: (page: Pick<PaginatedResult<Message>, 'data' | 'total' | 'offset'>) => void
   prependMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void
   updateMessage: (id: string, updates: Partial<Message>) => void
@@ -122,6 +123,7 @@ export interface StartupSettings {
   landingPageGalleryWidth?: 'compact' | 'expanded'
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
+  spindleSettings?: Partial<SpindleSettings>
   connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
 }
 
@@ -249,6 +251,19 @@ export interface CustomCSSEditorSession {
   showAssets: boolean
 }
 
+export interface MessageEditDraft {
+  chatId: string
+  messageId: string
+  messageOffset: number
+  messageIndexInChat: number
+  content: string
+  reasoning: string
+  showReasoningEditor: boolean
+  hadReasoning: boolean
+  dirty: boolean
+  focusRequested: boolean
+}
+
 export interface UISlice {
   activeModal: string | null
   modalProps: Record<string, any>
@@ -258,7 +273,7 @@ export interface UISlice {
   drawerTab: string | null
   settingsModalOpen: boolean
   settingsActiveView: string
-  settingsScrollTarget: { extensionId?: string; nonce: number } | null
+  settingsScrollTarget: { extensionId?: string; anchorId?: string; nonce: number } | null
   portraitPanelOpen: boolean
   commandPaletteOpen: boolean
   customCSSDockOpen: boolean
@@ -278,7 +293,7 @@ export interface UISlice {
   openDrawer: (tab?: string) => void
   closeDrawer: () => void
   setDrawerTab: (tab: string) => void
-  openSettings: (view?: string, target?: { extensionId?: string }) => void
+  openSettings: (view?: string, target?: { extensionId?: string; anchorId?: string }) => void
   closeSettings: () => void
   togglePortraitPanel: () => void
   openCommandPalette: () => void
@@ -299,7 +314,13 @@ export interface UISlice {
 
   // Message editing (globally single-slot)
   editingMessageId: string | null
+  messageEditDraft: MessageEditDraft | null
   setEditingMessageId: (id: string | null) => void
+  beginMessageEdit: (draft: Omit<MessageEditDraft, 'dirty' | 'focusRequested'>) => void
+  updateMessageEditDraft: (patch: Partial<Pick<MessageEditDraft, 'content' | 'reasoning'>>) => void
+  resumeMessageEdit: () => void
+  consumeMessageEditFocusRequest: () => void
+  clearMessageEdit: () => void
 
   // Transient highlight target for navigation feedback (e.g. greeting switch)
   highlightedMessageId: string | null
@@ -512,6 +533,8 @@ export interface QuickToolbarSettings {
   rect: SurfaceRectPrefs
   verticalSize: SurfaceSizePrefs
   rectVersion: number
+  /** Undefined keeps the responsive default: hide only on mobile overlays. */
+  hideWhenOverlaid?: boolean
   modalRestoreHandle: boolean
   v2IconSize: number
   v2LabelTextSize: number
@@ -558,6 +581,8 @@ export interface LoreIndicatorSettings {
   v4GroupBy: LoreIndicatorGroupBy
   v4BookPreviewCount: number
   v5ShowShortcutHints: boolean
+  /** Chooses where Lore Indicator entry navigation opens. */
+  editorLaunchTarget?: 'native' | 'half' | 'full'
 }
 
 export interface CharacterDisplaySettings {
@@ -609,6 +634,7 @@ export interface PortraitDockSettings {
 
 export interface LorebookEditorSettings {
   defaultVariant: 'full' | 'half'
+  fullEditorLaunchMode: 'windowed' | 'fullscreen'
   triggerDisplay: TriggerDisplayMode
   halfButtonEnabled: boolean
   loreIndicatorActionEnabled: boolean
@@ -774,7 +800,8 @@ export interface SpindleSettings {
   dockPanelDesktopSide: 'left' | 'right'
   /** Show routine Spindle lifecycle and WebSocket events in the browser console. */
   infoLoggingEnabled: boolean
-  extensionUpdateToastDisabled: boolean
+  /** Per-extension opt-out for update notification toasts. */
+  extensionUpdateToastDisabled: Record<string, boolean>
 }
 
 // ---- Loom Registry Entry ----

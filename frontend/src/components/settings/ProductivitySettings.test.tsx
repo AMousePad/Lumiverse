@@ -109,10 +109,33 @@ describe('canonical Productivity settings renderer', () => {
     expect(markup).toContain('Vertical orientation')
     expect(markup).toContain('Restore tab over full-screen dialogs')
     expect(markup).toContain('brings it back without closing the dialog')
+    expect(markup).toContain('Hide when overlaid')
+    expect(markup).toContain('When unset, this follows the mobile default.')
     expect(markup).not.toContain('Toolbar x')
     expect(markup).not.toContain('Toolbar y')
     expect(markup).not.toContain('Toolbar width')
     expect(markup).not.toContain('Toolbar height')
+  })
+
+  test('keeps overlay hiding controls out of V2 Adjacent', () => {
+    const previous = state.quickToolbarSettings
+    state.quickToolbarSettings = {
+      ...PRODUCTIVITY_DEFAULTS.quickToolbarSettings,
+      variant: 'v2-settings-adjacent',
+    }
+
+    const markup = renderToStaticMarkup(<ProductivitySettings />)
+    state.quickToolbarSettings = previous
+
+    expect(markup).not.toContain('Hide when overlaid')
+  })
+
+  test('renders Lore Indicator launch-target controls', () => {
+    const markup = renderToStaticMarkup(<ProductivitySettings />)
+    expect(markup).toContain('Click launch target')
+    expect(markup).toContain('Native drawer')
+    expect(markup).toContain('Half screen')
+    expect(markup).toContain('Full workspace')
   })
 
   test('renders dense card headers without decorative preview blocks', () => {
@@ -122,6 +145,7 @@ describe('canonical Productivity settings renderer', () => {
     expect(markup).toContain('Configure launcher, layouts, model metadata, and profile tags.')
     expect(markup).toContain('Configure compact, bottom-strip, and command-palette lore activity views.')
     expect(markup).toContain('Control homepage cards, filters, view defaults, and selected-character panel.')
+    expect(markup).toContain('id="homepage-character-library-settings"')
     expect(markup).toContain('Configure opening behavior, persistent layout, dock state, and hover controls.')
     expect(markup).toContain('Configure full-page and half-screen launch behavior, pane sizes, and entry density.')
     expect(markup).not.toContain('Quick Toolbar preview')

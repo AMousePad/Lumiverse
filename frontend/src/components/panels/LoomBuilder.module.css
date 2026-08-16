@@ -336,6 +336,52 @@
 }
 
 /* ============================================================================
+   GUIDE VIEWER - EXTENSION
+   ============================================================================ */
+
+.extensionTabRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.extensionTabRow .extensionTabBar {
+  flex: 1;
+  min-width: 0;
+}
+
+.extensionGuideButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+
+  width: 28px;
+  height: 28px;
+  padding: 0;
+
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+
+  color: var(--lumiverse-text-dim);
+  opacity: 0.42;
+  cursor: pointer;
+
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.extensionGuideButton:hover {
+  opacity: 1;
+  color: var(--lumiverse-text);
+  background: var(--lumiverse-fill-subtle);
+}
+
+/* ============================================================================
    SCROLL AREA
    ============================================================================ */
 

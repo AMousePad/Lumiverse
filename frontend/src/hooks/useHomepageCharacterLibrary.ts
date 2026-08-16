@@ -9,6 +9,8 @@ import type {
   HomepageCharacterLibrarySettings,
 } from '@/types/store'
 import { useStore } from '@/store'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/ws/events'
 import { resolveCharacterDisplaySettings } from '@/lib/characterDisplaySettings'
 import {
   applyCharacterPage,
@@ -55,6 +57,7 @@ export function useHomepageCharacterLibrary() {
   const activeChatId = useStore((s) => s.activeChatId)
   const setSetting = useStore((s) => s.setSetting)
   const setEditingCharacterId = useStore((s) => s.setEditingCharacterId)
+  const updateCharacter = useStore((s) => s.updateCharacter)
   const openSettingsModal = useStore((s) => s.openSettings)
   const navigate = useNavigate()
   const [filter, setFilter] = useState<HomepageCharacterFilter>('all')
@@ -85,6 +88,7 @@ export function useHomepageCharacterLibrary() {
   // generation has already moved on, and `applyCharacterPage` returns it unchanged.
   const pageStateRef = useRef<CharacterPageState<CharacterSummary>>(createCharacterPageState())
   const queryKeyRef = useRef<string | null>(null)
+  const editRequestIdRef = useRef(0)
   /** The last key whose first page actually committed. Only this one may skip a fetch. */
   const settledQueryKeyRef = useRef<string | null>(null)
   const queryParamsRef = useRef<SummaryParams>({})
@@ -120,6 +124,36 @@ export function useHomepageCharacterLibrary() {
     const timer = window.setTimeout(() => setDebouncedSearch(search), HOMEPAGE_SEARCH_DEBOUNCE_MS)
     return () => window.clearTimeout(timer)
   }, [search])
+
+  useEffect(() => {
+    if (!settings.enabled) return
+
+    const invalidate = () => {
+      // Both refs must be cleared: retryVersion reruns the fetch effect, and
+      // clearing queryKeyRef forces it to start again at offset 0.
+      settledQueryKeyRef.current = null
+      queryKeyRef.current = null
+      setRetryVersion((version) => version + 1)
+    }
+
+    const unsubscribers = [
+      wsClient.on(EventType.CHARACTER_CREATED, invalidate),
+      wsClient.on(EventType.CHARACTER_EDITED, invalidate),
+      wsClient.on(EventType.CHARACTER_DELETED, invalidate),
+    ]
+
+    if (resolved.query.sortField === 'recent') {
+      unsubscribers.push(
+        wsClient.on(EventType.MESSAGE_SENT, invalidate),
+        wsClient.on(EventType.CHAT_CREATED, invalidate),
+        wsClient.on(EventType.CHAT_CHANGED, invalidate),
+        wsClient.on(EventType.CHAT_DELETED, invalidate),
+        wsClient.on(EventType.CHAT_FORKED, invalidate),
+      )
+    }
+
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe())
+  }, [resolved.query.sortField, settings.enabled])
 
   useEffect(() => {
     if (!settings.enabled) return
@@ -326,10 +360,20 @@ export function useHomepageCharacterLibrary() {
     }
   }, [navigate, selectCharacter])
 
-  const editCharacter = useCallback((id: string) => {
-    setEditingCharacterId(id)
-    navigate('/characters')
-  }, [navigate, setEditingCharacterId])
+  const editCharacter = useCallback(async (id: string) => {
+    const editRequestId = ++editRequestIdRef.current
+    setError(null)
+    try {
+      const character = await charactersApi.get(id)
+      if (editRequestId !== editRequestIdRef.current) return
+      updateCharacter(character.id, character)
+      setEditingCharacterId(id)
+    } catch (err) {
+      if (editRequestId !== editRequestIdRef.current) return
+      console.error('[HomepageCharacterLibrary] Failed to load character for editing:', err)
+      setError(err instanceof Error ? err.message : 'Failed to load character for editing')
+    }
+  }, [setEditingCharacterId, updateCharacter])
 
   const setPanelPinned = useCallback((panelPinned: boolean) => {
     updateSettings({ panelPinned })
@@ -344,7 +388,10 @@ export function useHomepageCharacterLibrary() {
   }, [updateSettings])
 
   const closePanel = useCallback(() => setPanelOpen(false), [])
-  const openSettings = useCallback(() => openSettingsModal('productivity'), [openSettingsModal])
+  const openSettings = useCallback(
+    () => openSettingsModal('productivity', { anchorId: 'homepage-character-library-settings' }),
+    [openSettingsModal],
+  )
   const retry = useCallback(() => {
     queryKeyRef.current = null
     setError(null)

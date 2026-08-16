@@ -1,9 +1,14 @@
 # Lumiverse for Stream Deck
 
-The MVP provides two actions:
+The plugin provides three user-facing actions:
 
 - **Open Recent Chat** opens the user's most recently updated Lumiverse chat.
 - **Open Character Chat** opens the most recent chat for a character selected in the Property Inspector.
+- **Browse Lumiverse** opens a paginated device profile containing characters and recent chats. Use the toggle,
+  previous, next, and back keys to navigate; selecting a result opens its chat.
+
+The browser profile is bundled for Stream Deck, Mini, XL, and Stream Deck +. Stream Deck installs the matching
+profile the first time **Browse Lumiverse** is used.
 
 ## Build and validate
 

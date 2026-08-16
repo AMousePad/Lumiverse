@@ -1,8 +1,15 @@
-.btn {
+.controls {
   position: absolute;
   bottom: calc(var(--lcs-input-safe-zone, 100px) - 10px);
   right: 20px;
   z-index: 32;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  align-items: center;
+}
+
+.btn {
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -31,8 +38,8 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
-:global([data-select-mode]) .btn {
-  bottom: calc(var(--lcs-input-safe-zone, 100px) + 42px);
+:global([data-select-mode]) .controls {
+  bottom: calc(var(--lcs-input-safe-zone, 100px) + 32px);
 }
 
 .btn:hover {
@@ -40,4 +47,22 @@
   color: var(--lumiverse-text);
   border-color: var(--lumiverse-border-hover);
   transform: translateY(-1px);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.editBtn {
+  color: var(--lumiverse-primary);
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 45%, var(--lumiverse-border));
+}
+
+.spin {
+  animation: chatNavigationSpin 0.8s linear infinite;
+}
+
+@keyframes chatNavigationSpin {
+  to { transform: rotate(360deg); }
 }

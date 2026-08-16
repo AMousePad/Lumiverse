@@ -69,9 +69,18 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
   addProfile: (profile) => set((state) => {
     const connectionsOrder = normalizeConnectionsOrder(state.connectionsOrder)
     const order = connectionsOrder.llm
+    const existingIndex = state.profiles.findIndex((candidate) => candidate.id === profile.id)
     return {
-      profiles: [...state.profiles, profile],
-      connectionsOrder: { ...connectionsOrder, llm: [...order, profile.id] },
+      // A connection mutation is delivered both over WebSocket and in the
+      // initiating request's REST response. Either can arrive first, so treat
+      // adding an already-known id as an update instead of creating two rows.
+      profiles: existingIndex === -1
+        ? [...state.profiles, profile]
+        : state.profiles.map((candidate, index) => index === existingIndex ? profile : candidate),
+      connectionsOrder: {
+        ...connectionsOrder,
+        llm: order.includes(profile.id) ? order : [...order, profile.id],
+      },
     }
   }),
   updateProfile: (id, updates) =>

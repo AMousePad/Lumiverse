@@ -31,6 +31,7 @@ import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
 import ChatFindBar, { type ChatFindNavigationTarget } from './ChatFindBar'
 import ScrollToBottom from './ScrollToBottom'
+import MessageNavigator from './MessageNavigator'
 import CouncilPill from './CouncilPill'
 import PortraitPanel from './PortraitPanel'
 import ExpressionDisplay from './expressions/ExpressionDisplay'
@@ -210,6 +211,7 @@ export default function ChatView() {
   const [chatFindFocusRequest, setChatFindFocusRequest] = useState(0)
   const [chatFindQuery, setChatFindQuery] = useState('')
   const [chatFindTarget, setChatFindTarget] = useState<ChatFindNavigationTarget | null>(null)
+  const [messageNavigatorOpen, setMessageNavigatorOpen] = useState(false)
   const setActiveChat = useStore((s) => s.setActiveChat)
   const setMessages = useStore((s) => s.setMessages)
   const messages = useStore((s) => s.messages)
@@ -299,6 +301,7 @@ export default function ChatView() {
     setChatFindOpen(false)
     setChatFindQuery('')
     setChatFindTarget(null)
+    setMessageNavigatorOpen(false)
   }, [chatId])
 
   useSwipeKeyboard()
@@ -1111,6 +1114,12 @@ export default function ChatView() {
               onClearTarget={clearChatFindTarget}
               onQueryChange={setChatFindQuery}
             />
+            <MessageNavigator
+              chatId={chatId}
+              open={messageNavigatorOpen}
+              onClose={() => setMessageNavigatorOpen(false)}
+              onNavigate={setChatFindTarget}
+            />
             <MessageList
               messages={messages}
               chatId={chatId}
@@ -1118,7 +1127,11 @@ export default function ChatView() {
               findTarget={chatFindTarget}
               findQuery={chatFindQuery}
             />
-            <ScrollToBottom />
+            <ScrollToBottom
+              chatId={chatId}
+              onOpenNavigator={() => setMessageNavigatorOpen(true)}
+              onNavigate={setChatFindTarget}
+            />
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
             <div data-spindle-mount="chat_bottom_dock" data-dock-request="strip" />

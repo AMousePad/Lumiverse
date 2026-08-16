@@ -36,6 +36,34 @@ beforeEach(async () => {
 afterEach(() => closeDatabase());
 
 describe("world-book P8 REST mutation contracts", () => {
+  test("forwards reorder expected revisions", async () => {
+    const book = svc.createWorldBook(USER_ID, { name: "Reorder fixture" });
+    const first = svc.createEntry(USER_ID, book.id, { comment: "first", content: "lore" })!;
+    const second = svc.createEntry(USER_ID, book.id, { comment: "second", content: "lore" })!;
+    const url = `http://localhost/world-books/${book.id}/entries/reorder`;
+    const headers = { "content-type": "application/json", "x-test-user": USER_ID };
+    const expectedRevisions = { [first.id]: first.revision, [second.id]: second.revision };
+
+    const winner = await app.request(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ordered_ids: [second.id, first.id], expected_revisions: expectedRevisions }),
+    });
+    expect(winner.status).toBe(200);
+
+    const stale = await app.request(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ordered_ids: [first.id, second.id], expected_revisions: expectedRevisions }),
+    });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({
+      error: "world_book_entry_conflict",
+      code: "WORLD_BOOK_ENTRY_CONFLICT",
+      conflicts: [{ id: first.id }],
+    });
+  });
+
   test("maps malformed and stale entry revisions canonically", async () => {
     const book = svc.createWorldBook(USER_ID, { name: "Route fixture" });
     const entry = svc.createEntry(USER_ID, book.id, { comment: "first", content: "lore" })!;
@@ -185,5 +213,59 @@ describe("world-book P8 REST mutation contracts", () => {
     expect(copied.status).toBe(200);
     expect((await copied.json()).affected).toBe(2);
     expect(svc.listEntries(USER_ID, target.id)).toHaveLength(2);
+  });
+
+  test("maps malformed and stale bulk revisions canonically", async () => {
+    const book = svc.createWorldBook(USER_ID, { name: "Bulk revision fixture" });
+    const entry = svc.createEntry(USER_ID, book.id, { comment: "first", content: "lore" })!;
+    const url = `http://localhost/world-books/${book.id}/entries/bulk`;
+    const headers = { "content-type": "application/json", "x-test-user": USER_ID };
+
+    const malformed = await app.request(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "set_enabled",
+        enabled: false,
+        entry_ids: [entry.id],
+        expected_revisions: { [entry.id]: 0 },
+      }),
+    });
+    expect(malformed.status).toBe(428);
+    expect(await malformed.json()).toMatchObject({
+      error: "WORLD_BOOK_ENTRY_REVISION_INVALID",
+      code: "WORLD_BOOK_ENTRY_REVISION_INVALID",
+      field: "expected_revisions",
+    });
+
+    const expectedRevisions = { [entry.id]: entry.revision };
+    const winner = await app.request(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "set_enabled",
+        enabled: false,
+        entry_ids: [entry.id],
+        expected_revisions: expectedRevisions,
+      }),
+    });
+    expect(winner.status).toBe(200);
+
+    const stale = await app.request(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "set_enabled",
+        enabled: true,
+        entry_ids: [entry.id],
+        expected_revisions: expectedRevisions,
+      }),
+    });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({
+      error: "world_book_entry_conflict",
+      code: "WORLD_BOOK_ENTRY_CONFLICT",
+      conflicts: [{ id: entry.id }],
+    });
   });
 });

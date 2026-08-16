@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
+import { eventBus } from "../ws/bus";
+import { EventType, type EventMessage } from "../ws/events";
 import {
   addGroupMember,
   addSwipe,
@@ -234,6 +236,30 @@ describe("chat greeting selection", () => {
     expect(chat.metadata.activeGreetingIndex).toBe(2);
     expect(greeting?.content).toBe("Alternate two");
     expect(greeting?.extra.greeting_index).toBe(2);
+  });
+});
+
+describe("chat lifecycle events", () => {
+  test("emits CHAT_CREATED after solo creation and group conversion", async () => {
+    const events: EventMessage[] = [];
+    const unsubscribe = eventBus.on(EventType.CHAT_CREATED, (event) => events.push(event));
+
+    try {
+      const solo = createChat("u1", { character_id: "c1", name: "Solo" });
+      const converted = convertSoloChatToGroup("u1", solo.id);
+      expect(converted).not.toBeNull();
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(events.map((event) => event.payload.id)).toEqual([solo.id, converted!.id]);
+      expect(events.every((event) => event.userId === "u1")).toBe(true);
+      expect(events[1]?.payload.chat.metadata).toEqual(expect.objectContaining({
+        group: true,
+        character_ids: ["c1"],
+      }));
+    } finally {
+      unsubscribe();
+    }
   });
 });
 
@@ -770,6 +796,25 @@ describe("avatar-bound appearance", () => {
       description: "winter-desc",
       personality: "warm",
     });
+    expect(result?.chat.metadata.active_avatar_id).toBeUndefined();
+  });
+
+  test("applies an avatar selection to the addressed group member, not the chat owner", () => {
+    seedCharacterWithExtensions("char1", appearanceExtensions);
+    seedCharacterWithExtensions("char2", appearanceExtensions);
+    getDb().query("UPDATE characters SET alternate_greetings = ? WHERE id IN (?, ?)")
+      .run(JSON.stringify(["Winter hello"]), "char1", "char2");
+    seedChat("chat1", "char1", "Group", JSON.stringify({ group: true, character_ids: ["char1", "char2"] }), 1);
+
+    const result = applyChatAppearance("u1", "chat1", {
+      type: "avatar",
+      avatar_entry_id: "winter-avatar",
+      character_id: "char2",
+    });
+
+    expect(result?.chat.metadata.group_active_avatar_ids).toEqual({ char2: "winter-image" });
+    expect(result?.chat.metadata.group_active_avatar_entry_ids).toEqual({ char2: "winter-avatar" });
+    expect(result?.chat.metadata.group_active_greeting_indices).toEqual({ char2: 1 });
     expect(result?.chat.metadata.active_avatar_id).toBeUndefined();
   });
 });

@@ -11,13 +11,13 @@ export const PRODUCTIVITY_SETTING_KEYS = [
 export type ProductivitySettingKey = typeof PRODUCTIVITY_SETTING_KEYS[number]
 
 export const PRODUCTIVITY_CONTROL_DEFINITIONS = {
-  quickToolbarSettings: ['enabled', 'variant', 'visibleTabIds', 'iconOrder', 'iconSize', 'labelVisible', 'labelTextSize', 'scale', 'orientation', 'rotationDeg', 'opacity', 'snapToEdge', 'rect'],
+  quickToolbarSettings: ['enabled', 'variant', 'visibleTabIds', 'iconOrder', 'iconSize', 'labelVisible', 'labelTextSize', 'scale', 'orientation', 'rotationDeg', 'opacity', 'snapToEdge', 'rect', 'hideWhenOverlaid'],
   connectionsPickerSettings: ['enabled', 'variant', 'launcherEnabled', 'launcherIconSize', 'opacity', 'thumbnailSize', 'density', 'showFavorites', 'showRecent', 'showSearch', 'showModelMetadata', 'profileTags', 'visibleTagIds', 'favoriteProfileIds', 'recentProfileIds', 'rowPadding', 'rowGap', 'sectionSpacing', 'columnWidths'],
-  loreIndicatorSettings: ['enabled', 'variant', 'v2ActivationMode', 'v2BookDisplay', 'v5Keybind', 'visibleMetadata', 'iconSize', 'textSize', 'entryTypeAppearance', 'v4Items', 'v4Spacing'],
+  loreIndicatorSettings: ['enabled', 'variant', 'v2ActivationMode', 'v2BookDisplay', 'v5Keybind', 'visibleMetadata', 'iconSize', 'textSize', 'entryTypeAppearance', 'v4Items', 'v4Spacing', 'editorLaunchTarget'],
   homepageCharacterLibrarySettings: ['enabled', 'thumbnailWidth', 'thumbnailHeight', 'density', 'footerMode', 'visibleMetadata', 'tagRows', 'viewMode', 'defaultSort', 'defaultFilter', 'maxVisibleTags', 'showNameBackground', 'panelWidth', 'panelImageHeight', 'panelPinned', 'lastSelectedCharacterId'],
   characterTabDisplaySettings: ['thumbnailWidth', 'thumbnailHeight', 'density', 'footerMode', 'visibleMetadata', 'tagRows', 'viewMode', 'defaultSort', 'defaultFilter', 'useHomepageSettings'],
   portraitDockSettings: ['enabled', 'openAtOriginalSize', 'rememberSizePosition', 'defaultDockSide', 'snapToEdge', 'hoverControls', 'hoverControlSize', 'defaultAspectRatioLock', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'rect', 'pinned', 'aspectRatioLocked', 'dockSide', 'open', 'lastPortrait'],
-  lorebookEditorSettings: ['defaultVariant', 'triggerDisplay', 'halfButtonEnabled', 'loreIndicatorActionEnabled', 'allowSimultaneousEditors', 'halfEditorMode', 'fullRect', 'halfRect', 'minChatWidth', 'minEditorPaneWidth', 'halfEntriesPaneWidth', 'booksPaneWidth', 'entriesPaneWidth', 'inspectorPaneWidth', 'rowDensity', 'visibleEntryMetadata'],
+  lorebookEditorSettings: ['defaultVariant', 'fullEditorLaunchMode', 'triggerDisplay', 'halfButtonEnabled', 'loreIndicatorActionEnabled', 'allowSimultaneousEditors', 'halfEditorMode', 'fullRect', 'halfRect', 'minChatWidth', 'minEditorPaneWidth', 'halfEntriesPaneWidth', 'booksPaneWidth', 'entriesPaneWidth', 'inspectorPaneWidth', 'rowDensity', 'visibleEntryMetadata'],
 } as const satisfies Record<ProductivitySettingKey, readonly string[]>
 
 export function reorderItems<T>(items: readonly T[], from: number, to: number): T[] {

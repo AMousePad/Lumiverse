@@ -22,6 +22,7 @@ const ASYNC_UNWIND_INTERVAL = 64;
 export interface EvaluateOptions {
   phase?: MacroInterceptorPhase;
   sourceHint?: string;
+  sourceOwner?: "host";
   /** Safety budget for one evaluate() call. This is a work cap, not a nesting cap. */
   maxMacroResolutions?: number;
 }
@@ -32,6 +33,7 @@ interface EvaluationState {
   maxMacroResolutions: number;
   activeExpansions: Set<string>;
   halted: boolean;
+  sourceOwner?: EvaluateOptions["sourceOwner"];
 }
 
 const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
@@ -64,11 +66,12 @@ export async function evaluate(
     maxMacroResolutions: options?.maxMacroResolutions ?? DEFAULT_MAX_MACRO_RESOLUTIONS,
     activeExpansions: new Set(),
     halted: false,
+    sourceOwner: options?.sourceOwner,
   };
   let text = processed;
 
   const userId = typeof env.extra?.userId === "string" ? env.extra.userId : undefined;
-  const runInterceptors = macroInterceptorChain.count > 0;
+  const runInterceptors = options?.sourceOwner !== "host" && macroInterceptorChain.count > 0;
   const phase = options?.phase ?? "other";
   const sourceHint = options?.sourceHint;
 
@@ -117,6 +120,34 @@ export async function evaluate(
 }
 
 const EMPTY_TOUCHED_VARS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Offer one complete character prompt source to extension evaluators, then
+ * continue the host's normal evaluation with the returned text.
+ */
+async function resolvePromptSource(
+  input: string,
+  sourceHint: string,
+  env: MacroEnv,
+): Promise<string | undefined> {
+  if (macroInterceptorChain.count === 0) return undefined;
+
+  const userId = typeof env.extra?.userId === "string" ? env.extra.userId : undefined;
+  const result = await macroInterceptorChain.run({
+    template: input,
+    env: snapshotEnvForInterceptor(env),
+    commit: env.commit !== false,
+    phase: "prompt",
+    sourceHint,
+    ...(userId !== undefined ? { userId } : {}),
+  });
+  if (env._fingerprint) {
+    for (const variable of result.touchedVars) env._fingerprint.touched.add(variable);
+    if (result.volatile || result.opaque) env._fingerprint.cacheable = false;
+  }
+
+  return result.text;
+}
 
 function wrapEnvForFingerprint(
   env: MacroEnv,
@@ -306,11 +337,14 @@ async function evaluateMacroNode(
   state: EvaluationState,
 ): Promise<string> {
   const def = registry.getMacro(node.name);
+  const origin = registry.getMacroOrigin(node.name);
 
-  // Check dynamic macros via pre-normalized lowercase map (O(1) lookup)
+  // Preset/request macros override extension registrations, but never system
+  // macros. This keeps host behavior stable while allowing presets to define
+  // their own values without an extension globally shadowing them.
   const dynamicKey = node.name.toLowerCase();
   const dynamicLookup = env._dynamicMacrosLower;
-  if (!def && dynamicLookup && dynamicLookup.has(dynamicKey)) {
+  if (origin?.kind !== "system" && dynamicLookup && dynamicLookup.has(dynamicKey)) {
     if (env._fingerprint) env._fingerprint.cacheable = false;
     const dynamic = dynamicLookup.get(dynamicKey)!;
     let rawResult: string;
@@ -479,6 +513,12 @@ async function evaluateScopedMacroNode(
     },
     resolveNodes: (nodes: AstNode[]) =>
       evaluateNodes(nodes, env, registry, globalOffset, depth + 1, state),
+    ...(state.sourceOwner === "host"
+      ? {
+          resolvePromptSource: (input: string, sourceHint: string) =>
+            resolvePromptSource(input, sourceHint, env),
+        }
+      : {}),
     warn: (message: string) => {
       state.diagnostics.push({ level: "warn", message, macroName: node.name, offset: node.offset });
     },
@@ -531,6 +571,12 @@ function buildExecContext(
     },
     resolveNodes: (nodes: AstNode[]) =>
       evaluateNodes(nodes, env, registry, globalOffset, depth + 1, state),
+    ...(state.sourceOwner === "host"
+      ? {
+          resolvePromptSource: (input: string, sourceHint: string) =>
+            resolvePromptSource(input, sourceHint, env),
+        }
+      : {}),
     warn: (message: string) => {
       state.diagnostics.push({ level: "warn", message, macroName: node.name, offset: node.offset });
     },

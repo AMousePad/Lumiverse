@@ -1251,15 +1251,48 @@ function appendBaseRole(role: string): "user" | "assistant" {
   return role === "user_append" ? "user" : "assistant";
 }
 
+function definePromptVariableEntry<T extends object>(target: T, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
 /**
- * A resolved profile owns its variable scope. Missing values use the variable
- * definition's default rather than leaking selections from the shared preset.
+ * A resolved profile is an override layer over the preset's configured values.
+ * Missing profile blocks and keys inherit from the preset, including legacy
+ * bindings created before prompt-variable snapshots existed.
  */
 function resolveStoredPromptVariableValues(
   presetValues: Record<string, Record<string, PromptVariableValue>>,
   profileValues?: PromptVariableValues,
 ): Record<string, Record<string, PromptVariableValue>> {
-  return profileValues === undefined ? presetValues : profileValues;
+  if (profileValues === undefined) return presetValues;
+
+  const merged: Record<string, Record<string, PromptVariableValue>> = {};
+  for (const [blockId, values] of Object.entries(presetValues)) {
+    const bucket: Record<string, PromptVariableValue> = {};
+    for (const [name, value] of Object.entries(values)) {
+      definePromptVariableEntry(bucket, name, value);
+    }
+    definePromptVariableEntry(merged, blockId, bucket);
+  }
+  for (const [blockId, values] of Object.entries(profileValues)) {
+    const inherited = Object.hasOwn(merged, blockId) ? merged[blockId] : undefined;
+    const bucket: Record<string, PromptVariableValue> = {};
+    if (inherited) {
+      for (const [name, value] of Object.entries(inherited)) {
+        definePromptVariableEntry(bucket, name, value);
+      }
+    }
+    for (const [name, value] of Object.entries(values)) {
+      definePromptVariableEntry(bucket, name, value);
+    }
+    definePromptVariableEntry(merged, blockId, bucket);
+  }
+  return merged;
 }
 
 /**
@@ -1267,13 +1300,25 @@ function resolveStoredPromptVariableValues(
  * wraps the existing single macro evaluation rather than scheduling a second
  * pass, so the placement macros are strictly observational.
  */
+async function evaluateHostPromptSource(
+  content: string,
+  macroEnv: MacroEnv,
+  sourceHint = "prompt_source:preset_setting",
+): Promise<string> {
+  return (await evaluate(content, macroEnv, registry, {
+    phase: "prompt",
+    sourceHint,
+    sourceOwner: "host",
+  })).text;
+}
+
 async function evaluatePromptBlockContent(
   content: string,
   macroEnv: MacroEnv,
-  block: Pick<PromptBlock, "role" | "position" | "depth">,
+  block: Pick<PromptBlock, "id" | "role" | "position" | "depth">,
 ): Promise<string> {
   return withPromptBlockContext(macroEnv, block, async () =>
-    (await evaluate(content, macroEnv, registry)).text,
+    evaluateHostPromptSource(content, macroEnv, "prompt_source:preset_block"),
   );
 }
 
@@ -1303,12 +1348,16 @@ export function resolvePromptVariables(
   const values: Record<string, string | number> = {};
   const defaults: Record<string, string | number> = {};
   const byBlock: Record<string, Record<string, string | number>> = {};
+  const defaultsByBlock: Record<string, Record<string, string | number>> = {};
   const selections: Record<string, string[]> = {};
+  const selectionsByBlock: Record<string, Record<string, string[]>> = {};
 
   for (const block of blocks) {
     if (!block.enabled || !block.variables?.length) continue;
     const bucket = stored[block.id] ?? {};
     const perBlock: Record<string, string | number> = {};
+    const perBlockDefaults: Record<string, string | number> = {};
+    const perBlockSelections: Record<string, string[]> = {};
     for (const def of block.variables) {
       if (!def?.name) continue;
       const override = Object.prototype.hasOwnProperty.call(bucket, def.name)
@@ -1317,27 +1366,38 @@ export function resolvePromptVariables(
       const resolved = coercePromptVariable(def, override);
       perBlock[def.name] = resolved.rendered;
       values[def.name] = resolved.rendered;
-      defaults[def.name] = coercePromptVariable(def, undefined).rendered;
+      const defaultValue = coercePromptVariable(def, undefined).rendered;
+      perBlockDefaults[def.name] = defaultValue;
+      defaults[def.name] = defaultValue;
       if (def.type === "multiselect") {
+        perBlockSelections[def.name] = resolved.selectedIds;
         selections[def.name] = resolved.selectedIds;
       }
     }
-    if (Object.keys(perBlock).length) byBlock[block.id] = perBlock;
+    if (Object.keys(perBlock).length) {
+      byBlock[block.id] = perBlock;
+      defaultsByBlock[block.id] = perBlockDefaults;
+    }
+    if (Object.keys(perBlockSelections).length) {
+      selectionsByBlock[block.id] = perBlockSelections;
+    }
   }
 
   env.extra.promptVariables = values;
   env.extra.promptVariablesByBlock = byBlock;
   env.extra.promptVariableDefaults = defaults;
+  env.extra.promptVariableDefaultsByBlock = defaultsByBlock;
   env.extra.promptVariableSelections = selections;
+  env.extra.promptVariableSelectionsByBlock = selectionsByBlock;
 
   // Seed the local-variables Map so {{getvar::name}} resolves to the same
-  // value as {{var::name}}. Seeding happens before any block renders, so
-  // in-prompt {{setvar::name::…}} can still override mid-assembly (setvar
-  // wins because it runs later during block evaluation).
+  // value as {{var::name}} outside a defining block. While a block renders,
+  // withPromptBlockContext overlays that block's own resolved values so a
+  // same-named definition elsewhere cannot shadow it. In-block
+  // {{setvar::name::…}} writes still win for the rest of that block.
   //
   // Local variables are transient per assembly, so this is the only seed source
-  // for preset variables. In-prompt {{setvar::name::...}} can still override the
-  // value later in the same assembly, but nothing is rehydrated from chat state.
+  // for preset variables; nothing is rehydrated from chat state.
   for (const [name, value] of Object.entries(values)) {
     env.variables.local.set(name, String(value));
   }
@@ -2425,9 +2485,7 @@ export async function assemblePrompt(
   // Prompt variables — resolve creator-defined schemas + end-user overrides and
   // surface them on env.extra so {{var::name}} / {{hasVar::name}} / {{varDefault::name}}
   // can read consistent values across every block in this assembly.
-  const profilePromptVariables = resolvedProfile.binding
-    ? resolvedProfile.binding.prompt_variables ?? {}
-    : undefined;
+  const profilePromptVariables = resolvedProfile.binding?.prompt_variables;
   resolvePromptVariables(macroEnv, blocks, preset, profilePromptVariables);
 
   // A select variable may choose an in-memory insertion profile for its own
@@ -2983,8 +3041,7 @@ export async function assemblePrompt(
           chat.metadata?.group === true,
         );
         if (newChatPrompt) {
-          const resolved = (await evaluate(newChatPrompt, macroEnv, registry))
-            .text;
+          const resolved = await evaluateHostPromptSource(newChatPrompt, macroEnv);
           const trimmed = resolved.trim();
           if (trimmed && !isDecorativeNewChatSeparator(trimmed)) {
             result.push({ role: "system", content: trimmed });
@@ -3417,13 +3474,11 @@ export async function assemblePrompt(
   // ---- Post-history instructions ----
   phaseStartedAt = performance.now();
   if (!phiMacroReferenced && effectiveCharacter.post_history_instructions) {
-    const resolved = (
-      await evaluate(
-        effectiveCharacter.post_history_instructions,
-        macroEnv,
-        registry,
-      )
-    ).text.trim();
+    const resolved = (await evaluateHostPromptSource(
+      "{{charPostHistoryInstructions}}",
+      macroEnv,
+      "prompt_source:character_wrapper",
+    )).trim();
     if (resolved) {
       result.push({ role: "system", content: resolved });
       breakdown.push({
@@ -3704,7 +3759,7 @@ export async function assemblePrompt(
   ) {
     const nudge = promptBehavior.continueNudge;
     if (nudge) {
-      const resolved = (await evaluate(nudge, macroEnv, registry)).text;
+      const resolved = await evaluateHostPromptSource(nudge, macroEnv);
       if (resolved) {
         result.push(markAsContinueNudge({ role: "system", content: resolved }));
         breakdown.push({
@@ -3726,7 +3781,7 @@ export async function assemblePrompt(
         : "";
     let resolved = "";
     if (prompt) {
-      resolved = (await evaluate(prompt, macroEnv, registry)).text;
+      resolved = await evaluateHostPromptSource(prompt, macroEnv);
     }
     if (userInput) {
       resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
@@ -3750,9 +3805,10 @@ export async function assemblePrompt(
       typeof last.content === "string" &&
       !last.content.trim()
     ) {
-      const resolved = (
-        await evaluate(promptBehavior.sendIfEmpty, macroEnv, registry)
-      ).text;
+      const resolved = await evaluateHostPromptSource(
+        promptBehavior.sendIfEmpty,
+        macroEnv,
+      );
       if (resolved) {
         result.push({ role: "user", content: resolved });
         breakdown.push({
@@ -3778,7 +3834,7 @@ export async function assemblePrompt(
   ) {
     const nudge = promptBehavior.emptySendNudge;
     if (nudge) {
-      const resolved = (await evaluate(nudge, macroEnv, registry)).text;
+      const resolved = await evaluateHostPromptSource(nudge, macroEnv);
       if (resolved) {
         result.push({ role: "user", content: resolved });
         breakdown.push({
@@ -3806,7 +3862,7 @@ export async function assemblePrompt(
   ) {
     const groupNudge = promptBehavior.groupNudge;
     if (groupNudge) {
-      const resolved = (await evaluate(groupNudge, macroEnv, registry)).text;
+      const resolved = await evaluateHostPromptSource(groupNudge, macroEnv);
       if (resolved) {
         result.push({ role: "user", content: resolved });
         breakdown.push({
@@ -3840,8 +3896,11 @@ export async function assemblePrompt(
     typeof promptBiasVal === "string" &&
     promptBiasVal.trim()
   ) {
-    const resolvedBias = (await evaluate(promptBiasVal, macroEnv, registry))
-      .text;
+    const resolvedBias = await evaluateHostPromptSource(
+      promptBiasVal,
+      macroEnv,
+      "prompt_source:host_setting",
+    );
     if (resolvedBias) prefillParts.push(resolvedBias);
   }
 
@@ -3852,8 +3911,7 @@ export async function assemblePrompt(
         ? completionSettings.assistantImpersonation
         : completionSettings.assistantPrefill;
   if (csPrefill) {
-    const resolvedPrefill = (await evaluate(csPrefill, macroEnv, registry))
-      .text;
+    const resolvedPrefill = await evaluateHostPromptSource(csPrefill, macroEnv);
     if (resolvedPrefill) prefillParts.push(resolvedPrefill);
   }
 
@@ -3866,9 +3924,10 @@ export async function assemblePrompt(
     connection?.provider === "moonshot" &&
     completionSettings.reasoningPrefill
   ) {
-    const resolvedReasoningPrefill = (
-      await evaluate(completionSettings.reasoningPrefill, macroEnv, registry)
-    ).text;
+    const resolvedReasoningPrefill = await evaluateHostPromptSource(
+      completionSettings.reasoningPrefill,
+      macroEnv,
+    );
     if (resolvedReasoningPrefill) {
       assistantReasoningPrefill = resolvedReasoningPrefill;
     }
@@ -7257,9 +7316,11 @@ export function injectReasoningParams(
 ): void {
   if (providerName === "anthropic") {
     if (!params.thinking) {
-      // Claude 4.6+ models support adaptive thinking (recommended over manual budget)
+      // Claude 4.6+ and Claude 5 models support adaptive thinking (recommended over manual budget)
       const isAdaptiveModel =
-        model && /claude-(opus|sonnet)-4[-.](6|7|8)/i.test(model);
+        model &&
+        (/claude-(opus|sonnet)-4[-.](6|7|8)/i.test(model) ||
+          /claude-[a-z0-9][a-z0-9-]*-5(?:$|[-.:@])/i.test(model));
       if (isAdaptiveModel) {
         // Adaptive thinking: Claude decides when/how much to think
         params.thinking = { type: "adaptive" };
@@ -7592,7 +7653,7 @@ async function onelinerImpersonation(
     typeof ctx.impersonateInput === "string" ? ctx.impersonateInput.trim() : "";
   let resolved = "";
   if (prompt) {
-    resolved = (await evaluate(prompt, macroEnv, registry)).text;
+    resolved = await evaluateHostPromptSource(prompt, macroEnv);
   }
   if (userInput) {
     resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
@@ -7614,8 +7675,7 @@ async function onelinerImpersonation(
     completionSettings.assistantImpersonation ||
     completionSettings.assistantPrefill;
   if (csPrefill) {
-    const resolvedPrefill = (await evaluate(csPrefill, macroEnv, registry))
-      .text;
+    const resolvedPrefill = await evaluateHostPromptSource(csPrefill, macroEnv);
     if (resolvedPrefill) {
       assistantPrefill = resolvedPrefill;
       result.push({ role: "assistant", content: assistantPrefill, partial: true });
@@ -7629,9 +7689,10 @@ async function onelinerImpersonation(
   }
 
   if (connection?.provider === "moonshot" && completionSettings.reasoningPrefill) {
-    const resolvedReasoningPrefill = (
-      await evaluate(completionSettings.reasoningPrefill, macroEnv, registry)
-    ).text;
+    const resolvedReasoningPrefill = await evaluateHostPromptSource(
+      completionSettings.reasoningPrefill,
+      macroEnv,
+    );
     if (resolvedReasoningPrefill) {
       assistantReasoningPrefill = resolvedReasoningPrefill;
       const prefillMessage = result.findLast(

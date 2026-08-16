@@ -16,16 +16,20 @@ export function applyChatAppearance(
   character: Character,
   action: ChatAppearanceAction,
 ): Promise<ChatAppearanceResult> {
+  // The server resolves the target member from character_id; without it a
+  // group action falls back to the chat's primary character and fails when
+  // the entry belongs to another member.
+  const resolved: ChatAppearanceAction = { ...action, character_id: action.character_id ?? character.id }
   const revision = (revisions.get(chatId) || 0) + 1
   revisions.set(chatId, revision)
 
   const state = useStore.getState()
   const previousMetadata = state.activeChatMetadata
-  const optimisticMetadata = previewAppearanceMetadata(character, previousMetadata, action)
+  const optimisticMetadata = previewAppearanceMetadata(character, previousMetadata, resolved)
   state.setActiveChatMetadata(optimisticMetadata)
 
   const prior = queues.get(chatId) || Promise.resolve()
-  const request = prior.catch(() => undefined).then(() => chatsApi.applyAppearance(chatId, action))
+  const request = prior.catch(() => undefined).then(() => chatsApi.applyAppearance(chatId, resolved))
   queues.set(chatId, request)
 
   return request.then((result) => {

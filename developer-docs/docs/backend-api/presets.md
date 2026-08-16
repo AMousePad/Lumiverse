@@ -195,6 +195,27 @@ Common fields:
 | `categoryMode` | `'radio' \| 'checkbox' \| null` | Category selection mode; meaningful only on category marker blocks |
 | `variables` | `PromptVariableDefDTO[]` | Prompt variable definitions for this block |
 
+Prompt-variable names are scoped to their defining block while Lumiverse renders
+that block. If another block defines the same name, `{{var::name}}`,
+`{{getvar::name}}`, and `{{.name}}` still resolve the current block's own saved
+instance. Runtime `{{setvar::name::value}}` writes remain effective for the rest
+of that block and the outer local-variable scope is restored afterward.
+
+When a chat, persona, character, connection, or default preset profile is
+active, its saved prompt-variable values are overrides rather than a complete
+replacement. Blocks and variable keys absent from the profile inherit the
+current values in `metadata.promptVariables`; bindings created before profile
+variable snapshots therefore continue to use the preset configuration.
+
+Lumiverse evaluates preset blocks and prompt settings itself; macro
+interceptors do not receive the complete preset template. If a block references
+a character field such as `{{description}}` or `{{system}}`, that field is
+offered to interceptors separately. `ctx.sourceHint` identifies which field was
+provided. This keeps preset variables and system macros stable while still
+allowing extensions to process character content. Regex scripts attached to a
+preset follow the same rule. Character fields receive the same local, chat, and
+global variables available at their original position in the preset.
+
 ---
 
 ## Categories

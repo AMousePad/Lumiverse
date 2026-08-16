@@ -3,7 +3,24 @@ import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
 import { useVirtualizer, type VirtualItem, type Virtualizer } from '@tanstack/react-virtual'
-import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass, EyeOff, Star, Pencil, Copy, GitBranch, Maximize2, Minimize2 } from 'lucide-react'
+import {
+  MessageSquarePlus,
+  MessageSquare,
+  Trash2,
+  Users,
+  LogOut,
+  FlaskConical,
+  Gamepad2,
+  Compass,
+  EyeOff,
+  Star,
+  Pencil,
+  Copy,
+  GitBranch,
+  Maximize2,
+  Minimize2,
+  BookOpen,
+} from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi, messagesApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
@@ -19,6 +36,8 @@ import { prefetchImages } from '@/lib/imageDecodeCache'
 import { measureLayoutHeight, renderedPxToLayoutPx } from '@/lib/uiScale'
 import LazyImage from '@/components/shared/LazyImage'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import { GuideViewer } from '@/components/shared/GuideViewer'
+import type { GuideDefinition } from '@/lib/guides/types'
 import SearchField from '@/components/shared/SearchField'
 import { SortControl } from '@/components/shared/SortControl'
 import { useLongPress } from '@/hooks/useLongPress'
@@ -972,6 +991,12 @@ function VirtualizedChatRows({
   )
 }
 
+const FULL_GUIDES: GuideDefinition = {
+  kind: 'builtin',
+  path: 'index.md',
+  title: 'Lumiverse Guides',
+}
+
 export default function LandingPage() {
   const { t } = useTranslation('landing')
   const { t: tc } = useTranslation('common')
@@ -1029,6 +1054,7 @@ export default function LandingPage() {
   const [items, setItems] = useState<GroupedRecentChat[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [guidesOpen, setGuidesOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [total, setTotal] = useState(0)
   const [creatingTempChat, setCreatingTempChat] = useState(false)
@@ -1734,7 +1760,7 @@ export default function LandingPage() {
               </button>
             </div>
           </div>
-          <div className={styles.headerActions}>
+                    <div className={styles.headerActions}>
             {showMobileMotionEnable && mobileMotionPermission !== 'denied' && (
               <button
                 type="button"
@@ -1746,6 +1772,7 @@ export default function LandingPage() {
                 <Compass size={13} strokeWidth={1.5} />
               </button>
             )}
+
             <div className={styles.tempChatWrap} ref={tempChatMenuRef}>
               <button
                 type="button"
@@ -1765,21 +1792,49 @@ export default function LandingPage() {
                 </span>
                 <FlaskConical size={13} strokeWidth={1.5} />
               </button>
+
               {tempChatMenuOpen && (
                 <div className={styles.tempChatMenu}>
-                  <button type="button" className={styles.tempChatMenuItem} onClick={() => handleTempChat(false)}>
-                    <span className={styles.tempChatMenuLabel}>{t('tempChatMenu.withPreset')}</span>
+                  <button
+                    type="button"
+                    className={styles.tempChatMenuItem}
+                    onClick={() => handleTempChat(false)}
+                  >
+                    <span className={styles.tempChatMenuLabel}>
+                      {t('tempChatMenu.withPreset')}
+                    </span>
                     <span className={styles.tempChatMenuHint}>
                       {activePresetName || t('tempChatMenu.withPresetHint')}
                     </span>
                   </button>
-                  <button type="button" className={styles.tempChatMenuItem} onClick={() => handleTempChat(true)}>
-                    <span className={styles.tempChatMenuLabel}>{t('tempChatMenu.noPreset')}</span>
-                    <span className={styles.tempChatMenuHint}>{t('tempChatMenu.noPresetHint')}</span>
+
+                  <button
+                    type="button"
+                    className={styles.tempChatMenuItem}
+                    onClick={() => handleTempChat(true)}
+                  >
+                    <span className={styles.tempChatMenuLabel}>
+                      {t('tempChatMenu.noPreset')}
+                    </span>
+                    <span className={styles.tempChatMenuHint}>
+                      {t('tempChatMenu.noPresetHint')}
+                    </span>
                   </button>
                 </div>
               )}
             </div>
+
+            <button
+              type="button"
+              className={styles.accountBtn}
+              onClick={() => setGuidesOpen(true)}
+              title="Open Lumiverse guides"
+              aria-label="Open Lumiverse guides"
+            >
+              <span className={styles.accountName}>Guides</span>
+              <BookOpen size={13} strokeWidth={1.5} />
+            </button>
+
             <button
               type="button"
               className={styles.accountBtn}
@@ -1925,6 +1980,13 @@ export default function LandingPage() {
         </main>
       </motion.div>
     </div>
+    <GuideViewer
+        isOpen={guidesOpen}
+        onClose={() => setGuidesOpen(false)}
+        guide={FULL_GUIDES}
+        title="Lumiverse Guides"
+        searchable
+    />
     <ContextMenu
       position={contextMenu?.position ?? null}
       items={contextMenuItems}

@@ -30,6 +30,11 @@ import {
 } from "../src/db/connection";
 import { buildExportStream } from "../src/services/user-data/export.service";
 import { verifyArchiveFast, verifyArchive } from "../src/services/user-data/import.service";
+import {
+  ARCHIVE_SCHEMA_VERSION,
+  NDJSON_FORMAT_VERSION,
+  NDJSON_MAX_RECORD_BYTES,
+} from "../src/services/user-data/manifest";
 
 const USER_ID = "export-roundtrip-user";
 
@@ -149,8 +154,9 @@ describe("user-data export ZIP64 round-trip", () => {
     // Fast path: ZIP central-directory parse + manifest read.
     const manifest = await verifyArchiveFast(archivePath);
     expect(manifest.producer).toBe("lumiverse");
-    expect(manifest.schemaVersion).toBe(1);
-    expect(manifest.ndjsonFormatVersion).toBe(1);
+    expect(manifest.schemaVersion).toBe(ARCHIVE_SCHEMA_VERSION);
+    expect(manifest.ndjsonFormatVersion).toBe(NDJSON_FORMAT_VERSION);
+    expect(manifest.ndjsonMaxRecordBytes).toBe(NDJSON_MAX_RECORD_BYTES);
     expect(manifest.archiveId).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
@@ -169,7 +175,7 @@ describe("user-data export ZIP64 round-trip", () => {
     // bounded central-directory verifier as the import route.
     const manifest = await verifyArchive(archivePath);
     expect(manifest.producer).toBe("lumiverse");
-    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.schemaVersion).toBe(ARCHIVE_SCHEMA_VERSION);
   });
 
   test("fast verifier scans a multi-page central directory without loading it whole", async () => {

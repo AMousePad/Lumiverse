@@ -52,7 +52,8 @@ function initInstallerTestDb(): void {
   db.run(`CREATE TABLE regex_scripts (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    preset_id TEXT
+    preset_id TEXT,
+    owner_extension_identifier TEXT
   )`);
 }
 

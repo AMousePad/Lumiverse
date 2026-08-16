@@ -10,6 +10,7 @@ import type {
   SurfaceRectPrefs,
 } from '@/types/store'
 import {
+  DEFAULT_FULL_EDITOR_RECT,
   DEFAULT_MIN_CHAT_WIDTH,
   DEFAULT_MIN_EDITOR_PANE_WIDTH,
 } from '@/lib/lorebookEditorGeometry'
@@ -19,6 +20,39 @@ export const DEFAULT_SURFACE_RECT: SurfaceRectPrefs = {
   y: 24,
   width: 360,
   height: 420,
+}
+
+export function shouldHideQuickToolbarWhenOverlaid({
+  hideWhenOverlaid,
+  isMobile,
+  activeModal,
+  settingsModalOpen,
+  drawerOpen,
+  characterEditorOpen,
+  lorebookHalfEditorOpen,
+  lorebookWorkspaceOpen,
+}: {
+  hideWhenOverlaid: boolean | undefined
+  isMobile: boolean
+  activeModal: unknown
+  settingsModalOpen: boolean
+  drawerOpen: boolean
+  characterEditorOpen: boolean
+  lorebookHalfEditorOpen: boolean
+  lorebookWorkspaceOpen: boolean
+}) {
+  const overlayOpen = Boolean(activeModal)
+    || settingsModalOpen
+    || drawerOpen
+    || characterEditorOpen
+    || lorebookHalfEditorOpen
+    || lorebookWorkspaceOpen
+  return overlayOpen && (hideWhenOverlaid ?? isMobile)
+}
+
+export function isMobileViewportOrDevice(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia?.('(pointer: coarse)').matches || window.innerWidth <= 600
 }
 
 export const DEFAULT_CHARACTER_DISPLAY_SETTINGS: CharacterDisplaySettings = {
@@ -140,6 +174,7 @@ export const DEFAULT_LORE_INDICATOR_SETTINGS: LoreIndicatorSettings = {
   v4GroupBy: 'lorebook',
   v4BookPreviewCount: 4,
   v5ShowShortcutHints: true,
+  editorLaunchTarget: 'native',
 }
 
 const LORE_APPEARANCE_TYPES = ['constant', 'sticky', 'keyword', 'vector'] as const
@@ -212,12 +247,13 @@ export const DEFAULT_PORTRAIT_DOCK_SETTINGS: PortraitDockSettings = {
 
 export const DEFAULT_LOREBOOK_EDITOR_SETTINGS: LorebookEditorSettings = {
   defaultVariant: 'full',
+  fullEditorLaunchMode: 'windowed',
   triggerDisplay: 'words',
   halfButtonEnabled: true,
   loreIndicatorActionEnabled: true,
   allowSimultaneousEditors: true,
   halfEditorMode: 'docked',
-  fullRect: { x: 48, y: 36, width: 1540, height: 840 },
+  fullRect: { ...DEFAULT_FULL_EDITOR_RECT },
   halfRect: { ...DEFAULT_SURFACE_RECT, width: 720, height: 640 },
   // The chat reservation the half editor clamps against. 420, not the legacy 240:
   // a 240px sliver of chat next to a 1680px editor is the defect, not the fix.

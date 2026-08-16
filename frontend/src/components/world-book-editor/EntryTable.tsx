@@ -1,5 +1,22 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DraggableAttributes,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
 import { GripVertical, KeyRound, Lock, Sparkles } from 'lucide-react'
 import clsx from 'clsx'
 import { Toggle } from '@/components/shared/Toggle'
@@ -18,7 +35,12 @@ import {
 } from '@/lib/lorebookRowMetrics'
 import { buildEntryIndexMap, planEntryReveal } from '@/lib/entryReveal'
 import { getUiScale as readUiScale } from '@/lib/uiScale'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { estimateTokens } from '@/lib/tokenEstimate'
+import type {
+  EntrySearchResult,
+  EntrySearchTextRange,
+} from '@/lib/lorebookEntrySearch'
 import type { LorebookResolvedTokenCount as ResolvedTokenCount } from './useLorebookTokenCounts'
 import type { WorldBookEntry } from '@/types/api'
 import styles from './LorebookEditorLayout.module.css'
@@ -302,7 +324,17 @@ export interface EntryTableProps {
   /** Every entry in the open book — only the empty state distinguishes the two lists. */
   entries: WorldBookEntry[]
   filteredEntries: WorldBookEntry[]
+  /** Ranked-match metadata, present only while a meaningful query is active. */
+  searchResultsById?: ReadonlyMap<string, EntrySearchResult<WorldBookEntry>>
+  searchActive?: boolean
+  searchQuery?: string
+  typeFilter?: 'all' | TriggerType
+  onClearSearch?: () => void
+  onClearTypeFilter?: () => void
   loading: boolean
+  /** Reordering is only safe for the complete, unfiltered custom-order list. */
+  reorderEnabled?: boolean
+  onReorder?: (activeId: string, overId: string) => Promise<void> | void
   /**
    * The columns the *user* has enabled. Which of them actually render is decided
    * here, from the measured width — see {@link resolveResponsiveColumns}.
@@ -340,6 +372,7 @@ const NO_TOKENS: ResolvedTokenCount = { value: 0, exact: false }
 
 interface EntryRowProps {
   entry: WorldBookEntry
+  searchResult?: EntrySearchResult<WorldBookEntry>
   responsiveColumns: EntryColumn[]
   selected: boolean
   checked: boolean
@@ -356,6 +389,62 @@ interface EntryRowProps {
   saveEntry: (entryId: string, updates: Partial<WorldBookEntry>) => void
   onEntryPointerEnter?: (entryId: string) => void
   onEntryPointerLeave?: (entryId: string) => void
+  dragHandleAttributes?: DraggableAttributes
+  dragHandleListeners?: Record<string, unknown>
+  dragEnabled?: boolean
+}
+
+function mergeTextRanges(ranges: EntrySearchTextRange[]): EntrySearchTextRange[] {
+  const merged: EntrySearchTextRange[] = []
+  const sorted = ranges
+    .filter((range) => range.end > range.start)
+    .sort((left, right) => left.start - right.start || left.end - right.end)
+  for (const range of sorted) {
+    const previous = merged[merged.length - 1]
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end)
+      previous.fuzzy = previous.fuzzy || range.fuzzy
+    } else {
+      merged.push({ ...range })
+    }
+  }
+  return merged
+}
+
+function HighlightedText({ text, ranges }: { text: string; ranges: EntrySearchTextRange[] }) {
+  const safeRanges = mergeTextRanges(ranges).map((range) => ({
+    ...range,
+    start: Math.max(0, Math.min(text.length, range.start)),
+    end: Math.max(0, Math.min(text.length, range.end)),
+  }))
+  if (safeRanges.length === 0) return <>{text}</>
+
+  const parts: React.ReactNode[] = []
+  let cursor = 0
+  safeRanges.forEach((range, index) => {
+    if (range.start > cursor) parts.push(text.slice(cursor, range.start))
+    parts.push(
+      <mark
+        key={`${range.start}:${range.end}:${index}`}
+        className={clsx(styles.entrySearchMark, range.fuzzy && styles.entrySearchMarkFuzzy)}
+      >
+        {text.slice(range.start, range.end)}
+      </mark>,
+    )
+    cursor = Math.max(cursor, range.end)
+  })
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return <>{parts}</>
+}
+
+function rangesFor(
+  result: EntrySearchResult<WorldBookEntry> | undefined,
+  field: 'comment' | 'primaryKey',
+  valueIndex = 0,
+): EntrySearchTextRange[] {
+  return result?.matches
+    .filter((match) => match.field === field && match.valueIndex === valueIndex)
+    .map((match) => ({ start: match.start, end: match.end, fuzzy: match.fuzzy })) ?? []
 }
 
 /**
@@ -377,6 +466,7 @@ interface EntryRowProps {
  */
 const EntryRow = memo(function EntryRow({
   entry,
+  searchResult,
   responsiveColumns,
   selected,
   checked,
@@ -388,6 +478,9 @@ const EntryRow = memo(function EntryRow({
   saveEntry,
   onEntryPointerEnter,
   onEntryPointerLeave,
+  dragHandleAttributes,
+  dragHandleListeners,
+  dragEnabled = false,
 }: EntryRowProps) {
   return (
     <div
@@ -405,7 +498,24 @@ const EntryRow = memo(function EntryRow({
         aria-label={`Select ${entry.comment || 'Untitled entry'}`}
       />
       <span className={styles.entryName} title={entry.comment || 'Untitled entry'}>
-        <GripVertical size={12} />{entry.comment || 'Untitled entry'}
+        <button
+          type="button"
+          className={styles.entryDragHandle}
+          aria-label={`Reorder ${entry.comment || 'Untitled entry'}`}
+          title={dragEnabled ? 'Drag to reorder' : 'Reordering is available only for the complete custom-order list'}
+          disabled={!dragEnabled}
+          onClick={(event) => event.stopPropagation()}
+          {...dragHandleAttributes}
+          {...dragHandleListeners}
+        >
+          <GripVertical size={12} />
+        </button>
+        <span className={styles.entryNameText}>
+          <HighlightedText
+            text={entry.comment || 'Untitled entry'}
+            ranges={entry.comment ? rangesFor(searchResult, 'comment') : []}
+          />
+        </span>
       </span>
       {responsiveColumns.map((column) => {
         const name = entry.comment || 'entry'
@@ -455,7 +565,16 @@ const EntryRow = memo(function EntryRow({
         }
         if (column.id === 'keys') {
           const keys = entry.key.join(', ')
-          return <span key={column.id} className={styles.rowKeys} title={keys || 'No primary keys'}>{keys || '—'}</span>
+          return (
+            <span key={column.id} className={styles.rowKeys} title={keys || 'No primary keys'}>
+              {entry.key.length === 0 ? '—' : entry.key.map((key, index) => (
+                <span key={`${index}:${key}`}>
+                  {index > 0 && ', '}
+                  <HighlightedText text={key} ranges={rangesFor(searchResult, 'primaryKey', index)} />
+                </span>
+              ))}
+            </span>
+          )
         }
         // `tokens` is only in `visibleColumns` when the column is on, so the
         // header and the row always emit the same cell count. The count itself
@@ -480,14 +599,61 @@ const EntryRow = memo(function EntryRow({
           title={entry.disabled ? 'Disabled' : 'Enabled'}
         />
       </span>
+      {searchResult?.snippet && (
+        <span className={styles.entrySearchSnippet}>
+          <b>{searchResult.snippet.label}</b>
+          <span className={styles.entrySearchSnippetText}>
+            {searchResult.snippet.leadingEllipsis && '…'}
+            <HighlightedText text={searchResult.snippet.text} ranges={searchResult.snippet.ranges} />
+            {searchResult.snippet.trailingEllipsis && '…'}
+          </span>
+        </span>
+      )}
     </div>
   )
 })
 
+function SortableEntryRow({
+  reorderEnabled,
+  ...props
+}: EntryRowProps & { reorderEnabled: boolean }) {
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
+    id: props.entry.id,
+    disabled: !reorderEnabled,
+  })
+  const { setNodeRef, style } = useScaledSortableStyle({
+    setNodeRef: setSortableRef,
+    transform,
+    transition,
+    isDragging,
+  })
+
+  // This node is deliberately nested inside `.entryVirtualRow`: TanStack owns
+  // the outer wrapper's translateY, while dnd-kit owns this transform.
+  return (
+    <div ref={setNodeRef} className={isDragging ? styles.entrySortableDragging : undefined} style={style}>
+      <EntryRow
+        {...props}
+        dragHandleAttributes={attributes}
+        dragHandleListeners={listeners}
+        dragEnabled={reorderEnabled}
+      />
+    </div>
+  )
+}
+
 export default function EntryTable({
   entries,
   filteredEntries,
+  searchResultsById,
+  searchActive = false,
+  searchQuery = '',
+  typeFilter = 'all',
+  onClearSearch,
+  onClearTypeFilter,
   loading,
+  reorderEnabled = false,
+  onReorder,
   visibleColumns,
   selectedEntryId,
   setSelectedEntryId,
@@ -571,6 +737,15 @@ export default function EntryTable({
   }), [])
 
   const rowMetrics = useEntryRowMetrics(regionRef)
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  const handleDragEnd = useCallback(({ active, over }: DragEndEvent) => {
+    if (!reorderEnabled || !over || active.id === over.id) return
+    void onReorder?.(String(active.id), String(over.id))
+  }, [onReorder, reorderEnabled])
 
   /**
    * Distance from the scroll element's content origin to the first virtual row.
@@ -653,6 +828,13 @@ export default function EntryTable({
   useEffect(() => {
     virtualizer.measure()
   }, [rowMetrics.density, rowMetrics.fontScale, virtualizer])
+
+  // Search snippets add a measured second grid row. Clear cached heights whenever
+  // the query result objects change so off-screen estimates and revealed rows
+  // agree immediately, before ResizeObserver sees each mounted row individually.
+  useEffect(() => {
+    virtualizer.measure()
+  }, [searchResultsById, virtualizer])
 
   /** id -> row index in the rendered list; consulted once per selection change. */
   const filteredIndexById = useMemo(() => buildEntryIndexMap(filteredEntries), [filteredEntries])
@@ -757,7 +939,21 @@ export default function EntryTable({
           </div>
           {loading && <div className={styles.empty}>Loading entries...</div>}
           {!loading && filteredEntries.length === 0 && (
-            <div className={styles.empty}>{entries.length === 0 ? 'This lorebook has no entries yet.' : 'No entries match this filter.'}</div>
+            <div className={styles.empty}>
+              <span>
+                {entries.length === 0
+                  ? 'This lorebook has no entries yet.'
+                  : searchActive
+                    ? `No entries match “${searchQuery.trim()}”${typeFilter === 'all' ? '.' : ' with the current type filter.'}`
+                    : 'No entries match the current type filter.'}
+              </span>
+              {entries.length > 0 && (
+                <span className={styles.emptyActions}>
+                  {searchActive && onClearSearch && <button type="button" onClick={onClearSearch}>Clear search</button>}
+                  {typeFilter !== 'all' && onClearTypeFilter && <button type="button" onClick={onClearTypeFilter}>Show all types</button>}
+                </span>
+              )}
+            </div>
           )}
           {selectionHiddenByFilter && (
             <div className={styles.entrySelectionNotice}>
@@ -773,44 +969,50 @@ export default function EntryTable({
             virtualizer's total, so the region scrolls exactly as far as 554 real
             rows used to make it.
           */}
-          <div
-            ref={spacerRef}
-            className={styles.entryVirtualSpacer}
-            style={{ height: virtualizer.getTotalSize() }}
-          >
-            {virtualizer.getVirtualItems().map((virtualRow) => {
-              const entry = filteredEntries[virtualRow.index]
-              if (!entry) return null
-              const tokens = tokensVisible ? resolveTokenCount(entry) : NO_TOKENS
-              return (
-                <div
-                  key={virtualRow.key}
-                  className={styles.entryVirtualRow}
-                  data-index={virtualRow.index}
-                  ref={virtualizer.measureElement}
-                  // `virtualRow.start` is measured from the scroll element's
-                  // origin and therefore includes `scrollMargin`; the wrapper is
-                  // positioned inside the spacer, which already starts there.
-                  style={{ transform: `translateY(${virtualRow.start - (scrollMargin ?? 0)}px)` }}
-                >
-                  <EntryRow
-                    entry={entry}
-                    responsiveColumns={responsiveColumns}
-                    selected={entry.id === selectedEntryId}
-                    checked={selectedIdSet.has(entry.id)}
-                    triggerDisplay={triggerDisplay}
-                    tokenValue={tokens.value}
-                    tokenExact={tokens.exact}
-                    setSelectedEntryId={stableActions.setSelectedEntryId}
-                    toggleEntrySelection={stableActions.toggleEntrySelection}
-                    saveEntry={stableActions.saveEntry}
-                    onEntryPointerEnter={stableActions.onEntryPointerEnter}
-                    onEntryPointerLeave={stableActions.onEntryPointerLeave}
-                  />
-                </div>
-              )
-            })}
-          </div>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={filteredEntries.map((entry) => entry.id)} strategy={verticalListSortingStrategy}>
+              <div
+                ref={spacerRef}
+                className={styles.entryVirtualSpacer}
+                style={{ height: virtualizer.getTotalSize() }}
+              >
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const entry = filteredEntries[virtualRow.index]
+                  if (!entry) return null
+                  const tokens = tokensVisible ? resolveTokenCount(entry) : NO_TOKENS
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      className={styles.entryVirtualRow}
+                      data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
+                      // `virtualRow.start` is measured from the scroll element's
+                      // origin and therefore includes `scrollMargin`; the wrapper is
+                      // positioned inside the spacer, which already starts there.
+                      style={{ transform: `translateY(${virtualRow.start - (scrollMargin ?? 0)}px)` }}
+                    >
+                      <SortableEntryRow
+                        entry={entry}
+                        searchResult={searchResultsById?.get(entry.id)}
+                        responsiveColumns={responsiveColumns}
+                        selected={entry.id === selectedEntryId}
+                        checked={selectedIdSet.has(entry.id)}
+                        triggerDisplay={triggerDisplay}
+                        tokenValue={tokens.value}
+                        tokenExact={tokens.exact}
+                        setSelectedEntryId={stableActions.setSelectedEntryId}
+                        toggleEntrySelection={stableActions.toggleEntrySelection}
+                        saveEntry={stableActions.saveEntry}
+                        onEntryPointerEnter={stableActions.onEntryPointerEnter}
+                        onEntryPointerLeave={stableActions.onEntryPointerLeave}
+                        reorderEnabled={reorderEnabled}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            </SortableContext>
+          </DndContext>
         </div>
       </div>
     </div>

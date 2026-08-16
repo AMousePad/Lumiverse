@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
   isCrossProcessLockFromPriorProcessInstance,
   isRetryableLanceWriteConflict,
   shouldUseCrossProcessWriteLock,
+  sweepEmptyIndexDirs,
 } from "./lancedb";
 
 describe("lancedb write conflict handling", () => {
@@ -46,6 +47,113 @@ describe("lancedb write conflict handling", () => {
   test("ignores non-conflict Lance warnings", () => {
     expect(isRetryableLanceWriteConflict(new Error("vector not divisible by 8"))).toBe(false);
     expect(isRetryableLanceWriteConflict(new Error("table 'embeddings' was not found"))).toBe(false);
+  });
+});
+
+describe("lancedb empty index directory cleanup", () => {
+  test("removes only aged, empty UUID directories", () => {
+    const root = mkdtempSync(join(tmpdir(), "lumiverse-lancedb-index-sweep-test-"));
+    const oldEmpty = join(root, "11111111-1111-4111-8111-111111111111");
+    const recentEmpty = join(root, "22222222-2222-4222-8222-222222222222");
+    const oldNonEmpty = join(root, "33333333-3333-4333-8333-333333333333");
+    const unrelated = join(root, "not-an-index-uuid");
+    const now = 20_000;
+    const gracePeriodMs = 5_000;
+
+    try {
+      for (const dir of [oldEmpty, recentEmpty, oldNonEmpty, unrelated]) {
+        mkdirSync(dir);
+      }
+      writeFileSync(join(oldNonEmpty, "index-file"), "live");
+      utimesSync(oldEmpty, new Date(1_000), new Date(1_000));
+      utimesSync(oldNonEmpty, new Date(1_000), new Date(1_000));
+      utimesSync(unrelated, new Date(1_000), new Date(1_000));
+      utimesSync(recentEmpty, new Date(18_000), new Date(18_000));
+
+      expect(sweepEmptyIndexDirs(root, gracePeriodMs, now)).toBe(1);
+      expect(existsSync(oldEmpty)).toBe(false);
+      expect(existsSync(recentEmpty)).toBe(true);
+      expect(existsSync(oldNonEmpty)).toBe(true);
+      expect(existsSync(unrelated)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("treats a missing index root as already clean", () => {
+    const root = join(tmpdir(), `lumiverse-lancedb-missing-index-sweep-${crypto.randomUUID()}`);
+    expect(sweepEmptyIndexDirs(root, 0, Date.now())).toBe(0);
+  });
+});
+
+describe("lancedb index maintenance", () => {
+  test("does not rebuild every scalar and FTS index after Lance optimize", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "lumiverse-lancedb-maintenance-test-"));
+    const repoRoot = join(import.meta.dir, "../../../..");
+    const resultMarker = "__LANCEDB_MAINTENANCE_RESULT__";
+
+    try {
+      const result = Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          "--eval",
+          `
+            const { readdirSync } = await import("fs");
+            const { join } = await import("path");
+            const { LanceDbStore } = await import("./src/services/vector-store/providers/lancedb.ts");
+            const store = new LanceDbStore();
+            try {
+              await store.upsert("embeddings", [{
+                id: "user:databank:source:0",
+                user_id: "user",
+                source_type: "databank",
+                source_id: "source",
+                owner_id: "owner",
+                chunk_index: 0,
+                content: "maintenance test",
+                vector: [1, 0],
+                metadata_json: "{}",
+                updated_at: 1,
+              }]);
+              const indexRoot = join(process.env.DATA_DIR, "lancedb", "embeddings.lance", "_indices");
+              const before = readdirSync(indexRoot).length;
+              await store.optimize(["embeddings"]);
+              const after = readdirSync(indexRoot).length;
+              console.log("${resultMarker}" + JSON.stringify({ before, after }));
+            } finally {
+              await store.close();
+            }
+          `,
+        ],
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          DATA_DIR: dataDir,
+          LUMIVERSE_LANCEDB_CROSS_PROCESS_LOCK: "false",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      if (result.exitCode !== 0) {
+        throw new Error(`LanceDB maintenance test subprocess failed:\n${result.stderr.toString()}`);
+      }
+      const resultLine = result.stdout
+        .toString()
+        .split(/\r?\n/)
+        .find((line) => line.startsWith(resultMarker));
+      expect(resultLine).toBeDefined();
+      const { before, after } = JSON.parse(resultLine!.slice(resultMarker.length)) as {
+        before: number;
+        after: number;
+      };
+      expect(before).toBe(6);
+      // Lance may create one optimized generation per index. The application
+      // must not immediately create a second generation for the same indexes.
+      expect(after - before).toBeLessThanOrEqual(before);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -142,5 +250,53 @@ describe("lancedb vector search distance", () => {
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("lancedb Termux native-read safety", () => {
+  test("serializes native read thunks on Termux", () => {
+    const repoRoot = join(import.meta.dir, "../../../..");
+    const resultMarker = "__LANCEDB_TERMUX_READ_RESULT__";
+    const result = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "--eval",
+        `
+          const { raceWithSignal } = await import("./src/services/vector-store/providers/lancedb.ts");
+          let active = 0;
+          let maxActive = 0;
+          const reads = Array.from({ length: 8 }, (_, index) => raceWithSignal(async () => {
+            active++;
+            maxActive = Math.max(maxActive, active);
+            await Bun.sleep(5);
+            active--;
+            return index;
+          }, undefined));
+          const values = await Promise.all(reads);
+          console.log("${resultMarker}" + JSON.stringify({ maxActive, values }));
+        `,
+      ],
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        LUMIVERSE_IS_TERMUX: "true",
+        LUMIVERSE_LANCEDB_CROSS_PROCESS_LOCK: "false",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    if (result.exitCode !== 0) {
+      throw new Error(`LanceDB Termux read test subprocess failed:\n${result.stderr.toString()}`);
+    }
+    const resultLine = result.stdout
+      .toString()
+      .split(/\r?\n/)
+      .find((line) => line.startsWith(resultMarker));
+    expect(resultLine).toBeDefined();
+    expect(JSON.parse(resultLine!.slice(resultMarker.length))).toEqual({
+      maxActive: 1,
+      values: [0, 1, 2, 3, 4, 5, 6, 7],
+    });
   });
 });
