@@ -368,6 +368,8 @@
     "findNext": "Next match",
     "rawFailed": "Failed to reassemble prompt.",
     "anthropicCache": "Anthropic cache",
+    "openAiCache": "OpenAI cache",
+    "openRouterCache": "OpenRouter cache",
     "cacheRead": "read {{count}}",
     "cacheWrite": "write {{count}}",
     "cache5m": "5m {{count}}",

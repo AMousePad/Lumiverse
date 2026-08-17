@@ -242,16 +242,23 @@ function collectTrailingUserMessageIds(userId: string, chatId: string): string[]
 function injectConnectionMetadataFlags(
   connection: { provider: string; metadata?: Record<string, any> },
   params: GenerationParameters,
+  chatId?: string,
 ): void {
   if (connection.metadata?.use_responses_api) {
     params.use_responses_api = true;
   }
 
-  if (
-    connection.provider === "openrouter" &&
-    connection.metadata?.openrouter
-  ) {
-    params._openrouter = connection.metadata.openrouter;
+  if (connection.provider === "openrouter") {
+    if (connection.metadata?.openrouter) {
+      params._openrouter = connection.metadata.openrouter;
+    }
+    // OpenRouter documents `session_id` as the explicit sticky-routing key.
+    // Keep it scoped to a Lumiverse chat and never replace a caller-provided
+    // session or cache key. The provider then reuses the same upstream cache
+    // across normal turns, swipes, and retries without forcing no-fallback.
+    if (chatId && params.session_id === undefined && params.prompt_cache_key === undefined) {
+      params.session_id = `lumiverse:${chatId}`;
+    }
   }
 }
 
@@ -2838,7 +2845,7 @@ export async function startGeneration(
         // Strip internal-only keys before they reach the provider
         delete mergedParams.max_context_length;
 
-        injectConnectionMetadataFlags(connection, mergedParams);
+        injectConnectionMetadataFlags(connection, mergedParams, input.chat_id);
 
         const cached = applyPromptCaching(
           {
