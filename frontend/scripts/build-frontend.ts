@@ -6,9 +6,19 @@ import {
 } from 'fs'
 import { rename } from 'fs/promises'
 import { basename, join, resolve } from 'path'
-import { retryWindowsRename } from '../../scripts/windows-fs-retry'
 
 const REQUIRED_BUILD_FILES = ['index.html', 'sw.js'] as const
+
+/**
+ * Keep the Windows-only retry helper out of non-Windows frontend builds. In
+ * particular, Docker copies only `frontend/` into its Linux build stage.
+ */
+async function retryWindowsRename<T>(operation: () => Promise<T> | T): Promise<T> {
+  if (process.platform !== 'win32') return operation()
+
+  const { retryWindowsRename: retry } = await import('../../scripts/windows-fs-retry')
+  return retry(operation)
+}
 
 export function resolveViteRuntime(
   env: Record<string, string | undefined> = process.env,
