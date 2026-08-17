@@ -14,6 +14,12 @@ export interface InlineCouncilToolResult {
   toolDisplayName: string;
   memberName?: string;
   result: string;
+  /** Mark an executed tool failure for providers that support native tool_result errors. */
+  isError?: boolean;
+  /** Untrusted web context injected separately on the continuation turn. */
+  inlineWebSearchContext?: string;
+  /** True when this was Lumiverse's direct, non-Council web-search tool. */
+  isInlineWebSearch?: boolean;
 }
 
 /**
@@ -151,6 +157,7 @@ export function buildInlineToolContinuation(
     type: "tool_result",
     tool_use_id: tc.call_id,
     content: resultsByCallId.get(tc.call_id)!.result || "(empty result)",
+    ...(resultsByCallId.get(tc.call_id)!.isError ? { is_error: true } : {}),
   }));
 
   return [

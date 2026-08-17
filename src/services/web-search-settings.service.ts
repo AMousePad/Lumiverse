@@ -2,11 +2,20 @@ import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
 
 export const WEB_SEARCH_SETTINGS_KEY = "webSearchSettings";
+/** Legacy SearXNG key name; retained so existing installations keep working. */
 export const WEB_SEARCH_API_KEY_SECRET = "web_search_api_key";
+export const EXA_WEB_SEARCH_API_KEY_SECRET = "web_search_exa_api_key";
+export const EXA_SEARCH_API_URL = "https://api.exa.ai/search";
+
+export type WebSearchProvider = "searxng" | "exa";
+
+function apiKeySecretForProvider(provider: WebSearchProvider): string {
+  return provider === "exa" ? EXA_WEB_SEARCH_API_KEY_SECRET : WEB_SEARCH_API_KEY_SECRET;
+}
 
 export interface WebSearchSettings {
   enabled: boolean;
-  provider: "searxng";
+  provider: WebSearchProvider;
   apiUrl: string;
   requestTimeoutMs: number;
   defaultResultCount: number;
@@ -16,12 +25,14 @@ export interface WebSearchSettings {
   language: string;
   safeSearch: 0 | 1 | 2;
   engines: string[];
+  /** Allow the primary model to call Lumiverse's selected web-search provider. */
+  inlineToolEnabled: boolean;
   hasApiKey: boolean;
 }
 
 export interface WebSearchSettingsInput {
   enabled?: boolean;
-  provider?: "searxng";
+  provider?: WebSearchProvider;
   apiUrl?: string;
   requestTimeoutMs?: number;
   defaultResultCount?: number;
@@ -31,6 +42,7 @@ export interface WebSearchSettingsInput {
   language?: string;
   safeSearch?: 0 | 1 | 2;
   engines?: string[];
+  inlineToolEnabled?: boolean;
   apiKey?: string | null;
 }
 
@@ -46,6 +58,7 @@ const DEFAULT_SETTINGS: Omit<WebSearchSettings, "hasApiKey"> = {
   language: "all",
   safeSearch: 1,
   engines: [],
+  inlineToolEnabled: false,
 };
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
@@ -57,6 +70,10 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 function normalizeApiUrl(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_SETTINGS.apiUrl;
   return value.trim().replace(/\/$/, "");
+}
+
+function normalizeProvider(value: unknown): WebSearchProvider {
+  return value === "exa" ? "exa" : "searxng";
 }
 
 function normalizeLanguage(value: unknown): string {
@@ -82,13 +99,16 @@ function normalizeEngines(value: unknown): string[] {
 
 function normalizeBaseSettings(raw: Partial<WebSearchSettingsInput> | null | undefined): Omit<WebSearchSettings, "hasApiKey"> {
   const merged = { ...DEFAULT_SETTINGS, ...(raw || {}) };
+  const provider = normalizeProvider(merged.provider);
   const defaultResultCount = clampInt(merged.defaultResultCount, 1, 10, DEFAULT_SETTINGS.defaultResultCount);
   const maxResultCount = clampInt(merged.maxResultCount, defaultResultCount, 20, DEFAULT_SETTINGS.maxResultCount);
 
   return {
     enabled: !!merged.enabled,
-    provider: "searxng",
-    apiUrl: normalizeApiUrl(merged.apiUrl),
+    provider,
+    // Exa's public search endpoint is fixed. Do not let a stale SearXNG URL
+    // get used when a client switches providers without resetting apiUrl.
+    apiUrl: provider === "exa" ? EXA_SEARCH_API_URL : normalizeApiUrl(merged.apiUrl),
     requestTimeoutMs: clampInt(merged.requestTimeoutMs, 5_000, 120_000, DEFAULT_SETTINGS.requestTimeoutMs),
     defaultResultCount,
     maxResultCount,
@@ -97,6 +117,7 @@ function normalizeBaseSettings(raw: Partial<WebSearchSettingsInput> | null | und
     language: normalizeLanguage(merged.language),
     safeSearch: clampInt(merged.safeSearch, 0, 2, DEFAULT_SETTINGS.safeSearch) as 0 | 1 | 2,
     engines: normalizeEngines(merged.engines),
+    inlineToolEnabled: merged.inlineToolEnabled === true,
   };
 }
 
@@ -112,12 +133,13 @@ export function normalizeWebSearchSettings(
 
 export async function getWebSearchSettings(userId: string): Promise<WebSearchSettings> {
   const row = settingsSvc.getSetting(userId, WEB_SEARCH_SETTINGS_KEY);
-  const hasApiKey = await secretsSvc.validateSecret(userId, WEB_SEARCH_API_KEY_SECRET);
-  return normalizeWebSearchSettings((row?.value as Partial<WebSearchSettingsInput> | undefined) ?? undefined, hasApiKey);
+  const normalized = normalizeBaseSettings((row?.value as Partial<WebSearchSettingsInput> | undefined) ?? undefined);
+  const hasApiKey = await secretsSvc.validateSecret(userId, apiKeySecretForProvider(normalized.provider));
+  return { ...normalized, hasApiKey };
 }
 
-export async function getWebSearchApiKey(userId: string): Promise<string | null> {
-  return secretsSvc.getSecret(userId, WEB_SEARCH_API_KEY_SECRET);
+export async function getWebSearchApiKey(userId: string, provider: WebSearchProvider = "searxng"): Promise<string | null> {
+  return secretsSvc.getSecret(userId, apiKeySecretForProvider(provider));
 }
 
 export async function putWebSearchSettings(userId: string, input: WebSearchSettingsInput): Promise<WebSearchSettings> {
@@ -129,12 +151,12 @@ export async function putWebSearchSettings(userId: string, input: WebSearchSetti
   if (typeof input.apiKey === "string") {
     const trimmed = input.apiKey.trim();
     if (trimmed) {
-      await secretsSvc.putSecret(userId, WEB_SEARCH_API_KEY_SECRET, trimmed);
+      await secretsSvc.putSecret(userId, apiKeySecretForProvider(merged.provider), trimmed);
     } else {
-      secretsSvc.deleteSecret(userId, WEB_SEARCH_API_KEY_SECRET);
+      secretsSvc.deleteSecret(userId, apiKeySecretForProvider(merged.provider));
     }
   } else if (input.apiKey === null) {
-    secretsSvc.deleteSecret(userId, WEB_SEARCH_API_KEY_SECRET);
+    secretsSvc.deleteSecret(userId, apiKeySecretForProvider(merged.provider));
   }
 
   return getWebSearchSettings(userId);

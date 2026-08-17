@@ -138,6 +138,10 @@ import {
 } from "./world-info-sources.service";
 import { promptBlockMatchesCharacterTags } from "../utils/prompt-block-character-tags";
 import {
+  captureInlineWebSearchContextSlot,
+  stripInlineWebSearchContextSlot,
+} from "./inline-web-search";
+import {
   isGenuinelyNewChat,
   resolveNewChatPromptConfig,
   resolvePromptBehavior,
@@ -4035,6 +4039,23 @@ export async function assemblePrompt(
     resolvePromptMacrosAfterRegexPass(result, macroEnv)
   );
   stripEmptyTextParts(result);
+
+  // {{webSearchContext}} resolves to a private token while prompt blocks are
+  // assembled. Retain the original message as an internal template, but strip
+  // the token from normal prompt display and the first model request. If the
+  // model later calls web_search, generate.service replays this exact location
+  // with bounded result context instead of using the fallback end block.
+  for (const message of result) {
+    captureInlineWebSearchContextSlot(message);
+  }
+  for (let index = breakdown.length - 1; index >= 0; index--) {
+    const entry = breakdown[index];
+    if (typeof entry.content !== "string") continue;
+    entry.content = stripInlineWebSearchContextSlot(entry.content);
+    if (entry.type === "block" && entry.content.trim().length === 0) {
+      breakdown.splice(index, 1);
+    }
+  }
 
   if (ctx.generationType === "continue") {
     const finalized = finalizeContinuePrompt(

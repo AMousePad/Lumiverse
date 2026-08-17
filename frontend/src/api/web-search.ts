@@ -2,7 +2,7 @@ import { get, post, put } from './client'
 
 export interface WebSearchSettingsInput {
   enabled?: boolean
-  provider?: 'searxng'
+  provider?: 'searxng' | 'exa'
   apiUrl?: string
   requestTimeoutMs?: number
   defaultResultCount?: number
@@ -12,12 +12,13 @@ export interface WebSearchSettingsInput {
   language?: string
   safeSearch?: 0 | 1 | 2
   engines?: string[]
+  inlineToolEnabled?: boolean
   apiKey?: string | null
 }
 
 export interface WebSearchSettingsResponse {
   enabled: boolean
-  provider: 'searxng'
+  provider: 'searxng' | 'exa'
   apiUrl: string
   requestTimeoutMs: number
   defaultResultCount: number
@@ -27,6 +28,7 @@ export interface WebSearchSettingsResponse {
   language: string
   safeSearch: 0 | 1 | 2
   engines: string[]
+  inlineToolEnabled: boolean
   hasApiKey: boolean
 }
 

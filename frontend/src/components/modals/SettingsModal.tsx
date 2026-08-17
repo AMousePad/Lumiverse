@@ -2653,7 +2653,7 @@ function EmbeddingsSettings() {
 
 interface WebSearchSettingsState {
   enabled: boolean
-  provider: 'searxng'
+  provider: 'searxng' | 'exa'
   apiUrl: string
   requestTimeoutMs: number
   defaultResultCount: number
@@ -2663,6 +2663,7 @@ interface WebSearchSettingsState {
   language: string
   safeSearch: 0 | 1 | 2
   engines: string[]
+  inlineToolEnabled: boolean
   hasApiKey: boolean
 }
 
@@ -2678,8 +2679,11 @@ const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
   language: 'all',
   safeSearch: 1,
   engines: [],
+  inlineToolEnabled: false,
   hasApiKey: false,
 }
+
+const EXA_SEARCH_API_URL = 'https://api.exa.ai/search'
 
 function WebSearchSettings() {
   const { t } = useTranslation('settings')
@@ -2713,7 +2717,7 @@ function WebSearchSettings() {
 
   const buildPayload = (): WebSearchSettingsInput => ({
     enabled: cfg.enabled,
-    provider: 'searxng',
+    provider: cfg.provider,
     apiUrl: cfg.apiUrl,
     requestTimeoutMs: cfg.requestTimeoutMs,
     defaultResultCount: cfg.defaultResultCount,
@@ -2723,6 +2727,7 @@ function WebSearchSettings() {
     language: cfg.language,
     safeSearch: cfg.safeSearch,
     engines: enginesInput.split(',').map((item) => item.trim()).filter(Boolean),
+    inlineToolEnabled: cfg.inlineToolEnabled,
   })
 
   const save = async () => {
@@ -2785,20 +2790,37 @@ function WebSearchSettings() {
         label={t('webSearch.enable')}
       />
 
+      <Toggle.Checkbox
+        checked={cfg.inlineToolEnabled}
+        onChange={(checked) => update({ inlineToolEnabled: checked })}
+        label={t('webSearch.inlineToolEnable')}
+      />
+      <p className={styles.placeholder}>{t('webSearch.inlineToolHint')}</p>
+
       <div className={styles.field}>
         <label className={styles.fieldLabel}>{t('webSearch.provider')}</label>
-        <select className={styles.select} value={cfg.provider} onChange={() => update({ provider: 'searxng' })}>
+        <select
+          className={styles.select}
+          value={cfg.provider}
+          onChange={(e) => {
+            const provider = e.target.value as WebSearchSettingsState['provider']
+            update({ provider, apiUrl: provider === 'exa' ? EXA_SEARCH_API_URL : '' })
+          }}
+        >
           <option value="searxng">{t('webSearch.providerSearxng')}</option>
+          <option value="exa">{t('webSearch.providerExa')}</option>
         </select>
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.apiUrl')}</label>
-        <input className={styles.select} value={cfg.apiUrl} onChange={(e) => update({ apiUrl: e.target.value })} placeholder={t('webSearch.apiUrlPlaceholder')} />
-      </div>
+      {cfg.provider === 'searxng' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>{t('webSearch.apiUrl')}</label>
+          <input className={styles.select} value={cfg.apiUrl} onChange={(e) => update({ apiUrl: e.target.value })} placeholder={t('webSearch.apiUrlPlaceholder')} />
+        </div>
+      )}
 
       <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.apiKey')} {cfg.hasApiKey ? t('webSearch.apiKeyConfigured') : t('webSearch.apiKeyOptional')}</label>
+        <label className={styles.fieldLabel}>{t('webSearch.apiKey')} {cfg.hasApiKey ? t('webSearch.apiKeyConfigured') : cfg.provider === 'exa' ? t('webSearch.apiKeyRequired') : t('webSearch.apiKeyOptional')}</label>
         <input
           className={styles.select}
           type="password"
@@ -2808,28 +2830,32 @@ function WebSearchSettings() {
         />
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.engines')}</label>
-        <input className={styles.select} value={enginesInput} onChange={(e) => setEnginesInput(e.target.value)} placeholder={t('webSearch.enginesPlaceholder')} />
-        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
-          {t('webSearch.enginesHint')}
-        </span>
-      </div>
+      {cfg.provider === 'searxng' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>{t('webSearch.engines')}</label>
+          <input className={styles.select} value={enginesInput} onChange={(e) => setEnginesInput(e.target.value)} placeholder={t('webSearch.enginesPlaceholder')} />
+          <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
+            {t('webSearch.enginesHint')}
+          </span>
+        </div>
+      )}
 
-      <div className={styles.drawerRow}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>{t('webSearch.language')}</label>
-          <input className={styles.select} value={cfg.language} onChange={(e) => update({ language: e.target.value })} placeholder={t('webSearch.languagePlaceholder')} />
+      {cfg.provider === 'searxng' && (
+        <div className={styles.drawerRow}>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>{t('webSearch.language')}</label>
+            <input className={styles.select} value={cfg.language} onChange={(e) => update({ language: e.target.value })} placeholder={t('webSearch.languagePlaceholder')} />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>{t('webSearch.safeSearch')}</label>
+            <select className={styles.select} value={cfg.safeSearch} onChange={(e) => update({ safeSearch: Number(e.target.value) as 0 | 1 | 2 })}>
+              <option value={0}>{t('webSearch.safeOff')}</option>
+              <option value={1}>{t('webSearch.safeModerate')}</option>
+              <option value={2}>{t('webSearch.safeStrict')}</option>
+            </select>
+          </div>
         </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>{t('webSearch.safeSearch')}</label>
-          <select className={styles.select} value={cfg.safeSearch} onChange={(e) => update({ safeSearch: Number(e.target.value) as 0 | 1 | 2 })}>
-            <option value={0}>{t('webSearch.safeOff')}</option>
-            <option value={1}>{t('webSearch.safeModerate')}</option>
-            <option value={2}>{t('webSearch.safeStrict')}</option>
-          </select>
-        </div>
-      </div>
+      )}
 
       <div className={styles.drawerRow}>
         <div className={styles.field}>
