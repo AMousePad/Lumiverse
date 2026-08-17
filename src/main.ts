@@ -199,19 +199,26 @@ if (process.env.LUMIVERSE_RUNNER_IPC === "1" && typeof process.send === "functio
   process.send({ type: "ready", payload: { port: env.port, pid: process.pid } });
 }
 
-// LanceDB maintenance can compact data and replace several index generations.
-// Starting it before Bun.serve() made Windows desktop clients wait on native
-// filesystem work before they could present the server. Let the listener and
-// first UI request settle first; vector search handles maintenance exclusion
-// independently, so this does not weaken storage safety.
-setTimeout(() => {
-  console.info("[startup] Starting deferred LanceDB maintenance...");
-  import("./services/embeddings.service").then(({ runStartupVectorMaintenance }) =>
-    runStartupVectorMaintenance()
-  ).catch((err) => {
-    console.warn("[embeddings] Deferred startup maintenance failed:", err);
-  });
-}, 5_000);
+// LanceDB compaction and index replacement can monopolize Bun's runtime even
+// when called through an async API. Do not run that native work automatically
+// in the serving process: it can make the already-listening frontend appear
+// hung. Run it in a child after readiness instead; ordinary index repair still
+// happens on demand where it is scoped to the affected vector request.
+const lancedbStartupMaintenanceEnabled = !["0", "false", "no", "off"].includes(
+  (process.env.LUMIVERSE_LANCEDB_STARTUP_MAINTENANCE ?? "").trim().toLowerCase(),
+);
+if (lancedbStartupMaintenanceEnabled) {
+  setTimeout(() => {
+    console.info("[startup] Starting deferred LanceDB maintenance child...");
+    import("./services/lancedb-maintenance-supervisor").then(({ runLanceDbMaintenanceInChild }) =>
+      runLanceDbMaintenanceInChild({ mode: "startup" })
+    ).catch((err) => {
+      console.warn("[embeddings] Deferred startup maintenance failed:", err);
+    });
+  }, 5_000);
+} else {
+  console.info("[startup] Automatic LanceDB startup maintenance is disabled; use an Operator maintenance window to run compaction.");
+}
 
 // Auto-connect to LumiHub if linked. Deferred to a timer tick so the HTTP
 // server gets a chance to service its first requests before the WebSocket

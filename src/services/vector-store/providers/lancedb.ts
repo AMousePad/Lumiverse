@@ -363,6 +363,11 @@ async function acquireCrossProcessWriteLockIfNeeded(): Promise<(() => void) | nu
 }
 
 export async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  // A child maintenance process asks the serving process to close this gate
+  // before it starts mutating Lance files. Writers need to honor the same
+  // gate as readers; the cross-process write lock alone cannot protect a
+  // native read from optimize() deleting its version files.
+  await awaitMaintenanceGate();
   if (!_writeLockHeld) {
     _writeLockHeld = true;
   } else {
@@ -519,11 +524,11 @@ function raceMaintenanceGate(gate: Promise<void>, signal?: AbortSignal): Promise
   });
 }
 
-async function waitForReadsToDrain(timeoutMs = 30_000): Promise<void> {
+async function waitForReadsToDrain(timeoutMs?: number): Promise<void> {
   if (_activeReadCount === 0) return;
   const startedAt = Date.now();
   while (_activeReadCount > 0) {
-    if (Date.now() - startedAt >= timeoutMs) {
+    if (timeoutMs !== undefined && Date.now() - startedAt >= timeoutMs) {
       console.warn(
         `[embeddings] Compaction proceeding with ${_activeReadCount} read(s) still in flight (drain wait timed out after ${timeoutMs}ms)`,
       );
@@ -544,12 +549,42 @@ async function withMaintenanceExclusive<T>(fn: () => Promise<T>): Promise<T> {
   let release!: () => void;
   _maintenanceGate = new Promise<void>((resolve) => { release = resolve; });
   try {
-    await waitForReadsToDrain();
+    await waitForReadsToDrain(30_000);
     return await fn();
   } finally {
     _maintenanceGate = null;
     release();
   }
+}
+
+/**
+ * Close the serving process's LanceDB gate while maintenance runs in a child
+ * process. Unlike the in-process maintenance path, this waits indefinitely
+ * for existing scans: once the child has started, it has no visibility into
+ * this process's read count and therefore must never compact under a reader.
+ *
+ * The caller must invoke the returned release function after the child exits.
+ * The child separately takes the existing cross-process write lock, which also
+ * serializes it with any write that was already underway when this gate closed.
+ */
+export async function pauseLanceDbForExternalMaintenance(): Promise<() => void> {
+  // Do not overwrite an active in-process gate. This is normally unreachable
+  // because the supervisor serializes jobs, but waiting here keeps the helper
+  // safe if a manual optimize is already finishing.
+  await awaitMaintenanceGate();
+
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  _maintenanceGate = gate;
+  await waitForReadsToDrain();
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (_maintenanceGate === gate) _maintenanceGate = null;
+    release();
+  };
 }
 
 /**
@@ -736,6 +771,16 @@ function resetInMemoryVectorStoreState(): void {
       state.indexHealthTimer = null;
     }
   }
+}
+
+/**
+ * Drop every serving-process handle after a child process changed Lance files.
+ * The parent did not execute the transaction and may otherwise retain a table
+ * handle pointing at a pre-compaction manifest or index generation.
+ */
+export function refreshLanceDbAfterExternalMaintenance(): void {
+  resetInMemoryVectorStoreState();
+  startIndexHealthMonitor(EMBEDDINGS_TABLE);
 }
 
 export function resetSqliteVectorizationState(): void {
