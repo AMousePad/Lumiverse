@@ -25,8 +25,10 @@ describe('landingPageTabs', () => {
 
     expect(source).not.toContain("from './HomepageCharacterLibrary'")
     expect(source).not.toContain('<HomepageCharacterLibrary')
-    expect(source.match(/\n\s+data-spindle-mount="landing_characters"/g)).toHaveLength(1)
+    expect(source.match(/data-spindle-mount="landing_characters"/g)).toHaveLength(1)
+    expect(source.match(/data-spindle-mount="landing_chats"/g)).toHaveLength(1)
     expect(source).toContain('data-homepage-character-library-ready="true"')
+    expect(source).toContain('data-recent-chats-ready="true"')
     expect(source).toContain("'landingPageActiveTab', 'characters'")
   })
 

@@ -24,6 +24,7 @@ const AUTHORITATIVE_HOST_MOUNT_POINTS = [
   'chat_surface_side',
   'landing_toolbar',
   'landing_main',
+  'landing_chats',
   'landing_characters',
 ] as const
 

@@ -15,6 +15,7 @@ export const HOST_MOUNT_POINTS = [
   'chat_surface_side',
   'landing_toolbar',
   'landing_main',
+  'landing_chats',
   'landing_characters',
 ] as const
 
@@ -36,6 +37,7 @@ const knownMountPoints: Readonly<Record<HostMountPoint, true>> = {
   chat_surface_side: true,
   landing_toolbar: true,
   landing_main: true,
+  landing_chats: true,
   landing_characters: true,
 }
 

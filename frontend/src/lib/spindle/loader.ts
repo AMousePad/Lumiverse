@@ -12,11 +12,14 @@ import type {
 import { SPINDLE_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
 import type { MacroCatalogResponse } from '@/api/macros'
 import type {
+  Chat,
   ChatSummary,
   ConnectionModelsResult,
   ConnectionProfile,
+  GroupedRecentChat,
   Message,
   PaginatedResult,
+  RecentChat,
   UpdateConnectionProfileInput,
   WorldBook,
   WorldBookEntry,
@@ -1156,6 +1159,14 @@ async function doLoadFrontendExtension(
     const runtimeChatsApi = {
       listCharacterChats: chatsApiModule.chatsApi?.listCharacterChats
         ?? (async (_characterId: string): Promise<ChatSummary[]> => []),
+      listRecent: chatsApiModule.chatsApi?.listRecent
+        ?? (async (_options?: { limit?: number; offset?: number; search?: string; sort?: 'name' | 'recent' | 'created'; direction?: 'asc' | 'desc' }): Promise<PaginatedResult<RecentChat>> => ({ data: [], total: 0 } as PaginatedResult<RecentChat>)),
+      listRecentGrouped: chatsApiModule.chatsApi?.listRecentGrouped
+        ?? (async (_options?: { limit?: number; offset?: number; search?: string; sort?: 'name' | 'recent' | 'created'; direction?: 'asc' | 'desc' }): Promise<PaginatedResult<GroupedRecentChat>> => ({ data: [], total: 0 } as PaginatedResult<GroupedRecentChat>)),
+      update: chatsApiModule.chatsApi?.update
+        ?? (async (_id: string, _input: Partial<{ name: string; metadata: Record<string, unknown> }>): Promise<Chat> => ({ } as Chat)),
+      delete: chatsApiModule.chatsApi?.delete
+        ?? (async (_id: string): Promise<void> => undefined),
     }
     const runtimeConnectionsApi = {
       models: connectionsApiModule.connectionsApi?.models
@@ -1217,6 +1228,10 @@ async function doLoadFrontendExtension(
       chats: {
         listForCharacter: runtimeChatsApi.listCharacterChats,
         getMessages: runtimeMessagesApi.list,
+        listRecent: runtimeChatsApi.listRecent,
+        listRecentGrouped: runtimeChatsApi.listRecentGrouped,
+        update: runtimeChatsApi.update,
+        delete: runtimeChatsApi.delete,
       },
       worldBooks: {
         list: runtimeWorldBooksApi.listAll,
