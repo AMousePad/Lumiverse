@@ -37,7 +37,7 @@ import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
 import { notificationSoundsApi } from '@/api/notification-sounds'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
-import { webSearchApi, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
+import { webSearchApi, type WebSearchProviderProfile, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
 import type { DrawerSettings, GuidedGeneration, QuickReplySet } from '@/types/store'
 import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
 import type { WorldBookVectorPresetMode, WorldBookVectorSettings } from '@/types/world-book-vector-settings'
@@ -2677,6 +2677,7 @@ interface WebSearchSettingsState {
   engines: string[]
   inlineToolEnabled: boolean
   hasApiKey: boolean
+  providerProfiles: Partial<Record<'searxng' | 'exa' | 'tavily', WebSearchProviderProfile>>
 }
 
 const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
@@ -2693,6 +2694,7 @@ const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
   engines: [],
   inlineToolEnabled: false,
   hasApiKey: false,
+  providerProfiles: {},
 }
 
 const EXA_SEARCH_API_URL = 'https://api.exa.ai/search'
@@ -2753,7 +2755,7 @@ function WebSearchSettings() {
         ...payload,
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
       })
-      setCfg(next)
+      setCfg({ ...WEB_SEARCH_DEFAULTS, ...next })
       setEnginesInput(next.engines.join(', '))
       setApiKey('')
       setSuccess(t('webSearch.saveSuccess'))
@@ -2817,7 +2819,16 @@ function WebSearchSettings() {
           value={cfg.provider}
           onChange={(e) => {
             const provider = e.target.value as WebSearchSettingsState['provider']
-            update({ provider, apiUrl: provider === 'exa' ? EXA_SEARCH_API_URL : provider === 'tavily' ? TAVILY_SEARCH_API_URL : '' })
+            const saved = cfg.providerProfiles[provider]
+            update(saved
+              ? { ...saved, provider, hasApiKey: saved.hasApiKey ?? false }
+              : {
+                  provider,
+                  apiUrl: provider === 'exa' ? EXA_SEARCH_API_URL : provider === 'tavily' ? TAVILY_SEARCH_API_URL : '',
+                  hasApiKey: false,
+                })
+            setEnginesInput(saved?.engines.join(', ') ?? '')
+            setApiKey('')
           }}
         >
           <option value="searxng">{t('webSearch.providerSearxng')}</option>

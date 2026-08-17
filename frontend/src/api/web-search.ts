@@ -1,5 +1,19 @@
 import { get, post, put } from './client'
 
+export interface WebSearchProviderProfile {
+  apiUrl: string
+  requestTimeoutMs: number
+  defaultResultCount: number
+  maxResultCount: number
+  maxPagesToScrape: number
+  maxCharsPerPage: number
+  language: string
+  safeSearch: 0 | 1 | 2
+  engines: string[]
+  inlineToolEnabled: boolean
+  hasApiKey?: boolean
+}
+
 export interface WebSearchSettingsInput {
   enabled?: boolean
   provider?: 'searxng' | 'exa' | 'tavily'
@@ -13,6 +27,7 @@ export interface WebSearchSettingsInput {
   safeSearch?: 0 | 1 | 2
   engines?: string[]
   inlineToolEnabled?: boolean
+  providerProfiles?: Partial<Record<'searxng' | 'exa' | 'tavily', WebSearchProviderProfile>>
   apiKey?: string | null
 }
 
@@ -30,6 +45,7 @@ export interface WebSearchSettingsResponse {
   engines: string[]
   inlineToolEnabled: boolean
   hasApiKey: boolean
+  providerProfiles?: Partial<Record<'searxng' | 'exa' | 'tavily', WebSearchProviderProfile>>
 }
 
 export interface WebSearchDocument {
