@@ -46,7 +46,7 @@
     "webSearch": {
       "shortName": "Web Search",
       "tabName": "Web Search",
-      "tabDescription": "Configure SearXNG-backed web search for council tools"
+      "tabDescription": "Configure SearXNG, Exa, or Tavily web search for council tools"
     },
     "embeddings": {
       "shortName": "Embeddings",
@@ -562,13 +562,14 @@
   "webSearch": {
     "title": "Web Search",
     "loading": "Loading web search settings...",
-    "helper": "Configure SearXNG or Exa for the host-backed council web-search tool. The tool appears in Council once search is enabled and the selected provider is configured.",
+    "helper": "Configure SearXNG, Exa, or Tavily for the host-backed council web-search tool. The tool appears in Council once search is enabled and the selected provider is configured.",
     "enable": "Enable web search",
     "inlineToolEnable": "Allow the model to search during generation",
     "inlineToolHint": "Requires function calling in the active preset. Search results are added as bounded, untrusted reference context only after the model requests a search.",
     "provider": "Provider",
     "providerSearxng": "SearXNG",
     "providerExa": "Exa",
+    "providerTavily": "Tavily",
     "apiUrl": "API URL",
     "apiUrlPlaceholder": "https://your-searxng.example.com/search",
     "apiKey": "API Key",

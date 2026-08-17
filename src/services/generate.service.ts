@@ -2682,7 +2682,7 @@ export async function startGeneration(
 
         // ── Built-in Inline Web Search (independent of Council) ──────────
         // This is intentionally separate from the preset's Google-native
-        // grounding option. It uses the user's configured SearXNG or Exa
+        // grounding option. It uses the user's configured web-search
         // provider and is only offered when both web search and function
         // calling are explicitly available.
         if (genType !== "impersonate") {
@@ -2693,7 +2693,7 @@ export async function startGeneration(
           const completionSettings = preset?.prompts?.completionSettings;
           const webSearchSettings = await getWebSearchSettings(input.userId);
           const configured = webSearchSettings.enabled && !!webSearchSettings.apiUrl &&
-            (webSearchSettings.provider !== "exa" || webSearchSettings.hasApiKey);
+            (webSearchSettings.provider === "searxng" || webSearchSettings.hasApiKey);
           if (configured && webSearchSettings.inlineToolEnabled && completionSettings?.enableFunctionCalling !== false) {
             if (!inlineTools) inlineTools = [];
             if (!inlineToolDefsByName) {

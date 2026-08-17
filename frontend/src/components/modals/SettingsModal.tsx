@@ -2653,7 +2653,7 @@ function EmbeddingsSettings() {
 
 interface WebSearchSettingsState {
   enabled: boolean
-  provider: 'searxng' | 'exa'
+  provider: 'searxng' | 'exa' | 'tavily'
   apiUrl: string
   requestTimeoutMs: number
   defaultResultCount: number
@@ -2684,6 +2684,7 @@ const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
 }
 
 const EXA_SEARCH_API_URL = 'https://api.exa.ai/search'
+const TAVILY_SEARCH_API_URL = 'https://api.tavily.com/search'
 
 function WebSearchSettings() {
   const { t } = useTranslation('settings')
@@ -2804,11 +2805,12 @@ function WebSearchSettings() {
           value={cfg.provider}
           onChange={(e) => {
             const provider = e.target.value as WebSearchSettingsState['provider']
-            update({ provider, apiUrl: provider === 'exa' ? EXA_SEARCH_API_URL : '' })
+            update({ provider, apiUrl: provider === 'exa' ? EXA_SEARCH_API_URL : provider === 'tavily' ? TAVILY_SEARCH_API_URL : '' })
           }}
         >
           <option value="searxng">{t('webSearch.providerSearxng')}</option>
           <option value="exa">{t('webSearch.providerExa')}</option>
+          <option value="tavily">{t('webSearch.providerTavily')}</option>
         </select>
       </div>
 
@@ -2820,7 +2822,7 @@ function WebSearchSettings() {
       )}
 
       <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.apiKey')} {cfg.hasApiKey ? t('webSearch.apiKeyConfigured') : cfg.provider === 'exa' ? t('webSearch.apiKeyRequired') : t('webSearch.apiKeyOptional')}</label>
+        <label className={styles.fieldLabel}>{t('webSearch.apiKey')} {cfg.hasApiKey ? t('webSearch.apiKeyConfigured') : cfg.provider === 'searxng' ? t('webSearch.apiKeyOptional') : t('webSearch.apiKeyRequired')}</label>
         <input
           className={styles.select}
           type="password"

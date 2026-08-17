@@ -152,7 +152,7 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     id: 'webSearch',
     shortName: 'Web Search',
     tabName: 'Web Search',
-    tabDescription: 'Configure SearXNG or Exa web search for council tools',
+    tabDescription: 'Configure SearXNG, Exa, or Tavily web search for council tools',
     tabIcon: Search,
     keywords: ['web search', 'searxng', 'exa', 'search', 'browse', 'internet', 'web', 'council tool'],
     sections: [

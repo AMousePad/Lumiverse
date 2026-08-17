@@ -5,12 +5,16 @@ export const WEB_SEARCH_SETTINGS_KEY = "webSearchSettings";
 /** Legacy SearXNG key name; retained so existing installations keep working. */
 export const WEB_SEARCH_API_KEY_SECRET = "web_search_api_key";
 export const EXA_WEB_SEARCH_API_KEY_SECRET = "web_search_exa_api_key";
+export const TAVILY_WEB_SEARCH_API_KEY_SECRET = "web_search_tavily_api_key";
 export const EXA_SEARCH_API_URL = "https://api.exa.ai/search";
+export const TAVILY_SEARCH_API_URL = "https://api.tavily.com/search";
 
-export type WebSearchProvider = "searxng" | "exa";
+export type WebSearchProvider = "searxng" | "exa" | "tavily";
 
 function apiKeySecretForProvider(provider: WebSearchProvider): string {
-  return provider === "exa" ? EXA_WEB_SEARCH_API_KEY_SECRET : WEB_SEARCH_API_KEY_SECRET;
+  if (provider === "exa") return EXA_WEB_SEARCH_API_KEY_SECRET;
+  if (provider === "tavily") return TAVILY_WEB_SEARCH_API_KEY_SECRET;
+  return WEB_SEARCH_API_KEY_SECRET;
 }
 
 export interface WebSearchSettings {
@@ -73,7 +77,7 @@ function normalizeApiUrl(value: unknown): string {
 }
 
 function normalizeProvider(value: unknown): WebSearchProvider {
-  return value === "exa" ? "exa" : "searxng";
+  return value === "exa" || value === "tavily" ? value : "searxng";
 }
 
 function normalizeLanguage(value: unknown): string {
@@ -106,9 +110,13 @@ function normalizeBaseSettings(raw: Partial<WebSearchSettingsInput> | null | und
   return {
     enabled: !!merged.enabled,
     provider,
-    // Exa's public search endpoint is fixed. Do not let a stale SearXNG URL
-    // get used when a client switches providers without resetting apiUrl.
-    apiUrl: provider === "exa" ? EXA_SEARCH_API_URL : normalizeApiUrl(merged.apiUrl),
+    // Hosted provider endpoints are fixed. Do not let a stale SearXNG URL get
+    // used when a client switches providers without resetting apiUrl.
+    apiUrl: provider === "exa"
+      ? EXA_SEARCH_API_URL
+      : provider === "tavily"
+        ? TAVILY_SEARCH_API_URL
+        : normalizeApiUrl(merged.apiUrl),
     requestTimeoutMs: clampInt(merged.requestTimeoutMs, 5_000, 120_000, DEFAULT_SETTINGS.requestTimeoutMs),
     defaultResultCount,
     maxResultCount,

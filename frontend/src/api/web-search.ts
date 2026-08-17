@@ -2,7 +2,7 @@ import { get, post, put } from './client'
 
 export interface WebSearchSettingsInput {
   enabled?: boolean
-  provider?: 'searxng' | 'exa'
+  provider?: 'searxng' | 'exa' | 'tavily'
   apiUrl?: string
   requestTimeoutMs?: number
   defaultResultCount?: number
@@ -18,7 +18,7 @@ export interface WebSearchSettingsInput {
 
 export interface WebSearchSettingsResponse {
   enabled: boolean
-  provider: 'searxng' | 'exa'
+  provider: 'searxng' | 'exa' | 'tavily'
   apiUrl: string
   requestTimeoutMs: number
   defaultResultCount: number
