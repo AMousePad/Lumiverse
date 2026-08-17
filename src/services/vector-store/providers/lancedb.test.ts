@@ -3,10 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  ensureVectorIndex,
   isCrossProcessLockFromPriorProcessInstance,
   isRetryableLanceWriteConflict,
   shouldUseCrossProcessWriteLock,
   sweepEmptyIndexDirs,
+  WORLD_BOOK_EMBEDDINGS_TABLE,
 } from "./lancedb";
 
 describe("lancedb write conflict handling", () => {
@@ -87,6 +89,20 @@ describe("lancedb empty index directory cleanup", () => {
 });
 
 describe("lancedb index maintenance", () => {
+  test("keeps an existing vector index after runtime state is reset", async () => {
+    let countRowsCalls = 0;
+    const table: any = {
+      listIndices: async () => [{ name: "vector_idx" }],
+      countRows: async () => {
+        countRowsCalls += 1;
+        return 10_000;
+      },
+    };
+
+    await expect(ensureVectorIndex(WORLD_BOOK_EMBEDDINGS_TABLE, table)).resolves.toBe(table);
+    expect(countRowsCalls).toBe(0);
+  });
+
   test("does not rebuild every scalar and FTS index after Lance optimize", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "lumiverse-lancedb-maintenance-test-"));
     const repoRoot = join(import.meta.dir, "../../../..");

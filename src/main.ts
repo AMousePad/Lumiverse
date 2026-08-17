@@ -138,11 +138,6 @@ initSmartctl();
 // Pre-warm tokenizers for active/default connection models (fire-and-forget)
 import("./services/tokenizer.service").then(({ prewarm }) => prewarm()).catch(() => {});
 
-// LanceDB startup maintenance: compact fragments, migrate old HNSW_PQ → IVF_PQ (fire-and-forget)
-import("./services/embeddings.service").then(({ runStartupVectorMaintenance }) =>
-  runStartupVectorMaintenance()
-).catch(() => {});
-
 // Import app after database is ready (auth config needs getDb())
 const { default: app, websocket } = await import("./app");
 
@@ -203,6 +198,20 @@ startExtensionUpdateMonitor();
 if (process.env.LUMIVERSE_RUNNER_IPC === "1" && typeof process.send === "function") {
   process.send({ type: "ready", payload: { port: env.port, pid: process.pid } });
 }
+
+// LanceDB maintenance can compact data and replace several index generations.
+// Starting it before Bun.serve() made Windows desktop clients wait on native
+// filesystem work before they could present the server. Let the listener and
+// first UI request settle first; vector search handles maintenance exclusion
+// independently, so this does not weaken storage safety.
+setTimeout(() => {
+  console.info("[startup] Starting deferred LanceDB maintenance...");
+  import("./services/embeddings.service").then(({ runStartupVectorMaintenance }) =>
+    runStartupVectorMaintenance()
+  ).catch((err) => {
+    console.warn("[embeddings] Deferred startup maintenance failed:", err);
+  });
+}, 5_000);
 
 // Auto-connect to LumiHub if linked. Deferred to a timer tick so the HTTP
 // server gets a chance to service its first requests before the WebSocket
