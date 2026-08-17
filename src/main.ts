@@ -57,6 +57,14 @@ await initVapidKeys();
 const db = initDatabase();
 await runMigrations(db);
 
+// Move legacy plaintext Pollinations application keys into the per-user
+// encrypted secret store before the rest of the application begins serving.
+const { migrateLegacyPollinationsAppKeys } = await import("./services/connections.service");
+const pollinationsKeysMigrated = await migrateLegacyPollinationsAppKeys();
+if (pollinationsKeysMigrated > 0) {
+  console.log(`[startup] Migrated ${pollinationsKeysMigrated} Pollinations application key(s) to encrypted storage.`);
+}
+
 // Chat-head generation state is intentionally ephemeral. Clear any retained
 // in-memory pool state during startup so clients never resurrect stale heads
 // after a restart or hot-reload.
