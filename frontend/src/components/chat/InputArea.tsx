@@ -1998,6 +1998,21 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
         toast.info(t('toast.regexActionClaimFailed'))
         return
       }
+      // Ctrl/cmd-click or right-click queues the send-action content into
+      // the composer as an editable draft. Nothing is claimed server-side;
+      // the action stays usable until the user sends the drafted message.
+      if (action.queue && !action.multi_select && action.type === 'send') {
+        setText((current) => applyRegexActionDraft(current, { content: action.content, mode: 'append' }))
+        requestAnimationFrame(() => {
+          resizeTextarea(textareaRef.current)
+          textareaRef.current?.focus()
+        })
+        toast.info(action.subtitle || t('toast.regexActionDraftQueued'), {
+          title: action.title || t('toast.regexActionSelected'),
+          duration: 2500,
+        })
+        return
+      }
       regexActionHandlingRef.current = true
       try {
         if (action.multi_select) {
