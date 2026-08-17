@@ -552,6 +552,9 @@ interface BlockEditorProps {
   refreshMacros?: () => void
   compact: boolean
   trustedHostFeatures?: boolean
+  /** Preset-level move: relocates a variable def (and its value bucket) to
+   * another block. Returns false when the move was rejected. */
+  onMoveVariable?: (sourceBlockId: string, variable: PromptVariableDef, targetBlockId: string) => boolean
 }
 
 function cleanPlacementBinding(
@@ -594,6 +597,7 @@ export function BlockEditor({
   refreshMacros,
   compact,
   trustedHostFeatures = false,
+  onMoveVariable,
 }: BlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
@@ -952,6 +956,36 @@ export function BlockEditor({
             placementBinding={placementBinding}
             fallbackPlacement={{ role, position, depth }}
             onPlacementBindingChange={setPlacementBinding}
+            moveTargets={blocks
+              .filter((candidate) => candidate.id !== block.id)
+              .map((candidate) => {
+                const isCategory = candidate.marker === 'category'
+                const category = isCategory
+                  ? candidate
+                  : candidate.group
+                    ? blocks.find((entry) => entry.id === candidate.group && entry.marker === 'category')
+                    : undefined
+                return {
+                  id: candidate.id,
+                  name: candidate.name || candidate.id,
+                  categoryId: category?.id ?? null,
+                  categoryName: category?.name || null,
+                  isCategory,
+                  variableNames: (candidate.variables ?? [])
+                    .map((variable) => variable.name?.trim() ?? '')
+                    .filter(Boolean),
+                }
+              })}
+            onMoveToBlock={onMoveVariable ? (variableId, targetBlockId) => {
+              const moving = variables.find((variable) => variable.id === variableId)
+              if (!moving) return
+              // Move the in-editor version of the def (it may carry unsaved
+              // edits) and drop it from the local list so a later Save of
+              // this block doesn't resurrect it.
+              if (onMoveVariable(block.id, moving, targetBlockId)) {
+                setVariables((current) => current.filter((variable) => variable.id !== variableId))
+              }
+            } : undefined}
           />
         </div>
       </div>
@@ -1799,6 +1833,7 @@ export default function LoomBuilder({
     updateBlock,
     toggleBlock,
     toggleCategoryChildren,
+    movePromptVariable,
     saveSamplerOverrides,
     savePromptBehavior,
     saveCompletionSettings,
@@ -2495,6 +2530,7 @@ useEffect(() => {
           refreshMacros={refreshMacros}
           compact={compact}
           trustedHostFeatures={true}
+          onMoveVariable={movePromptVariable}
         />
       </>
     )
