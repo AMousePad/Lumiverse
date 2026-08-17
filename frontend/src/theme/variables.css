@@ -9,6 +9,9 @@
   --lumiverse-primary-015: rgba(147, 112, 219, 0.15);
   --lumiverse-primary-020: rgba(147, 112, 219, 0.2);
   --lumiverse-primary-050: rgba(147, 112, 219, 0.5);
+  --lumiverse-primary-deep: rgb(26 20 39);
+  --lumiverse-primary-deep-hover: rgb(38 29 57);
+  --lumiverse-primary-deep-contrast: hsl(273, 30%, 95%);
 
   /* Secondary gray tones */
   --lumiverse-secondary: rgba(128, 128, 128, 0.15);
