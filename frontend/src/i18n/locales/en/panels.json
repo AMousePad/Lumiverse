@@ -669,6 +669,7 @@
     "sort": {
       "name": "Name",
       "recent": "Recent",
+      "mostChats": "Most chats",
       "created": "Created",
       "shuffle": "Shuffle"
     },
