@@ -100,6 +100,7 @@ const CUSTOM_PAGE_SIZE = 200 as const
 const ENTRY_FIELD_VISIBLE_TOP_GUTTER = 12
 const ENTRY_FIELD_KEYBOARD_GUTTER = 72
 const ENTRY_FIELD_REVEAL_THRESHOLD = 10
+const ENTRY_FIELD_RESIZED_VIEWPORT_SETTLE_DELAY = 160
 const ENTRY_FIELD_FOCUS_SETTLE_DELAYS = [40, 180, 360, 520] as const
 const TOKEN_PREFETCH_DWELL_MS = 180
 
@@ -190,9 +191,17 @@ function parseCssPx(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+function usesBrowserResizedKeyboardViewport(): boolean {
+  const root = document.documentElement
+  return root.hasAttribute('data-pwa') && root.hasAttribute('data-resizes-content')
+}
+
 function getEntryFieldBottomGutter(container: HTMLElement): number {
   const style = getComputedStyle(container)
   const footerHeight = parseCssPx(style.getPropertyValue('--worldbook-footer-height'))
+  if (usesBrowserResizedKeyboardViewport()) {
+    return footerHeight + ENTRY_FIELD_VISIBLE_TOP_GUTTER
+  }
   return Math.max(ENTRY_FIELD_KEYBOARD_GUTTER, footerHeight + ENTRY_FIELD_VISIBLE_TOP_GUTTER)
 }
 
@@ -795,6 +804,20 @@ export default function WorldBookEntriesSection({
   const scheduleEntryFieldFocusCorrection = useCallback((target: HTMLElement) => {
     focusedEntryFieldRef.current = target
     clearFocusRevealTimers()
+
+    // Chromium/Android PWAs opt into `interactive-widget=resizes-content`, so
+    // the browser has already resized the layout viewport above the keyboard.
+    // Wait until that resize settles, then perform at most one minimal fallback
+    // correction. Running the immediate + multi-timer path here counts the
+    // keyboard twice and visibly throws the lorebook panel upward.
+    if (usesBrowserResizedKeyboardViewport()) {
+      focusRevealTimersRef.current = [window.setTimeout(
+        () => scheduleEntryFieldReveal(target),
+        ENTRY_FIELD_RESIZED_VIEWPORT_SETTLE_DELAY,
+      )]
+      return
+    }
+
     scheduleEntryFieldReveal(target)
     focusRevealTimersRef.current = ENTRY_FIELD_FOCUS_SETTLE_DELAYS.map((delay) =>
       window.setTimeout(() => scheduleEntryFieldReveal(target), delay)
@@ -820,11 +843,18 @@ export default function WorldBookEntriesSection({
     const handleInput = (event: Event) => {
       if (!isEditableEntryField(event.target)) return
       focusedEntryFieldRef.current = event.target
+      if (usesBrowserResizedKeyboardViewport()) return
       scheduleEntryFieldReveal(event.target)
     }
 
     const handleViewportChange = () => {
-      scheduleEntryFieldReveal()
+      const target = focusedEntryFieldRef.current
+      if (!target) return
+      if (usesBrowserResizedKeyboardViewport()) {
+        scheduleEntryFieldFocusCorrection(target)
+      } else {
+        scheduleEntryFieldReveal(target)
+      }
     }
 
     root.addEventListener('focusin', handleFocusIn)
