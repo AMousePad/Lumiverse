@@ -138,6 +138,10 @@ import {
 } from "./world-info-sources.service";
 import { promptBlockMatchesCharacterTags } from "../utils/prompt-block-character-tags";
 import {
+  captureInlineWebSearchContextSlot,
+  stripInlineWebSearchContextSlot,
+} from "./inline-web-search";
+import {
   isGenuinelyNewChat,
   resolveNewChatPromptConfig,
   resolvePromptBehavior,
@@ -1322,6 +1326,41 @@ async function evaluatePromptBlockContent(
   );
 }
 
+const WI_MARKER_MACRO_RE = /\{\{\s*wi_?marker\s*(?:\}\}|::)/i;
+
+/**
+ * Resolve the same block with marker-mode WI suppressed for breakdown
+ * accounting. The clone keeps this diagnostic pass from mutating the live
+ * block-local variables or persisted macro state.
+ */
+export async function evaluatePromptBlockTokenCountContent(
+  content: string,
+  macroEnv: MacroEnv,
+  block: Pick<PromptBlock, "id" | "role" | "position" | "depth">,
+): Promise<string | undefined> {
+  if (!WI_MARKER_MACRO_RE.test(content)) return undefined;
+
+  const tokenCountEnv = cloneEnv(macroEnv);
+  tokenCountEnv.commit = false;
+  tokenCountEnv.extra.worldInfoAtMarker = "";
+  return evaluatePromptBlockContent(content, tokenCountEnv, block);
+}
+
+export function attributeExpandedMarkerWorldInfoTokens(
+  breakdown: AssemblyBreakdownEntry[],
+): void {
+  const markerWorldInfoWasExpanded = breakdown.some(
+    (entry) => entry.attributesWorldInfoMarkerTokens === true,
+  );
+  if (!markerWorldInfoWasExpanded) return;
+
+  for (const entry of breakdown) {
+    if (entry.type === "world_info" && entry.marker === "wi_marker") {
+      delete entry.excludeFromTotal;
+    }
+  }
+}
+
 /**
  * Walk enabled prompt blocks, merge stored overrides over creator defaults,
  * coerce + clamp per variable type, and publish the result on env.extra so
@@ -1583,6 +1622,8 @@ interface PendingAppend {
   baseRole: "user" | "assistant";
   depth: number;
   content: string;
+  tokenCountContent?: string;
+  attributesWorldInfoMarkerTokens?: boolean;
   blockName: string;
   blockId: string;
 }
@@ -2923,6 +2964,8 @@ export async function assemblePrompt(
     role: LlmMessage["role"];
     depth: number;
     content: string;
+    tokenCountContent?: string;
+    attributesWorldInfoMarkerTokens?: boolean;
     blockName: string;
     blockId: string;
     marker?: string;
@@ -3413,11 +3456,21 @@ export async function assemblePrompt(
     ) {
       phiMacroReferenced = true;
     }
+    const rawTokenCountContent = await evaluatePromptBlockTokenCountContent(
+      content,
+      macroEnv,
+      block,
+    );
+    delete macroEnv.extra._worldInfoAtMarkerMacroUsed;
     const rawResolved = await evaluatePromptBlockContent(
       content,
       macroEnv,
       block,
     );
+    const attributesWorldInfoMarkerTokens =
+      macroEnv.extra._worldInfoAtMarkerMacroUsed === true
+      && rawTokenCountContent !== undefined;
+    delete macroEnv.extra._worldInfoAtMarkerMacroUsed;
 
     // Append roles: collect for deferred application after full assembly.
     // Check BEFORE the trim gate so whitespace-only appends (e.g. lone
@@ -3428,6 +3481,10 @@ export async function assemblePrompt(
           baseRole: appendBaseRole(block.role),
           depth: block.depth || 0,
           content: rawResolved,
+          tokenCountContent: attributesWorldInfoMarkerTokens
+            ? rawTokenCountContent
+            : undefined,
+          attributesWorldInfoMarkerTokens,
           blockName: block.name,
           blockId: block.id,
         });
@@ -3436,6 +3493,10 @@ export async function assemblePrompt(
     }
 
     const resolved = normalizePromptBlockText(rawResolved);
+    const tokenCountContent = !attributesWorldInfoMarkerTokens
+      || rawTokenCountContent === undefined
+      ? undefined
+      : normalizePromptBlockText(rawTokenCountContent);
     if (resolved) {
       const role: LlmMessage["role"] =
         (block.role as LlmMessage["role"]) || "system";
@@ -3447,6 +3508,8 @@ export async function assemblePrompt(
           role,
           depth: Math.max(0, block.depth || 0),
           content: resolved,
+          tokenCountContent,
+          attributesWorldInfoMarkerTokens,
           blockName: block.name,
           blockId: block.id,
           marker: block.marker ?? undefined,
@@ -3458,6 +3521,8 @@ export async function assemblePrompt(
           name: block.name,
           role,
           content: resolved,
+          tokenCountContent,
+          attributesWorldInfoMarkerTokens,
           blockId: block.id,
           marker: block.marker ?? undefined,
         });
@@ -3635,6 +3700,7 @@ export async function assemblePrompt(
       name: formatWorldInfoBreakdownName("WI At Marker", markerEntry.entryLabel),
       role: markerEntry.role,
       content: markerEntry.content,
+      marker: "wi_marker",
       excludeFromTotal: true,
     });
   }
@@ -3672,6 +3738,9 @@ export async function assemblePrompt(
       name: depthBlock.blockName,
       role: depthBlock.role,
       content: depthBlock.content,
+      tokenCountContent: depthBlock.tokenCountContent,
+      attributesWorldInfoMarkerTokens:
+        depthBlock.attributesWorldInfoMarkerTokens,
       blockId: depthBlock.blockId,
       marker: depthBlock.marker,
     });
@@ -3986,6 +4055,13 @@ export async function assemblePrompt(
     applyAppendGroup(result, breakdown, group);
   }
 
+  // At-marker entries are absent from the outbound prompt unless an emitted
+  // block actually expanded {{wiMarker}}. Once that happens, the block's
+  // tokenCountContent owns only its non-WI wrapper and these rows own the WI
+  // tokens. Keep the old exclusion when the macro appeared only in a skipped
+  // branch/block, or was not present at all.
+  attributeExpandedMarkerWorldInfoTokens(breakdown);
+
   // Strip trailing whitespace from the last chat-history assistant message.
   // Anthropic (and other strict providers) reject turns ending in whitespace;
   // explicit prefills are left alone so users can intentionally seed responses.
@@ -4035,6 +4111,23 @@ export async function assemblePrompt(
     resolvePromptMacrosAfterRegexPass(result, macroEnv)
   );
   stripEmptyTextParts(result);
+
+  // {{webSearchContext}} resolves to a private token while prompt blocks are
+  // assembled. Retain the original message as an internal template, but strip
+  // the token from normal prompt display and the first model request. If the
+  // model later calls web_search, generate.service replays this exact location
+  // with bounded result context instead of using the fallback end block.
+  for (const message of result) {
+    captureInlineWebSearchContextSlot(message);
+  }
+  for (let index = breakdown.length - 1; index >= 0; index--) {
+    const entry = breakdown[index];
+    if (typeof entry.content !== "string") continue;
+    entry.content = stripInlineWebSearchContextSlot(entry.content);
+    if (entry.type === "block" && entry.content.trim().length === 0) {
+      breakdown.splice(index, 1);
+    }
+  }
 
   if (ctx.generationType === "continue") {
     const finalized = finalizeContinuePrompt(
@@ -5465,6 +5558,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     if (!queryVector) {
       const [vec] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], {
         signal,
+        inputType: "query",
       });
       queryVector = vec;
       if (queryVector && queryVector.length > 0) {
@@ -6212,6 +6306,9 @@ function applyAppendGroup(
             name: `${append.blockName} → ${baseRole}@${depth}`,
             role: baseRole,
             content: append.content,
+            tokenCountContent: append.tokenCountContent,
+            attributesWorldInfoMarkerTokens:
+              append.attributesWorldInfoMarkerTokens,
             blockId: append.blockId,
           });
         }

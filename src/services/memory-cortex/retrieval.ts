@@ -114,7 +114,7 @@ export async function queryCortex(
   let vectorResults: VectorSearchResult[];
 
   try {
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(query.userId, [query.queryText], { signal });
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(query.userId, [query.queryText], { signal, inputType: "query" });
     if (signal?.aborted) return emptyResult(startTime);
     if (!queryVector || queryVector.length === 0) {
       return emptyResult(startTime);
@@ -734,7 +734,7 @@ export async function queryVaultCortex(
   // ── Phase 2: LanceDB vector search scoped to this vault ──
   let vectorResults: VectorSearchResult[];
   try {
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal, inputType: "query" });
     if (signal?.aborted) return emptyResult(startTime);
     if (!queryVector || queryVector.length === 0) return emptyResult(startTime);
 

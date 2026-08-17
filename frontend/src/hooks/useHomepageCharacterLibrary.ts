@@ -142,7 +142,7 @@ export function useHomepageCharacterLibrary() {
       wsClient.on(EventType.CHARACTER_DELETED, invalidate),
     ]
 
-    if (resolved.query.sortField === 'recent') {
+    if (resolved.query.sortField === 'recent' || resolved.query.sortField === 'most_chats') {
       unsubscribers.push(
         wsClient.on(EventType.MESSAGE_SENT, invalidate),
         wsClient.on(EventType.CHAT_CREATED, invalidate),
@@ -387,6 +387,11 @@ export function useHomepageCharacterLibrary() {
     updateSettings({ panelImageHeight: clampHomepagePanelImageHeight(panelImageHeight) })
   }, [updateSettings])
 
+  const selectSortField = useCallback((nextSortField: CharacterSortField) => {
+    setSortField(nextSortField)
+    if (nextSortField === 'most_chats') setSortDirection('desc')
+  }, [])
+
   const closePanel = useCallback(() => setPanelOpen(false), [])
   const openSettings = useCallback(
     () => openSettingsModal('productivity', { anchorId: 'homepage-character-library-settings' }),
@@ -420,7 +425,7 @@ export function useHomepageCharacterLibrary() {
     selectedTag,
     setSelectedTag,
     sortField,
-    setSortField,
+    setSortField: selectSortField,
     sortDirection,
     setSortDirection,
     activeChatId,

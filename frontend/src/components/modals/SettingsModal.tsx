@@ -37,7 +37,7 @@ import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
 import { notificationSoundsApi } from '@/api/notification-sounds'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
-import { webSearchApi, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
+import { webSearchApi, type WebSearchProviderProfile, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
 import type { DrawerSettings, GuidedGeneration, QuickReplySet } from '@/types/store'
 import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
 import type { WorldBookVectorPresetMode, WorldBookVectorSettings } from '@/types/world-book-vector-settings'
@@ -2071,29 +2071,36 @@ function EmbeddingsSettings() {
     setModelLabels({})
   }, [cfg?.provider, cfg?.api_url])
 
-  const PROVIDER_DEFAULTS: Record<string, { api_url: string }> = {
-    'openai-compatible': { api_url: 'https://api.openai.com/v1/embeddings' },
-    openai: { api_url: 'https://api.openai.com/v1/embeddings' },
-    openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings' },
-    electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings' },
-    bananabread: { api_url: 'http://localhost:8008/v1/embeddings' },
-    nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings' },
+  const PROVIDER_DEFAULTS: Record<string, { api_url: string; model: string }> = {
+    'openai-compatible': { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
+    openai: { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
+    openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings', model: 'text-embedding-3-small' },
+    electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings', model: 'text-embedding-3-small' },
+    bananabread: { api_url: 'http://localhost:8008/v1/embeddings', model: 'mixedbread-ai/mxbai-embed-large-v1' },
+    nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings', model: 'text-embedding-3-small' },
+    'nvidia-nim': { api_url: 'https://integrate.api.nvidia.com/v1/embeddings', model: 'nvidia/nemotron-3-embed-1b' },
   }
 
   const providerAllowsCustomApiUrl = (provider: EmbeddingConfig['provider']) => {
-    return provider === 'openai-compatible' || provider === 'bananabread'
+    return provider === 'openai-compatible' || provider === 'bananabread' || provider === 'nvidia-nim'
   }
 
   const update = (patch: Partial<EmbeddingConfig>) => {
     setCfg((current) => {
       if (!current) return current
       let nextPatch = patch
-      // When provider changes, auto-fill URL with provider default.
+      // Restore the provider's last saved setup instead of carrying over the
+      // preceding provider's model, dimensions, or retrieval tuning.
       if (nextPatch.provider && nextPatch.provider !== current.provider) {
+        const savedProfile = current.provider_profiles?.[nextPatch.provider]
         const defaults = PROVIDER_DEFAULTS[nextPatch.provider]
-        if (defaults) {
-          nextPatch = { ...nextPatch, api_url: defaults.api_url }
-        }
+        nextPatch = savedProfile
+          ? { ...nextPatch, ...savedProfile, provider: nextPatch.provider }
+          : {
+              ...nextPatch,
+              api_url: defaults?.api_url ?? current.api_url,
+              model: defaults?.model ?? current.model,
+            }
       }
       return { ...current, ...nextPatch }
     })
@@ -2130,6 +2137,7 @@ function EmbeddingsSettings() {
         api_url: cfg.api_url,
         model: cfg.model,
         dimensions: cfg.dimensions,
+        send_dimensions: cfg.send_dimensions,
         retrieval_top_k: worldBookSettings.retrievalTopK,
         hybrid_weight_mode: cfg.hybrid_weight_mode,
         preferred_context_size: cfg.preferred_context_size,
@@ -2337,6 +2345,7 @@ function EmbeddingsSettings() {
                 <option value="electronhub">ElectronHub</option>
                 <option value="bananabread">BananaBread</option>
                 <option value="nanogpt">Nano-GPT</option>
+                <option value="nvidia-nim">NVIDIA NIM</option>
               </select>
             </div>
 
@@ -2370,6 +2379,9 @@ function EmbeddingsSettings() {
                 <span className={styles.helperText}>
                   {t('embeddings.bananabreadHint')}
                 </span>
+              )}
+              {cfg.provider === 'nvidia-nim' && (
+                <span className={styles.helperText}>{t('embeddings.nvidiaNimHint')}</span>
               )}
             </div>
           ) : (
@@ -2653,7 +2665,7 @@ function EmbeddingsSettings() {
 
 interface WebSearchSettingsState {
   enabled: boolean
-  provider: 'searxng'
+  provider: 'searxng' | 'exa' | 'tavily'
   apiUrl: string
   requestTimeoutMs: number
   defaultResultCount: number
@@ -2663,7 +2675,9 @@ interface WebSearchSettingsState {
   language: string
   safeSearch: 0 | 1 | 2
   engines: string[]
+  inlineToolEnabled: boolean
   hasApiKey: boolean
+  providerProfiles: Partial<Record<'searxng' | 'exa' | 'tavily', WebSearchProviderProfile>>
 }
 
 const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
@@ -2678,8 +2692,13 @@ const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
   language: 'all',
   safeSearch: 1,
   engines: [],
+  inlineToolEnabled: false,
   hasApiKey: false,
+  providerProfiles: {},
 }
+
+const EXA_SEARCH_API_URL = 'https://api.exa.ai/search'
+const TAVILY_SEARCH_API_URL = 'https://api.tavily.com/search'
 
 function WebSearchSettings() {
   const { t } = useTranslation('settings')
@@ -2713,7 +2732,7 @@ function WebSearchSettings() {
 
   const buildPayload = (): WebSearchSettingsInput => ({
     enabled: cfg.enabled,
-    provider: 'searxng',
+    provider: cfg.provider,
     apiUrl: cfg.apiUrl,
     requestTimeoutMs: cfg.requestTimeoutMs,
     defaultResultCount: cfg.defaultResultCount,
@@ -2723,6 +2742,7 @@ function WebSearchSettings() {
     language: cfg.language,
     safeSearch: cfg.safeSearch,
     engines: enginesInput.split(',').map((item) => item.trim()).filter(Boolean),
+    inlineToolEnabled: cfg.inlineToolEnabled,
   })
 
   const save = async () => {
@@ -2735,7 +2755,7 @@ function WebSearchSettings() {
         ...payload,
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
       })
-      setCfg(next)
+      setCfg({ ...WEB_SEARCH_DEFAULTS, ...next })
       setEnginesInput(next.engines.join(', '))
       setApiKey('')
       setSuccess(t('webSearch.saveSuccess'))
@@ -2785,20 +2805,47 @@ function WebSearchSettings() {
         label={t('webSearch.enable')}
       />
 
+      <Toggle.Checkbox
+        checked={cfg.inlineToolEnabled}
+        onChange={(checked) => update({ inlineToolEnabled: checked })}
+        label={t('webSearch.inlineToolEnable')}
+      />
+      <p className={styles.placeholder}>{t('webSearch.inlineToolHint')}</p>
+
       <div className={styles.field}>
         <label className={styles.fieldLabel}>{t('webSearch.provider')}</label>
-        <select className={styles.select} value={cfg.provider} onChange={() => update({ provider: 'searxng' })}>
+        <select
+          className={styles.select}
+          value={cfg.provider}
+          onChange={(e) => {
+            const provider = e.target.value as WebSearchSettingsState['provider']
+            const saved = cfg.providerProfiles[provider]
+            update(saved
+              ? { ...saved, provider, hasApiKey: saved.hasApiKey ?? false }
+              : {
+                  provider,
+                  apiUrl: provider === 'exa' ? EXA_SEARCH_API_URL : provider === 'tavily' ? TAVILY_SEARCH_API_URL : '',
+                  hasApiKey: false,
+                })
+            setEnginesInput(saved?.engines.join(', ') ?? '')
+            setApiKey('')
+          }}
+        >
           <option value="searxng">{t('webSearch.providerSearxng')}</option>
+          <option value="exa">{t('webSearch.providerExa')}</option>
+          <option value="tavily">{t('webSearch.providerTavily')}</option>
         </select>
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.apiUrl')}</label>
-        <input className={styles.select} value={cfg.apiUrl} onChange={(e) => update({ apiUrl: e.target.value })} placeholder={t('webSearch.apiUrlPlaceholder')} />
-      </div>
+      {cfg.provider === 'searxng' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>{t('webSearch.apiUrl')}</label>
+          <input className={styles.select} value={cfg.apiUrl} onChange={(e) => update({ apiUrl: e.target.value })} placeholder={t('webSearch.apiUrlPlaceholder')} />
+        </div>
+      )}
 
       <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.apiKey')} {cfg.hasApiKey ? t('webSearch.apiKeyConfigured') : t('webSearch.apiKeyOptional')}</label>
+        <label className={styles.fieldLabel}>{t('webSearch.apiKey')} {cfg.hasApiKey ? t('webSearch.apiKeyConfigured') : cfg.provider === 'searxng' ? t('webSearch.apiKeyOptional') : t('webSearch.apiKeyRequired')}</label>
         <input
           className={styles.select}
           type="password"
@@ -2808,28 +2855,32 @@ function WebSearchSettings() {
         />
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.engines')}</label>
-        <input className={styles.select} value={enginesInput} onChange={(e) => setEnginesInput(e.target.value)} placeholder={t('webSearch.enginesPlaceholder')} />
-        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
-          {t('webSearch.enginesHint')}
-        </span>
-      </div>
+      {cfg.provider === 'searxng' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>{t('webSearch.engines')}</label>
+          <input className={styles.select} value={enginesInput} onChange={(e) => setEnginesInput(e.target.value)} placeholder={t('webSearch.enginesPlaceholder')} />
+          <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
+            {t('webSearch.enginesHint')}
+          </span>
+        </div>
+      )}
 
-      <div className={styles.drawerRow}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>{t('webSearch.language')}</label>
-          <input className={styles.select} value={cfg.language} onChange={(e) => update({ language: e.target.value })} placeholder={t('webSearch.languagePlaceholder')} />
+      {cfg.provider === 'searxng' && (
+        <div className={styles.drawerRow}>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>{t('webSearch.language')}</label>
+            <input className={styles.select} value={cfg.language} onChange={(e) => update({ language: e.target.value })} placeholder={t('webSearch.languagePlaceholder')} />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>{t('webSearch.safeSearch')}</label>
+            <select className={styles.select} value={cfg.safeSearch} onChange={(e) => update({ safeSearch: Number(e.target.value) as 0 | 1 | 2 })}>
+              <option value={0}>{t('webSearch.safeOff')}</option>
+              <option value={1}>{t('webSearch.safeModerate')}</option>
+              <option value={2}>{t('webSearch.safeStrict')}</option>
+            </select>
+          </div>
         </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>{t('webSearch.safeSearch')}</label>
-          <select className={styles.select} value={cfg.safeSearch} onChange={(e) => update({ safeSearch: Number(e.target.value) as 0 | 1 | 2 })}>
-            <option value={0}>{t('webSearch.safeOff')}</option>
-            <option value={1}>{t('webSearch.safeModerate')}</option>
-            <option value={2}>{t('webSearch.safeStrict')}</option>
-          </select>
-        </div>
-      </div>
+      )}
 
       <div className={styles.drawerRow}>
         <div className={styles.field}>

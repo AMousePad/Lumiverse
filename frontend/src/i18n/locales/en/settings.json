@@ -46,7 +46,7 @@
     "webSearch": {
       "shortName": "Web Search",
       "tabName": "Web Search",
-      "tabDescription": "Configure SearXNG-backed web search for council tools"
+      "tabDescription": "Configure SearXNG, Exa, or Tavily web search for council tools"
     },
     "embeddings": {
       "shortName": "Embeddings",
@@ -562,15 +562,20 @@
   "webSearch": {
     "title": "Web Search",
     "loading": "Loading web search settings...",
-    "helper": "Configure a SearXNG instance for the host-backed council web-search tool. The tool will appear in Council once search is enabled and an API URL is configured.",
+    "helper": "Configure SearXNG, Exa, or Tavily for the host-backed council web-search tool. The tool appears in Council once search is enabled and the selected provider is configured.",
     "enable": "Enable web search",
+    "inlineToolEnable": "Allow the model to search during generation",
+    "inlineToolHint": "Requires function calling in the active preset. Search results are added as bounded, untrusted reference context only after the model requests a search.",
     "provider": "Provider",
     "providerSearxng": "SearXNG",
+    "providerExa": "Exa",
+    "providerTavily": "Tavily",
     "apiUrl": "API URL",
     "apiUrlPlaceholder": "https://your-searxng.example.com/search",
     "apiKey": "API Key",
     "apiKeyConfigured": "(configured)",
     "apiKeyOptional": "(optional)",
+    "apiKeyRequired": "(required)",
     "apiKeyPlaceholder": "Paste a new key to replace",
     "engines": "Engines",
     "enginesPlaceholder": "google, brave, duckduckgo",
@@ -1498,6 +1503,7 @@
     "sendDimensionsHint": "When enabled, the dimensions value above is included in the embedding API request. Some providers set this automatically from the model and may reject an explicit value.",
     "apiUrlPathHint": "Auto-appends /v1/embeddings to base domains and /embeddings to partial paths. Full paths ending in /embeddings are used as-is.",
     "bananabreadHint": "BananaBread defaults to `http://localhost:8008/v1/embeddings` and uses its loaded model list from `/v1/models`.",
+    "nvidiaNimHint": "Defaults to NVIDIA's hosted OpenAI-compatible endpoint. The picker includes confirmed hosted embedding models; set your self-hosted NIM URL to discover its additional models, including compatible Qwen embeddings.",
     "apiEndpoint": "API Endpoint",
     "apiEndpointDefault": "Uses the provider default: `{{url}}`",
     "worldBooksEyebrow": "World Books",

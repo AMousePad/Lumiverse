@@ -372,6 +372,9 @@
   transition: all var(--lumiverse-transition-fast, 120ms);
   opacity: 0.6;
   order: 2;
+}
+
+.toolbarBtnPrimary {
   margin-left: auto;
 }
 
@@ -387,6 +390,19 @@
   color: var(--lumiverse-primary);
   background: var(--lumiverse-primary-010);
   border-color: var(--lumiverse-primary);
+}
+
+.toolbarBtn:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.toolbarSpinner {
+  animation: chatToolbarSpin 0.8s linear infinite;
+}
+
+@keyframes chatToolbarSpin {
+  to { transform: rotate(360deg); }
 }
 
 /* GPU optimization: disable backdrop-filter on the card receiving tokens. */

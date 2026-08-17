@@ -1041,6 +1041,29 @@ export default function LandingPage() {
     observer.observe(document.body, { childList: true, subtree: true })
     return () => observer.disconnect()
   }, [setSetting])
+  // Symmetric seam for the Chats tab: an extension-owned chats surface
+  // (e.g. a Recent Chats browser) marks its root ready and takes over the
+  // tab, suppressing the native chat browser exactly like the character
+  // library does for Characters. Unlike Characters it never auto-switches
+  // tabs — the native list stays usable until the user picks Chats.
+  const [chatsSurfaceReady, setChatsSurfaceReady] = useState(() => (
+    typeof document !== 'undefined' && Boolean(document.querySelector(
+      `[data-spindle-mount="${'landing_chats'}"] [data-recent-chats-ready="true"]`,
+    ))
+  ))
+  useEffect(() => {
+    const readReady = () => {
+      setChatsSurfaceReady(Boolean(document.querySelector(
+        `[data-spindle-mount="${'landing_chats'}"] [data-recent-chats-ready="true"]`,
+      )))
+    }
+    readReady()
+    const Observer = document.defaultView?.MutationObserver
+    if (!Observer) return undefined
+    const observer = new Observer(readReady)
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-recent-chats-ready'] })
+    return () => observer.disconnect()
+  }, [])
   const availableLandingTabs = useMemo(
     () => getAvailableLandingPageTabs({ characterLibraryEnabled: homepageSurfaceReady }),
     [homepageSurfaceReady],
@@ -1870,7 +1893,7 @@ export default function LandingPage() {
               )
             })}
           </div>
-          {activeLandingTab === 'chats' && <>
+          {activeLandingTab === 'chats' && !chatsSurfaceReady && <>
           <SearchField
             value={searchQuery}
             onChange={setSearchQuery}
@@ -1921,8 +1944,11 @@ export default function LandingPage() {
           <div id={landingPageTabPanelId('characters')} role="tabpanel" aria-labelledby={landingPageTabId('characters')}
             data-component="LandingPageCharacterPanel" data-spindle-mount="landing_characters"
             hidden={activeLandingTab !== 'characters' || !homepageSurfaceReady} />
+          <div id={landingPageTabPanelId('chats')} role="tabpanel" aria-labelledby={landingPageTabId('chats')}
+            data-component="LandingPageChatsPanel" data-spindle-mount="landing_chats"
+            hidden={activeLandingTab !== 'chats'} />
           <AnimatePresence mode="wait">
-            {activeLandingTab === 'characters' ? null : !settingsLoaded || (loading && items.length === 0) ? (
+            {activeLandingTab === 'characters' || chatsSurfaceReady ? null : !settingsLoaded || (loading && items.length === 0) ? (
               <motion.div
                 key={`loading-${skeletonLayout}`}
                 className={skeletonLayout === 'compact' ? styles.compactList : styles.gridCards}
@@ -1967,7 +1993,7 @@ export default function LandingPage() {
             )}
           </AnimatePresence>
 
-          {activeLandingTab === 'chats' && hasMore && (
+          {activeLandingTab === 'chats' && !chatsSurfaceReady && hasMore && (
             <div ref={sentinelRef} className={styles.loadMoreSentinel}>
               {loadingMore && (
                 <div className={styles.loadingMore}>

@@ -310,6 +310,20 @@ export function listCharacterSummaries(
     ) cs ON cs.character_id = c.id
   `;
 
+  // A character owns its one-on-one chats. Group chats are intentionally not
+  // counted here: assigning a single group session to every participant would
+  // overstate the number of chats for each card.
+  const chatCountJoin = `
+    LEFT JOIN (
+      SELECT character_id, COUNT(*) AS chat_count
+      FROM chats
+      WHERE user_id = ?
+        AND character_id IS NOT NULL
+        AND COALESCE(json_extract(metadata, '$.group'), 0) != 1
+      GROUP BY character_id
+    ) cs ON cs.character_id = c.id
+  `;
+
   // Sort
   let orderBy: string;
   let extraJoin = "";
@@ -326,6 +340,11 @@ export function listCharacterSummaries(
         break;
       case "created":
         orderBy = `ORDER BY c.created_at ${dir}, c.id ASC`;
+        break;
+      case "most_chats":
+        extraJoin = chatCountJoin;
+        queryParams = [userId, ...whereParams];
+        orderBy = `ORDER BY COALESCE(cs.chat_count, 0) ${dir}, c.updated_at ${dir}, c.id ASC`;
         break;
       case "recent":
       default:
@@ -574,7 +593,7 @@ export function getCharacterAvatarInfo(
   return { image_id: row.image_id || null, avatar_path: row.avatar_path || null, avatar_crop_image_id: avatarCropImageId };
 }
 
-export type CharacterSortMode = "recent" | "discover";
+export type CharacterSortMode = "recent" | "discover" | "most_chats";
 
 export type PerspectiveLayerKind = "background" | "framing" | "subject";
 export const LANDING_PERSPECTIVE_LAYERS_KEY = "landing_perspective_layers";

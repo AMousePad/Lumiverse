@@ -151,6 +151,20 @@ export function useCharacterBrowser() {
     }
   }, [])
 
+  // The sort key changes when a one-on-one chat is created or deleted. Group
+  // chats are ignored by this sort at the API layer, so their refreshes are
+  // harmless and keep the event handling straightforward.
+  useEffect(() => {
+    if (sortField !== 'most_chats') return
+    const refresh = () => setFetchVersion((v) => v + 1)
+    const offCreated = wsClient.on(EventType.CHAT_CREATED, refresh)
+    const offDeleted = wsClient.on(EventType.CHAT_DELETED, refresh)
+    return () => {
+      offCreated()
+      offDeleted()
+    }
+  }, [sortField])
+
   // ─── Server-side paginated summaries (the fast path) ────────────────────
   const [browserItems, setBrowserItems] = useState<CharacterSummary[]>([])
   const [browserTotal, setBrowserTotal] = useState(0)
