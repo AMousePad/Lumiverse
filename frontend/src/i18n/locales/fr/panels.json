@@ -3072,9 +3072,11 @@
       "expand": "Agrandir la catégorie",
       "collapse": "Réduire la catégorie",
       "pickOne": "en choisir un",
+      "enableAll": "Activer la catégorie et son contenu",
+      "disableAll": "Désactiver la catégorie et son contenu",
       "multi": "multi",
-      "enable": "Activer la catégorie",
-      "disable": "Désactiver la catégorie",
+      "enable": "Activer le bloc de catégorie",
+      "disable": "Désactiver le bloc de catégorie",
       "rename": "Rebaptiser",
       "deleteCategory": "Supprimer la catégorie"
     },

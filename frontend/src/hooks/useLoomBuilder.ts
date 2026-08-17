@@ -29,6 +29,7 @@ import {
   sanitizeLumiHubSealedBlocksForExport,
   normalizeCategoryBlockState,
   toggleBlockWithCategoryRules,
+  toggleCategoryWithChildren,
   coerceImportedLoomPreset,
   detectImportedPresetKind,
   reconcilePromptVariableValues,
@@ -584,6 +585,15 @@ export function useLoomBuilder() {
     saveBlocks(blocks)
   }, [saveBlocks])
 
+  // Blanket category toggle: disable captures each child's enabled state on
+  // the category block; enable restores that exact snapshot.
+  const toggleCategoryChildren = useCallback((categoryId: string) => {
+    const current = effectiveActivePresetRef.current
+    if (!current) return
+    const blocks = toggleCategoryWithChildren(current.blocks, categoryId)
+    saveBlocks(blocks)
+  }, [saveBlocks])
+
   const reorderBlocks = useCallback((fromIndex: number, toIndex: number) => {
     const current = effectiveActivePresetRef.current
     if (!current) return
@@ -826,6 +836,7 @@ export function useLoomBuilder() {
     removeBlock,
     updateBlock,
     toggleBlock,
+    toggleCategoryChildren,
     reorderBlocks,
 
     // Sampler settings

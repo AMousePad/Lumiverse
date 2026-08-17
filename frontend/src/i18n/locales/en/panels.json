@@ -3332,9 +3332,11 @@
       "collapseAll": "Collapse all",
       "bulkUnavailableSearch": "Clear the prompt search to expand or collapse all categories",
       "pickOne": "pick one",
+      "enableAll": "Enable category and contents",
+      "disableAll": "Disable category and contents",
       "multi": "multi",
-      "enable": "Enable category",
-      "disable": "Disable category",
+      "enable": "Enable category block",
+      "disable": "Disable category block",
       "rename": "Rename",
       "deleteCategory": "Delete category"
     },
