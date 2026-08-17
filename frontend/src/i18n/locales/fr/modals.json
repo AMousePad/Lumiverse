@@ -681,6 +681,8 @@
     "depthHint": "0 = dernières",
     "trimStrings": "Trim des chaînes",
     "trimHint": "séparées par des virgules",
+    "sortOrder": "Ordre de tri",
+    "sortOrderHint": "Le plus petit s'exécute en premier ; le glisser-déposer réécrit ces valeurs",
     "scopeGlobal": "Mondial",
     "scopeCharacter": "Personnage",
     "scopeChat": "Chat",

@@ -681,6 +681,8 @@
     "depthHint": "0 = 最新",
     "trimStrings": "修剪字符串",
     "trimHint": "逗号分隔",
+    "sortOrder": "排序",
+    "sortOrderHint": "数值小的先执行；拖拽排序列表会重写这些值",
     "scopeGlobal": "全局",
     "scopeCharacter": "角色",
     "scopeChat": "聊天",

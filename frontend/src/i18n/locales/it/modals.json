@@ -681,6 +681,8 @@
     "depthHint": "0 = ultimi",
     "trimStrings": "Trim stringhe",
     "trimHint": "separati da virgole",
+    "sortOrder": "Ordine",
+    "sortOrderHint": "Prima il valore più basso; il riordino con trascinamento riscrive questi valori",
     "scopeGlobal": "Globale",
     "scopeCharacter": "Personaggio",
     "scopeChat": "Chat",
