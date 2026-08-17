@@ -186,7 +186,36 @@ export type EmbeddingProvider =
   | "electronhub"
   | "bananabread"
   | "nanogpt"
+  | "nvidia-nim"
   | "google_vertex";
+
+/**
+ * Connection and retrieval options remembered for each embedding provider.
+ * `enabled` remains global: the active embedding model is shared by the
+ * vector store, while switching providers should not discard its setup.
+ */
+export interface EmbeddingProviderProfile {
+  api_url: string;
+  model: string;
+  dimensions: number | null;
+  send_dimensions: boolean;
+  retrieval_top_k: number;
+  hybrid_weight_mode: "keyword_first" | "balanced" | "vector_first";
+  preferred_context_size: number;
+  batch_size: number;
+  similarity_threshold: number;
+  rerank_cutoff: number;
+  vectorize_world_books: boolean;
+  vectorize_chat_messages: boolean;
+  vectorize_chat_documents: boolean;
+  chat_memory_mode: "conservative" | "balanced" | "aggressive";
+  request_timeout: number;
+  vertex_region?: string;
+}
+
+export interface EmbeddingProviderProfileWithStatus extends EmbeddingProviderProfile {
+  has_api_key: boolean;
+}
 
 export interface EmbeddingConfig {
   enabled: boolean;
@@ -211,10 +240,14 @@ export interface EmbeddingConfig {
   /** Google Vertex AI region. Only used when `provider === "google_vertex"`.
    *  The `api_url` field is ignored for Vertex — host is derived from this. */
   vertex_region?: string;
+  /** Saved, non-secret settings for each provider. API keys live in the
+   * encrypted secret store under provider-specific keys. */
+  provider_profiles?: Partial<Record<EmbeddingProvider, EmbeddingProviderProfile>>;
 }
 
 export interface EmbeddingConfigWithStatus extends EmbeddingConfig {
   has_api_key: boolean;
+  provider_profiles?: Partial<Record<EmbeddingProvider, EmbeddingProviderProfileWithStatus>>;
   /** True when the returned config belongs to the server owner and the caller
    *  is a non-owner receiving it by inheritance. Non-owners cannot mutate an
    *  inherited config and share the owner's API key / billing. */
@@ -516,6 +549,7 @@ const PROVIDER_DEFAULT_URL: Record<EmbeddingProvider, string> = {
   electronhub: "https://api.electronhub.top/v1/embeddings",
   bananabread: "http://localhost:8008/v1/embeddings",
   nanogpt: "https://nano-gpt.com/api/v1/embeddings",
+  "nvidia-nim": "https://integrate.api.nvidia.com/v1/embeddings",
   // Vertex derives its host from vertex_region — this is a cosmetic default.
   google_vertex: "https://aiplatform.googleapis.com",
 };
@@ -526,12 +560,15 @@ function providerDefaultModel(provider: EmbeddingProvider): string {
   if (provider === "openrouter") return "text-embedding-3-small";
   if (provider === "electronhub") return "text-embedding-3-small";
   if (provider === "openai") return "text-embedding-3-small";
+  if (provider === "nvidia-nim") return "nvidia/nemotron-3-embed-1b";
   if (provider === "google_vertex") return "gemini-embedding-001";
   return "text-embedding-3-small";
 }
 
 function providerAllowsCustomApiUrl(provider: EmbeddingProvider): boolean {
-  return provider === "openai-compatible" || provider === "bananabread";
+  // NIM's hosted API is the default, but self-hosted NIM deployments expose
+  // the same OpenAI-compatible endpoint and may offer additional models.
+  return provider === "openai-compatible" || provider === "bananabread" || provider === "nvidia-nim";
 }
 
 function defaultConfig(provider: EmbeddingProvider = "openai-compatible"): EmbeddingConfig {
@@ -558,8 +595,28 @@ function defaultConfig(provider: EmbeddingProvider = "openai-compatible"): Embed
 }
 
 const VALID_EMBEDDING_PROVIDERS: EmbeddingProvider[] = [
-  "openai-compatible", "openai", "openrouter", "electronhub", "bananabread", "nanogpt", "google_vertex",
+  "openai-compatible", "openai", "openrouter", "electronhub", "bananabread", "nanogpt", "nvidia-nim", "google_vertex",
 ];
+
+function toProviderProfile(config: EmbeddingConfig): EmbeddingProviderProfile {
+  const {
+    enabled: _enabled,
+    provider: _provider,
+    provider_profiles: _providerProfiles,
+    ...profile
+  } = config;
+  return profile;
+}
+
+function normalizeProviderProfiles(input: any): Partial<Record<EmbeddingProvider, EmbeddingProviderProfile>> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+  const profiles: Partial<Record<EmbeddingProvider, EmbeddingProviderProfile>> = {};
+  for (const provider of VALID_EMBEDDING_PROVIDERS) {
+    if (!input[provider] || typeof input[provider] !== "object" || Array.isArray(input[provider])) continue;
+    profiles[provider] = toProviderProfile(normalizeConfig({ ...input[provider], provider }));
+  }
+  return profiles;
+}
 
 function normalizeConfig(input: any): EmbeddingConfig {
   const rawProvider = input?.provider as EmbeddingProvider | undefined;
@@ -570,7 +627,7 @@ function normalizeConfig(input: any): EmbeddingConfig {
   const api_url = providerAllowsCustomApiUrl(provider)
     ? (typeof input?.api_url === "string" && input.api_url.trim() ? input.api_url.trim() : base.api_url)
     : base.api_url;
-  return {
+  const normalized: EmbeddingConfig = {
     enabled: input?.enabled !== undefined ? !!input.enabled : base.enabled,
     provider,
     api_url,
@@ -625,6 +682,13 @@ function normalizeConfig(input: any): EmbeddingConfig {
           : base.vertex_region)
       : undefined,
   };
+  const profiles = normalizeProviderProfiles(input?.provider_profiles);
+  // Existing installs only have the legacy flat config. Surface it as this
+  // provider's first profile so the UI can switch away and back without a
+  // migration step or a first-save data loss.
+  if (!profiles[provider]) profiles[provider] = toProviderProfile(normalized);
+  normalized.provider_profiles = profiles;
+  return normalized;
 }
 
 /**
@@ -1310,6 +1374,43 @@ export function getProviderDefaults(provider: EmbeddingProvider) {
   };
 }
 
+const NVIDIA_NIM_EMBEDDING_MODELS = [
+  "nvidia/llama-nemotron-embed-1b-v2",
+  "nvidia/nemotron-3-embed-1b",
+  "nvidia/nv-embed-v1",
+  "nvidia/nv-embedqa-e5-v5",
+];
+
+type EmbeddingInputType = "query" | "passage";
+
+function nvidiaNimNeedsInputType(cfg: Pick<EmbeddingConfig, "provider" | "model">): boolean {
+  return cfg.provider === "nvidia-nim" && [
+    "nvidia/llama-nemotron-embed-1b-v2",
+    "nvidia/nv-embedqa-e5-v5",
+  ].includes(cfg.model);
+}
+
+function isLikelyEmbeddingModel(model: string): boolean {
+  return /(?:embed|retriev)/i.test(model);
+}
+
+async function fetchNvidiaNimEmbeddingModels(apiKey: string, apiUrl: string): Promise<string[]> {
+  const fallback = NVIDIA_NIM_EMBEDDING_MODELS;
+  const providerImpl = getProvider("custom");
+  if (!providerImpl) return fallback;
+  try {
+    const models = await providerImpl.listModels(apiKey, normalizeEmbeddingApiUrlForModelListing(apiUrl));
+    // A private/self-hosted NIM may serve Qwen or a newer Nemotron embedding
+    // model before it appears in the hosted catalogue. Only include likely
+    // embedding models; the form still permits an explicit model ID.
+    return Array.from(new Set([...fallback, ...models.filter(isLikelyEmbeddingModel)])).sort();
+  } catch {
+    // Keep known hosted choices usable when /models needs a different scope
+    // or is disabled by a self-hosted NIM gateway.
+    return fallback;
+  }
+}
+
 function normalizeEmbeddingApiUrlForModelListing(rawUrl: string): string {
   const trimmed = rawUrl.trim().replace(/\/+$/, "");
   if (!trimmed) return "";
@@ -1408,6 +1509,13 @@ export async function previewEmbeddingModels(
   }
 
   try {
+    if (cfg.provider === "nvidia-nim") {
+      return {
+        models: await fetchNvidiaNimEmbeddingModels(apiKey, cfg.api_url),
+        provider: cfg.provider,
+      };
+    }
+
     if (cfg.provider === "nanogpt") {
       const result = await fetchNanoGptEmbeddingModels(apiKey, cfg.api_url);
       return { ...result, provider: cfg.provider };
@@ -1458,6 +1566,51 @@ function readRawEmbeddingConfig(userId: string): EmbeddingConfig {
   return normalizeConfig(setting?.value);
 }
 
+async function withEmbeddingSecretStatus(
+  userId: string,
+  config: EmbeddingConfig,
+  inherited = false,
+): Promise<EmbeddingConfigWithStatus> {
+  const profiles = config.provider_profiles ?? {};
+  const profilesWithStatus = Object.fromEntries(await Promise.all(
+    Object.entries(profiles).map(async ([provider, profile]) => [
+      provider,
+      { ...profile, has_api_key: await hasEmbeddingSecret(userId, provider as EmbeddingProvider) },
+    ] as const),
+  )) as Partial<Record<EmbeddingProvider, EmbeddingProviderProfileWithStatus>>;
+  const has_api_key = profilesWithStatus[config.provider]?.has_api_key
+    ?? await hasEmbeddingSecret(userId, config.provider);
+  return {
+    ...config,
+    has_api_key,
+    provider_profiles: profilesWithStatus,
+    ...(inherited ? { inherited: true } : {}),
+  };
+}
+
+function mergeEmbeddingConfigUpdate(
+  current: EmbeddingConfig,
+  input: Partial<EmbeddingConfig>,
+): EmbeddingConfig {
+  const requestedProvider = input.provider && VALID_EMBEDDING_PROVIDERS.includes(input.provider)
+    ? input.provider
+    : current.provider;
+  // A partial API caller can change only `provider`; in that case restore the
+  // selected provider's saved profile before applying its patch.
+  const selectedBase = requestedProvider === current.provider
+    ? current
+    : { ...current, ...current.provider_profiles?.[requestedProvider], provider: requestedProvider };
+  const merged = normalizeConfig({ ...selectedBase, ...input });
+  return {
+    ...merged,
+    provider_profiles: {
+      ...current.provider_profiles,
+      ...merged.provider_profiles,
+      [merged.provider]: toProviderProfile(merged),
+    },
+  };
+}
+
 /**
  * Owner gate: LanceDB stores one table with a dimension locked at creation,
  * so a multi-user box cannot support different embedding models per user
@@ -1483,10 +1636,7 @@ function resolveEmbeddingUserContext(callerUserId: string): { userId: string; in
 export async function getEmbeddingConfig(userId: string): Promise<EmbeddingConfigWithStatus> {
   const ctx = resolveEmbeddingUserContext(userId);
   const cfg = readRawEmbeddingConfig(ctx.userId);
-  const has_api_key = await hasEmbeddingSecret(ctx.userId, cfg.provider);
-  return ctx.inherited
-    ? { ...cfg, has_api_key, inherited: true }
-    : { ...cfg, has_api_key };
+  return withEmbeddingSecretStatus(ctx.userId, cfg, ctx.inherited);
 }
 
 export async function updateEmbeddingConfig(
@@ -1506,20 +1656,20 @@ export async function updateEmbeddingConfig(
   }
 
   const current = readRawEmbeddingConfig(userId);
-  const merged = normalizeConfig({ ...current, ...input });
-  settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, merged);
+  const persisted = mergeEmbeddingConfigUpdate(current, input);
+  settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, persisted);
 
   if (input.api_key !== undefined) {
     const next = (input.api_key || "").trim();
     if (next) {
-      await putEmbeddingSecret(userId, merged.provider, next);
+      await putEmbeddingSecret(userId, persisted.provider, next);
     } else {
-      deleteEmbeddingSecret(userId, merged.provider);
+      deleteEmbeddingSecret(userId, persisted.provider);
     }
   }
 
   const oldFp = getModelFingerprint(current);
-  const newFp = getModelFingerprint(merged);
+  const newFp = getModelFingerprint(persisted);
   const fingerprintChanged =
     oldFp.provider !== newFp.provider ||
     oldFp.model !== newFp.model ||
@@ -1530,16 +1680,15 @@ export async function updateEmbeddingConfig(
   // every user's vectors become stale at once — nuke the shared LanceDB store
   // so everyone re-vectorizes against the new config. For non-owner edits
   // (only reachable when the gate was inactive), scope invalidation to caller.
-  const ownerGateTransition = callerIsOwner && current.enabled !== merged.enabled;
-  const ownerFingerprintChanged = callerIsOwner && merged.enabled && fingerprintChanged;
+  const ownerGateTransition = callerIsOwner && current.enabled !== persisted.enabled;
+  const ownerFingerprintChanged = callerIsOwner && persisted.enabled && fingerprintChanged;
   if (ownerGateTransition || ownerFingerprintChanged) {
     await forceResetLanceDB();
   } else if (!callerIsOwner && fingerprintChanged) {
     await invalidateAllVectors(userId);
   }
 
-  const has_api_key = await hasEmbeddingSecret(userId, merged.provider);
-  return { ...merged, has_api_key };
+  return withEmbeddingSecretStatus(userId, persisted);
 }
 
 /**
@@ -1556,6 +1705,12 @@ function parseEmbeddingResponse(payload: any, expectedCount: number): number[][]
       ? err
       : (err.message || err.code || JSON.stringify(err));
     throw new Error(`Embedding provider returned an error: ${msg}`);
+  }
+  // NVIDIA NIM catalogue routing can use RFC 7807-style error envelopes even
+  // when the HTTP status is successful. Surface the useful provider detail
+  // instead of an opaque response-format error.
+  if (typeof payload?.detail === "string" && payload.detail.trim()) {
+    throw new Error(`Embedding provider returned an error: ${payload.detail}`);
   }
 
   // OpenAI format: { data: [{ embedding: number[] }, ...] }
@@ -1728,7 +1883,7 @@ async function postVertex<T>(url: string, accessToken: string, body: Record<stri
 async function requestEmbeddings(
   userId: string,
   texts: string[],
-  options?: { omitDimensions?: boolean; signal?: AbortSignal }
+  options?: { omitDimensions?: boolean; signal?: AbortSignal; inputType?: EmbeddingInputType }
 ): Promise<number[][]> {
   // Resolve which user's settings + API key actually drive this call. In gate
   // mode non-owners inherit the owner's config and use the owner's key.
@@ -1771,6 +1926,9 @@ async function requestEmbeddings(
   };
   if (!isOllamaNative) {
     body.encoding_format = "float";
+  }
+  if (nvidiaNimNeedsInputType(cfg)) {
+    body.input_type = options?.inputType ?? "passage";
   }
   if (!options?.omitDimensions && cfg.send_dimensions && cfg.dimensions) body.dimensions = cfg.dimensions;
   const timeoutMs = cfg.request_timeout > 0
@@ -1820,7 +1978,7 @@ async function requestEmbeddings(
 export async function embedTexts(
   userId: string,
   texts: string[],
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; inputType?: EmbeddingInputType },
 ): Promise<number[][]> {
   return requestEmbeddings(userId, texts, options);
 }
@@ -1878,20 +2036,28 @@ const inflightEmbeddings = new Map<string, InflightEmbeddingEntry>();
 export async function cachedEmbedTexts(
   userId: string,
   texts: string[],
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; inputType?: EmbeddingInputType },
 ): Promise<number[][]> {
   if (!texts.length) return [];
   if (options?.signal?.aborted) throw resolveAbortError(options.signal);
   const cfg = await getEmbeddingConfig(userId);
   const fingerprint = getModelFingerprint(cfg);
+  // Asymmetric embedding models produce distinct vectors for the exact same
+  // text when used as a query versus a stored passage. Keep cache and
+  // in-flight dedup entries separate for those two roles.
+  const inputType = options?.inputType ?? "passage";
+  const cacheFingerprint: ModelFingerprint = {
+    ...fingerprint,
+    api_url: `${fingerprint.api_url}|input_type:${inputType}`,
+  };
 
   // Fast path for single-text calls (the common case for cortex + chat memory retrieval)
   if (texts.length === 1) {
-    const key = computeCacheKey(texts[0], fingerprint);
+    const key = computeCacheKey(texts[0], cacheFingerprint);
     const cached = embeddingCache.get(key);
     if (cached) return [cached];
 
-    const vec = await joinOrStartInflight(userId, texts, key, options?.signal);
+    const vec = await joinOrStartInflight(userId, texts, key, options?.signal, inputType);
     return [vec];
   }
 
@@ -1900,7 +2066,7 @@ export async function cachedEmbedTexts(
   const uncachedIndices: number[] = [];
 
   for (let i = 0; i < texts.length; i++) {
-    const key = computeCacheKey(texts[i], fingerprint);
+    const key = computeCacheKey(texts[i], cacheFingerprint);
     const cached = embeddingCache.get(key);
     if (cached) {
       results[i] = cached;
@@ -1911,11 +2077,11 @@ export async function cachedEmbedTexts(
 
   if (uncachedIndices.length > 0) {
     const uncachedTexts = uncachedIndices.map((i) => texts[i]);
-    const vectors = await requestEmbeddings(userId, uncachedTexts, options);
+    const vectors = await requestEmbeddings(userId, uncachedTexts, { ...options, inputType });
     for (let j = 0; j < uncachedIndices.length; j++) {
       const idx = uncachedIndices[j];
       results[idx] = vectors[j];
-      embeddingCache.set(computeCacheKey(texts[idx], fingerprint), vectors[j]);
+      embeddingCache.set(computeCacheKey(texts[idx], cacheFingerprint), vectors[j]);
     }
   }
 
@@ -1974,7 +2140,7 @@ export async function embedQueryAdaptive(
   let current = text;
   for (;;) {
     try {
-      const [vec] = await cachedEmbedTexts(userId, [current], { signal: options?.signal });
+      const [vec] = await cachedEmbedTexts(userId, [current], { signal: options?.signal, inputType: "query" });
       return vec ?? [];
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -2069,6 +2235,7 @@ function joinOrStartInflight(
   texts: string[],
   key: string,
   signal: AbortSignal | undefined,
+  inputType: EmbeddingInputType,
 ): Promise<number[]> {
   const existing = inflightEmbeddings.get(key);
   if (existing) {
@@ -2083,7 +2250,7 @@ function joinOrStartInflight(
     hasUncancellableJoiner: false,
   };
 
-  entry.promise = requestEmbeddings(userId, texts, { signal: controller.signal }).then(
+  entry.promise = requestEmbeddings(userId, texts, { signal: controller.signal, inputType }).then(
     (vecs) => {
       const vec = vecs[0];
       embeddingCache.set(key, vec);
@@ -2235,24 +2402,27 @@ export async function testEmbeddingConfig(
   const ctx = resolveEmbeddingUserContext(userId);
   if (ctx.inherited) {
     const ownerCfg = readRawEmbeddingConfig(ctx.userId);
-    const has_api_key = await hasEmbeddingSecret(ctx.userId, ownerCfg.provider);
     return {
       dimension: first.length,
-      config: { ...ownerCfg, has_api_key, inherited: true },
+      config: await withEmbeddingSecretStatus(ctx.userId, ownerCfg, true),
     };
   }
 
   const current = readRawEmbeddingConfig(userId);
   const updated = normalizeConfig({ ...current, dimensions: first.length });
-  settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, updated);
-  const has_api_key = await hasEmbeddingSecret(userId, updated.provider);
+  const persisted = {
+    ...updated,
+    provider_profiles: {
+      ...current.provider_profiles,
+      ...updated.provider_profiles,
+      [updated.provider]: toProviderProfile(updated),
+    },
+  };
+  settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, persisted);
 
   return {
     dimension: first.length,
-    config: {
-      ...updated,
-      has_api_key,
-    },
+    config: await withEmbeddingSecretStatus(userId, persisted),
   };
 }
 
@@ -2618,6 +2788,12 @@ async function commitWorldBookVectorWritesIfCurrent(
 }
 
 export const __test__ = {
+  normalizeConfig,
+  mergeEmbeddingConfigUpdate,
+  putEmbeddingSecret,
+  NVIDIA_NIM_EMBEDDING_MODELS,
+  nvidiaNimNeedsInputType,
+  parseEmbeddingResponse,
   collectWorldBookHitsByUniqueSource,
   collapseWorldBookHitsBySource,
   hasEmbeddingSecret,
@@ -2938,7 +3114,7 @@ export async function searchWorldBookEntries(
   const text = query.trim();
   if (!text) return [];
 
-  const [vector] = await cachedEmbedTexts(userId, [text]);
+  const [vector] = await cachedEmbedTexts(userId, [text], { inputType: "query" });
   const rows = await searchWorldBookEntriesHybridWithVector(userId, worldBookId, text, vector, limit, cfg.hybrid_weight_mode);
   return rows.map((row) => ({
     entry_id: row.entry_id,

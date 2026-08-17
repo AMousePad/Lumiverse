@@ -5486,6 +5486,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     if (!queryVector) {
       const [vec] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], {
         signal,
+        inputType: "query",
       });
       queryVector = vec;
       if (queryVector && queryVector.length > 0) {

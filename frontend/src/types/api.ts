@@ -1260,9 +1260,31 @@ export interface WorldBookEntryBulkActionResult {
   target_book_id?: string;
 }
 
+export type EmbeddingProvider = 'openai-compatible' | 'openai' | 'openrouter' | 'electronhub' | 'bananabread' | 'nanogpt' | 'nvidia-nim' | 'google_vertex';
+
+export interface EmbeddingProviderProfile {
+  api_url: string;
+  model: string;
+  dimensions: number | null;
+  send_dimensions: boolean;
+  retrieval_top_k: number;
+  hybrid_weight_mode: 'keyword_first' | 'balanced' | 'vector_first';
+  preferred_context_size: number;
+  batch_size: number;
+  similarity_threshold: number;
+  rerank_cutoff: number;
+  vectorize_world_books: boolean;
+  vectorize_chat_messages: boolean;
+  vectorize_chat_documents: boolean;
+  chat_memory_mode: 'conservative' | 'balanced' | 'aggressive';
+  request_timeout: number;
+  vertex_region?: string;
+  has_api_key: boolean;
+}
+
 export interface EmbeddingConfig {
   enabled: boolean;
-  provider: 'openai-compatible' | 'openai' | 'openrouter' | 'electronhub' | 'bananabread' | 'nanogpt';
+  provider: EmbeddingProvider;
   api_url: string;
   model: string;
   dimensions: number | null;
@@ -1279,6 +1301,7 @@ export interface EmbeddingConfig {
   chat_memory_mode: 'conservative' | 'balanced' | 'aggressive';
   request_timeout: number;
   has_api_key: boolean;
+  provider_profiles?: Partial<Record<EmbeddingProvider, EmbeddingProviderProfile>>;
   /** True when the server owner has enabled a shared embedding config and the
    *  current user is a non-owner inheriting it. The form should be read-only
    *  and the config is not user-editable while this flag is set. */

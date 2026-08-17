@@ -1503,6 +1503,7 @@
     "sendDimensionsHint": "When enabled, the dimensions value above is included in the embedding API request. Some providers set this automatically from the model and may reject an explicit value.",
     "apiUrlPathHint": "Auto-appends /v1/embeddings to base domains and /embeddings to partial paths. Full paths ending in /embeddings are used as-is.",
     "bananabreadHint": "BananaBread defaults to `http://localhost:8008/v1/embeddings` and uses its loaded model list from `/v1/models`.",
+    "nvidiaNimHint": "Defaults to NVIDIA's hosted OpenAI-compatible endpoint. The picker includes confirmed hosted embedding models; set your self-hosted NIM URL to discover its additional models, including compatible Qwen embeddings.",
     "apiEndpoint": "API Endpoint",
     "apiEndpointDefault": "Uses the provider default: `{{url}}`",
     "worldBooksEyebrow": "World Books",

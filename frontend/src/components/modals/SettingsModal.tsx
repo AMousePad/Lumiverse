@@ -2071,29 +2071,36 @@ function EmbeddingsSettings() {
     setModelLabels({})
   }, [cfg?.provider, cfg?.api_url])
 
-  const PROVIDER_DEFAULTS: Record<string, { api_url: string }> = {
-    'openai-compatible': { api_url: 'https://api.openai.com/v1/embeddings' },
-    openai: { api_url: 'https://api.openai.com/v1/embeddings' },
-    openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings' },
-    electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings' },
-    bananabread: { api_url: 'http://localhost:8008/v1/embeddings' },
-    nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings' },
+  const PROVIDER_DEFAULTS: Record<string, { api_url: string; model: string }> = {
+    'openai-compatible': { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
+    openai: { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
+    openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings', model: 'text-embedding-3-small' },
+    electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings', model: 'text-embedding-3-small' },
+    bananabread: { api_url: 'http://localhost:8008/v1/embeddings', model: 'mixedbread-ai/mxbai-embed-large-v1' },
+    nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings', model: 'text-embedding-3-small' },
+    'nvidia-nim': { api_url: 'https://integrate.api.nvidia.com/v1/embeddings', model: 'nvidia/nemotron-3-embed-1b' },
   }
 
   const providerAllowsCustomApiUrl = (provider: EmbeddingConfig['provider']) => {
-    return provider === 'openai-compatible' || provider === 'bananabread'
+    return provider === 'openai-compatible' || provider === 'bananabread' || provider === 'nvidia-nim'
   }
 
   const update = (patch: Partial<EmbeddingConfig>) => {
     setCfg((current) => {
       if (!current) return current
       let nextPatch = patch
-      // When provider changes, auto-fill URL with provider default.
+      // Restore the provider's last saved setup instead of carrying over the
+      // preceding provider's model, dimensions, or retrieval tuning.
       if (nextPatch.provider && nextPatch.provider !== current.provider) {
+        const savedProfile = current.provider_profiles?.[nextPatch.provider]
         const defaults = PROVIDER_DEFAULTS[nextPatch.provider]
-        if (defaults) {
-          nextPatch = { ...nextPatch, api_url: defaults.api_url }
-        }
+        nextPatch = savedProfile
+          ? { ...nextPatch, ...savedProfile, provider: nextPatch.provider }
+          : {
+              ...nextPatch,
+              api_url: defaults?.api_url ?? current.api_url,
+              model: defaults?.model ?? current.model,
+            }
       }
       return { ...current, ...nextPatch }
     })
@@ -2130,6 +2137,7 @@ function EmbeddingsSettings() {
         api_url: cfg.api_url,
         model: cfg.model,
         dimensions: cfg.dimensions,
+        send_dimensions: cfg.send_dimensions,
         retrieval_top_k: worldBookSettings.retrievalTopK,
         hybrid_weight_mode: cfg.hybrid_weight_mode,
         preferred_context_size: cfg.preferred_context_size,
@@ -2337,6 +2345,7 @@ function EmbeddingsSettings() {
                 <option value="electronhub">ElectronHub</option>
                 <option value="bananabread">BananaBread</option>
                 <option value="nanogpt">Nano-GPT</option>
+                <option value="nvidia-nim">NVIDIA NIM</option>
               </select>
             </div>
 
@@ -2370,6 +2379,9 @@ function EmbeddingsSettings() {
                 <span className={styles.helperText}>
                   {t('embeddings.bananabreadHint')}
                 </span>
+              )}
+              {cfg.provider === 'nvidia-nim' && (
+                <span className={styles.helperText}>{t('embeddings.nvidiaNimHint')}</span>
               )}
             </div>
           ) : (
