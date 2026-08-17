@@ -540,6 +540,13 @@ export interface AssemblyBreakdownEntry {
   firstMessageIndex?: number;
   /** Pre-counted token value (e.g. from sidecar usage stats). Skips local tokenization. */
   preCountedTokens?: number;
+  /**
+   * Alternate content used only for prompt-breakdown tokenization. The normal
+   * `content` remains the fully resolved text shown in inspectors.
+   */
+  tokenCountContent?: string;
+  /** True when this entry's token-count content delegates marker-mode WI to its World Info rows. */
+  attributesWorldInfoMarkerTokens?: boolean;
   /** If true, tokens are displayed but NOT added to the total (e.g. sidecar tokens spent on a separate LLM). */
   excludeFromTotal?: boolean;
   /** Present for prompt blocks injected by Spindle interceptors. */
