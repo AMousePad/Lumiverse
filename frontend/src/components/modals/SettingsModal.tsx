@@ -71,6 +71,7 @@ interface SettingsModalProps {
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const { t: ts } = useTranslation('settings')
   const settingsActiveView = useStore((s) => s.settingsActiveView)
+  const setSettingsActiveView = useStore((s) => s.setSettingsActiveView)
   const settingsScrollTarget = useStore((s) => s.settingsScrollTarget)
   const user = useStore((s) => s.user)
   const settingsTabs = useStore((s) => s.settingsTabs)
@@ -86,19 +87,24 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const handledScrollTargetNonce = useRef<number | null>(null)
   const [scrollTarget, setScrollTarget] = useState<{ anchorId: string | null; nonce: number } | null>(null)
 
+  const selectView = useCallback((view: string) => {
+    setActiveView(view)
+    setSettingsActiveView(view)
+  }, [setSettingsActiveView])
+
   useEffect(() => {
     setActiveView(settingsActiveView || 'display')
   }, [settingsActiveView])
 
   useEffect(() => {
     if (!VIEWS.some((tab) => tab.id === activeView) && VIEWS.length > 0) {
-      setActiveView(VIEWS[0].id)
+      selectView(VIEWS[0].id)
     }
-  }, [VIEWS, activeView])
+  }, [VIEWS, activeView, selectView])
 
   // Open a tab from the in-modal search and remember where to scroll.
   const handleSearchNavigate = (tabId: string, anchorId: string | null) => {
-    setActiveView(tabId)
+    selectView(tabId)
     setScrollTarget({ anchorId, nonce: navNonce.current++ })
   }
 
@@ -137,7 +143,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
     if (extensionId) {
       if (activeView !== 'extensions') {
-        setActiveView('extensions')
+        selectView('extensions')
         return
       }
 
@@ -175,7 +181,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
     handledScrollTargetNonce.current = targetNonce
     setScrollTarget({ anchorId, nonce: targetNonce })
-  }, [activeView, settingsActiveView, settingsScrollTarget])
+  }, [activeView, settingsActiveView, settingsScrollTarget, selectView])
 
   return createPortal(
     <div className={styles.overlay} onClick={onClose}>
@@ -202,7 +208,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   key={tab.id}
                   type="button"
                   className={clsx(styles.navBtn, activeView === tab.id && styles.navBtnActive)}
-                  onClick={() => setActiveView(tab.id)}
+                  onClick={() => selectView(tab.id)}
                 >
                   <Icon size={14} />
                   <span>{translateSettingsField(tab.id, 'shortName', tab.shortName)}</span>
@@ -816,14 +822,14 @@ function CompletionSoundUploader({ disabled, current, onChange, onError, onSucce
 function ChatSettings() {
   const { t } = useTranslation('settings')
   const { t: tc } = useTranslation('common')
-  const displayMode = useStore((s) => s.chatSheldDisplayMode)
+  const displayMode = useStore((s) => s.chatDisplayMode)
   const minimalUseFullAvatar = useStore((s) => s.minimalUseFullAvatar ?? false)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
   const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
   const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
   const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)
-  const enterToSend = useStore((s) => s.chatSheldEnterToSend)
+  const enterToSend = useStore((s) => s.inputBarEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
@@ -832,6 +838,7 @@ function ChatSettings() {
   const regenFeedback = useStore((s) => s.regenFeedback)
   const suppressContextDropWarnings = useStore((s) => s.suppressContextDropWarnings)
   const setSetting = useStore((s) => s.setSetting)
+  const setInputBarEnterToSend = useStore((s) => s.setInputBarEnterToSend)
 
   return (
     <div className={styles.settingsSection}>
@@ -844,7 +851,7 @@ function ChatSettings() {
           <button
             type="button"
             className={clsx(styles.displayModeCard, displayMode === 'minimal' && styles.displayModeCardActive)}
-            onClick={() => setSetting('chatSheldDisplayMode', 'minimal')}
+            onClick={() => setSetting('chatDisplayMode', 'minimal')}
           >
             <div className={styles.previewMinimal}>
               {/* Character message */}
@@ -882,7 +889,7 @@ function ChatSettings() {
           <button
             type="button"
             className={clsx(styles.displayModeCard, displayMode === 'bubble' && styles.displayModeCardActive)}
-            onClick={() => setSetting('chatSheldDisplayMode', 'bubble')}
+            onClick={() => setSetting('chatDisplayMode', 'bubble')}
           >
             <div className={styles.previewBubble}>
               {/* Character bubble message */}
@@ -1081,7 +1088,7 @@ function ChatSettings() {
 
       <Toggle.Checkbox
         checked={enterToSend}
-        onChange={(checked) => setSetting('chatSheldEnterToSend', checked)}
+        onChange={setInputBarEnterToSend}
         label={t('chat.enterToSend')}
       />
 

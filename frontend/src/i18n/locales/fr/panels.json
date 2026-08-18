@@ -263,7 +263,9 @@
   "presetManager": {
     "reasoningTitle": "Raisonnement / CoT",
     "savedOn": "Enregistré le {{name}}",
-    "bindingChangedHint": "Le panneau a été modifié localement. Modifiez la connexion et utilisez Capture Current pour mettre à jour l'instantané enregistré.",
+    "bindingChangedHint": "Le panneau a été modifié localement. Réassociez les réglages actuels pour mettre à jour l'instantané enregistré.",
+    "rebindCurrent": "Réassocier les réglages actuels",
+    "rebindFailed": "Impossible de mettre à jour les réglages de raisonnement enregistrés.",
     "prefix": "Préfixe",
     "suffix": "Suffixe",
     "reasoningPrefix": "Préfixe de raisonnement",

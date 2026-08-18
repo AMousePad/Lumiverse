@@ -335,7 +335,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
   )
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
-  const enterToSend = useStore((s) => s.chatSheldEnterToSend)
+  const enterToSend = useStore((s) => s.inputBarEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)

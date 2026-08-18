@@ -81,6 +81,8 @@ export interface InlineToolContinuationOptions {
    * structured assistant turn for replay. Ignored by other providers.
    */
   reasoningDetails?: Record<string, unknown>[];
+  /** Optional Gemini signature for this round's non-tool thought/text part. */
+  thoughtSignature?: string;
 }
 
 /**
@@ -118,6 +120,7 @@ export function buildInlineToolContinuation(
     results,
     thinkingBlocks,
     reasoningDetails,
+    thoughtSignature,
   } = opts;
 
   const legacyContinuation = (): LlmMessage[] => [
@@ -140,7 +143,13 @@ export function buildInlineToolContinuation(
   if (resolvedCalls.length === 0) return legacyContinuation();
 
   const assistantParts: LlmMessagePart[] = [];
-  if (roundContent) assistantParts.push({ type: "text", text: roundContent });
+  if (roundContent) {
+    assistantParts.push({
+      type: "text",
+      text: roundContent,
+      ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
+    });
+  }
   for (const tc of resolvedCalls) {
     assistantParts.push({
       type: "tool_use",

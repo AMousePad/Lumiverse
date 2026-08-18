@@ -294,6 +294,7 @@ export interface UISlice {
   closeDrawer: () => void
   setDrawerTab: (tab: string) => void
   openSettings: (view?: string, target?: { extensionId?: string; anchorId?: string }) => void
+  setSettingsActiveView: (view: string) => void
   closeSettings: () => void
   togglePortraitPanel: () => void
   openCommandPalette: () => void
@@ -403,6 +404,10 @@ export interface ReasoningSettings {
   /** Anthropic-only. Maps to `thinking.display` in the Messages API request body.
    *  'auto' leaves the field unset so the API picks a model-appropriate default. */
   thinkingDisplay: ThinkingDisplay
+  /** Z.AI-only. Omitted means use Z.AI's API/model default. */
+  clearThinking?: boolean
+  /** Google Gemini / Vertex only. Replays optional non-tool thought signatures. */
+  replayThoughtSignatures?: boolean
   /**
    * Extra request-body fields. Omitted for legacy settings so the backend can
    * continue honoring an old preset-level custom body until this is saved.
@@ -671,7 +676,7 @@ export interface SettingsSlice {
   charactersPerPage: number
   personasPerPage: number
   messagesPerPage: number
-  chatSheldDisplayMode: 'minimal' | 'immersive' | 'bubble'
+  chatDisplayMode: 'minimal' | 'immersive' | 'bubble'
   minimalUseFullAvatar: boolean
   bubbleUserAlign: 'left' | 'right'
   bubbleDisableHover: boolean
@@ -679,7 +684,7 @@ export interface SettingsSlice {
   bubbleUseFullAvatar: boolean
   /** Bubble background opacity, 0–1. 1 = the theme's natural bubble fill (default). */
   bubbleOpacity: number
-  chatSheldEnterToSend: boolean
+  inputBarEnterToSend: boolean
   saveDraftInput: boolean
   chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
   chatContentMaxWidth: number
@@ -746,6 +751,7 @@ export interface SettingsSlice {
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
+  setInputBarEnterToSend: (enabled: boolean) => void
   setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K], source?: SettingsWriteSource) => void
   setTheme: (theme: ThemeConfig | null) => void
   setCharacterThemeOverlay: (overlay: CharacterThemeOverlay | null) => void

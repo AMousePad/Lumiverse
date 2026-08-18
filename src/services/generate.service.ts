@@ -1119,6 +1119,8 @@ type ReasoningSettingsSnapshot = {
   apiReasoning?: boolean;
   reasoningEffort?: string;
   thinkingDisplay?: string;
+  clearThinking?: boolean;
+  replayThoughtSignatures?: boolean;
   customBody?: CustomBody;
 } | null;
 
@@ -1295,7 +1297,14 @@ function applyEffectiveReasoningSettings(
         effort,
         modelName,
         reasoningSettings.thinkingDisplay,
+        reasoningSettings.clearThinking,
       );
+    }
+    if (
+      reasoningSettings.replayThoughtSignatures === true &&
+      (providerName === "google" || providerName === "google_vertex")
+    ) {
+      params._replay_thought_signatures = true;
     }
     return;
   }
@@ -3483,6 +3492,7 @@ async function runGeneration(
   let nativeReasoningContent = "";
   let nativeThinkingBlocks: LlmThinkingBlock[] | undefined;
   let nativeReasoningDetails: Record<string, unknown>[] | undefined;
+  let nativeThoughtSignature: string | undefined;
 
   function storedReasoningCarrier(): Record<string, unknown> | undefined {
     if (nativeThinkingBlocks?.length) {
@@ -3490,6 +3500,9 @@ async function runGeneration(
     }
     if (nativeReasoningDetails?.length) {
       return { type: "reasoning_details", details: nativeReasoningDetails };
+    }
+    if (nativeThoughtSignature) {
+      return { type: "gemini_thought_signature", signature: nativeThoughtSignature };
     }
     if (nativeReasoningContent) {
       return { type: "reasoning_content", content: nativeReasoningContent };
@@ -3748,6 +3761,7 @@ async function runGeneration(
       let pendingThinkingBlocks: LlmThinkingBlock[] | undefined;
       // OpenRouter reasoning_details captured this round, replayed likewise.
       let pendingReasoningDetails: Record<string, unknown>[] | undefined;
+      let pendingThoughtSignature: string | undefined;
 
       // Non-streaming path: call generate() once, then synthesize a single-chunk stream.
       // Wrapped in a factory so the pre-token retry below can re-issue a clean request.
@@ -3776,6 +3790,7 @@ async function runGeneration(
               tool_calls: result.tool_calls,
               thinking_blocks: result.thinking_blocks,
               reasoning_details: result.reasoning_details,
+              thought_signature: result.thought_signature,
               usage: result.usage,
             };
           })();
@@ -3907,6 +3922,11 @@ async function runGeneration(
           ];
         }
 
+        if (chunk.thought_signature) {
+          pendingThoughtSignature = chunk.thought_signature;
+          nativeThoughtSignature = chunk.thought_signature;
+        }
+
         // Capture provider usage data (token counts) from the stream
         if (chunk.usage) {
           streamUsage = chunk.usage;
@@ -4003,6 +4023,7 @@ async function runGeneration(
           results: continuationResults,
           thinkingBlocks: pendingThinkingBlocks,
           reasoningDetails: pendingReasoningDetails,
+          thoughtSignature: pendingThoughtSignature,
         }),
         ...(!interleavedStructured && !manualPlacement.placed
           ? inlineWebSearchContexts.map((content) => ({ role: "system", content } satisfies LlmMessage))

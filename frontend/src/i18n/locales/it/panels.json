@@ -263,7 +263,9 @@
   "presetManager": {
     "reasoningTitle": "Ragionamento / CoT",
     "savedOn": "Salvato su {{name}}",
-    "bindingChangedHint": "Il pannello è stato modificato localmente. Modifica la connessione e usa Cattura corrente per aggiornare la snapshot salvata.",
+    "bindingChangedHint": "Il pannello è stato modificato localmente. Ricollega le impostazioni correnti per aggiornare la snapshot salvata.",
+    "rebindCurrent": "Ricollega le impostazioni correnti",
+    "rebindFailed": "Impossibile aggiornare le impostazioni di ragionamento salvate.",
     "prefix": "Prefisso",
     "suffix": "Suffisso",
     "reasoningPrefix": "Prefisso del ragionamento",

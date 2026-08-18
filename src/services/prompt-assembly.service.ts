@@ -254,7 +254,7 @@ export { getSourceMessageMetadata };
  */
 function getStoredReasoningCarrier(message: Message): Pick<
   LlmMessage,
-  "reasoning_content" | "thinking_blocks" | "reasoning_details"
+  "reasoning_content" | "thinking_blocks" | "reasoning_details" | "thought_signature"
 > {
   if (message.is_user) return {};
   const carrier = message.extra?.reasoningCarrier;
@@ -286,19 +286,27 @@ function getStoredReasoningCarrier(message: Message): Pick<
   ) {
     return { reasoning_content: value.content };
   }
+  if (
+    value.type === "gemini_thought_signature" &&
+    typeof value.signature === "string" &&
+    value.signature.length > 0
+  ) {
+    return { thought_signature: value.signature };
+  }
   return {};
 }
 
 function hasNativeReasoningCarrier(message: LlmMessage): boolean {
   return Boolean(
-    message.reasoning_content ||
+      message.reasoning_content ||
       message.thinking_blocks?.length ||
-      message.reasoning_details?.length,
+      message.reasoning_details?.length ||
+      message.thought_signature,
   );
 }
 
 function omitNativeReasoningCarrier(message: LlmMessage): LlmMessage {
-  const { reasoning_content, thinking_blocks, reasoning_details, ...withoutCarrier } =
+  const { reasoning_content, thinking_blocks, reasoning_details, thought_signature, ...withoutCarrier } =
     message;
   return withoutCarrier;
 }
@@ -7230,6 +7238,10 @@ type ReasoningParameterSettings = {
   reasoningEffort?: string;
   keepInHistory?: number;
   thinkingDisplay?: string;
+  /** Z.AI-only. When set, forwards to `thinking.clear_thinking`. */
+  clearThinking?: boolean;
+  /** Google Gemini / Vertex only. Replays optional non-tool thought signatures. */
+  replayThoughtSignatures?: boolean;
   /** When present, supersedes the legacy preset-level custom body. */
   customBody?: CustomBody;
 };
@@ -7358,7 +7370,14 @@ export function buildParameters(
         effort,
         modelName || undefined,
         reasoningSettings.thinkingDisplay,
+        reasoningSettings.clearThinking,
       );
+    }
+    if (
+      reasoningSettings.replayThoughtSignatures === true &&
+      (providerName === "google" || providerName === "google_vertex")
+    ) {
+      params._replay_thought_signatures = true;
     }
   }
 
@@ -7410,9 +7429,12 @@ export function buildParameters(
  *                "max" at present). K2.7-code uses thinking: { type: "enabled",
  *                keep: "all" } (or omit, since thinking is always on). K2.6/K2.5
  *                use thinking: { type: "enabled" }.
- * - Z.AI:        thinking: { type: "enabled" } plus reasoning_effort for GLM-5.x
- *                models (max/xhigh/high/medium/low/minimal/none). GLM-4.x only
- *                receives the thinking toggle.
+ * - Z.AI:        thinking: { type: "enabled" } plus an optional user-selected
+ *                `clear_thinking` value and reasoning_effort for GLM-5.x models.
+ *                GLM-5.3 accepts low/high/max; older GLM-5 models retain their
+ *                compatibility values. GLM-4.5+ supports
+ *                the same user-selected clear-thinking behaviour without
+ *                reasoning_effort.
  * - Others:      reasoning: { effort } (generic OpenAI-compatible passthrough)
  */
 export function injectReasoningParams(
@@ -7421,6 +7443,7 @@ export function injectReasoningParams(
   effort: string,
   model?: string,
   thinkingDisplay?: string,
+  clearThinking?: boolean,
 ): void {
   if (providerName === "anthropic") {
     if (!params.thinking) {
@@ -7568,23 +7591,26 @@ export function injectReasoningParams(
   } else if (providerName === "zai") {
     // Z.AI (Zhipu GLM): thinking.type controls CoT; GLM-5.x additionally
     // supports reasoning_effort (GLM-5.2+ officially, GLM-5/5.1 support max/high
-    // per the GLM-5 repo). Send both so GLM-5.x models use the requested effort.
+    // per the GLM-5 repo). `clear_thinking` is intentionally only sent when
+    // the user configures it on the connection's Reasoning tab; omitting it
+    // leaves Z.AI's model/API default in control.
     if (!params.thinking) {
-      params.thinking = { type: "enabled" };
+      params.thinking = {
+        type: "enabled",
+        ...(typeof clearThinking === "boolean"
+          ? { clear_thinking: clearThinking }
+          : {}),
+      };
     }
 
     const isGlm5 = model ? /^glm-5/i.test(model) : false;
     if (isGlm5 && params.reasoning_effort === undefined) {
-      const validEfforts = new Set([
-        "max",
-        "xhigh",
-        "high",
-        "medium",
-        "low",
-        "minimal",
-        "none",
-      ]);
-      // "auto" maps to the documented default deep-reasoning level.
+      const isGlm53 = /^glm-5\.3(?:$|[\[.:@-])/i.test(model || "");
+      const validEfforts = isGlm53
+        ? new Set(["low", "high", "max"])
+        : new Set(["max", "xhigh", "high", "medium", "low", "minimal", "none"]);
+      // "auto" maps to the documented default deep-reasoning level. Values
+      // outside GLM-5.3's low/high/max contract also fall back to max.
       params.reasoning_effort =
         effort === "auto" ? "max" : validEfforts.has(effort) ? effort : "max";
     }

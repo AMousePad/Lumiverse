@@ -60,7 +60,7 @@ interface MessageContentProps {
   findQuery?: string
 }
 
-// Custom renderer for sheld prose classes
+// Custom renderer for chat prose classes
 const renderer = createEmphasisAwareRenderer({
   emClass: styles.proseItalic,
   strongClass: styles.proseBold,

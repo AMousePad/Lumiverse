@@ -6,6 +6,8 @@ export interface LlmTextPart {
   type: "text";
   text: string;
   cache_control?: Record<string, unknown>;
+  /** Opaque Gemini thought signature for this non-tool part. */
+  thought_signature?: string;
 }
 
 export interface LlmImagePart {
@@ -91,6 +93,8 @@ export interface LlmMessage {
    *  Replayed verbatim (entire sequence, unmodified) on the assistant message
    *  to preserve chain-of-thought across tool calls. Opaque to Lumiverse. */
   reasoning_details?: Record<string, unknown>[];
+  /** Opaque Gemini signature on a non-tool response part, replayed when enabled. */
+  thought_signature?: string;
 }
 
 /** Helper: extract the text content from an LlmMessage regardless of format. */
@@ -223,6 +227,8 @@ export interface GenerationResponse {
   /** OpenRouter `reasoning_details` captured this turn, to replay on tool-use
    *  continuations. */
   reasoning_details?: Record<string, unknown>[];
+  /** Optional Gemini signature from a non-tool response part. */
+  thought_signature?: string;
   usage?: GenerationUsage;
 }
 
@@ -239,6 +245,8 @@ export interface StreamChunk {
   /** OpenRouter `reasoning_details`, accumulated across stream chunks and set on
    *  the final chunk alongside tool_calls. */
   reasoning_details?: Record<string, unknown>[];
+  /** Optional Gemini signature from a non-tool response part. */
+  thought_signature?: string;
   usage?: GenerationUsage;
 }
 

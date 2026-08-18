@@ -263,7 +263,9 @@
   "presetManager": {
     "reasoningTitle": "推論/CoT",
     "savedOn": "保存日: {{name}}",
-    "bindingChangedHint": "パネルはローカルに変更されました。接続を編集し、Capture Current を使用して、保存されたスナップショットを更新します。",
+    "bindingChangedHint": "パネルはローカルで変更されました。現在の設定を再バインドして、保存済みのスナップショットを更新します。",
+    "rebindCurrent": "現在の設定を再バインド",
+    "rebindFailed": "保存済みの推論設定を更新できませんでした。",
     "prefix": "プレフィックス",
     "suffix": "サフィックス",
     "reasoningPrefix": "推論接頭語",

@@ -778,7 +778,14 @@ const THINKING_DISPLAY_VALUES = new Set<ThinkingDisplayDTO>([
   "omitted",
 ]);
 
-function coerceReasoningSettings(raw: unknown): ReasoningSettingsDTO | null {
+type ReasoningSettingsWithProviderOptions = ReasoningSettingsDTO & {
+  /** Z.AI's `thinking.clear_thinking` option, retained in bound profiles. */
+  clearThinking?: boolean;
+  /** Google Gemini / Vertex optional non-tool signature replay setting. */
+  replayThoughtSignatures?: boolean;
+};
+
+function coerceReasoningSettings(raw: unknown): ReasoningSettingsWithProviderOptions | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   const effort = REASONING_EFFORT_VALUES.has(r.reasoningEffort as ReasoningEffortDTO)
@@ -795,6 +802,10 @@ function coerceReasoningSettings(raw: unknown): ReasoningSettingsDTO | null {
     suffix: typeof r.suffix === "string" ? r.suffix : "",
     autoParse: r.autoParse !== false,
     keepInHistory: typeof r.keepInHistory === "number" ? r.keepInHistory : 0,
+    ...(typeof r.clearThinking === "boolean" ? { clearThinking: r.clearThinking } : {}),
+    ...(typeof r.replayThoughtSignatures === "boolean"
+      ? { replayThoughtSignatures: r.replayThoughtSignatures }
+      : {}),
   };
 }
 

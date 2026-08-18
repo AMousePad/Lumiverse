@@ -91,7 +91,7 @@ export function useMessageCard(message: Message, chatId: string) {
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
   const activeChatMetadata = useStore((s) => s.activeChatMetadata)
   const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
-  const isBubbleMode = useStore((s) => s.chatSheldDisplayMode) === 'bubble'
+  const isBubbleMode = useStore((s) => s.chatDisplayMode) === 'bubble'
 
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
   const streamingSwipeId = useStore((s) => s.streamingSwipeId)

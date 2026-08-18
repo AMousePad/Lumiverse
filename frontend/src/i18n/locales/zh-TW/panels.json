@@ -263,7 +263,9 @@
   "presetManager": {
     "reasoningTitle": "推理 / CoT",
     "savedOn": "已保存到 {{name}}",
-    "bindingChangedHint": "面板參數已在本地修改。請編輯連接並使用 Capture Current 更新已保存快照。",
+    "bindingChangedHint": "面板參數已在本機修改。重新綁定目前設定以更新已儲存的快照。",
+    "rebindCurrent": "重新綁定目前設定",
+    "rebindFailed": "無法更新已儲存的推理設定。",
     "prefix": "前綴",
     "suffix": "後綴",
     "reasoningPrefix": "推理前綴",
