@@ -2257,6 +2257,8 @@
   },
   "memoryCortexPanel": {
     "noChat": "打開聊天以查看其記憶圖譜",
+    "readMore": "閱讀更多",
+    "showLess": "收起",
     "tabs": {
       "entities": "實體",
       "colors": "顏色",

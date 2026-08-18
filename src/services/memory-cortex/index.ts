@@ -1095,6 +1095,10 @@ export async function processChunk(
    *  External callers should normally use scheduleProcessChunk() so chunk
    *  rebuilds, warmups, and live ingests share the same chat-scoped lane. */
   precomputedHeuristic?: import("./heuristic-runtime").HeuristicAnalysisOutput,
+  /** Rebuilds ingest chunks concurrently and use pre-computed extraction
+   *  adapters. They consolidate the completed backlog once, with the real
+   *  sidecar adapter, after all chunk writes finish. */
+  skipConsolidation = false,
 ): Promise<void> {
   const config = getCortexConfig(data.userId);
   if (!isCortexEnabledForStoredChat(data.userId, data.chatId, config)) return;
@@ -1804,7 +1808,7 @@ export async function processChunk(
 
   // ── Consolidation Check ──
 
-  if (config.consolidation.enabled) {
+  if (config.consolidation.enabled && !skipConsolidation) {
     // Run async — don't block the ingestion pipeline
     consolidation
       .maybeConsolidate(
@@ -1841,6 +1845,7 @@ export type RebuildPhase =
   | "precompute"
   | "awaiting_provider"
   | "ingesting"
+  | "consolidating"
   | "idle_between_batches";
 
 interface RebuildState {
@@ -1989,6 +1994,7 @@ export async function rebuildCortex(
           sidecarAvailable ? generateRawFn : undefined,
           sidecarAvailable ? sidecarConnectionId : undefined,
           descriptionAliases,
+          true,
         );
         const current = completedBeforeStart + i + 1;
         state.current = current;
@@ -2186,11 +2192,11 @@ export async function rebuildCortex(
                   perChunkHeuristic[i] ?? undefined,
                 );
               } else {
-                await processChunkFromRaw(chunk, chatId, userId, characterId, characterNames, undefined, undefined, descriptionAliases);
+                await processChunkFromRaw(chunk, chatId, userId, characterId, characterNames, undefined, undefined, descriptionAliases, true);
               }
             } catch {
               // fall back to heuristic on ingest failure
-              await processChunkFromRaw(chunk, chatId, userId, characterId, characterNames, undefined, undefined, descriptionAliases);
+              await processChunkFromRaw(chunk, chatId, userId, characterId, characterNames, undefined, undefined, descriptionAliases, true);
             }
             tickProgress();
           }
@@ -2200,6 +2206,24 @@ export async function rebuildCortex(
       // concurrency workers, each pulls batches
       const workers = Array.from({ length: Math.min(concurrency, chunks.length) }, () => processNextBatch());
       await Promise.all(workers);
+    }
+
+    if (config.consolidation.enabled && config.consolidation.useSidecar && sidecarAvailable) {
+      state.phase = "consolidating";
+      emit();
+      const created = await consolidation.consolidateBacklog(
+        userId,
+        chatId,
+        config.consolidation,
+        generateRawFn,
+        sidecarConnectionId,
+        config.sidecarTimeoutMs,
+        buildSidecarSamplingParameters(config.sidecar, { includeMaxTokens: false }),
+        config.nonProseScaffoldTags,
+      );
+      if (created > 0) {
+        console.info(`[memory-cortex] Rebuild created ${created} scene consolidation(s) for chat ${chatId}`);
+      }
     }
 
     if (signal?.aborted) {
@@ -2248,6 +2272,7 @@ async function processChunkFromRaw(
   generateRawFn?: any,
   sidecarConnectionId?: string,
   descriptionAliases?: Map<string, string>,
+  skipConsolidation = false,
 ): Promise<void> {
   await processChunk(
     {
@@ -2265,6 +2290,8 @@ async function processChunkFromRaw(
     generateRawFn,
     sidecarConnectionId,
     descriptionAliases,
+    undefined,
+    skipConsolidation,
   );
 }
 
@@ -2366,6 +2393,7 @@ async function processChunkWithPrecomputedSidecar(
     "precomputed",
     descriptionAliases,
     precomputedHeuristic,
+    true,
   );
 }
 

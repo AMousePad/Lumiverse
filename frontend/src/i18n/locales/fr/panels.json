@@ -2257,6 +2257,8 @@
   },
   "memoryCortexPanel": {
     "noChat": "Ouvrez une discussion pour afficher son graphique de mémoire",
+    "readMore": "Lire la suite",
+    "showLess": "Afficher moins",
     "tabs": {
       "entities": "Entités",
       "colors": "Couleurs",

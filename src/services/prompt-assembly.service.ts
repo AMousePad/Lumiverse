@@ -6017,12 +6017,23 @@ function formatCortexForAssembly(
   };
 
   if (cortexConfig.useChatMemoryFormatting) {
-    const memResult = memoryCortex.cortexToMemoryResult(cortexResult, chatMemorySettings);
+    // Preserve the user's Long-Term Memory templates for raw retrieved chunks.
+    // Cortex-owned scene consolidations, entities, relationships, and arcs
+    // still use the selected Cortex formatter mode.
+    const rawMemoryResult = {
+      ...cortexResult,
+      memories: cortexResult.memories.filter((memory) => memory.source === "chunk"),
+    };
+    const consolidationMemories = cortexResult.memories.filter(
+      (memory) => memory.source === "consolidation",
+    );
+    const memResult = memoryCortex.cortexToMemoryResult(rawMemoryResult, chatMemorySettings);
 
-    // Append entity/relationship/arc context so the LLM still benefits from
-    // cortex scoring signals even when memory chunks use chat memory templates.
+    // Append Cortex-owned context so the LLM still benefits from consolidation
+    // and graph signals even when raw memories use chat-memory templates.
     const contextBudget = Math.floor(cortexConfig.contextTokenBudget * 0.55);
-    const contextText = memoryCortex.formatContextSections(
+    const contextText = memoryCortex.formatShadowPrompt(
+      consolidationMemories,
       cortexResult.entityContext,
       cortexResult.activeRelationships,
       cortexResult.arcContext,
@@ -6031,7 +6042,7 @@ function formatCortexForAssembly(
         tokenBudget: contextBudget,
         currentSpeakerName: character?.name,
       },
-    );
+    ).text;
     if (contextText) {
       memResult.formatted = memResult.formatted
         ? memResult.formatted + "\n\n" + contextText

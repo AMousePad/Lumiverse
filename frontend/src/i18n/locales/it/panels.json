@@ -2264,6 +2264,8 @@
   },
   "memoryCortexPanel": {
     "noChat": "Apri una chat per visualizzare il suo grafico della memoria",
+    "readMore": "Leggi di più",
+    "showLess": "Mostra meno",
     "tabs": {
       "entities": "Entità",
       "colors": "Colori",

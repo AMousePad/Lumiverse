@@ -1090,7 +1090,7 @@
     "modeSidecar": "AI-assisted",
     "modeOff": "Off",
     "aiSummaries": "AI-written memory summaries",
-    "aiSummariesHint": "Consolidation summaries written by AI instead of extractive selection",
+    "aiSummariesHint": "Required for semantic scene and arc summaries. Without it, source chunks remain available instead of being copied into a summary.",
     "chunksPerRequest": "Chunks per request",
     "parallelRequests": "Parallel requests",
     "rpmLimit": "RPM limit",
