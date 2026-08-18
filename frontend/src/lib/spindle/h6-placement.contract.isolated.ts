@@ -145,8 +145,11 @@ const generation = 7
 let handles: Array<{ destroy(): void }> = []
 
 beforeEach(() => {
-  placementStore = createStore<SpindlePlacementSlice>()(createSpindlePlacementSlice)
+  // The slice hydrates persisted geometry during construction, so clear the
+  // fake browser storage before creating each store. Reversing this order
+  // carries the previous test's geometry into the new in-memory slice.
   fakeWindow.localStorage.clear()
+  placementStore = createStore<SpindlePlacementSlice>()(createSpindlePlacementSlice)
   handles = []
 })
 
