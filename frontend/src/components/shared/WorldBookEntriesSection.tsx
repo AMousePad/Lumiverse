@@ -1228,16 +1228,18 @@ export default function WorldBookEntriesSection({
 
   useEffect(() => {
     if (!pendingWorldBookEditEntryId) return
-    if (!entries.some((entry) => entry.id === pendingWorldBookEditEntryId)) return
+    const targetIndex = filteredEntries.findIndex((entry) => entry.id === pendingWorldBookEditEntryId)
+    if (targetIndex < 0) return
+    if (pageSize != null) setEntryPage(Math.floor(targetIndex / pageSize) + 1)
     setSelectedEntryId(pendingWorldBookEditEntryId)
     setPendingWorldBookEditEntryId(null)
-  }, [entries, pendingWorldBookEditEntryId, setPendingWorldBookEditEntryId])
+  }, [filteredEntries, pageSize, pendingWorldBookEditEntryId, setPendingWorldBookEditEntryId])
 
   useEffect(() => {
     if (!selectedEntryId) return
     const element = entryListRef.current?.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(selectedEntryId)}"]`)
     element?.scrollIntoView({ block: 'nearest' })
-  }, [selectedEntryId])
+  }, [entryPage, selectedEntryId])
 
   const refetchCurrentPage = useCallback(async () => {
     await loadEntries(selectedBookId)
