@@ -834,22 +834,20 @@ function setEntriesPendingReindex(entries: WorldBookEntry[]): void {
 }
 
 function deleteWorldBookVectorsAndMaybeRequeue(userId: string, entry: WorldBookEntry, requeue: boolean): void {
-  void (async () => {
-    try {
-      await embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id);
-    } catch (err: unknown) {
-      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-    } finally {
-      if (requeue && isWorldBookEntryVectorEligible(entry)) {
-        vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
-      }
-    }
-  })();
+  if (requeue && isWorldBookEntryVectorEligible(entry)) {
+    vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
+    return;
+  }
+  void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
+    console.warn("[embeddings] Failed to remove world book entry vectors:", err);
+  });
 }
 
 function queueReindexForEntries(userId: string, entries: WorldBookEntry[]): void {
   for (const entry of entries) {
-    deleteWorldBookVectorsAndMaybeRequeue(userId, entry, true);
+    if (isWorldBookEntryVectorEligible(entry)) {
+      vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
+    }
   }
 }
 

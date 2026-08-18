@@ -1072,8 +1072,10 @@ const MIN_ROWS_FOR_PQ_VECTOR_INDEX = 65_536;
 export const MAX_LANCE_SOURCE_FILTER_IDS = 250;
 const OPTIMIZE_MAX_WAIT_MS = 2 * 60_000; // 2 minutes (reduced from 5 min to prevent fragment buildup)
 const CHAT_OPTIMIZE_MIN_INTERVAL_MS = 30 * 60_000; // Avoid full-table optimize churn from active chat writes
+const WORLD_BOOK_OPTIMIZE_MIN_INTERVAL_MS = 10 * 60_000; // Lorebook edits used to rewrite the table every 15s
 let optimizeQueuedAt: number | null = null;
 let lastChatOptimizeScheduledAt = 0;
+let lastWorldBookOptimizeScheduledAt = 0;
 let optimizeWorldBooksQueued = false;
 
 // ---------------------------------------------------------------------------
@@ -1676,14 +1678,18 @@ export function scheduleOptimize(reason: "general" | "chat_chunk" | "world_book"
     // Chat memory writes are high-frequency, but they share the same Lance table
     // as large static world-book corpora. Running full optimize/index rebuilds on
     // every chat-churn window can make disk usage balloon during active chats.
-    // Rate-limit the background optimize for chat-only writes and leave startup,
-    // manual, and bulk world-book/databank maintenance paths unchanged.
+    // Rate-limit the background optimize for chat-only writes. Lorebook edits are
+    // independently rate-limited below so typing does not rewrite the table.
     if (now - lastChatOptimizeScheduledAt < CHAT_OPTIMIZE_MIN_INTERVAL_MS) {
       return;
     }
     lastChatOptimizeScheduledAt = now;
   }
   if (reason === "world_book") {
+    if (now - lastWorldBookOptimizeScheduledAt < WORLD_BOOK_OPTIMIZE_MIN_INTERVAL_MS) {
+      return;
+    }
+    lastWorldBookOptimizeScheduledAt = now;
     optimizeWorldBooksQueued = true;
   }
   if (optimizeQueuedAt == null) optimizeQueuedAt = now;
