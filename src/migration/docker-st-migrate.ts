@@ -21,6 +21,8 @@ import {
   importChats,
   importGroupChats,
 } from "./st-importer";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -235,6 +237,12 @@ export async function runDockerSTMigration(): Promise<void> {
     };
 
     putSetting(userId, "docker_st_migration_status", status);
+    if ((results.characters?.imported ?? 0) > 0) {
+      eventBus.emit(EventType.CHARACTER_LIBRARY_CHANGED, {
+        reason: "sillytavern_migration",
+        imported: results.characters!.imported,
+      }, userId);
+    }
     logger.info(`Migration complete in ${(durationMs / 1000).toFixed(1)}s`);
   } catch (err: any) {
     logger.error(`Migration failed: ${err.message || err}`);

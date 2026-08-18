@@ -504,14 +504,17 @@ export async function scanCharacterPNGs(charsDir: string, logger?: MigrationLogg
     const filePath = fs.join(charsDir, entry.name);
     logger?.progress("Scanning character files", i + 1, pngFiles.length);
     try {
-      const info = await readPNGCharaName(filePath, fs);
+      const [info, fileStat] = await Promise.all([
+        readPNGCharaName(filePath, fs),
+        fs.stat(filePath).catch(() => null),
+      ]);
       results.push({
         filename: entry.name,
         stem: fs.basename(entry.name, ".png"),
         embeddedName: info.embeddedName,
         hasData: info.hasCharaData,
         parseError: info.parseError,
-        sizeBytes: entry.size,
+        sizeBytes: fileStat?.size ?? entry.size,
       });
     } catch {
       results.push({

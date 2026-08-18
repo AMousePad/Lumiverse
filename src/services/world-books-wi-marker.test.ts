@@ -28,6 +28,11 @@ async function applyBaseline(): Promise<void> {
       ),
     ).text(),
   );
+  db.run(
+    await Bun.file(
+      join(import.meta.dir, "..", "db", "migrations", "098_world_book_entry_revision.sql"),
+    ).text(),
+  );
 }
 
 function readRawExtensions(id: string): Record<string, any> {

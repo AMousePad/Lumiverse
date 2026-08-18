@@ -42,6 +42,7 @@
     "protobufjs": "8.7.0"
   },
   "scripts": {
+    "test": "bun test --isolate",
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "build:lancedb:android": "bash scripts/build-lancedb-android.sh",

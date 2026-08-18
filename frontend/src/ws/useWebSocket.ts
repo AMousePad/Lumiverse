@@ -1388,6 +1388,13 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.CHARACTER_LIBRARY_CHANGED, () => {
+        // Bulk imports intentionally omit thousands of full-character events.
+        // Mark the full-object cache stale; paginated surfaces independently
+        // refresh their lightweight summaries once.
+        store.getState().setCharactersLoaded(false)
+      }),
+
       wsClient.on(EventType.CHARACTER_DELETED, (payload: { id: string }) => {
         store.getState().removeCharacter(payload.id)
       }),

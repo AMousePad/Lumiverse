@@ -665,6 +665,8 @@ export async function uploadImages(
   options?: {
     owner_extension_identifier?: string;
     concurrency?: number;
+    /** Leave metadata/thumbnails to the existing lazy read path. */
+    deferProcessing?: boolean;
   },
 ): Promise<UploadImagesResult[]> {
   if (items.length === 0) return [];
@@ -769,7 +771,9 @@ export async function uploadImages(
       created_at: now,
     };
     results[i] = { id: p.id, image };
-    if (p.isImage) scheduleDeferredImageProcessing(userId, p.id, p.filepath);
+    if (p.isImage && options?.deferProcessing !== false) {
+      scheduleDeferredImageProcessing(userId, p.id, p.filepath);
+    }
   }
   return results;
 }

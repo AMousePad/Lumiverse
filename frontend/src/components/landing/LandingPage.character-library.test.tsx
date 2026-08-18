@@ -311,6 +311,7 @@ mock.module('lucide-react', () => ({
   PinOff: Icon,
   Search: Icon,
   Settings: Icon,
+  ArrowLeft: Icon,
   X: Icon,
 }))
 
@@ -358,6 +359,7 @@ Object.assign(globalThis, { IntersectionObserver: TestIntersectionObserver })
 Object.assign(domWindow, { IntersectionObserver: TestIntersectionObserver })
 
 const englishI18n = createInstance()
+mock.module('@/i18n', () => ({ default: englishI18n }))
 const mountedRoots: Array<{ root: Root; host: HTMLDivElement }> = []
 
 function summary(id: string, name: string, library_scope: 'mine' | 'shared' = 'mine'): Summary {

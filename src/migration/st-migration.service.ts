@@ -298,6 +298,8 @@ export async function executeMigration(
   fs: FileSystem = defaultFs,
 ): Promise<void> {
   const startTime = Date.now();
+  let importedCharacterCount = 0;
+  let characterImportAttempted = false;
 
   const state: MigrationState = {
     migrationId,
@@ -357,6 +359,7 @@ export async function executeMigration(
     // Characters (needed first for filenameToId mapping)
     let filenameToId = new Map<string, string>();
     if (scope.characters && counts.characters > 0) {
+      characterImportAttempted = true;
       setPhase("characters");
       logger.info(`Importing ${counts.characters} characters...`);
       const charResult = await importCharacters(targetUserId, dataDir, logger, fs);
@@ -366,6 +369,7 @@ export async function executeMigration(
         skipped: charResult.skipped,
         failed: charResult.failed,
       };
+      importedCharacterCount = charResult.imported;
       logger.info(`Characters: ${charResult.imported} imported, ${charResult.skipped} skipped, ${charResult.failed} failed`);
     }
 
@@ -457,6 +461,16 @@ export async function executeMigration(
 
     logger.error(`Migration failed: ${errorMsg}`);
   } finally {
+    // A character batch or later phase can fail after earlier batches commit.
+    // Always invalidate after an attempted character phase—even when the final
+    // imported count is unavailable—because per-character events are suppressed.
+    if (characterImportAttempted) {
+      eventBus.emit(EventType.CHARACTER_LIBRARY_CHANGED, {
+        reason: "sillytavern_migration",
+        migrationId,
+        imported: importedCharacterCount,
+      }, targetUserId);
+    }
     currentMigrationId = null;
     // Disconnect remote filesystems when migration ends
     if (fs.type !== "local") {

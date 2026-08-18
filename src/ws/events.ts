@@ -39,6 +39,8 @@ export enum EventType {
   CHARACTER_EDITED = "CHARACTER_EDITED",
   CHARACTER_DELETED = "CHARACTER_DELETED",
   CHARACTER_DUPLICATED = "CHARACTER_DUPLICATED",
+  /** Coarse invalidation for bulk workflows that intentionally suppress per-row events. */
+  CHARACTER_LIBRARY_CHANGED = "CHARACTER_LIBRARY_CHANGED",
   PERSONA_CHANGED = "PERSONA_CHANGED",
 
   // Images

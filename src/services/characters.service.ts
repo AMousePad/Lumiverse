@@ -911,7 +911,16 @@ export function getCharactersByIds(userId: string, ids: string[]): Map<string, C
   return result;
 }
 
-export function createCharacter(userId: string, input: CreateCharacterInput): Character {
+export interface CreateCharacterOptions {
+  /** Bulk workflows publish one library invalidation after committing. */
+  emitEvent?: boolean;
+}
+
+export function createCharacter(
+  userId: string,
+  input: CreateCharacterInput,
+  options: CreateCharacterOptions = {},
+): Character {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const createdAt = input.created_at ?? now;
@@ -951,7 +960,9 @@ export function createCharacter(userId: string, input: CreateCharacterInput): Ch
   }
 
   const character = getCharacter(userId, id)!;
-  eventBus.emit(EventType.CHARACTER_CREATED, { id, character }, userId);
+  if (options.emitEvent !== false) {
+    eventBus.emit(EventType.CHARACTER_CREATED, { id, character }, userId);
+  }
   return character;
 }
 
@@ -1323,6 +1334,25 @@ export function findCharacterBySourceFilename(userId: string, sourceFilename: st
     )
     .get(userId, sourceFilename) as any;
   return row ? rowToCharacter(row) : null;
+}
+
+/** Load migration identities once so a large import does not issue one lookup
+ * per card. Duplicate legacy identities resolve deterministically to the most
+ * recently updated character, matching the old LIMIT 1 behavior closely. */
+export function listCharacterSourceFilenameIds(userId: string): Map<string, string> {
+  const rows = getDb()
+    .query(
+      `SELECT id, json_extract(extensions, '$._lumiverse_source_filename') AS source_filename
+       FROM characters
+       WHERE user_id = ?
+         AND json_type(extensions, '$._lumiverse_source_filename') = 'text'
+       ORDER BY updated_at ASC`,
+    )
+    .all(userId) as Array<{ id: string; source_filename: string }>;
+
+  const result = new Map<string, string>();
+  for (const row of rows) result.set(row.source_filename, row.id);
+  return result;
 }
 
 export function setCharacterSourceFilename(userId: string, id: string, sourceFilename: string): void {

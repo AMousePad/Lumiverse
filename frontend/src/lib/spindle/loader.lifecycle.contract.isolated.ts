@@ -17,6 +17,10 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/',
   pretendToBeVisual: true,
 })
+dom.window.matchMedia = (media: string) => ({
+  addEventListener() {}, addListener() {}, dispatchEvent: () => false, matches: false,
+  media, onchange: null, removeEventListener() {}, removeListener() {},
+})
 const originalGlobals = {
   window: globalThis.window,
   document: globalThis.document,
@@ -72,7 +76,15 @@ function getSpindleStore(): StoreApi<SpindleSlice> {
 }
 
 function readStoreState(): TestStoreState {
-  return { ...placementStore.getState(), ...getSpindleStore().getState() }
+  return {
+    activeProfileId: null,
+    messages: [],
+    profiles: [],
+    setActiveProfile() {},
+    updateProfile() {},
+    ...placementStore.getState(),
+    ...getSpindleStore().getState(),
+  } as TestStoreState
 }
 
 const useStoreMock = Object.assign(
@@ -89,14 +101,32 @@ const useStoreMock = Object.assign(
 
 const NullComponent = () => null
 mock.module('@/store', () => ({ useStore: useStoreMock }))
-mock.module('@/components/shared/FormComponents', () => ({ TextInput: NullComponent, TextArea: NullComponent }))
+mock.module('@/i18n', () => ({
+  UI_LANGUAGE_STORAGE_KEY: 'lumiverse-ui-language',
+  changeUiLanguage: async () => {},
+  default: { language: 'en', t: (key: string) => key },
+  ensureLanguageLoaded: async () => {},
+  initI18n: async () => ({}),
+}))
+mock.module('@/components/shared/FormComponents', () => ({
+  Button: NullComponent,
+  EditorContent: NullComponent,
+  EditorFooter: NullComponent,
+  EditorLayout: NullComponent,
+  EditorSection: NullComponent,
+  FormField: NullComponent,
+  ImageInput: NullComponent,
+  Select: NullComponent,
+  TextArea: NullComponent,
+  TextInput: NullComponent,
+}))
 mock.module('@/components/shared/FormComponents.module.css', () => ({ default: {} }))
 mock.module('@/components/shared/NumericInput', () => ({ default: NullComponent }))
 mock.module('@/components/shared/NumberStepper', () => ({ default: NullComponent }))
 mock.module('@/components/shared/RangeSlider', () => ({ RangeSlider: NullComponent, LabeledRangeSlider: NullComponent }))
 mock.module('@/components/shared/Toggle', () => ({ Toggle: NullComponent }))
 mock.module('@/components/shared/Badge', () => ({ Badge: NullComponent }))
-mock.module('@/components/shared/Spinner', () => ({ Spinner: NullComponent }))
+mock.module('@/components/shared/Spinner', () => ({ Spinner: NullComponent, spinClass: 'spin' }))
 mock.module('@/components/shared/CloseButton', () => ({ CloseButton: NullComponent }))
 mock.module('@/components/shared/Pagination', () => ({ default: NullComponent }))
 mock.module('@/components/shared/CollapsibleSection', () => ({ default: NullComponent }))
@@ -135,7 +165,13 @@ const loaderWsClient = {
   },
 }
 let mockedGrantedPermissions = ['ui_panels', 'presets']
-mock.module('@/ws/client', () => ({ wsClient: loaderWsClient }))
+mock.module('@/ws/client', () => ({
+  WS_AUTH_ERROR: '__ws_auth_error',
+  WS_CLOSE: '__ws_close',
+  WS_OPEN: '__ws_open',
+  WS_PONG: '__ws_pong',
+  wsClient: loaderWsClient,
+}))
 mock.module('@/api/spindle', () => ({
   spindleApi: {
     getPermissions: async () => {
@@ -153,6 +189,7 @@ mock.module('@/api/characters', () => ({
   },
 }))
 mock.module('@/api/chats', () => ({
+  chatsApi: {},
   messagesApi: {
     update: async () => {
       chatApiCalls += 1
@@ -161,29 +198,45 @@ mock.module('@/api/chats', () => ({
   },
 }))
 mock.module('./message-interceptors', () => ({
+  dispatchMessageTagIntercepts() {},
+  getTagInterceptorRegistryVersion: () => 0,
   registerTagInterceptor: () => {
     tagRegistrations += 1
     return () => {}
   },
+  stripMessageTags: (content: string) => ({ cleanedContent: content, intercepts: [] }),
+  subscribeTagInterceptorRegistry: () => () => {},
   unregisterTagInterceptorsByExtension() {},
 }))
 mock.module('./display-resolver-registry', () => ({
+  getDisplayOwnerIdentifier: () => null,
+  getDisplayResolverForChat: () => null,
+  isDisplayChatOwned: () => false,
   registerDisplayResolver: () => {
     displayRegistrations += 1
     return () => {}
   },
   unregisterDisplayResolver() {},
 }))
-mock.module('@/hooks/useDisplayRegex', () => ({ invalidateDisplayRegexCache() {}, invalidateDisplayRegexCacheForVars() {} }))
+mock.module('@/hooks/useDisplayRegex', () => ({
+  invalidateDisplayRegexCache() {},
+  invalidateDisplayRegexCacheForMessage() {},
+  invalidateDisplayRegexCacheForVars() {},
+  useDisplayRegex: (content: string) => content,
+}))
 mock.module('./message-widgets', () => ({
+  SpindleMessageWidgets: () => null,
+  getMessageWidgetVersion: () => 0,
   removeMessageWidgetsByExtension() {},
   upsertMessageWidget: () => {
     widgetRegistrations += 1
   },
   removeMessageWidget() {},
+  subscribeMessageWidgets: () => () => {},
 }))
 mock.module('./character-editor-helper', () => ({
   getCharacterEditorState: () => ({}),
+  setCharacterEditorController() {},
   subscribeCharacterEditorState: (handler: (state: unknown) => void) => {
     characterListeners.add(handler)
     let active = true
@@ -197,9 +250,21 @@ mock.module('./character-editor-helper', () => ({
   updateCharacterEditorExtensions() {},
   flushCharacterEditorExtensions: async () => {},
   setCharacterEditorActiveTab() {},
+  syncCharacterEditorState() {},
 }))
 mock.module('./navigation-guards', () => ({ installSpindleNavigationGuards() {} }))
-mock.module('@/lib/drawer-tab-registry', () => ({ DRAWER_TABS: [], ensureRegistryRoot: () => undefined }))
+mock.module('@/lib/drawer-tab-registry', () => ({
+  DRAWER_TABS: [],
+  adaptExtensionTabs: () => [],
+  applyDrawerTabOrder: (items: unknown[]) => items,
+  ensureRegistryRoot: () => undefined,
+  extensionCommandsToCommands: () => [],
+  extensionTabsToCommands: () => [],
+  isDrawerTabCore: () => false,
+  registryToCommands: () => [],
+  sanitizeDrawerTabOrder: (order?: string[]) => order ?? [],
+  sanitizeHiddenDrawerTabIds: (ids?: string[]) => ids ?? [],
+}))
 mock.module('./browser-scheduler', () => ({ yieldToBrowser: async () => {}, scheduleSpindleDomTask: () => () => {} }))
 
 // These factories intentionally load after the narrow store and visual-component
@@ -389,7 +454,7 @@ describe('loader-owned roots', () => {
     const manifest: SpindleManifest = {
       version: '1.0.0',
       name: 'Loader root contract',
-      identifier: extensionId,
+      identifier: extensionId.replaceAll('-', '_'),
       author: 'test',
       github: 'https://example.test/loader-root',
       homepage: 'https://example.test/loader-root',
@@ -484,7 +549,7 @@ function placementManifest(identifier: string): SpindleManifest {
   return {
     version: '1.0.0',
     name: 'Free placement contract',
-    identifier,
+    identifier: identifier.replaceAll('-', '_'),
     author: 'test',
     github: `https://example.test/${identifier}`,
     homepage: `https://example.test/${identifier}`,
@@ -1110,7 +1175,7 @@ describe('retained non-UI context lifecycle', () => {
     const manifest: SpindleManifest = {
       version: '1.0.0',
       name: 'Retained context contract',
-      identifier: retainedId,
+      identifier: retainedId.replaceAll('-', '_'),
       author: 'test',
       github: `https://example.test/${retainedId}`,
       homepage: `https://example.test/${retainedId}`,

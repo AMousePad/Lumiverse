@@ -25,21 +25,22 @@ import {
 import { extractCardFromPng } from "../services/character-card.service";
 import {
   createCharacter,
-  findCharacterBySourceFilename,
-  setCharacterSourceFilename,
-  setCharacterAvatar,
-  setCharacterImage,
+  listCharacterSourceFilenameIds,
 } from "../services/characters.service";
-import { uploadImage } from "../services/images.service";
+import { uploadImage, uploadImages } from "../services/images.service";
 import { createPersona, setPersonaAvatar, setPersonaImage } from "../services/personas.service";
 import { importWorldBookBulk } from "../services/world-books.service";
 import { createChatRaw, bulkInsertMessages } from "../services/chats.service";
-import { createCooperativeYielder } from "../llm/stream-utils";
+import { createCooperativeYielder, yieldToEventLoop } from "../llm/stream-utils";
+import { getDb } from "../db/connection";
+import type { CreateCharacterInput } from "../types/character";
 
 // ─── Default filesystem singleton ──────────────────────────────────────────
 
 const defaultFs = new LocalFileSystem();
-const yieldEveryCharacter = 4;
+const characterBatchSize = 50;
+const characterReadConcurrency = 8;
+const characterAvatarWriteConcurrency = 8;
 const yieldEveryWorldBook = 2;
 const yieldEveryPersona = 4;
 const yieldEveryChat = 8;
@@ -82,6 +83,37 @@ export interface GroupChatImportResult {
   totalMessages: number;
 }
 
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, worker),
+  );
+  return results;
+}
+
+type PreparedCharacter =
+  | { kind: "existing"; filename: string; stem: string; characterId: string }
+  | { kind: "failed"; filename: string }
+  | {
+      kind: "ready";
+      filename: string;
+      stem: string;
+      bytes: Uint8Array;
+      cardInput: CreateCharacterInput;
+    };
+
 // ─── Character import ───────────────────────────────────────────────────────
 
 export async function importCharacters(
@@ -104,57 +136,121 @@ export async function importCharacters(
   );
 
   const total = pngFiles.length;
-  const maybeYield = createCooperativeYielder(yieldEveryCharacter);
+  // One indexed query replaces N progressively slower JSON lookups.
+  const existingByFilename = listCharacterSourceFilenameIds(userId);
 
-  for (let i = 0; i < pngFiles.length; i++) {
-    const filename = pngFiles[i].name;
-    const stem = fs.basename(filename, ".png");
-    const filePath = fs.join(charsDir, filename);
+  for (let batchStart = 0; batchStart < pngFiles.length; batchStart += characterBatchSize) {
+    const batch = pngFiles.slice(batchStart, batchStart + characterBatchSize);
+    const prepared = await mapWithConcurrency(
+      batch,
+      characterReadConcurrency,
+      async (entry): Promise<PreparedCharacter> => {
+        const filename = entry.name;
+        const stem = fs.basename(filename, ".png");
+        const existingId = existingByFilename.get(filename);
+        if (existingId) return { kind: "existing", filename, stem, characterId: existingId };
 
-    logger.progress("Importing characters", i + 1, total);
+        try {
+          const filePath = fs.join(charsDir, filename);
+          const [buffer, fileStat] = await Promise.all([
+            fs.readFile(filePath),
+            fs.stat(filePath).catch(() => null),
+          ]);
+          const bytes = new Uint8Array(buffer);
+          const cardInput = await extractCardFromPng(
+            new File([bytes], filename, { type: "image/png" }),
+          );
+          if (cardInput.created_at == null && fileStat) {
+            cardInput.created_at = fileStat.createdAt ?? fileStat.modifiedAt;
+          }
+          cardInput.extensions = {
+            ...(cardInput.extensions ?? {}),
+            _lumiverse_source_filename: filename,
+          };
+          return { kind: "ready", filename, stem, bytes, cardInput };
+        } catch (err: any) {
+          logger.warn(`Failed to import ${filename}: ${err.message}`);
+          return { kind: "failed", filename };
+        }
+      },
+    );
 
-    try {
-      // Deduplication: skip if already imported
-      const existing = findCharacterBySourceFilename(userId, filename);
-      if (existing) {
-        filenameToId.set(stem, existing.id);
-        skipped++;
-        await maybeYield();
-        continue;
+    const created: Array<{
+      filename: string;
+      bytes: Uint8Array;
+      characterId: string;
+    }> = [];
+
+    // Keep commits bounded, but collapse the per-card autocommit overhead.
+    getDb().transaction(() => {
+      for (const item of prepared) {
+        if (item.kind === "existing") {
+          filenameToId.set(item.stem, item.characterId);
+          skipped++;
+          continue;
+        }
+        if (item.kind === "failed") {
+          failed++;
+          continue;
+        }
+        try {
+          const character = createCharacter(userId, item.cardInput, { emitEvent: false });
+          filenameToId.set(item.stem, character.id);
+          existingByFilename.set(item.filename, character.id);
+          created.push({
+            filename: item.filename,
+            bytes: item.bytes,
+            characterId: character.id,
+          });
+          imported++;
+        } catch (err: any) {
+          logger.warn(`Failed to import ${item.filename}: ${err.message}`);
+          failed++;
+        }
       }
+    })();
 
-      const [buffer, fileStat] = await Promise.all([
-        fs.readFile(filePath),
-        fs.stat(filePath).catch(() => null),
-      ]);
-      const bytes = new Uint8Array(buffer);
-      const file = new File([bytes], filename, { type: "image/png" });
-
-      const cardInput = await extractCardFromPng(file);
-      if (cardInput.created_at == null && fileStat) {
-        cardInput.created_at = fileStat.createdAt ?? fileStat.modifiedAt;
-      }
-      const character = createCharacter(userId, cardInput);
-      setCharacterSourceFilename(userId, character.id, filename);
-
-      // Upload avatar from the same PNG
+    if (created.length > 0) {
       try {
-        const avatarFile = new File([bytes], filename, { type: "image/png" });
-        const image = await uploadImage(userId, avatarFile);
-        setCharacterImage(userId, character.id, image.id);
-        setCharacterAvatar(userId, character.id, image.filename);
-      } catch {
-        // Avatar upload failed, not critical
-      }
+        // Store originals in parallel and let thumbnails generate lazily on
+        // first use. Starting two Sharp jobs for every card would swamp large
+        // migrations long after their database phase completed.
+        const avatarResults = await uploadImages(
+          userId,
+          created.map((item) => ({
+            data: item.bytes,
+            filename: item.filename,
+            mime_type: "image/png",
+            owner_character_id: item.characterId,
+          })),
+          {
+            concurrency: characterAvatarWriteConcurrency,
+            deferProcessing: false,
+          },
+        );
 
-      filenameToId.set(stem, character.id);
-      imported++;
-    } catch (err: any) {
-      logger.warn(`Failed to import ${filename}: ${err.message}`);
-      failed++;
+        const attachAvatar = getDb().query(
+          `UPDATE characters
+           SET image_id = ?, avatar_path = ?, updated_at = ?
+           WHERE id = ? AND user_id = ?`,
+        );
+        const now = Math.floor(Date.now() / 1000);
+        getDb().transaction(() => {
+          for (let i = 0; i < avatarResults.length; i++) {
+            const image = avatarResults[i]?.image;
+            if (!image) continue;
+            attachAvatar.run(image.id, image.filename, now, created[i].characterId, userId);
+          }
+        })();
+      } catch (err: any) {
+        logger.warn(`Avatar batch failed; characters were still imported: ${err.message}`);
+      }
     }
 
-    await maybeYield();
+    for (let i = 0; i < batch.length; i++) {
+      logger.progress("Importing characters", batchStart + i + 1, total);
+    }
+    await yieldToEventLoop();
   }
 
   return { imported, skipped, failed, filenameToId };

@@ -144,10 +144,12 @@ export function useCharacterBrowser() {
     const offCreated = wsClient.on(EventType.CHARACTER_CREATED, refresh)
     const offEdited = wsClient.on(EventType.CHARACTER_EDITED, refresh)
     const offDeleted = wsClient.on(EventType.CHARACTER_DELETED, refresh)
+    const offLibraryChanged = wsClient.on(EventType.CHARACTER_LIBRARY_CHANGED, refresh)
     return () => {
       offCreated()
       offEdited()
       offDeleted()
+      offLibraryChanged()
     }
   }, [])
 
