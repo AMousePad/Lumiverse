@@ -324,6 +324,7 @@ mock.module('motion/react', () => ({
 mock.module('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
     getVirtualItems: () => count > 0 ? [{ index: 0, key: 'row-0', start: 0, end: 100, size: 100, lane: 0 }] : [],
+    getTotalSize: () => 100,
     measure: jest.fn(),
     containerRef: jest.fn(),
     measureElement: jest.fn(),
@@ -529,6 +530,33 @@ describe('LandingPage character library', () => {
 
     await settleDeferred(nextPage, page([recentChat('character-2', 'Bea')], 2))
     expect(listRecentGrouped).toHaveBeenCalledTimes(2)
+  })
+
+  test('loads the next Chats page when the landing scroller reaches its bottom', async () => {
+    storeState = createStoreState(false)
+    listRecentGrouped
+      .mockResolvedValueOnce(page([recentChat('character-1', 'Ava')], 2))
+      .mockResolvedValueOnce(page([recentChat('character-2', 'Bea')], 2))
+    listTags.mockResolvedValue([])
+    getHomepagePreview.mockResolvedValue(null)
+
+    const host = await mountLanding()
+    await flush()
+    const scroller = host.querySelector<HTMLElement>('[data-component="LandingPage"]')!
+    Object.defineProperties(scroller, {
+      scrollTop: { configurable: true, value: 600 },
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 1000 },
+    })
+
+    await act(async () => {
+      scroller.dispatchEvent(new domWindow.Event('scroll', { bubbles: true }))
+      await Promise.resolve()
+    })
+    await flush()
+
+    expect(listRecentGrouped).toHaveBeenCalledTimes(2)
+    expect(listRecentGrouped.mock.calls[1]?.[0]?.limit).toBe(listRecentGrouped.mock.calls[0]?.[0]?.limit)
   })
 
   test('keeps the recent-chat gallery compact by default and can expand it', async () => {

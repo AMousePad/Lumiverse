@@ -1,5 +1,14 @@
 import { useEffect, useRef } from 'react'
-import { wsClient, WS_OPEN, WS_CLOSE, WS_PONG, WS_AUTH_ERROR } from './client'
+import {
+  wsClient,
+  WS_OPEN,
+  WS_CLOSE,
+  WS_PONG,
+  WS_AUTH_ERROR,
+  WS_RESUME_RECOVERY_START,
+  WS_RESUME_RECOVERY_COMPLETE,
+  WS_RESUME_RECOVERY_FAILED,
+} from './client'
 import { sendRoomAction, relayClient } from './relayClient'
 import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/personaSnapshot'
 import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
@@ -620,6 +629,18 @@ export function useWebSocket() {
           pendingReconnectBundleCheckRef.current = false
           void checkForBundleUpdate()
         }
+      }),
+      // A backgrounded PWA cannot use its frozen JS timers as evidence that
+      // the server died. Keep the failure overlay suppressed until a fresh,
+      // correlated foreground ping succeeds or the recovery window expires.
+      wsClient.on(WS_RESUME_RECOVERY_START, () => {
+        store.getState().setWsResumeRecovering(true)
+      }),
+      wsClient.on(WS_RESUME_RECOVERY_COMPLETE, () => {
+        store.getState().setWsResumeRecovering(false)
+      }),
+      wsClient.on(WS_RESUME_RECOVERY_FAILED, () => {
+        store.getState().setWsResumeRecovering(false)
       }),
       wsClient.on(WS_AUTH_ERROR, () => {
         // Server has explicitly rejected our session — the cookie is invalid
@@ -2210,6 +2231,7 @@ export function useWebSocket() {
       clearInterval(chatHeadReconcile)
       unsubDrawerTabs()
       unsubPersonaRelay()
+      store.getState().setWsResumeRecovering(false)
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }

@@ -1792,6 +1792,8 @@ export interface ConnectionSlice {
   wsAuthSynced: boolean
   /** True after a pong has been received since the last open — confirms the round-trip works. */
   wsRoundTripVerified: boolean
+  /** True while a previously healthy PWA is proving a fresh foreground round trip. */
+  wsResumeRecovering: boolean
   /**
    * Flips to true the first time all three healthy signals coincide. Stays true for the rest of
    * the session so the connection-lost overlay only appears AFTER an initial healthy connection.
@@ -1806,6 +1808,7 @@ export interface ConnectionSlice {
   setWsConnected: (connected: boolean) => void
   setWsAuthSynced: (synced: boolean) => void
   setWsRoundTripVerified: (verified: boolean) => void
+  setWsResumeRecovering: (recovering: boolean) => void
   setWsUpdatePending: (pending: boolean) => void
   resetConnectionState: () => void
 }

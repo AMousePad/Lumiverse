@@ -63,6 +63,7 @@ import {
   type LandingPageTab,
 } from '@/lib/landingPageTabs'
 import { readDeviceLandingPageStartTab } from '@/lib/landingPageStartTab'
+import { resolveLandingChatPageSize } from '@/lib/landingChatPagination'
 
 type LandingSortField = 'name' | 'recent' | 'created'
 
@@ -752,6 +753,7 @@ interface VirtualRowProps {
   virtualRow: VirtualItem
   virtualColumns: number
   virtualGap: number
+  virtualScrollMargin: number
   rowItems: GroupedRecentChat[]
   layoutMode: 'cards' | 'compact'
   initialPageSize: number
@@ -768,8 +770,10 @@ interface VirtualRowProps {
 function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boolean {
   if (prev.virtualRow.key !== next.virtualRow.key) return false
   if (prev.virtualRow.index !== next.virtualRow.index) return false
+  if (prev.virtualRow.start !== next.virtualRow.start) return false
   if (prev.virtualColumns !== next.virtualColumns) return false
   if (prev.virtualGap !== next.virtualGap) return false
+  if (prev.virtualScrollMargin !== next.virtualScrollMargin) return false
   if (prev.layoutMode !== next.layoutMode) return false
   if (prev.initialPageSize !== next.initialPageSize) return false
   if (prev.animateInitialEntries !== next.animateInitialEntries) return false
@@ -791,6 +795,7 @@ const VirtualRow = memo(function VirtualRow({
   virtualRow,
   virtualColumns,
   virtualGap,
+  virtualScrollMargin,
   rowItems,
   layoutMode,
   initialPageSize,
@@ -815,6 +820,7 @@ const VirtualRow = memo(function VirtualRow({
         gridTemplateColumns: `repeat(${virtualColumns}, minmax(0, 1fr))`,
         gap: virtualGap,
         paddingBottom: virtualGap,
+        transform: `translateY(${virtualRow.start - virtualScrollMargin}px)`,
       }}
     >
       {rowItems.map((item) =>
@@ -962,6 +968,7 @@ function VirtualizedChatRows({
       className={clsx(styles.virtualChats, navigatingToChat && styles.chatsLeaving)}
       data-component="LandingPageChats"
       ref={setContainerRef}
+      style={{ height: chatVirtualizer.getTotalSize() }}
       variants={containerVariants}
       initial="hidden"
       animate={navigatingToChat ? 'leaving' : 'visible'}
@@ -975,6 +982,7 @@ function VirtualizedChatRows({
             virtualRow={virtualRow}
             virtualColumns={virtualColumns}
             virtualGap={virtualGap}
+            virtualScrollMargin={virtualScrollMargin}
             rowItems={items.slice(start, start + virtualColumns)}
             layoutMode={layoutMode}
             initialPageSize={initialPageSize}
@@ -1118,6 +1126,7 @@ export default function LandingPage() {
   const chatNavigationTimerRef = useRef<number | null>(null)
   const fetchSequenceRef = useRef(0)
   const loadingMoreRef = useRef(false)
+  const chatPageSizeRef = useRef(landingPageChatsDisplayed)
 
   const profiles = useStore((s) => s.profiles)
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -1242,7 +1251,23 @@ export default function LandingPage() {
   const mainRef = useRef<HTMLElement>(null)
   const virtualContainerRef = useRef<HTMLDivElement | null>(null)
   const [mainWidth, setMainWidth] = useState(() => Math.min(1400, Math.max(320, window.innerWidth - 64)))
+  const [chatViewportHeight, setChatViewportHeight] = useState(0)
   const [virtualScrollMargin, setVirtualScrollMargin] = useState(0)
+  const virtualLayout = landingPageLayoutMode === 'compact' ? 'compact' : 'cards'
+  const virtualGap = getColumnGap(mainWidth, virtualLayout)
+  const virtualColumns = getColumnCount(mainWidth, virtualLayout)
+  const virtualColumnWidth = Math.max(1, (mainWidth - virtualGap * (virtualColumns - 1)) / virtualColumns)
+  const virtualRowEstimate = virtualLayout === 'compact'
+    ? COMPACT_ROW_ESTIMATE + virtualGap
+    : Math.ceil(virtualColumnWidth * (4 / 3)) + virtualGap
+  const recentChatPageSize = resolveLandingChatPageSize({
+    configuredPageSize: landingPageChatsDisplayed,
+    isExpanded: landingPageGalleryWidth === 'expanded',
+    layout: virtualLayout,
+    columns: virtualColumns,
+    rowHeight: virtualRowEstimate,
+    availableHeight: chatViewportHeight,
+  })
 
   useScrollGate(scrollRef)
 
@@ -1325,6 +1350,13 @@ export default function LandingPage() {
     const update = () => {
       frame = 0
       setMainWidth(el.clientWidth)
+      const scroller = scrollRef.current
+      if (scroller) {
+        const availableHeight = renderedPxToLayoutPx(
+          scroller.getBoundingClientRect().bottom - el.getBoundingClientRect().top,
+        )
+        setChatViewportHeight(Math.max(0, availableHeight))
+      }
       updateVirtualScrollMargin()
     }
     const scheduleUpdate = () => {
@@ -1347,12 +1379,20 @@ export default function LandingPage() {
   const fetchChats = useCallback(async () => {
     if (!settingsLoaded) return
     const requestSequence = ++fetchSequenceRef.current
+    // Choose the expanded-grid capacity once per fresh query. Later offset
+    // requests must use this exact same size even if a measurement changes
+    // while the user is scrolling.
+    const pageSize = recentChatPageSize
+    chatPageSizeRef.current = pageSize
 
     // Bootstrap delivers the first recent-chats page alongside settings —
     // consume it once instead of issuing another round trip. Later runs
     // (WS chat-deleted, limit changes, revisits) find it cleared and fetch.
     const preload = useStore.getState().landingRecentChats
-    const canUsePreload = !debouncedSearchQuery && sortField === 'recent' && sortDirection === 'desc'
+    const canUsePreload = !debouncedSearchQuery
+      && sortField === 'recent'
+      && sortDirection === 'desc'
+      && (!preload || preload.total <= preload.data.length || preload.data.length >= pageSize)
     if (preload && canUsePreload) {
       useStore.getState().setLandingRecentChats(null)
       setItems(preload.data)
@@ -1367,7 +1407,7 @@ export default function LandingPage() {
     setError(null)
     try {
       const result = await chatsApi.listRecentGrouped({
-        limit: landingPageChatsDisplayed,
+        limit: pageSize,
         ...recentChatQuery,
       })
       if (requestSequence !== fetchSequenceRef.current) return
@@ -1380,7 +1420,7 @@ export default function LandingPage() {
     } finally {
       if (requestSequence === fetchSequenceRef.current) setLoading(false)
     }
-  }, [debouncedSearchQuery, landingPageChatsDisplayed, recentChatQuery, settingsLoaded, sortDirection, sortField])
+  }, [debouncedSearchQuery, recentChatPageSize, recentChatQuery, settingsLoaded, sortDirection, sortField])
 
   const loadMore = useCallback(async () => {
     // Intersection observers may deliver multiple entries during a grid
@@ -1393,7 +1433,7 @@ export default function LandingPage() {
     setLoadingMore(true)
     try {
       const result = await chatsApi.listRecentGrouped({
-        limit: landingPageChatsDisplayed,
+        limit: chatPageSizeRef.current,
         offset: items.length,
         ...recentChatQuery,
       })
@@ -1406,7 +1446,7 @@ export default function LandingPage() {
       loadingMoreRef.current = false
       setLoadingMore(false)
     }
-  }, [items.length, total, landingPageChatsDisplayed, recentChatQuery])
+  }, [items.length, total, recentChatQuery])
 
   useEffect(() => {
     fetchChats()
@@ -1435,6 +1475,24 @@ export default function LandingPage() {
     observer.observe(sentinel)
     return () => observer.disconnect()
   }, [items.length, total, loading, loadMore, mainWidth])
+
+  useEffect(() => {
+    const root = scrollRef.current
+    if (!root || activeLandingTab !== 'chats' || chatsSurfaceReady || loading || items.length >= total) return
+
+    // The sentinel observer is the eager path, but extension-owned mounts can
+    // cause a layout change that leaves it out of IntersectionObserver's next
+    // evaluation. A real scroll to the end of the native Chats scroller must
+    // always request the next page. `loadMore` has its own synchronous guard,
+    // so this safely overlaps with observer deliveries.
+    const onScroll = () => {
+      const distanceFromEnd = root.scrollHeight - root.clientHeight - root.scrollTop
+      if (distanceFromEnd <= 2) void loadMore()
+    }
+
+    root.addEventListener('scroll', onScroll, { passive: true })
+    return () => root.removeEventListener('scroll', onScroll)
+  }, [activeLandingTab, chatsSurfaceReady, items.length, loading, loadMore, total])
 
   const navigateToChat = useCallback((chatId: string) => {
     if (chatNavigationTimerRef.current !== null) return
@@ -1737,13 +1795,6 @@ export default function LandingPage() {
   }, [])
 
   const hasMore = items.length < total
-  const virtualLayout = landingPageLayoutMode === 'compact' ? 'compact' : 'cards'
-  const virtualGap = getColumnGap(mainWidth, virtualLayout)
-  const virtualColumns = getColumnCount(mainWidth, virtualLayout)
-  const virtualColumnWidth = Math.max(1, (mainWidth - virtualGap * (virtualColumns - 1)) / virtualColumns)
-  const virtualRowEstimate = virtualLayout === 'compact'
-    ? COMPACT_ROW_ESTIMATE + virtualGap
-    : Math.ceil(virtualColumnWidth * (4 / 3)) + virtualGap
 
   const handleVirtualContainerChange = useCallback((node: HTMLDivElement | null) => {
     virtualContainerRef.current = node
@@ -2000,7 +2051,7 @@ export default function LandingPage() {
                 virtualRowEstimate={virtualRowEstimate}
                 virtualScrollMargin={virtualScrollMargin}
                 scrollRef={scrollRef}
-                initialPageSize={landingPageChatsDisplayed}
+                initialPageSize={chatPageSizeRef.current}
                 animateInitialEntries={animateInitialEntries}
                 navigatingToChat={navigatingToChat}
                 shiftPressed={shiftPressed}
