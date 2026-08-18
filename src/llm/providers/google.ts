@@ -137,6 +137,14 @@ export class GoogleProvider implements LlmProvider {
     const decoder = new TextDecoder();
     let buffer = "";
     const maybeYield = createCooperativeYielder(64, request.signal);
+    // Some Vertex-based providers serialize a completed response as several
+    // SSE messages, including an empty `STOP` envelope before the envelope
+    // containing the response text. A finish reason is a property of the
+    // complete response, not proof that this individual SSE message is final,
+    // so hold it until the stream itself closes.
+    // This also lets us retain the final (and often only accurate) usage data.
+    let terminalFinishReason: string | undefined;
+    let finalUsage: StreamChunk["usage"];
 
     let streamDoneNaturally = false;
     try {
@@ -191,22 +199,31 @@ export class GoogleProvider implements LlmProvider {
 
           const toolCalls = fnCalls.length > 0 ? fnCalls : undefined;
 
+          if (toolCalls) {
+            terminalFinishReason = "tool_calls";
+          } else if (finishReason && terminalFinishReason !== "tool_calls") {
+            terminalFinishReason = finishReason === "STOP" ? "stop" : finishReason;
+          }
+          if (usage) finalUsage = usage;
+
           if (text || reasoning || toolCalls || thoughtSignature) {
             yield {
               token: text,
               reasoning: reasoning || undefined,
-              finish_reason: toolCalls ? "tool_calls" : (finishReason === "STOP" ? "stop" : undefined),
               tool_calls: toolCalls,
               ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
               usage,
             };
-          } else if (finishReason || usage) {
-            yield { token: "", finish_reason: finishReason === "STOP" ? "stop" : (finishReason || undefined), usage };
+          } else if (usage) {
+            yield { token: "", usage };
           }
         } catch {
           // Skip malformed SSE lines
         }
       }
+    }
+    if (terminalFinishReason) {
+      yield { token: "", finish_reason: terminalFinishReason, usage: finalUsage };
     }
     } finally {
       if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);

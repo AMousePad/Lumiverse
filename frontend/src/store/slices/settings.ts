@@ -30,7 +30,6 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'landingPageChatsDisplayed',
   'landingPageLayoutMode',
   'landingPageGalleryWidth',
-  'landingPageActiveTab',
   'landingHiddenCharacterIds',
   'charactersPerPage',
   'personasPerPage',
@@ -743,7 +742,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     },
     narrationVoice: null,
   },
-  ...({ landingPageActiveTab: 'characters', ...PRODUCTIVITY_DEFAULTS } as any),
+  ...PRODUCTIVITY_DEFAULTS,
 
   connectionsOrder: normalizeConnectionsOrder(),
 

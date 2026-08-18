@@ -84,7 +84,6 @@ type SummaryPage = { data: Summary[]; total: number }
 type MockFn = ReturnType<typeof jest.fn>
 
 type StoreState = {
-  landingPageActiveTab?: unknown
   landingPageChatsDisplayed: number
   landingPageLayoutMode: 'cards' | 'compact'
   landingPageGalleryWidth: 'compact' | 'expanded'
@@ -125,6 +124,7 @@ const createChat = jest.fn()
 const branchChat = jest.fn()
 const listMessages = jest.fn()
 const navigate = jest.fn()
+const readDeviceLandingPageStartTab = jest.fn(() => 'characters')
 
 let storeState: StoreState
 
@@ -155,11 +155,8 @@ function notifyStore() {
   for (const listener of storeListeners) listener()
 }
 
-function createStoreState(landingPageActiveTab: unknown = 'characters', enabled = true): StoreState {
+function createStoreState(enabled = true): StoreState {
   const setSetting = jest.fn((key: string, value: unknown) => {
-    if (key === 'landingPageActiveTab') {
-      storeState = { ...storeState, landingPageActiveTab: value }
-    }
     if (key === 'landingPageGalleryWidth') {
       storeState = { ...storeState, landingPageGalleryWidth: value as 'compact' | 'expanded' }
     }
@@ -172,7 +169,6 @@ function createStoreState(landingPageActiveTab: unknown = 'characters', enabled 
     notifyStore()
   })
   return {
-    landingPageActiveTab,
     landingPageChatsDisplayed: 12,
     landingPageLayoutMode: 'cards',
     landingPageGalleryWidth: 'compact',
@@ -255,6 +251,7 @@ mock.module('@/lib/tagColors', () => ({ getTagColorVar: () => '128,128,128' }))
 mock.module('@/lib/uiProductivityDefaults', () => ({
   PRODUCTIVITY_DEFAULTS: { homepageCharacterLibrarySettings: defaultHomepageSettings(true) },
 }))
+mock.module('@/lib/landingPageStartTab', () => ({ readDeviceLandingPageStartTab }))
 mock.module('@/lib/deviceRotation', () => ({
   doesDeviceRotationNeedPermission: () => false,
   isDeviceRotationSupported: () => false,
@@ -435,6 +432,7 @@ function appendReadySuiteRoot(host: HTMLDivElement) {
   root.dataset.homepageCharacterLibraryRoot = 'true'
   root.dataset.homepageCharacterLibraryReady = 'true'
   root.dataset.component = 'HomepageCharacterLibrary'
+  root.dataset.spindleExtId = 'lumiverse_suite'
   root.textContent = 'Character Library'
   charactersMount(host).append(root)
   return root
@@ -501,12 +499,14 @@ afterEach(async () => {
   branchChat.mockReset()
   listMessages.mockReset()
   navigate.mockReset()
+  readDeviceLandingPageStartTab.mockReset()
+  readDeviceLandingPageStartTab.mockReturnValue('characters')
   storeState = createStoreState()
 })
 
 describe('LandingPage character library', () => {
   test('uses the landing scroller for resized gallery pagination and de-duplicates observer entries', async () => {
-    storeState = createStoreState('chats', false)
+    storeState = createStoreState(false)
     const nextPage = createDeferred<SummaryPage>()
     listRecentGrouped
       .mockResolvedValueOnce(page([recentChat('character-1', 'Ava')], 2))
@@ -532,7 +532,7 @@ describe('LandingPage character library', () => {
   })
 
   test('keeps the recent-chat gallery compact by default and can expand it', async () => {
-    storeState = createStoreState('chats', false)
+    storeState = createStoreState(false)
     listRecentGrouped.mockResolvedValue(page([]))
     listTags.mockResolvedValue([])
     getHomepagePreview.mockResolvedValue(null)
@@ -551,7 +551,7 @@ describe('LandingPage character library', () => {
   })
 
   test('shows only native Chats before and after the suite surface is disabled', async () => {
-    storeState = createStoreState('characters')
+    storeState = createStoreState(false)
     listRecentGrouped.mockResolvedValue(page([]))
     listTags.mockResolvedValue([])
     getHomepagePreview.mockResolvedValue(null)
@@ -576,8 +576,8 @@ describe('LandingPage character library', () => {
     expect(host.textContent).toContain('No recent chats')
   })
 
-  test('adds Characters and selects it first when one suite root becomes ready', async () => {
-    storeState = createStoreState('chats')
+  test('adds Characters when one suite root becomes ready and switches tabs without writing settings', async () => {
+    storeState = createStoreState()
     listRecentGrouped.mockResolvedValue(page([]))
     listTags.mockResolvedValue([])
     getHomepagePreview.mockResolvedValue(null)
@@ -598,11 +598,32 @@ describe('LandingPage character library', () => {
     expect(charactersMount(host).querySelectorAll('[data-component="HomepageCharacterLibrary"]')).toHaveLength(1)
     expect(listSummaries).not.toHaveBeenCalled()
     expect(listRecentGrouped).toHaveBeenCalledTimes(1)
-    expect(storeState.setSetting).toHaveBeenNthCalledWith(1, 'landingPageActiveTab', 'characters')
+    expect(storeState.setSetting).not.toHaveBeenCalledWith('landingPageActiveTab', expect.anything())
+
+    await click(tab(host, 'Chats')!)
+
+    expect(tab(host, 'Chats')?.getAttribute('aria-selected')).toBe('true')
+    expect(storeState.setSetting).not.toHaveBeenCalledWith('landingPageActiveTab', expect.anything())
+  })
+
+  test('uses the device-local Suite start preference after the character surface is ready', async () => {
+    readDeviceLandingPageStartTab.mockReturnValue('chats')
+    storeState = createStoreState()
+    storeState.user = { username: 'test-user', id: 'suite-user' } as StoreState['user']
+    listRecentGrouped.mockResolvedValue(page([]))
+    listTags.mockResolvedValue([])
+    getHomepagePreview.mockResolvedValue(null)
+
+    const host = await mountLanding()
+    appendReadySuiteRoot(host)
+    await flush()
+
+    expect(tab(host, 'Chats')?.getAttribute('aria-selected')).toBe('true')
+    expect(readDeviceLandingPageStartTab).toHaveBeenCalledWith('suite-user')
   })
 
   test('returns to native Chats when the suite root is removed', async () => {
-    storeState = createStoreState('chats')
+    storeState = createStoreState()
     listRecentGrouped.mockResolvedValue(page([]))
     listTags.mockResolvedValue([])
     getHomepagePreview.mockResolvedValue(null)
@@ -622,7 +643,7 @@ describe('LandingPage character library', () => {
   })
 
   test('re-adding the suite root activates once per ready transition and preserves Chats', async () => {
-    storeState = createStoreState('chats')
+    storeState = createStoreState()
     listRecentGrouped.mockResolvedValue(page([]))
     listTags.mockResolvedValue([])
     getHomepagePreview.mockResolvedValue(null)
@@ -632,11 +653,10 @@ describe('LandingPage character library', () => {
 
     const firstRoot = appendReadySuiteRoot(host)
     await flush()
-    expect(storeState.setSetting).toHaveBeenCalledTimes(1)
-    expect(storeState.setSetting).toHaveBeenLastCalledWith('landingPageActiveTab', 'characters')
+    expect(storeState.setSetting).not.toHaveBeenCalledWith('landingPageActiveTab', expect.anything())
     firstRoot.append(document.createElement('span'))
     await flush()
-    expect(storeState.setSetting).toHaveBeenCalledTimes(1)
+    expect(storeState.setSetting).not.toHaveBeenCalledWith('landingPageActiveTab', expect.anything())
 
     firstRoot.remove()
     await flush()
@@ -647,8 +667,7 @@ describe('LandingPage character library', () => {
     await flush()
 
     expect(tab(host, 'Characters')?.getAttribute('aria-selected')).toBe('true')
-    expect(storeState.setSetting).toHaveBeenCalledTimes(2)
-    expect(storeState.setSetting).toHaveBeenLastCalledWith('landingPageActiveTab', 'characters')
+    expect(storeState.setSetting).not.toHaveBeenCalledWith('landingPageActiveTab', expect.anything())
     expect(charactersMount(host).querySelectorAll('[data-homepage-character-library-root]')).toHaveLength(1)
     expect(listRecentGrouped).toHaveBeenCalledTimes(1)
     expect(listSummaries).not.toHaveBeenCalled()

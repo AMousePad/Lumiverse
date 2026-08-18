@@ -740,7 +740,6 @@ export interface SettingsSlice {
   spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
   connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>
-  landingPageActiveTab: 'chats' | 'characters'
   quickToolbarSettings: QuickToolbarSettings
   connectionsPickerSettings: ConnectionsPickerSettings
   loreIndicatorSettings: LoreIndicatorSettings

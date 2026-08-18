@@ -50,7 +50,6 @@ const SELECTOR_ROWS: readonly AuthorityRow[] = [
   free({ surface: 'state_selector', id: 'worldInfo.selectedEntryId', source: 'worldInfo.selectedEntryId', freeBecause: 'limb-e: the selected world-book entry identifier is editor selection metadata; no entry content crosses the boundary' }),
   free({ surface: 'state_selector', id: 'loom.activePresetId', source: 'loom.activePresetId', freeBecause: 'rest: the authenticated session exposes the active Loom preset identifier as read-only state' }),
   free({ surface: 'state_selector', id: 'persona.activeId', source: 'persona.activeId', freeBecause: 'rest: the authenticated session exposes the active persona identifier as read-only state' }),
-  free({ surface: 'state_selector', id: 'landing.activeTab', source: 'settings.landingPageActiveTab', freeBecause: 'rest: GET /api/v1/settings/landingPageActiveTab returns the existing authenticated-session preference' }),
 ]
 
 const DRAWER_TAB_IDS = [

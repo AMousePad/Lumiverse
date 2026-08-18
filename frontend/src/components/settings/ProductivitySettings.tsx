@@ -13,6 +13,7 @@ import { useTokenizerAvailability } from '@/hooks/useTokenCounts'
 import { ENTRY_METADATA_VERSION } from '@/lib/lorebookEntryColumns'
 import { getCharacterAvatarLargeUrlById } from '@/lib/avatarUrls'
 import { getHomepageCardMetadata, getHomepageVisibleTags } from '@/lib/characterDisplaySettings'
+import { readDeviceLandingPageStartTab, writeDeviceLandingPageStartTab } from '@/lib/landingPageStartTab'
 import type { Character } from '@/types/api'
 import styles from './ProductivitySettings.module.css'
 
@@ -167,6 +168,15 @@ function CardHeader({ id, title, description, action }: { id: string; title: str
 export default function ProductivitySettings() {
   const store = useStore((state) => state)
   const [toolbarQuery, setToolbarQuery] = useState('')
+  const userId = (store as { user?: { id?: string } | null }).user?.id ?? null
+  const hasLumiverseSuite = ((store as { extensions?: unknown[] }).extensions ?? []).some((extension) => {
+    const candidate = extension as { identifier?: unknown; enabled?: unknown; has_frontend?: unknown }
+    return candidate.identifier === 'lumiverse_suite' && candidate.enabled === true && candidate.has_frontend === true
+  })
+  const [landingStartTab, setLandingStartTab] = useState(() => readDeviceLandingPageStartTab(userId))
+  useEffect(() => {
+    setLandingStartTab(readDeviceLandingPageStartTab(userId))
+  }, [userId])
   const getBlob = (key: ProductivitySettingKey): Blob => (store as any)[key] ?? PRODUCTIVITY_DEFAULTS[key]
   const update = (key: ProductivitySettingKey, patch: Blob) => {
     const current = (useStore.getState() as any)[key] ?? PRODUCTIVITY_DEFAULTS[key]
@@ -379,6 +389,11 @@ export default function ProductivitySettings() {
 
     <section id="homepage-character-library-settings" className={styles.card} aria-labelledby="productivity-home-title"><CardHeader id="productivity-home-title" title={labels.homepageCharacterLibrarySettings} description="Control homepage cards, filters, view defaults, and selected-character panel." action={<Toggle.Switch checked={homepage.enabled !== false} onChange={(enabled) => update('homepageCharacterLibrarySettings', { enabled })} aria-label="Enable homepage library" title="Enable homepage library" />} /><div className={styles.cardBody}>
       <HomepageCharacterLibraryPreview settings={homepage} character={characters.find((character) => character.id === homepage.lastSelectedCharacterId) ?? characters[0]} />
+      {hasLumiverseSuite && homepage.enabled !== false && <SegmentedField label="Landing page start view" value={landingStartTab} options={[['characters', 'Characters'], ['chats', 'Chats']]} onChange={(value) => {
+        if (value !== 'characters' && value !== 'chats') return
+        setLandingStartTab(value)
+        writeDeviceLandingPageStartTab(userId, value)
+      }} />}
       <CharacterDisplayControls settings={homepage} onChange={(patch) => update('homepageCharacterLibrarySettings', patch)} compactFooterLabel="Compact glass" idPrefix="home" />
       <NumberField id="home-max-tags" label="Maximum visible tags" value={homepage.maxVisibleTags} onChange={(maxVisibleTags) => update('homepageCharacterLibrarySettings', { maxVisibleTags })} min={1} max={20} />
       <NumberField id="home-panel-width" label="Preview panel width" value={homepage.panelWidth} onChange={(panelWidth) => update('homepageCharacterLibrarySettings', { panelWidth })} min={360} max={720} suffix="px" />

@@ -326,3 +326,63 @@ describe("GoogleProvider web search grounding", () => {
     }
   });
 });
+
+describe("GoogleProvider streaming", () => {
+  test("waits for stream close before emitting STOP from a multi-envelope Gemini response", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestBodies: unknown[] = [];
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return new Response([
+        'data: {"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0}}\n\n',
+        'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Lumiverse Gemini test passed"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0}}\n\n',
+        'data: {"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":5,"totalTokenCount":168}}\n\n',
+      ].join(""), { headers: { "Content-Type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    try {
+      const provider = new GoogleProvider();
+      const chunks = [];
+      for await (const chunk of provider.generateStream("test-key", "https://provider.example.test", {
+        model: "test-model",
+        messages: [{ role: "user", content: "Reply with exactly: Lumiverse Gemini test passed" }],
+        parameters: {
+          temperature: 1,
+          max_tokens: 128,
+          thinkingConfig: { thinkingLevel: "high", includeThoughts: true },
+        },
+      })) {
+        chunks.push(chunk);
+      }
+
+      expect(requestBodies[0]).toMatchObject({
+        generationConfig: {
+          temperature: 1,
+          maxOutputTokens: 128,
+          thinkingConfig: { thinkingLevel: "high", includeThoughts: true },
+        },
+      });
+      expect(chunks).toEqual([
+        {
+          token: "",
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        },
+        {
+          token: "Lumiverse Gemini test passed",
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        },
+        {
+          token: "",
+          usage: { prompt_tokens: 9, completion_tokens: 5, total_tokens: 168 },
+        },
+        {
+          token: "",
+          finish_reason: "stop",
+          usage: { prompt_tokens: 9, completion_tokens: 5, total_tokens: 168 },
+        },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

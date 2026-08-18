@@ -60,7 +60,9 @@ import {
   landingPageTabPanelId,
   normalizeLandingPageTab,
   resolveTabArrowKey,
+  type LandingPageTab,
 } from '@/lib/landingPageTabs'
+import { readDeviceLandingPageStartTab } from '@/lib/landingPageStartTab'
 
 type LandingSortField = 'name' | 'recent' | 'created'
 
@@ -1015,24 +1017,37 @@ export default function LandingPage() {
   const authUser = useStore((s) => s.user)
   const hasGlobalWallpaper = useStore((s) => Boolean(s.wallpaper.global?.image_id))
   const accountLabel = authUser?.username || authUser?.name || t('account')
-  const landingPageActiveTab = useStore((s) => (s as typeof s & { landingPageActiveTab?: unknown }).landingPageActiveTab)
+  // The selected landing tab is intentionally local UI state. It must not be
+  // persisted with account settings: a tab click on one device should never
+  // move another device's landing page.
+  const [requestedLandingTab, setRequestedLandingTab] = useState<LandingPageTab>('characters')
   const [homepageSurfaceReady, setHomepageSurfaceReady] = useState(() => (
     typeof document !== 'undefined' && Boolean(document.querySelector(
       `[data-spindle-mount="${'landing_characters'}"] [data-homepage-character-library-ready="true"]`,
     ))
   ))
+  const [suiteHomepageSurfaceReady, setSuiteHomepageSurfaceReady] = useState(() => (
+    typeof document !== 'undefined' && Boolean(document.querySelector(
+      `[data-spindle-mount="${'landing_characters'}"] [data-homepage-character-library-ready="true"][data-spindle-ext-id="lumiverse_suite"]`,
+    ))
+  ))
   const selectedCharactersForReady = useRef(false)
+  const initializedStartTabForUser = useRef<string | null>(null)
   useEffect(() => {
     const readReady = () => {
       const ready = Boolean(document.querySelector(
         `[data-spindle-mount="${'landing_characters'}"] [data-homepage-character-library-ready="true"]`,
       ))
+      const suiteReady = Boolean(document.querySelector(
+        `[data-spindle-mount="${'landing_characters'}"] [data-homepage-character-library-ready="true"][data-spindle-ext-id="lumiverse_suite"]`,
+      ))
       if (!ready) selectedCharactersForReady.current = false
       else if (!selectedCharactersForReady.current) {
         selectedCharactersForReady.current = true
-        ;(setSetting as unknown as (key: string, value: unknown) => void)('landingPageActiveTab', 'characters')
+        setRequestedLandingTab('characters')
       }
       setHomepageSurfaceReady(ready)
+      setSuiteHomepageSurfaceReady(suiteReady)
     }
     readReady()
     const Observer = document.defaultView?.MutationObserver
@@ -1040,7 +1055,7 @@ export default function LandingPage() {
     const observer = new Observer(readReady)
     observer.observe(document.body, { childList: true, subtree: true })
     return () => observer.disconnect()
-  }, [setSetting])
+  }, [])
   // Symmetric seam for the Chats tab: an extension-owned chats surface
   // (e.g. a Recent Chats browser) marks its root ready and takes over the
   // tab, suppressing the native chat browser exactly like the character
@@ -1068,11 +1083,17 @@ export default function LandingPage() {
     () => getAvailableLandingPageTabs({ characterLibraryEnabled: homepageSurfaceReady }),
     [homepageSurfaceReady],
   )
-  const activeLandingTab = normalizeLandingPageTab(landingPageActiveTab, availableLandingTabs)
+  useEffect(() => {
+    const userId = authUser?.id ?? null
+    if (!suiteHomepageSurfaceReady || !userId || initializedStartTabForUser.current === userId) return
+    initializedStartTabForUser.current = userId
+    setRequestedLandingTab(readDeviceLandingPageStartTab(userId))
+  }, [authUser?.id, suiteHomepageSurfaceReady])
+  const activeLandingTab = normalizeLandingPageTab(requestedLandingTab, availableLandingTabs)
   const handleLandingTabChange = useCallback((tab: (typeof availableLandingTabs)[number]) => {
     if (!availableLandingTabs.includes(tab)) return
-    ;(setSetting as unknown as (key: string, value: unknown) => void)('landingPageActiveTab', tab)
-  }, [availableLandingTabs, setSetting])
+    setRequestedLandingTab(tab)
+  }, [availableLandingTabs])
 
   const [items, setItems] = useState<GroupedRecentChat[]>([])
   const [loading, setLoading] = useState(true)
@@ -1871,7 +1892,7 @@ export default function LandingPage() {
         </header>
 
         <div className={styles.landingToolbar} data-component="LandingPageTabs" data-spindle-mount="landing_toolbar">
-          <div className={styles.landingTabs} role="tablist" aria-label="Landing views">
+          <div className={clsx(styles.landingTabs, homepageSurfaceReady && styles.landingTabsWithSuite)} role="tablist" aria-label="Landing views">
             {availableLandingTabs.map((tab) => {
               const selected = activeLandingTab === tab
               return (
@@ -1888,7 +1909,7 @@ export default function LandingPage() {
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 10px', border: '1px solid var(--lumiverse-border)', borderRadius: 8, background: selected ? 'var(--lumiverse-primary-010)' : 'transparent', color: selected ? 'var(--lumiverse-text)' : 'var(--lumiverse-text-muted)', cursor: 'pointer' }}
                 >
                   {tab === 'characters' ? <Users size={14} strokeWidth={1.5} /> : <MessageSquare size={14} strokeWidth={1.5} />}
-                  <span>{tab === 'characters' ? 'Characters' : 'Chats'}</span>
+                  <span className={styles.landingTabLabel}>{tab === 'characters' ? 'Characters' : 'Chats'}</span>
                 </button>
               )
             })}
@@ -1927,7 +1948,7 @@ export default function LandingPage() {
           </button>
           <button
             type="button"
-            className={clsx(styles.hiddenManagerBtn, landingPageGalleryWidth === 'expanded' && styles.galleryWidthBtnActive)}
+            className={clsx(styles.hiddenManagerBtn, styles.galleryWidthBtn, landingPageGalleryWidth === 'expanded' && styles.galleryWidthBtnActive)}
             onClick={() => setSetting('landingPageGalleryWidth', landingPageGalleryWidth === 'expanded' ? 'compact' : 'expanded')}
             title={landingPageGalleryWidth === 'expanded' ? t('galleryWidth.compact') : t('galleryWidth.expanded')}
             aria-label={landingPageGalleryWidth === 'expanded' ? t('galleryWidth.compact') : t('galleryWidth.expanded')}
