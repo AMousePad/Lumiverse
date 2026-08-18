@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { isTermuxLikeEnvironment } from "./utils/termux";
 
-const NATIVE_BINARY_VERSION = "0.31.0";
-const NATIVE_BINARY_RELEASE_TAG = "android-lancedb-v0.31.0";
+const NATIVE_BINARY_VERSION = "0.37.1";
+const NATIVE_BINARY_RELEASE_TAG = "android-lancedb-v0.37.1";
+const NATIVE_BINARY_SHA256 = "4c269c41e8969589c4df1683d062172a541b48d2b748e3a4dfe0d142fd9f0fec";
 
 function needsDownload(binaryPath: string, stampPath: string): boolean {
   if (!existsSync(binaryPath)) return true;
@@ -64,6 +66,11 @@ export async function configureLanceDbNativeOverride(): Promise<void> {
       const merged = new Uint8Array(receivedBytes);
       let offset = 0;
       for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
+
+      const digest = createHash("sha256").update(merged).digest("hex");
+      if (digest !== NATIVE_BINARY_SHA256) {
+        throw new Error(`LanceDB native engine checksum mismatch: expected ${NATIVE_BINARY_SHA256}, received ${digest}`);
+      }
 
       await Bun.write(bundledAndroidOverride, merged);
       writeFileSync(versionStamp, NATIVE_BINARY_VERSION);
