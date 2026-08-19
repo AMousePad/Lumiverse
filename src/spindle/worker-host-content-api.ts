@@ -86,6 +86,28 @@ export function canExtensionMutateRegexScript(
     && script.preset_id == null;
 }
 
+export function prepareSpindleRegexMutation(
+  value: unknown,
+  extensionIdentifier: string,
+): {
+  input: Record<string, unknown>;
+  context: { extensionIdentifier: string; extensionFolderVersion?: unknown };
+} {
+  const input = value && typeof value === "object" && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
+  const hasFolderVersion = Object.prototype.hasOwnProperty.call(input, "folder_version");
+  const extensionFolderVersion = input.folder_version;
+  delete input.folder_version;
+  return {
+    input,
+    context: {
+      extensionIdentifier,
+      ...(hasFolderVersion ? { extensionFolderVersion } : {}),
+    },
+  };
+}
+
 export type SpindleBatchJsonValue =
   | null
   | boolean
@@ -1509,11 +1531,15 @@ export class WorkerHostContentApi {
     if (operation.domain === "regex_scripts" && operation.op === "update") {
       if (!this.hasPermission("regex_scripts")) throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts`);
       const scriptId = this.asBatchString(id, "scriptId");
+      const mutation = prepareSpindleRegexMutation(
+        this.asBatchRecord(args.input ?? {}, "input"),
+        this.manifest.identifier,
+      );
       const script = regexScriptsSvc.updateRegexScript(
         userId,
         scriptId,
-        this.asBatchRecord(args.input ?? {}, "input") as unknown as Parameters<typeof regexScriptsSvc.updateRegexScript>[2],
-        { extensionIdentifier: this.manifest.identifier },
+        mutation.input as unknown as Parameters<typeof regexScriptsSvc.updateRegexScript>[2],
+        mutation.context,
       );
       if (script === null) throw new Error("Regex script not found");
       if (typeof script === "string") throw new Error(script);
@@ -2380,6 +2406,7 @@ export class WorkerHostContentApi {
       sort_order: s.sort_order,
       description: s.description || "",
       folder: s.folder || "",
+      folder_version: regexScriptsSvc.getSpindleExtensionRegexFolderVersion(s),
       metadata: s.metadata || {},
       created_at: s.created_at,
       updated_at: s.updated_at,
@@ -2495,9 +2522,8 @@ export class WorkerHostContentApi {
         throw new Error("find_regex is required");
       }
 
-      const result = regexScriptsSvc.createRegexScript(resolvedUserId, input, {
-        extensionIdentifier: this.manifest.identifier,
-      });
+      const mutation = prepareSpindleRegexMutation(input, this.manifest.identifier);
+      const result = regexScriptsSvc.createRegexScript(resolvedUserId, mutation.input as any, mutation.context);
       if (typeof result === "string") throw new Error(result);
       this.postToWorker({ type: "response", requestId, result: this.toRegexScriptDTO(result) });
     } catch (err: any) {
@@ -2514,9 +2540,8 @@ export class WorkerHostContentApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const result = regexScriptsSvc.updateRegexScript(resolvedUserId, scriptId, input || {}, {
-        extensionIdentifier: this.manifest.identifier,
-      });
+      const mutation = prepareSpindleRegexMutation(input, this.manifest.identifier);
+      const result = regexScriptsSvc.updateRegexScript(resolvedUserId, scriptId, mutation.input as any, mutation.context);
       if (result === null) throw new Error("Regex script not found");
       if (typeof result === "string") throw new Error(result);
       this.postToWorker({ type: "response", requestId, result: this.toRegexScriptDTO(result) });

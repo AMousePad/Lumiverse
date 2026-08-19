@@ -117,6 +117,30 @@ function getLumiHubPresetVersions(
   }))
 }
 
+function getSpindleExtensionFolderVersions(
+  scripts: RegexScript[],
+): Array<{ identifier: string; version: string }> {
+  const versions = new Map<string, { identifier: string; version: string }>()
+  for (const script of scripts) {
+    const owner = script.owner_extension_identifier?.trim()
+    if (!owner || !script.folder.trim()) continue
+    const attribution = script.metadata?._lumiverse_spindle_extension
+    if (!attribution || typeof attribution !== 'object') continue
+    const identifier = typeof attribution.identifier === 'string' ? attribution.identifier.trim() : ''
+    const version = typeof attribution.version === 'string' ? attribution.version.trim() : ''
+    if (!identifier || identifier !== owner || !version) continue
+    versions.set(`${identifier}\u0000${version}`, { identifier, version })
+  }
+  return [...versions.values()].sort((left, right) => {
+    const byVersion = left.version.localeCompare(right.version, undefined, { numeric: true, sensitivity: 'base' })
+    return byVersion || left.identifier.localeCompare(right.identifier)
+  })
+}
+
+function formatVersionLabel(version: string): string {
+  return /^v/i.test(version) ? version : `v${version}`
+}
+
 export default function RegexPanel() {
   const { t } = useTranslation('panels')
   const { t: tc } = useTranslation('common')
@@ -806,6 +830,7 @@ export default function RegexPanel() {
                   const folderLabel = group.folder || t('shared:uncategorized')
                   const isNamedFolder = Boolean(group.folder)
                   const presetVersions = getLumiHubPresetVersions(group.scripts, presets)
+                  const spindleVersions = getSpindleExtensionFolderVersions(group.scripts)
                   return (
                     <div key={folderKey}>
                       <DroppableFolderHeader folderKey={folderKey} dropDisabled={!isCollapsed} onToggle={() => toggleFolder(folderKey)}>
@@ -838,9 +863,18 @@ export default function RegexPanel() {
                           <span
                             key={version}
                             className={styles.folderVersionBadge}
-                            title={t('regexPanel.lumihubPresetVersion', { version })}
+                            title={t('regexPanel.lumihubPresetVersion', { version: formatVersionLabel(version) })}
                           >
-                            <Badge color="info" size="sm">v{version}</Badge>
+                            <Badge color="info" size="sm">{formatVersionLabel(version)}</Badge>
+                          </span>
+                        ))}
+                        {spindleVersions.map(({ identifier, version }) => (
+                          <span
+                            key={`${identifier}:${version}`}
+                            className={styles.folderVersionBadge}
+                            title={t('regexPanel.spindleExtensionVersion', { identifier, version: formatVersionLabel(version) })}
+                          >
+                            <Badge color="primary" size="sm">{formatVersionLabel(version)}</Badge>
                           </span>
                         ))}
                         <span className={styles.folderCount}>{group.scripts.length}</span>

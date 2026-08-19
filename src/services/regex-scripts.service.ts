@@ -99,11 +99,15 @@ const REGEX_ACTION_ID_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,63}$/;
 const REGEX_ACTION_STATE_KEY_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/;
 const PRESET_REGEX_ENABLED_SETTING_PREFIX = "presetRegexEnabled:";
 const IMPORTED_SOURCE_SCRIPT_ID_METADATA_KEY = "imported_script_id";
+const SPINDLE_EXTENSION_REGEX_METADATA_KEY = "_lumiverse_spindle_extension";
+const MAX_REGEX_FOLDER_VERSION_LENGTH = 100;
 
 interface RegexMutationContext {
   activePresetId?: string | null;
   /** When present, restrict this mutation to unbound rows owned by this extension. */
   extensionIdentifier?: string;
+  /** Present only when a Spindle mutation explicitly supplied folder_version. */
+  extensionFolderVersion?: unknown;
 }
 
 const EXTENSION_REGEX_OWNERSHIP_ERROR = "Regex script is not an unbound script owned by this extension";
@@ -613,6 +617,76 @@ function isPlainMetadataRecord(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+interface SpindleExtensionRegexAttribution {
+  identifier: string;
+  version: string;
+}
+
+function getSpindleExtensionRegexAttribution(metadata: unknown): SpindleExtensionRegexAttribution | null {
+  if (!isPlainMetadataRecord(metadata)) return null;
+  const raw = metadata[SPINDLE_EXTENSION_REGEX_METADATA_KEY];
+  if (!isPlainMetadataRecord(raw)) return null;
+  const identifier = normalizeOptionalId(raw.identifier);
+  const version = normalizeOptionalId(raw.version);
+  return identifier && version ? { identifier, version } : null;
+}
+
+/** Return trusted folder-version attribution for a Spindle-owned regex script. */
+export function getSpindleExtensionRegexFolderVersion(
+  script: Pick<RegexScript, "folder" | "owner_extension_identifier" | "metadata">,
+): string | null {
+  const owner = normalizeOptionalId(script.owner_extension_identifier);
+  if (!owner || !normalizeOptionalId(script.folder)) return null;
+  const attribution = getSpindleExtensionRegexAttribution(script.metadata);
+  return attribution?.identifier === owner ? attribution.version : null;
+}
+
+function validateExtensionFolderVersion(context?: RegexMutationContext): string | null {
+  if (!context || !Object.prototype.hasOwnProperty.call(context, "extensionFolderVersion")) return null;
+  const value = context.extensionFolderVersion;
+  if (value !== null && value !== undefined && typeof value !== "string") {
+    return "folder_version must be a string or null";
+  }
+  if (typeof value === "string" && value.trim().length > MAX_REGEX_FOLDER_VERSION_LENGTH) {
+    return `folder_version exceeds maximum length (${MAX_REGEX_FOLDER_VERSION_LENGTH} characters)`;
+  }
+  return null;
+}
+
+function applySpindleExtensionRegexAttribution<T extends CreateRegexScriptInput | UpdateRegexScriptInput>(
+  input: T,
+  extensionIdentifier: string,
+  context: RegexMutationContext,
+  existing?: RegexScript,
+): T {
+  const suppliedVersion = Object.prototype.hasOwnProperty.call(context, "extensionFolderVersion");
+  const shouldWriteMetadata = !existing
+    || input.metadata !== undefined
+    || input.folder !== undefined
+    || suppliedVersion;
+  if (!shouldWriteMetadata) return { ...input };
+
+  const metadataSource = input.metadata !== undefined ? input.metadata : existing?.metadata;
+  const metadata = isPlainMetadataRecord(metadataSource) ? { ...metadataSource } : {};
+  delete metadata[SPINDLE_EXTENSION_REGEX_METADATA_KEY];
+
+  const existingAttribution = existing
+    ? getSpindleExtensionRegexAttribution(existing.metadata)
+    : null;
+  const version = suppliedVersion
+    ? normalizeOptionalId(context.extensionFolderVersion)
+    : existingAttribution?.identifier === extensionIdentifier
+      ? existingAttribution.version
+      : null;
+  const folder = input.folder !== undefined ? input.folder : existing?.folder;
+
+  if (version && normalizeOptionalId(folder)) {
+    metadata[SPINDLE_EXTENSION_REGEX_METADATA_KEY] = { identifier: extensionIdentifier, version };
+  }
+
+  return { ...input, metadata };
+}
+
 function mapRegexScriptPersistenceError(err: unknown): string | null {
   const message = err instanceof Error ? err.message : String(err ?? "");
   if (
@@ -647,6 +721,21 @@ export interface PresetBoundRegexAttribution {
   source?: "lumihub";
   hubPresetId?: string | null;
   presetVersion?: string | null;
+  folderName?: string | null;
+}
+
+interface LumiHubPresetRegexAttribution {
+  id: string | null;
+  version: string | null;
+}
+
+function getLumiHubPresetRegexAttribution(metadata: unknown): LumiHubPresetRegexAttribution | null {
+  if (!isPlainMetadataRecord(metadata)) return null;
+  const raw = metadata._lumiverse_lumihub_preset;
+  if (!isPlainMetadataRecord(raw)) return null;
+  const id = normalizeOptionalId(raw.id);
+  const version = normalizeOptionalId(raw.version);
+  return id || version ? { id, version } : null;
 }
 
 /**
@@ -740,9 +829,14 @@ export function createRegexScript(
   context?: RegexMutationContext,
 ): RegexScript | string {
   const extensionIdentifier = normalizeOptionalId(context?.extensionIdentifier);
-  const nextInput: CreateRegexScriptInput = extensionIdentifier
+  let nextInput: CreateRegexScriptInput = extensionIdentifier
     ? { ...input, pack_id: null, preset_id: null, character_id: null }
     : { ...input };
+  if (extensionIdentifier && context) {
+    const folderVersionError = validateExtensionFolderVersion(context);
+    if (folderVersionError) return folderVersionError;
+    nextInput = applySpindleExtensionRegexAttribution(nextInput, extensionIdentifier, context);
+  }
   const err = validateInput(nextInput, true);
   if (err) return err;
 
@@ -823,8 +917,11 @@ export function updateRegexScript(
 
   const activePresetId = normalizeOptionalId(context?.activePresetId);
   const isPresetBound = !!existing.preset_id;
-  const nextInput: UpdateRegexScriptInput = { ...input };
+  let nextInput: UpdateRegexScriptInput = { ...input };
   if (extensionIdentifier) {
+    const folderVersionError = validateExtensionFolderVersion(context);
+    if (folderVersionError) return folderVersionError;
+    nextInput = applySpindleExtensionRegexAttribution(nextInput, extensionIdentifier, context!, existing);
     // These links are host-owned. A script that becomes preset-bound through a
     // native flow automatically becomes read-only to its creating extension.
     delete nextInput.pack_id;
@@ -1990,6 +2087,234 @@ export function getRegexScriptsByPresetId(userId: string, presetId: string): Reg
   return rows.map(rowToRegexScript);
 }
 
+export interface RetireLumiHubPresetRegexOptions {
+  presetId: string;
+  hubPresetId: string;
+  previousHubPresetId?: string | null;
+  previousVersion?: string | null;
+  incomingVersion?: string | null;
+  presetName: string;
+  preserveIds?: string[];
+}
+
+export interface RetireLumiHubPresetRegexResult {
+  archivedIds: string[];
+  replacedIds: string[];
+}
+
+function versionLabel(version: string | null): string {
+  if (!version) return "previous";
+  return /^v/i.test(version) ? version : `v${version}`;
+}
+
+function chooseAvailableRegexFolder(
+  userId: string,
+  desiredFolder: string,
+  allowedOccupantIds: Set<string>,
+): string {
+  const db = getDb();
+  const base = desiredFolder.trim() || "LumiHub preset";
+  const candidates = [base, `${base} · LumiHub`];
+
+  for (let suffix = 2; suffix < 1000; suffix++) {
+    candidates.push(`${base} · LumiHub (${suffix})`);
+  }
+
+  for (const candidate of candidates) {
+    const occupants = db
+      .query("SELECT id FROM regex_scripts WHERE user_id = ? AND folder = ?")
+      .all(userId, candidate) as Array<{ id: string }>;
+    if (occupants.every((row) => allowedOccupantIds.has(row.id))) return candidate;
+  }
+
+  return `${base} · LumiHub (${Date.now()})`;
+}
+
+/**
+ * Preserve historical LumiHub regex payloads while making an update safe:
+ * older versions are disabled and moved into version-specific folders, while a
+ * repeat install of the incoming version is replaced instead of duplicated.
+ *
+ * Selection is based exclusively on preset ownership plus LumiHub attribution.
+ * Folder names are never used to decide which rows to mutate.
+ */
+export function retireLumiHubPresetRegexScriptsForUpdate(
+  userId: string,
+  options: RetireLumiHubPresetRegexOptions,
+): RetireLumiHubPresetRegexResult {
+  const hubPresetId = normalizeOptionalId(options.hubPresetId);
+  const previousHubPresetId = normalizeOptionalId(options.previousHubPresetId);
+  const previousVersion = normalizeOptionalId(options.previousVersion);
+  const incomingVersion = normalizeOptionalId(options.incomingVersion);
+  if (!hubPresetId) return { archivedIds: [], replacedIds: [] };
+
+  const acceptedHubIds = new Set([hubPresetId, previousHubPresetId].filter((id): id is string => !!id));
+  const preserveIds = new Set(options.preserveIds ?? []);
+  const rows = getRegexScriptsByPresetId(userId, options.presetId);
+  const matching = rows.flatMap((script) => {
+    if (preserveIds.has(script.id)) return [];
+    const attribution = getLumiHubPresetRegexAttribution(script.metadata);
+    if (attribution?.id && !acceptedHubIds.has(attribution.id)) return [];
+
+    // Rows from installations predating explicit per-regex attribution are
+    // still attributable through their preset_id, but only when the containing
+    // preset was already a tracked LumiHub installation.
+    if (!attribution?.id && !previousHubPresetId) return [];
+    return [{ script, version: attribution?.version ?? previousVersion }];
+  });
+
+  const replaced = matching.filter(({ version }) => version === incomingVersion);
+  const archived = matching.filter(({ version }) => version !== incomingVersion);
+  const replacedIds = replaced.map(({ script }) => script.id);
+  const archivedIds = archived.map(({ script }) => script.id);
+  const replaceIdSet = new Set(replacedIds);
+  const archiveIdsByVersion = new Map<string | null, Set<string>>();
+  for (const { script, version } of archived) {
+    const ids = archiveIdsByVersion.get(version) ?? new Set<string>();
+    ids.add(script.id);
+    archiveIdsByVersion.set(version, ids);
+  }
+
+  const foldersByVersion = new Map<string | null, string>();
+  for (const [version, ids] of archiveIdsByVersion) {
+    const allowedOccupants = new Set([...ids, ...replaceIdSet]);
+    const desired = `${options.presetName.trim()} · ${versionLabel(version)}`;
+    foldersByVersion.set(version, chooseAvailableRegexFolder(userId, desired, allowedOccupants));
+  }
+
+  const db = getDb();
+  const now = Math.floor(Date.now() / 1000);
+  db.transaction(() => {
+    const deleteRow = db.query("DELETE FROM regex_scripts WHERE id = ? AND user_id = ?");
+    for (const { script } of replaced) deleteRow.run(script.id, userId);
+
+    const updateRow = db.query(
+      "UPDATE regex_scripts SET disabled = 1, folder = ?, metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+    );
+    for (const { script, version } of archived) {
+      const metadata = isPlainMetadataRecord(script.metadata) ? { ...script.metadata } : {};
+      metadata._lumiverse_lumihub_preset = { id: hubPresetId, version };
+      updateRow.run(foldersByVersion.get(version)!, JSON.stringify(metadata), now, script.id, userId);
+    }
+
+    // Switching back to this preset must never revive a historical version.
+    writeStoredPresetRegexIdsWithDb(db, userId, options.presetId, []);
+  })();
+
+  for (const id of replacedIds) eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
+  for (const id of archivedIds) emitRegexChanged(userId, id);
+  return { archivedIds, replacedIds };
+}
+
+/** Pick a current-version folder without merging into an unrelated local folder. */
+export function resolveLumiHubPresetRegexInstallFolder(
+  userId: string,
+  presetId: string,
+  hubPresetId: string,
+  presetName: string,
+): string {
+  const normalizedHubId = normalizeOptionalId(hubPresetId);
+  const allowedIds = new Set(
+    getRegexScriptsByPresetId(userId, presetId)
+      .filter((script) => getLumiHubPresetRegexAttribution(script.metadata)?.id === normalizedHubId)
+      .map((script) => script.id),
+  );
+  return chooseAvailableRegexFolder(userId, presetName, allowedIds);
+}
+
+export interface InstallLumiHubPresetRegexOptions {
+  presetId: string;
+  presetName: string;
+  hubPresetId: string;
+  presetVersion?: string | null;
+  scripts: any[];
+  previous?: {
+    hubPresetId?: string | null;
+    version?: string | null;
+    presetName?: string | null;
+  } | null;
+}
+
+/**
+ * Stage a LumiHub regex payload before retiring the previous version. A partial
+ * import is removed and the old restore-list is reinstated, leaving the prior
+ * working set untouched.
+ */
+export function installLumiHubPresetRegexScripts(
+  userId: string,
+  options: InstallLumiHubPresetRegexOptions,
+): { imported: number; archived: number; replaced: number; folder: string | null } {
+  const previousRestore = readStoredPresetRegexIdsRecord(userId, options.presetId);
+  const beforeIds = new Set(getRegexScriptsByPresetId(userId, options.presetId).map((script) => script.id));
+  let newIds: string[] = [];
+  let folder: string | null = null;
+
+  try {
+    if (options.scripts.length > 0) {
+      folder = resolveLumiHubPresetRegexInstallFolder(
+        userId,
+        options.presetId,
+        options.hubPresetId,
+        options.presetName,
+      );
+      const imported = importPresetBoundRegexScripts(
+        userId,
+        options.presetId,
+        options.presetName,
+        options.scripts,
+        {
+          source: "lumihub",
+          hubPresetId: options.hubPresetId,
+          presetVersion: options.presetVersion,
+          folderName: folder,
+        },
+      );
+      newIds = getRegexScriptsByPresetId(userId, options.presetId)
+        .filter((script) => !beforeIds.has(script.id))
+        .map((script) => script.id);
+      if (imported.skipped > 0 || imported.imported !== options.scripts.length) {
+        throw new Error(`LumiHub preset regex import was incomplete (${imported.imported}/${options.scripts.length})`);
+      }
+    }
+
+    const nextRestore = options.scripts.length > 0
+      ? readStoredPresetRegexIdsRecord(userId, options.presetId).ids
+      : [];
+    const retired = options.previous
+      ? retireLumiHubPresetRegexScriptsForUpdate(userId, {
+          presetId: options.presetId,
+          hubPresetId: options.hubPresetId,
+          previousHubPresetId: options.previous.hubPresetId,
+          previousVersion: options.previous.version,
+          incomingVersion: options.presetVersion,
+          presetName: normalizeOptionalId(options.previous.presetName) ?? options.presetName,
+          preserveIds: newIds,
+        })
+      : { archivedIds: [], replacedIds: [] };
+
+    // Retirement clears the old restore-list. Reapply only the staged version's
+    // author-enabled IDs, including an intentionally empty list.
+    writeStoredPresetRegexIdsWithDb(getDb(), userId, options.presetId, nextRestore);
+    return {
+      imported: newIds.length,
+      archived: retired.archivedIds.length,
+      replaced: retired.replacedIds.length,
+      folder,
+    };
+  } catch (error) {
+    newIds = getRegexScriptsByPresetId(userId, options.presetId)
+      .filter((script) => !beforeIds.has(script.id))
+      .map((script) => script.id);
+    if (newIds.length > 0) deleteRegexScripts(userId, newIds);
+    if (previousRestore.exists) {
+      writeStoredPresetRegexIdsWithDb(getDb(), userId, options.presetId, previousRestore.ids);
+    } else {
+      deleteStoredPresetRegexIds(userId, options.presetId);
+    }
+    throw error;
+  }
+}
+
 export function activatePresetBoundRegexScripts(userId: string, presetId?: string | null): { changedIds: string[]; restoredIds: string[] } {
   const targetPresetId = normalizeOptionalId(presetId);
   const db = getDb();
@@ -2396,7 +2721,7 @@ export function importPresetBoundRegexScripts(
     const before = new Set(getRegexScriptsByPresetId(userId, presetId).map((s) => s.id));
     const result = importRegexScripts(userId, {
       scripts: [preparePresetBoundImportedScript(script, attribution)],
-      folder: presetName,
+      folder: normalizeOptionalId(attribution?.folderName) ?? presetName,
       preset_id: presetId,
     });
     imported += result.imported;
@@ -2408,12 +2733,10 @@ export function importPresetBoundRegexScripts(
     }
   }
 
-  // Seed the restore-list so author-enabled scripts activate on the next switch
-  // to this preset. If every script shipped disabled we leave no record — the
-  // activation default (enable currently-undisabled rows) then correctly enables none.
-  if (enabledIds.length > 0) {
-    updateStoredPresetRegexIds(userId, presetId, () => enabledIds);
-  }
+  // Replace the restore-list so only this imported version's author-enabled
+  // scripts can activate. Persist an empty list too; otherwise an older
+  // version's IDs could be restored when every new script ships disabled.
+  updateStoredPresetRegexIds(userId, presetId, () => enabledIds);
 
   return { imported, skipped };
 }
