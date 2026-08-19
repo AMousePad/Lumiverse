@@ -110,6 +110,8 @@ export enum EventType {
 
   // World Books
   WORLD_BOOK_CHANGED = "WORLD_BOOK_CHANGED",
+  /** Coarse invalidation for bulk workflows that suppress per-book payloads. */
+  WORLD_BOOK_LIBRARY_CHANGED = "WORLD_BOOK_LIBRARY_CHANGED",
   WORLD_BOOK_DELETED = "WORLD_BOOK_DELETED",
   WORLD_BOOK_ENTRY_CHANGED = "WORLD_BOOK_ENTRY_CHANGED",
   WORLD_BOOK_ENTRY_DELETED = "WORLD_BOOK_ENTRY_DELETED",

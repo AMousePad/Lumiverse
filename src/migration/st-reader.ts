@@ -70,6 +70,7 @@ export interface STProxy {
 export type STSecrets = Record<string, Array<{ id?: string; value?: string; active?: boolean }>>;
 
 export interface WorldBookPayload {
+  filename: string;
   name: string;
   description: string;
   entries: any;
@@ -547,6 +548,7 @@ export async function readWorldBooksFromDisk(stDataDir: string, logger?: Migrati
     try {
       const data = JSON.parse(await fs.readText(filePath));
       results.push({
+        filename: jsonFiles[i].name,
         name: data.name || data.originalName || fs.basename(jsonFiles[i].name, ".json"),
         description: data.description || "",
         entries: data.entries || [],

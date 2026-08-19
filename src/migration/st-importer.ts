@@ -29,7 +29,11 @@ import {
 } from "../services/characters.service";
 import { uploadImage, uploadImages } from "../services/images.service";
 import { createPersona, setPersonaAvatar, setPersonaImage } from "../services/personas.service";
-import { importWorldBookBulk } from "../services/world-books.service";
+import {
+  emitWorldBookLibraryChanged,
+  importWorldBookBulk,
+  listSillyTavernWorldBookSourceFilenameIds,
+} from "../services/world-books.service";
 import { createChatRaw, bulkInsertMessages } from "../services/chats.service";
 import { createCooperativeYielder, yieldToEventLoop } from "../llm/stream-utils";
 import { getDb } from "../db/connection";
@@ -41,7 +45,6 @@ const defaultFs = new LocalFileSystem();
 const characterBatchSize = 50;
 const characterReadConcurrency = 8;
 const characterAvatarWriteConcurrency = 8;
-const yieldEveryWorldBook = 2;
 const yieldEveryPersona = 4;
 const yieldEveryChat = 8;
 const yieldEveryGroupChat = 4;
@@ -57,6 +60,7 @@ export interface CharacterImportResult {
 
 export interface WorldBookImportResult {
   imported: number;
+  skipped: number;
   failed: number;
   totalEntries: number;
   nameToId: Map<string, string>;
@@ -266,31 +270,56 @@ export async function importWorldBooks(
 ): Promise<WorldBookImportResult> {
   const nameToId = new Map<string, string>();
   let imported = 0;
+  let skipped = 0;
   let failed = 0;
   let totalEntries = 0;
 
   const worldBooks = await readWorldBooksFromDisk(stDataDir, logger, fs);
   const total = worldBooks.length;
-  const maybeYield = createCooperativeYielder(yieldEveryWorldBook);
+  const existingByFilename = listSillyTavernWorldBookSourceFilenameIds(userId);
 
-  for (let i = 0; i < worldBooks.length; i++) {
-    const wb = worldBooks[i];
-    logger.progress("Importing world books", i + 1, total);
+  try {
+    for (let i = 0; i < worldBooks.length; i++) {
+      const wb = worldBooks[i];
+      logger.progress("Importing world books", i + 1, total);
 
-    try {
-      const result = importWorldBookBulk(userId, wb);
-      imported++;
-      totalEntries += result.entryCount;
-      nameToId.set(wb.name, result.worldBook.id);
-    } catch (err: any) {
-      logger.warn(`Failed to import world book "${wb.name}": ${err.message}`);
-      failed++;
+      const existingId = existingByFilename.get(wb.filename);
+      if (existingId) {
+        nameToId.set(wb.name, existingId);
+        skipped++;
+        await yieldToEventLoop();
+        continue;
+      }
+
+      try {
+        const result = await importWorldBookBulk(userId, wb, {
+          emitEvent: false,
+          metadata: {
+            source: "sillytavern_migration",
+            _lumiverse_source_filename: wb.filename,
+          },
+        });
+        imported++;
+        totalEntries += result.entryCount;
+        nameToId.set(wb.name, result.worldBook.id);
+        existingByFilename.set(wb.filename, result.worldBook.id);
+      } catch (err: any) {
+        logger.warn(`Failed to import world book "${wb.name}": ${err.message}`);
+        failed++;
+      }
+
+      await yieldToEventLoop();
     }
-
-    await maybeYield();
+  } finally {
+    if (imported > 0) {
+      emitWorldBookLibraryChanged(userId, {
+        reason: "sillytavern_migration",
+        imported,
+      });
+    }
   }
 
-  return { imported, failed, totalEntries, nameToId };
+  return { imported, skipped, failed, totalEntries, nameToId };
 }
 
 // ─── Persona import ─────────────────────────────────────────────────────────

@@ -17,6 +17,8 @@ import {
 import clsx from 'clsx'
 import { ApiError } from '@/api/client'
 import { worldBooksApi } from '@/api/world-books'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/ws/events'
 import {
   backfillEntryMetadata,
   buildEntryGridTemplate,
@@ -231,6 +233,12 @@ export default function LorebookEditorWorkspace({
     setSelectedBookId((current) => current ?? initialBookId ?? result.data[0]?.id ?? null)
     if (resolved && requestedEntriesBookId.current !== resolved) void loadEntries(resolved, false)
   }, [initialBookId, loadEntries])
+
+  useEffect(() => {
+    return wsClient.on(EventType.WORLD_BOOK_LIBRARY_CHANGED, () => {
+      void loadBooks()
+    })
+  }, [loadBooks])
 
   // The two opening requests, issued in the same tick.
   //

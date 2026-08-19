@@ -9,10 +9,11 @@ import {
   listCharacterSourceFilenameIds,
   listCharacterSummaries,
 } from "../services/characters.service";
+import { listSillyTavernWorldBookSourceFilenameIds } from "../services/world-books.service";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { MigrationLogger } from "./st-reader";
-import { importCharacters } from "./st-importer";
+import { importCharacters, importWorldBooks } from "./st-importer";
 
 const USER_ID = "st-import-user";
 const ONE_BY_ONE_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==";
@@ -52,6 +53,9 @@ beforeEach(async () => {
     "099_character_library_scope.sql",
     "102_character_source_filename_index.sql",
     "103_character_fts_update_columns.sql",
+    "098_world_book_entry_exclude_greeting.sql",
+    "098_world_book_entry_revision.sql",
+    "104_world_book_source_filename_index.sql",
   ]) {
     db.run(await Bun.file(join(import.meta.dir, "..", "db", "migrations", migration)).text());
   }
@@ -61,12 +65,70 @@ beforeEach(async () => {
   mkdirSync(join(workDir, "st-data", "characters"), { recursive: true });
   writeFileSync(join(workDir, "st-data", "characters", "alice.png"), cardPng("Alice"));
   writeFileSync(join(workDir, "st-data", "characters", "bob.png"), cardPng("Bob"));
+  mkdirSync(join(workDir, "st-data", "worlds"), { recursive: true });
+  writeFileSync(join(workDir, "st-data", "worlds", "alpha.json"), JSON.stringify({
+    name: "Alpha",
+    entries: {
+      0: { key: ["alpha"], content: "Alpha content" },
+      1: { key: ["beta"], content: "Beta content" },
+    },
+  }));
+  writeFileSync(join(workDir, "st-data", "worlds", "empty.json"), JSON.stringify({
+    name: "Empty",
+    entries: {},
+  }));
 });
 
 afterEach(() => {
   closeDatabase();
   env.dataDir = originalDataDir;
   if (workDir) rmSync(workDir, { recursive: true, force: true });
+});
+
+describe("SillyTavern world-book bulk migration", () => {
+  test("uses one coarse event and preloaded source identities across reruns", async () => {
+    let fullBookEvents = 0;
+    let libraryEvents = 0;
+    const offBook = eventBus.on(EventType.WORLD_BOOK_CHANGED, () => fullBookEvents++);
+    const offLibrary = eventBus.on(EventType.WORLD_BOOK_LIBRARY_CHANGED, () => libraryEvents++);
+
+    try {
+      const first = await importWorldBooks(USER_ID, join(workDir, "st-data"), logger);
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      expect(first).toMatchObject({ imported: 2, skipped: 0, failed: 0, totalEntries: 2 });
+      expect(first.nameToId.size).toBe(2);
+      expect(fullBookEvents).toBe(0);
+      expect(libraryEvents).toBe(1);
+      expect([...listSillyTavernWorldBookSourceFilenameIds(USER_ID).keys()].sort()).toEqual([
+        "alpha.json",
+        "empty.json",
+      ]);
+
+      const second = await importWorldBooks(USER_ID, join(workDir, "st-data"), logger);
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      expect(second).toMatchObject({ imported: 0, skipped: 2, failed: 0, totalEntries: 0 });
+      expect(second.nameToId.size).toBe(2);
+      expect(fullBookEvents).toBe(0);
+      expect(libraryEvents).toBe(1);
+      expect(getDb().query("SELECT COUNT(*) AS count FROM world_books").get()).toEqual({ count: 2 });
+      expect(getDb().query("SELECT COUNT(*) AS count FROM world_book_entries").get()).toEqual({ count: 2 });
+    } finally {
+      offBook();
+      offLibrary();
+    }
+  });
+
+  test("uses the source-filename expression index for migration identity scans", () => {
+    const plan = getDb().query(
+      `EXPLAIN QUERY PLAN
+       SELECT id, json_extract(metadata, '$._lumiverse_source_filename')
+       FROM world_books
+       WHERE user_id = ?
+         AND json_extract(metadata, '$._lumiverse_source_filename') = ?`,
+    ).all(USER_ID, "alpha.json") as Array<{ detail: string }>;
+
+    expect(plan.some((row) => row.detail.includes("idx_world_books_user_source_filename"))).toBe(true);
+  });
 });
 
 describe("SillyTavern character bulk migration", () => {

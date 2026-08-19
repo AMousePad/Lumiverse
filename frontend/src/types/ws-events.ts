@@ -62,6 +62,7 @@ export enum EventType {
 
   // World Books (lorebook editor live-sync — mirror src/ws/events.ts)
   WORLD_BOOK_CHANGED = 'WORLD_BOOK_CHANGED',
+  WORLD_BOOK_LIBRARY_CHANGED = 'WORLD_BOOK_LIBRARY_CHANGED',
   WORLD_BOOK_DELETED = 'WORLD_BOOK_DELETED',
   WORLD_BOOK_ENTRY_CHANGED = 'WORLD_BOOK_ENTRY_CHANGED',
   WORLD_BOOK_ENTRY_DELETED = 'WORLD_BOOK_ENTRY_DELETED',
@@ -625,6 +626,10 @@ export interface MigrationFailedPayload {
 export interface WorldBookChangedPayload {
   id: string
   worldBook: import('./api').WorldBook
+}
+export interface WorldBookLibraryChangedPayload {
+  reason: string
+  imported: number
 }
 export interface WorldBookDeletedPayload {
   id: string

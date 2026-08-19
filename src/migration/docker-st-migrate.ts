@@ -33,7 +33,7 @@ interface DockerSTMigrationStatus {
   migration_target: number;
   results: {
     characters?: { imported: number; skipped: number; failed: number };
-    world_books?: { imported: number; failed: number; total_entries: number };
+    world_books?: { imported: number; skipped: number; failed: number; total_entries: number };
     personas?: { imported: number; failed: number; avatars_uploaded: number };
     chats?: { imported: number; failed: number; total_messages: number };
     group_chats?: { imported: number; failed: number; skipped: number; total_messages: number };
@@ -177,10 +177,11 @@ export async function runDockerSTMigration(): Promise<void> {
       worldBookNameToId = wbResult.nameToId;
       results.world_books = {
         imported: wbResult.imported,
+        skipped: wbResult.skipped,
         failed: wbResult.failed,
         total_entries: wbResult.totalEntries,
       };
-      logger.info(`World books: ${wbResult.imported} imported (${wbResult.totalEntries} entries), ${wbResult.failed} failed`);
+      logger.info(`World books: ${wbResult.imported} imported, ${wbResult.skipped} skipped (${wbResult.totalEntries} entries), ${wbResult.failed} failed`);
     }
 
     // Personas (needs worldBookNameToId for lorebook attachment)
