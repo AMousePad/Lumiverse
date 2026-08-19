@@ -98,7 +98,7 @@ const MAX_REGEX_ACTION_FIELD_LENGTH = 10_000;
 const REGEX_ACTION_ID_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,63}$/;
 const REGEX_ACTION_STATE_KEY_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/;
 const PRESET_REGEX_ENABLED_SETTING_PREFIX = "presetRegexEnabled:";
-const IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY = "imported_script_id";
+const IMPORTED_SOURCE_SCRIPT_ID_METADATA_KEY = "imported_script_id";
 
 interface RegexMutationContext {
   activePresetId?: string | null;
@@ -631,11 +631,47 @@ function prepareCharacterBoundImportedScript<T extends Record<string, any>>(inpu
   const metadata = isPlainMetadataRecord(input.metadata) ? { ...input.metadata } : {};
   metadata.source = source;
   if (importedScriptId) {
-    metadata[IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY] = importedScriptId;
+    metadata[IMPORTED_SOURCE_SCRIPT_ID_METADATA_KEY] = importedScriptId;
   }
 
   // Character-bound regexes are rebound per imported character, so their
   // script_id must not remain globally unique across the whole user.
+  return {
+    ...input,
+    script_id: "",
+    metadata,
+  };
+}
+
+export interface PresetBoundRegexAttribution {
+  source?: "lumihub";
+  hubPresetId?: string | null;
+  presetVersion?: string | null;
+}
+
+/**
+ * Preset bundles may reuse a publisher-defined script_id that already exists in
+ * another local preset. Keep that ID as provenance metadata (the macro resolver
+ * already scopes it to the active preset) instead of competing for the user's
+ * globally-unique script_id column.
+ */
+function preparePresetBoundImportedScript<T extends Record<string, any>>(
+  input: T,
+  attribution?: PresetBoundRegexAttribution,
+): T {
+  const importedScriptId = typeof input.script_id === "string"
+    ? normalizeScriptId(input.script_id)
+    : "";
+  const metadata = isPlainMetadataRecord(input.metadata) ? { ...input.metadata } : {};
+  if (importedScriptId) metadata[IMPORTED_SOURCE_SCRIPT_ID_METADATA_KEY] = importedScriptId;
+
+  if (attribution?.source === "lumihub") {
+    metadata._lumiverse_lumihub_preset = {
+      id: normalizeOptionalId(attribution.hubPresetId),
+      version: normalizeOptionalId(attribution.presetVersion),
+    };
+  }
+
   return {
     ...input,
     script_id: "",
@@ -1148,7 +1184,7 @@ export function getRegexScriptByScriptId(
   const presetId = normalizeOptionalId(context?.presetId);
   const conditions = [
     "user_id = ?",
-    `(script_id = ? OR json_extract(metadata, '$.${IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY}') = ?)`,
+    `(script_id = ? OR json_extract(metadata, '$.${IMPORTED_SOURCE_SCRIPT_ID_METADATA_KEY}') = ?)`,
   ];
   const params: any[] = [userId, normalizedScriptId, normalizedScriptId];
 
@@ -2340,6 +2376,7 @@ export function importPresetBoundRegexScripts(
   presetId: string,
   presetName: string,
   scripts: any[],
+  attribution?: PresetBoundRegexAttribution,
 ): { imported: number; skipped: number } {
   if (!Array.isArray(scripts) || scripts.length === 0) {
     return { imported: 0, skipped: 0 };
@@ -2358,7 +2395,7 @@ export function importPresetBoundRegexScripts(
     }
     const before = new Set(getRegexScriptsByPresetId(userId, presetId).map((s) => s.id));
     const result = importRegexScripts(userId, {
-      scripts: [script],
+      scripts: [preparePresetBoundImportedScript(script, attribution)],
       folder: presetName,
       preset_id: presetId,
     });

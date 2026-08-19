@@ -9,8 +9,10 @@ import {
   getCharacterBoundScripts,
   getRegexScript,
   getRegexScriptByScriptId,
+  getRegexScriptsByPresetId,
   importRegexScripts,
   importCharacterBoundRegexScripts,
+  importPresetBoundRegexScripts,
   reportRegexScriptPerformance,
   switchPresetBoundRegexScripts,
   toggleRegexScript,
@@ -798,6 +800,51 @@ describe("regex JSON overwrite imports", () => {
     expect(mustGetScript(updated.id).disabled).toBe(true);
     toggleRegexScript(USER_ID, updated.id, false, { activePresetId: "new-preset" });
     expect(mustGetScript(updated.id).disabled).toBe(false);
+  });
+
+  test("isolates LumiHub preset script IDs and stamps version attribution", () => {
+    const global = createRegexScript(USER_ID, {
+      name: "User global",
+      script_id: "shared_preset_import",
+      find_regex: "global",
+    });
+    expect(typeof global).not.toBe("string");
+
+    const result = importPresetBoundRegexScripts(
+      USER_ID,
+      "preset-historical",
+      "Historical preset",
+      [{
+        name: "Bundled preset regex",
+        script_id: "shared_preset_import",
+        find_regex: "bundled",
+        disabled: false,
+      }],
+      {
+        source: "lumihub",
+        hubPresetId: "hub-preset-1",
+        presetVersion: "1.4.0",
+      },
+    );
+
+    expect(result).toEqual({ imported: 1, skipped: 0 });
+    expect(mustGetScript((global as RegexScript).id)).toMatchObject({
+      find_regex: "global",
+      preset_id: null,
+      script_id: "shared_preset_import",
+    });
+
+    const [bundled] = getRegexScriptsByPresetId(USER_ID, "preset-historical");
+    expect(bundled).toMatchObject({
+      folder: "Historical preset",
+      script_id: "",
+      metadata: {
+        imported_script_id: "shared_preset_import",
+        _lumiverse_lumihub_preset: { id: "hub-preset-1", version: "1.4.0" },
+      },
+    });
+    expect(getRegexScriptByScriptId(USER_ID, "shared_preset_import", { presetId: "preset-historical" })?.id)
+      .toBe(bundled.id);
   });
 });
 

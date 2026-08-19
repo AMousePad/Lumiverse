@@ -837,6 +837,7 @@
     "disableFolderAria": "Disable all scripts in {{folder}}",
     "enableFolderNone": "All scripts in \"{{folder}}\" are already enabled",
     "disableFolderNone": "All scripts in \"{{folder}}\" are already disabled",
+    "lumihubPresetVersion": "Installed with LumiHub preset v{{version}}",
     "folderToggleSkipped_one": "{{count}} script in \"{{folder}}\" was skipped because it belongs to an inactive preset",
     "folderToggleSkipped_other": "{{count}} scripts in \"{{folder}}\" were skipped because they belong to an inactive preset",
     "requestFailed": "Request failed",

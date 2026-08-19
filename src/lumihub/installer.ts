@@ -760,7 +760,11 @@ export async function installPreset(
       }
       const regexScripts = extractPresetRegexScripts(exported);
       if (regexScripts.length > 0) {
-        regexSvc.importPresetBoundRegexScripts(userId, saved.id, saved.name, regexScripts);
+        regexSvc.importPresetBoundRegexScripts(userId, saved.id, saved.name, regexScripts, {
+          source: "lumihub",
+          hubPresetId: payload.presetId,
+          presetVersion,
+        });
       }
     } catch (err) {
       console.warn("[LumiHub Installer] Preset regex import failed:", err);

@@ -88,6 +88,35 @@ function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetad
   return raw as RegexPerformanceMetadata
 }
 
+function getLumiHubPresetVersions(
+  scripts: RegexScript[],
+  presets: Record<string, { metadata?: Record<string, unknown> }>,
+): string[] {
+  const versions = new Set<string>()
+  for (const script of scripts) {
+    const attribution = script.metadata?._lumiverse_lumihub_preset
+    const attributedVersion = attribution && typeof attribution === 'object'
+      && typeof attribution.version === 'string'
+      ? attribution.version.trim()
+      : ''
+    if (attributedVersion) {
+      versions.add(attributedVersion)
+      continue
+    }
+
+    const preset = script.preset_id ? presets[script.preset_id] : undefined
+    if (preset?.metadata?._lumiverse_install_source !== 'lumihub') continue
+    const version = typeof preset.metadata._lumiverse_preset_version === 'string'
+      ? preset.metadata._lumiverse_preset_version.trim()
+      : ''
+    if (version) versions.add(version)
+  }
+  return [...versions].sort((left, right) => left.localeCompare(right, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  }))
+}
+
 export default function RegexPanel() {
   const { t } = useTranslation('panels')
   const { t: tc } = useTranslation('common')
@@ -106,6 +135,7 @@ export default function RegexPanel() {
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
+  const presets = useStore((s) => s.presets)
 
   const [scopeFilter, setScopeFilter] = useState<RegexPanelScopeFilterValue>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -775,6 +805,7 @@ export default function RegexPanel() {
                   const isCollapsed = collapsedFolders.has(folderKey)
                   const folderLabel = group.folder || t('shared:uncategorized')
                   const isNamedFolder = Boolean(group.folder)
+                  const presetVersions = getLumiHubPresetVersions(group.scripts, presets)
                   return (
                     <div key={folderKey}>
                       <DroppableFolderHeader folderKey={folderKey} dropDisabled={!isCollapsed} onToggle={() => toggleFolder(folderKey)}>
@@ -803,6 +834,15 @@ export default function RegexPanel() {
                         <span className={styles.folderName}>
                           {folderLabel}
                         </span>
+                        {presetVersions.map((version) => (
+                          <span
+                            key={version}
+                            className={styles.folderVersionBadge}
+                            title={t('regexPanel.lumihubPresetVersion', { version })}
+                          >
+                            <Badge color="info" size="sm">v{version}</Badge>
+                          </span>
+                        ))}
                         <span className={styles.folderCount}>{group.scripts.length}</span>
                         {!bulkMode && <div className={styles.folderActions}>
                           {group.scripts.length > 0 && (
