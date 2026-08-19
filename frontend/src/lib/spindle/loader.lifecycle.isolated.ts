@@ -231,6 +231,9 @@ mock.module('@/ws/client', () => ({
   WS_CLOSE: '__ws_close',
   WS_OPEN: '__ws_open',
   WS_PONG: '__ws_pong',
+  WS_RESUME_RECOVERY_START: '__ws_resume_recovery_start',
+  WS_RESUME_RECOVERY_COMPLETE: '__ws_resume_recovery_complete',
+  WS_RESUME_RECOVERY_FAILED: '__ws_resume_recovery_failed',
   wsClient: wsClientMock,
 }))
 mock.module('@/api/spindle', () => ({ spindleApi: { getPermissions: () => permissionPromise } }))
