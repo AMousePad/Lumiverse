@@ -350,6 +350,7 @@
     "hidden": "Nascosto",
     "model": "Modello",
     "provider": "Fornitore",
+    "preset": "Preimpostazione",
     "firstToken": "Primo token",
     "speed": "Velocità",
     "tokPerSec": "{{count}} token/s"

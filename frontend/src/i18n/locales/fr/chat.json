@@ -350,6 +350,7 @@
     "hidden": "Caché",
     "model": "Modèle",
     "provider": "Fournisseur",
+    "preset": "Préréglage",
     "firstToken": "Premier jeton",
     "speed": "Vitesse",
     "tokPerSec": "{{count}} jetons/s"

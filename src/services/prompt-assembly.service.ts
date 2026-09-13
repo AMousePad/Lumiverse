@@ -1812,7 +1812,7 @@ export async function assemblePrompt(
 
   // If no blocks, fall back to legacy mapping
   if (!blocks.length) {
-    return await legacyAssembly(
+    const legacyResult = await legacyAssembly(
       messages,
       ctx.generationType,
       character,
@@ -1823,6 +1823,12 @@ export async function assemblePrompt(
       ctx.userInput,
       ctx.signal,
     );
+    return {
+      ...legacyResult,
+      ...(preset
+        ? { resolvedPreset: { id: preset.id, name: preset.name } }
+        : {}),
+    };
   }
 
   // ---- Pre-flight: prepare deferred cortex warm-cache task ----
@@ -4272,6 +4278,9 @@ export async function assemblePrompt(
     messages: result,
     breakdown,
     parameters,
+    ...(preset
+      ? { resolvedPreset: { id: preset.id, name: preset.name } }
+      : {}),
     trimIncompleteWords: prompts.advancedSettings?.trimIncompleteWords === true,
     assistantPrefill,
     assistantReasoningPrefill,
@@ -7882,6 +7891,9 @@ async function onelinerImpersonation(
     messages: result,
     breakdown,
     parameters,
+    ...(preset
+      ? { resolvedPreset: { id: preset.id, name: preset.name } }
+      : {}),
     trimIncompleteWords: preset?.prompts?.advancedSettings?.trimIncompleteWords === true,
     assistantPrefill,
     assistantReasoningPrefill,

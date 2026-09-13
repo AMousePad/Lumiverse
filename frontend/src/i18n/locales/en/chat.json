@@ -410,6 +410,7 @@
     "hidden": "Hidden",
     "model": "Model",
     "provider": "Provider",
+    "preset": "Preset",
     "firstToken": "First token",
     "speed": "Speed",
     "tokPerSec": "{{count}} tok/s"

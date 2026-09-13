@@ -350,6 +350,7 @@
     "hidden": "已隱藏",
     "model": "模型",
     "provider": "提供商",
+    "preset": "預設",
     "firstToken": "首 token",
     "speed": "速度",
     "tokPerSec": "{{count}} tok/s"

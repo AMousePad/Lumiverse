@@ -488,6 +488,8 @@ class GenerationCancelledByExtensionError extends Error {
 interface PromptPipelineResult {
   messages: LlmMessage[];
   parameters: GenerationParameters;
+  /** Preset selected by profile/request resolution for this generation. */
+  resolvedPreset?: { id: string; name: string };
   breakdown?: AssemblyBreakdownEntry[];
   /** Snapshot of chat history messages taken before interceptors/post-processing,
    *  used as the shared tokenization source for both dry-run and generation breakdowns. */
@@ -1125,6 +1127,7 @@ async function runPromptPipeline(opts: {
     | undefined;
   let macroEnv: import("../macros/types").MacroEnv | undefined;
   let trimIncompleteWords = false;
+  let resolvedPreset: { id: string; name: string } | undefined;
 
   let deliberationHandledByMacro = false;
 
@@ -1202,6 +1205,7 @@ async function runPromptPipeline(opts: {
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
     macroEnv = assemblyResult.macroEnv;
     trimIncompleteWords = assemblyResult.trimIncompleteWords === true;
+    resolvedPreset = assemblyResult.resolvedPreset;
   }
 
   // Snapshot chat history messages BEFORE interceptors/post-processing can
@@ -1449,6 +1453,7 @@ async function runPromptPipeline(opts: {
   return {
     messages,
     parameters,
+    resolvedPreset,
     breakdown,
     chatHistoryMessages,
     assistantPrefill,
@@ -2756,15 +2761,13 @@ export async function startGeneration(
         }
 
         // Use the preset assembly actually selected, including profile overrides.
-        const presetId = typeof pipeline.macroEnv?.extra.presetId === "string"
-          ? pipeline.macroEnv.extra.presetId
-          : input.messages ? input.preset_id || connection.preset_id : undefined;
+        const presetId = pipeline.resolvedPreset?.id
+          ?? (input.messages ? input.preset_id || connection.preset_id : undefined);
         if (presetId) {
-          const preset = presetsSvc.getPreset(input.userId, presetId);
-          if (preset) {
-            lifecycle.presetName = preset.name;
-            lifecycle.presetId = presetId;
-          }
+          const presetName = pipeline.resolvedPreset?.name
+            ?? presetsSvc.getPreset(input.userId, presetId)?.name;
+          lifecycle.presetId = presetId;
+          if (presetName) lifecycle.presetName = presetName;
         }
 
         // Final abort checkpoint between assembly completion and runGeneration
@@ -4103,6 +4106,8 @@ async function runGeneration(
               wasStreaming: boolean;
               model?: string;
               provider?: string;
+              presetId?: string;
+              presetName?: string;
             }
           | undefined;
         if (finalPoolEntry) {
@@ -4140,6 +4145,10 @@ async function runGeneration(
             ...(lifecycle.model ? { model: lifecycle.model } : {}),
             ...(lifecycle.providerName
               ? { provider: lifecycle.providerName }
+              : {}),
+            ...(lifecycle.presetId ? { presetId: lifecycle.presetId } : {}),
+            ...(lifecycle.presetName
+              ? { presetName: lifecycle.presetName }
               : {}),
           };
         }

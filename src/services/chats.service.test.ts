@@ -667,7 +667,7 @@ describe("recent chats", () => {
     seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
     seedMessage("msg-1", "chat-1", "first swipe", {
       tokenCount: 11,
-      generationMetrics: { model: "first-model", tps: 1.1 },
+      generationMetrics: { model: "first-model", tps: 1.1, presetId: "preset-1", presetName: "First preset" },
       usage: { completion_tokens: 11, total_tokens: 22 },
     });
 
@@ -680,25 +680,40 @@ describe("recent chats", () => {
     patchMessageExtra("u1", "msg-1", {
       ...added.extra,
       tokenCount: 33,
-      generationMetrics: { model: "second-model", tps: 3.3 },
+      generationMetrics: { model: "second-model", tps: 3.3, presetId: "preset-2", presetName: "Second preset" },
       usage: { completion_tokens: 33, total_tokens: 44 },
     });
 
     const secondSwipe = getMessage("u1", "msg-1")!;
     expect(secondSwipe.extra.tokenCount).toBe(33);
-    expect(secondSwipe.extra.generationMetrics).toEqual({ model: "second-model", tps: 3.3 });
+    expect(secondSwipe.extra.generationMetrics).toEqual({
+      model: "second-model",
+      tps: 3.3,
+      presetId: "preset-2",
+      presetName: "Second preset",
+    });
     expect(secondSwipe.extra.usage).toEqual({ completion_tokens: 33, total_tokens: 44 });
 
     const firstSwipe = cycleSwipe("u1", "msg-1", "left")!;
     expect(firstSwipe.swipe_id).toBe(0);
     expect(firstSwipe.extra.tokenCount).toBe(11);
-    expect(firstSwipe.extra.generationMetrics).toEqual({ model: "first-model", tps: 1.1 });
+    expect(firstSwipe.extra.generationMetrics).toEqual({
+      model: "first-model",
+      tps: 1.1,
+      presetId: "preset-1",
+      presetName: "First preset",
+    });
     expect(firstSwipe.extra.usage).toEqual({ completion_tokens: 11, total_tokens: 22 });
 
     const restoredSecondSwipe = cycleSwipe("u1", "msg-1", "right")!;
     expect(restoredSecondSwipe.swipe_id).toBe(1);
     expect(restoredSecondSwipe.extra.tokenCount).toBe(33);
-    expect(restoredSecondSwipe.extra.generationMetrics).toEqual({ model: "second-model", tps: 3.3 });
+    expect(restoredSecondSwipe.extra.generationMetrics).toEqual({
+      model: "second-model",
+      tps: 3.3,
+      presetId: "preset-2",
+      presetName: "Second preset",
+    });
     expect(restoredSecondSwipe.extra.usage).toEqual({ completion_tokens: 33, total_tokens: 44 });
   });
 

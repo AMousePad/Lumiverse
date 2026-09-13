@@ -350,6 +350,7 @@
     "hidden": "非表示",
     "model": "モデル",
     "provider": "供給者",
+    "preset": "プリセット",
     "firstToken": "最初のトークン",
     "speed": "速度",
     "tokPerSec": "{{count}}トークン/秒"
