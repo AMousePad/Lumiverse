@@ -8,6 +8,15 @@ import { ProviderRequestError, throwProviderResponseError } from "../../utils/pr
 import { cancelStreamAndCloseConnection, fetchWithPreflightAbort, readWithAbort } from "../../llm/stream-utils";
 import { applyRawOverride } from "../types";
 
+// NovelAI expects an unsigned 64-bit seed, so -1 (the "random" sentinel used by other
+// providers and by saved connection defaults) must never reach the wire. Connection
+// defaults are merged into the request after extension-side normalization, so resolve
+// the seed once more at the final request boundary.
+function resolveNovelAISeed(value: unknown): number {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
+  return Math.floor(Math.random() * 2147483647);
+}
+
 const DIRECTOR_REF_CANVASES: Array<[number, number]> = [
   [1024, 1536],
   [1536, 1024],
@@ -112,7 +121,7 @@ export class NovelAIImageProvider implements ImageProvider {
     const negativePrompt =
       params.negativePrompt ||
       "lowres, artistic error, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, blurry, bad anatomy, bad hands, missing fingers, extra digits, fewer digits, text, watermark, username, logo, signature, dithering, halftone, screentone, scan artifacts, multiple views, blank page";
-    const seed = params.seed ?? Math.floor(Math.random() * 2147483647);
+    const seed = resolveNovelAISeed(params.seed);
     const usesStructuredPrompts = isNovelAIV4OrLaterModel(model);
 
     const naiParams: any = {
@@ -216,6 +225,8 @@ export class NovelAIImageProvider implements ImageProvider {
 
     // The saved connection controls transport, including when raw parameters are supplied.
     if (finalBody.parameters && typeof finalBody.parameters === "object") {
+      // Raw overrides and merged connection defaults can reintroduce an invalid seed.
+      finalBody.parameters.seed = resolveNovelAISeed(finalBody.parameters.seed);
       if (nonStreaming) delete finalBody.parameters.stream;
       else finalBody.parameters.stream = "msgpack";
     }
