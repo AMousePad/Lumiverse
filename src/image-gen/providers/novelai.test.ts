@@ -16,6 +16,64 @@ describe("NovelAIImageProvider", () => {
     globalThis.fetch = originalFetch;
   });
 
+
+  for (const nonStreaming of [false, true]) {
+    for (const raw of [false, true]) {
+      for (const seed of [undefined, null, -1, -42, NaN, Infinity, 1.5, "42", 0, 42, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1]) {
+        test(`final seed ${String(seed)}, raw=${raw}, nonStreaming=${nonStreaming}`, async () => {
+          const bodies: any[] = [];
+          globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+            bodies.push(JSON.parse(String(init?.body)));
+            return new Response(TINY_PNG);
+          }) as typeof fetch;
+          await provider.generate("offline-token", "https://example.test", {
+            prompt: "synthetic fox", model: "nai-diffusion-5-full",
+            parameters: raw
+              ? { seed: 77, rawRequestOverride: JSON.stringify({ input: "override", parameters: { seed, steps: 12 } }) }
+              : seed === undefined ? {} : { seed },
+            connectionOptions: { novelai: { nonStreaming } },
+          });
+          expect(bodies).toHaveLength(1);
+          const actual = bodies[0].parameters.seed;
+          if (raw && seed === undefined) expect(actual).toBe(77);
+          else if (typeof seed === "number" && Number.isSafeInteger(seed) && seed >= 0) expect(actual).toBe(seed);
+          else {
+            expect(Number.isSafeInteger(actual)).toBe(true);
+            expect(actual).toBeGreaterThanOrEqual(0);
+            expect(actual).toBeLessThan(2147483647);
+          }
+          if (raw) {
+            expect(bodies[0].input).toBe("override");
+            expect(bodies[0].parameters.steps).toBe(12);
+          }
+        });
+      }
+    }
+  }
+
+  test("replaces a merged connection-default seed of -1 without touching other defaults", async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(TINY_PNG);
+    }) as typeof fetch;
+
+    // Mirrors the Spindle image path, where saved connection defaults are merged into
+    // the request before the provider runs, so a stored seed of -1 reaches this boundary.
+    await provider.generate("offline-token", "https://example.test", {
+      prompt: "synthetic fox",
+      model: "nai-diffusion-4-5-full",
+      parameters: { seed: -1, steps: 19, sampler: "k_euler" },
+    });
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].parameters.seed).not.toBe(-1);
+    expect(Number.isSafeInteger(bodies[0].parameters.seed)).toBe(true);
+    expect(bodies[0].parameters.seed).toBeGreaterThanOrEqual(0);
+    expect(bodies[0].parameters.steps).toBe(19);
+    expect(bodies[0].parameters.sampler).toBe("k_euler");
+  });
+
   test("lists the V5 Full and Curated models", async () => {
     const models = await provider.listModels("", "");
 
