@@ -836,6 +836,7 @@ export function useLoomBuilder() {
   const persistImportedPreset = useCallback(async (payload: any, fileName?: string) => {
     const selection = beginActiveLoomPresetSelection()
     setIsLoading(true)
+    setError(null)
     try {
       const fallbackName = fileName?.replace(/\.json$/i, '') || 'Imported Preset'
       const loom = coerceImportedLoomPreset(payload, fallbackName)
