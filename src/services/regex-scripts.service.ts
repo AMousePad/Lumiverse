@@ -117,12 +117,25 @@ interface RegexMutationContext {
   extensionFolderVersion?: unknown;
 }
 
-const EXTENSION_REGEX_OWNERSHIP_ERROR = "Regex script is not an unbound script owned by this extension";
+const EXTENSION_REGEX_OWNERSHIP_ERROR = "Regex script is not owned by this extension";
 
 function normalizeOptionalId(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * A preset link is resolved by user whenever it is used: the deletion cascade
+ * (deleteRegexScriptsByPresetId) matches on user_id + preset_id, and preset
+ * activation reads the preset's own restore list. A link to an unknown preset,
+ * or to another user's preset, would therefore persist as an orphan row that no
+ * cascade can ever reach, so it is rejected instead of stored.
+ */
+function validateOwnedPresetLink(userId: string, presetId: string): string | null {
+  const preset = getDb().query("SELECT 1 AS found FROM presets WHERE id = ? AND user_id = ?")
+    .get(presetId, userId);
+  return preset ? null : "Linked preset not found";
 }
 
 function getPresetRegexSettingKey(presetId: string): string {
@@ -347,8 +360,15 @@ export function reportRegexScriptEvidence(
   return getRegexScript(userId, id);
 }
 
-function resolveCreateDisabledState(input: CreateRegexScriptInput, activePresetId: string | null): boolean {
+function resolveCreateDisabledState(
+  input: CreateRegexScriptInput,
+  activePresetId: string | null,
+  presetActivationManaged = true,
+): boolean {
   const requestedDisabled = !!input.disabled;
+  // Extension-owned rows are not driven by preset activation: the extension that
+  // created the row keeps its enabled state, even while it carries a preset link.
+  if (!presetActivationManaged) return requestedDisabled;
   const presetId = normalizeOptionalId(input.preset_id);
   if (!presetId) return requestedDisabled;
   if (presetId !== activePresetId) return true;
@@ -366,8 +386,11 @@ function applyPresetBoundActivationWithDb(
   userId: string,
   targetPresetId: string | null,
 ): { changedIds: string[]; restoredIds: string[] } {
+  // Extension-owned rows are excluded: their preset link is a lifecycle link, so
+  // preset activation neither disables an extension's row nor enables it against
+  // the extension's own `disabled` state.
   const rows = db
-    .query("SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND preset_id IS NOT NULL ORDER BY sort_order ASC, created_at ASC")
+    .query("SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND preset_id IS NOT NULL AND owner_extension_identifier IS NULL ORDER BY sort_order ASC, created_at ASC")
     .all(userId) as PresetBoundRowState[];
   if (rows.length === 0) return { changedIds: [], restoredIds: [] };
 
@@ -899,9 +922,28 @@ export function createRegexScript(
   context?: RegexMutationContext,
 ): RegexScript | string {
   const extensionIdentifier = normalizeOptionalId(context?.extensionIdentifier);
+  // Pack and character links stay host-owned. A preset link is the one binding an
+  // extension may install itself: it owns the row, so the host's preset-delete
+  // cascade must be able to reap it. The link is same-user-validated here and is
+  // treated as lifecycle-only — preset activation leaves extension-owned rows to
+  // their own `disabled` state (see applyPresetBoundActivationWithDb).
   let nextInput: CreateRegexScriptInput = extensionIdentifier
-    ? { ...input, pack_id: null, preset_id: null, character_id: null }
+    ? { ...input, pack_id: null, character_id: null }
     : { ...input };
+  if (extensionIdentifier) {
+    const rawPresetId = nextInput.preset_id;
+    // A silently-dropped link would leave the caller believing its row cascades
+    // with a preset it was never bound to, so a malformed value is rejected.
+    if (rawPresetId !== undefined && rawPresetId !== null && typeof rawPresetId !== "string") {
+      return "preset_id must be a string or null";
+    }
+    const presetId = normalizeOptionalId(rawPresetId);
+    nextInput.preset_id = presetId;
+    if (presetId) {
+      const presetError = validateOwnedPresetLink(userId, presetId);
+      if (presetError) return presetError;
+    }
+  }
   if (extensionIdentifier && context) {
     const folderVersionError = validateExtensionFolderVersion(context);
     if (folderVersionError) return folderVersionError;
@@ -918,7 +960,7 @@ export function createRegexScript(
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const activePresetId = normalizeOptionalId(context?.activePresetId);
-  const disabled = resolveCreateDisabledState(nextInput, activePresetId);
+  const disabled = resolveCreateDisabledState(nextInput, activePresetId, !extensionIdentifier);
 
   try {
     getDb()
@@ -963,7 +1005,7 @@ export function createRegexScript(
   }
 
   const script = getRegexScript(userId, id)!;
-  if (script.preset_id && script.preset_id === activePresetId) {
+  if (!extensionIdentifier && script.preset_id && script.preset_id === activePresetId) {
     setPresetBoundScriptEnabledInRestoreList(userId, script.preset_id, script.id, !script.disabled);
   }
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script }, userId);
@@ -980,10 +1022,10 @@ export function updateRegexScript(
   if (!existing) return null;
 
   const extensionIdentifier = normalizeOptionalId(context?.extensionIdentifier);
-  if (extensionIdentifier && (
-    existing.owner_extension_identifier !== extensionIdentifier
-    || existing.preset_id !== null
-  ) && !context?.allowUnownedMutation) {
+  // Ownership, not the preset link, decides mutability: a row this extension
+  // owns stays editable after it is bound to a preset.
+  const ownsRow = !!extensionIdentifier && existing.owner_extension_identifier === extensionIdentifier;
+  if (extensionIdentifier && !ownsRow && !context?.allowUnownedMutation) {
     return EXTENSION_REGEX_OWNERSHIP_ERROR;
   }
 
@@ -1004,8 +1046,9 @@ export function updateRegexScript(
       if (attribution) metadata[SPINDLE_EXTENSION_REGEX_METADATA_KEY] = attribution;
       nextInput.metadata = metadata;
     }
-    // These links are host-owned. A script that becomes preset-bound through a
-    // native flow automatically becomes read-only to its creating extension.
+    // Pack and character links are host-owned. A preset link is installed at
+    // creation only: an owner may edit the row it is attached to, but never
+    // re-points or clears the binding here.
     delete nextInput.pack_id;
     delete nextInput.preset_id;
     delete nextInput.character_id;
@@ -1028,7 +1071,9 @@ export function updateRegexScript(
   const nextPresetId = hasPresetIdUpdate ? normalizeOptionalId(nextInput.preset_id) : existing.preset_id;
   const mayPersistPresetEnablement = !!nextPresetId && nextPresetId === activePresetId;
 
-  if (isPresetBound && nextInput.disabled !== undefined && nextPresetId && !mayPersistPresetEnablement) {
+  if (isPresetBound && nextInput.disabled !== undefined && nextPresetId && !mayPersistPresetEnablement && !ownsRow) {
+    // The preset's own enable snapshot owns host rows; an extension-owned row is
+    // outside that snapshot, so its owner keeps control of `disabled`.
     delete nextInput.disabled;
   }
   if (nextPresetId && nextPresetId !== activePresetId && hasPresetIdUpdate) {
@@ -1111,17 +1156,20 @@ export function deleteRegexScript(userId: string, id: string, context: RegexMuta
 export function deleteRegexScript(userId: string, id: string, context?: RegexMutationContext): boolean | string {
   const existing = getRegexScript(userId, id);
   const extensionIdentifier = normalizeOptionalId(context?.extensionIdentifier);
-  if (extensionIdentifier && existing && (
-    existing.owner_extension_identifier !== extensionIdentifier
-    || existing.preset_id !== null
-  ) && !context?.allowUnownedMutation) {
+  // A preset-bound row the extension owns is still the extension's row, so the
+  // host's preset-delete cascade is what removes it once the preset is gone.
+  const ownsRow = !!extensionIdentifier && existing?.owner_extension_identifier === extensionIdentifier;
+  if (extensionIdentifier && existing && !ownsRow && !context?.allowUnownedMutation) {
     return EXTENSION_REGEX_OWNERSHIP_ERROR;
   }
   const result = getDb()
     .query("DELETE FROM regex_scripts WHERE id = ? AND user_id = ?")
     .run(id, userId);
   if (result.changes > 0) {
-    if (existing?.preset_id) {
+    // Only host-owned rows are tracked by a preset's restore list. An
+    // extension-owned row is outside that snapshot, so deleting it must not
+    // rewrite (and thereby pin) the preset's saved enablement.
+    if (existing?.preset_id && existing.owner_extension_identifier == null) {
       setPresetBoundScriptEnabledInRestoreList(userId, existing.preset_id, existing.id, false);
     }
     eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
@@ -2659,7 +2707,7 @@ export function switchPresetBoundRegexScripts(
     if (previousPresetId) {
       const enabledRows = db
         .query(
-          "SELECT id FROM regex_scripts WHERE user_id = ? AND preset_id = ? AND disabled = 0 ORDER BY sort_order ASC, created_at ASC",
+          "SELECT id FROM regex_scripts WHERE user_id = ? AND preset_id = ? AND disabled = 0 AND owner_extension_identifier IS NULL ORDER BY sort_order ASC, created_at ASC",
         )
         .all(userId, previousPresetId) as Array<{ id: string }>;
       writeStoredPresetRegexIdsWithDb(db, userId, previousPresetId, enabledRows.map((row) => row.id));

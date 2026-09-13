@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as regexScriptsSvc from "../services/regex-scripts.service";
 import {
   canExtensionMutateRegexScript,
   getEntityExtensionPermission,
@@ -8,21 +9,29 @@ import {
 } from "./worker-host-content-api";
 
 describe("worker regex-script mutation projection", () => {
-  test("exposes mutation capability only for the caller's non-preset scripts", () => {
+  test("exposes mutation capability for the caller's own scripts, preset-bound or not", () => {
     expect(canExtensionMutateRegexScript({
       owner_extension_identifier: "extension.a",
       preset_id: null,
+    }, "extension.a")).toBe(true);
+    expect(canExtensionMutateRegexScript({
+      owner_extension_identifier: "extension.a",
+      preset_id: "preset-1",
     }, "extension.a")).toBe(true);
     expect(canExtensionMutateRegexScript({
       owner_extension_identifier: null,
       preset_id: null,
     }, "extension.a")).toBe(false);
     expect(canExtensionMutateRegexScript({
+      owner_extension_identifier: null,
+      preset_id: "preset-1",
+    }, "extension.a")).toBe(false);
+    expect(canExtensionMutateRegexScript({
       owner_extension_identifier: "extension.b",
       preset_id: null,
     }, "extension.a")).toBe(false);
     expect(canExtensionMutateRegexScript({
-      owner_extension_identifier: "extension.a",
+      owner_extension_identifier: "extension.b",
       preset_id: "preset-1",
     }, "extension.a")).toBe(false);
     expect(canExtensionMutateRegexScript({
@@ -48,6 +57,114 @@ describe("worker regex-script mutation projection", () => {
       input: { name: "Editable script" },
       context: { extensionIdentifier: "extension.a", allowUnownedMutation: true },
     });
+  });
+});
+
+describe("worker regex-script RPC preset links", () => {
+  const extensionOwnedRow = {
+    id: "script-1",
+    name: "Imported display rule",
+    script_id: "display_rule",
+    find_regex: "x",
+    replace_string: "y",
+    actions: [],
+    flags: "gi",
+    placement: ["ai_output"],
+    scope: "global",
+    scope_id: null,
+    target: ["display"],
+    min_depth: null,
+    max_depth: null,
+    trim_strings: [],
+    run_on_edit: false,
+    substitute_macros: "none",
+    disabled: false,
+    sort_order: 0,
+    description: "",
+    folder: "",
+    pack_id: null,
+    preset_id: "preset-1",
+    character_id: null,
+    owner_extension_identifier: "realm.test",
+    metadata: {},
+    created_at: 1,
+    updated_at: 1,
+  };
+
+  const invoke = (
+    call: (api: WorkerHostContentApi) => void,
+    permissions: string[] = ["regex_scripts"],
+  ): Promise<{ type: "response"; requestId: string; result?: any; error?: string }> => new Promise((resolve) => {
+    const api = new WorkerHostContentApi({
+      manifest: { identifier: "realm.test" },
+      hasPermission: (permission) => permissions.includes(permission),
+      resolveEffectiveUserId: () => "owner-1",
+      enforceScopedUser: () => {},
+      postResponse: resolve,
+    });
+    call(api);
+  });
+
+  test("forwards an extension-supplied preset_id to creation and projects the row as mutable", async () => {
+    const create = spyOn(regexScriptsSvc, "createRegexScript").mockReturnValue(extensionOwnedRow as any);
+    try {
+      const response = await invoke((api) => api.handleRegexScriptsCreate("create-1", {
+        name: "Imported display rule",
+        find_regex: "x",
+        target: ["display"],
+        preset_id: "preset-1",
+        folder_version: "2.4.0",
+      }));
+
+      expect(response.error).toBeUndefined();
+      expect(create).toHaveBeenCalledTimes(1);
+      const [userId, input, context] = create.mock.calls[0]!;
+      expect(userId).toBe("owner-1");
+      expect(input).toMatchObject({ preset_id: "preset-1" });
+      expect(input).not.toHaveProperty("folder_version");
+      expect(context).toEqual({ extensionIdentifier: "realm.test", extensionFolderVersion: "2.4.0" });
+      expect(response.result).toMatchObject({ id: "script-1", can_mutate: true });
+    } finally {
+      create.mockRestore();
+    }
+  });
+
+  test("surfaces a rejected preset link as an error instead of a created row", async () => {
+    const create = spyOn(regexScriptsSvc, "createRegexScript").mockReturnValue("Linked preset not found");
+    try {
+      const response = await invoke((api) => api.handleRegexScriptsCreate("create-2", {
+        name: "Imported display rule",
+        find_regex: "x",
+        preset_id: "preset-foreign",
+      }));
+
+      expect(response.error).toBe("Linked preset not found");
+      expect(response.result).toBeUndefined();
+    } finally {
+      create.mockRestore();
+    }
+  });
+
+  test("only passes allowUnownedMutation for unrestricted regex editors", async () => {
+    const remove = spyOn(regexScriptsSvc, "deleteRegexScript").mockReturnValue(true);
+    try {
+      await invoke((api) => api.handleRegexScriptsDelete("delete-1", "script-1"));
+      expect(remove.mock.calls[0]?.[2]).toEqual({
+        extensionIdentifier: "realm.test",
+        allowUnownedMutation: false,
+      });
+
+      await invoke(
+        (api) => api.handleRegexScriptsDelete("delete-2", "script-1"),
+        ["regex_scripts", "regex_scripts_unrestricted"],
+      );
+      expect(remove.mock.calls[1]?.[2]).toEqual({
+        extensionIdentifier: "realm.test",
+        allowUnownedMutation: true,
+      });
+    } finally {
+      remove.mockRestore();
+    }
   });
 });
 
