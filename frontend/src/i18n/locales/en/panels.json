@@ -2246,6 +2246,7 @@
     "enableAllPermissionsConfirmTitle": "Enable all permissions for {{name}}?",
     "enableAllPermissionsConfirmMessage_one": "This will enable the remaining disabled permission for this extension.",
     "enableAllPermissionsConfirmMessage_other": "This will enable the remaining {{count}} disabled permissions for this extension.",
+    "illarinWithheld": "Withheld by Illarin",
     "updateAllConfirmTitle_one": "Update {{count}} extension?",
     "updateAllConfirmTitle_other": "Update {{count}} extensions?",
     "updateAllConfirmMessage": "Each extension will be reset to the newest commit on its remote branch and rebuilt. This can take a while. You can keep using the app while it runs, and progress will show in this panel. Any currently-disabled extensions will still be updated but will stay disabled.",
