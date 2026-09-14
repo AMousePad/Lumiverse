@@ -11,7 +11,6 @@ import type {
 } from "./types";
 import { parse, ESCAPED_OPEN, ESCAPED_CLOSE } from "./MacroParser";
 import { MacroRegistry } from "./MacroRegistry";
-import { restoreLiteralBraces } from "./literal-braces";
 import {
   macroInterceptorChain,
   type MacroInterceptorPhase,
@@ -26,8 +25,6 @@ export interface EvaluateOptions {
   sourceOwner?: "host";
   /** Safety budget for one evaluate() call. This is a work cap, not a nesting cap. */
   maxMacroResolutions?: number;
-  /** Keep literal-brace shielding for a later macro pass in prompt assembly. */
-  deferLiteralBraceRestore?: boolean;
 }
 
 interface EvaluationState {
@@ -56,14 +53,7 @@ export async function evaluate(
   // Fast-path: skip the entire lex/parse/evaluate pipeline when there are
   // no macro markers in the input (the vast majority of stored chat messages).
   if (!HAS_MACRO_RE.test(input)) {
-    return {
-      text: options?.deferLiteralBraceRestore
-        ? input
-        : restoreLiteralBraces(input),
-      diagnostics: [],
-      touchedVars: EMPTY_TOUCHED_VARS,
-      cacheable: true,
-    };
+    return { text: input, diagnostics: [], touchedVars: EMPTY_TOUCHED_VARS, cacheable: true };
   }
 
   // Pre-process: legacy syntax conversion
@@ -124,10 +114,7 @@ export async function evaluate(
   }
 
   // Post-process: unescape remaining escaped braces
-  const postprocessed = postprocess(text);
-  const final = options?.deferLiteralBraceRestore
-    ? postprocessed
-    : restoreLiteralBraces(postprocessed);
+  const final = postprocess(text);
 
   return { text: final, diagnostics, touchedVars: fingerprint.touched, cacheable: fingerprint.cacheable };
 }
@@ -516,7 +503,6 @@ async function evaluateScopedMacroNode(
     commit: env.commit !== false,
     isScoped: true,
     body,
-    bodySource: node.bodySource ?? body,
     bodyRaw: node.body,
     offset: node.offset,
     globalOffset,
@@ -575,7 +561,6 @@ function buildExecContext(
     commit: env.commit !== false,
     isScoped: false,
     body: "",
-    bodySource: "",
     bodyRaw: [],
     offset: node.offset,
     globalOffset,

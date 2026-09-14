@@ -46,7 +46,6 @@ import {
   registry,
   initMacros,
   withPromptBlockContext,
-  restoreLiteralBraces,
 } from "../macros";
 import type { MacroEnv } from "../macros";
 import { coercePromptVariable } from "../utils/prompt-variable-values";
@@ -844,70 +843,6 @@ async function applyPromptRegexScriptsBeforeClipping(
   }
 }
 
-/**
- * Restore the braces a {{#escape}} body was shielded with. The sentinels only
- * exist to keep that body inert while macro passes run, so this must be the
- * last text transformation applied to prompt content — every caller of
- * `resolvePromptMacrosAfterRegexPass` gets the model-facing form.
- */
-function restoreEscapeLiteralBraces(result: LlmMessage[]): void {
-  for (let i = 0; i < result.length; i++) {
-    const msg = result[i];
-    let content = msg.content;
-    let changed = false;
-
-    if (typeof msg.content === "string") {
-      const restored = restoreLiteralBraces(msg.content);
-      if (restored !== msg.content) {
-        content = restored;
-        changed = true;
-      }
-    } else if (Array.isArray(msg.content)) {
-      const parts = msg.content.map((part: any) => {
-        if (part?.type !== "text" || typeof part.text !== "string") return part;
-        const text = restoreLiteralBraces(part.text);
-        if (text === part.text) return part;
-        changed = true;
-        return { ...part, text };
-      });
-      if (changed) content = parts;
-    }
-
-    const reasoningContent = typeof msg.reasoning_content === "string"
-      ? restoreLiteralBraces(msg.reasoning_content)
-      : msg.reasoning_content;
-    if (reasoningContent !== msg.reasoning_content) changed = true;
-    if (!changed) continue;
-
-    const replacement: LlmMessage = {
-      ...msg,
-      content,
-      ...(reasoningContent !== undefined
-        ? { reasoning_content: reasoningContent }
-        : {}),
-    };
-    if (isChatHistoryMessage(msg)) markAsChatHistory(replacement);
-    result[i] = replacement;
-  }
-}
-
-/**
- * Same restoration for the prompt breakdown, which snapshots block content
- * between the two macro passes and feeds prompt display and token counts.
- */
-function restoreEscapeLiteralBracesInBreakdown(
-  breakdown: AssemblyBreakdownEntry[],
-): void {
-  for (const entry of breakdown) {
-    if (typeof entry.content === "string") {
-      entry.content = restoreLiteralBraces(entry.content);
-    }
-    if (typeof entry.tokenCountContent === "string") {
-      entry.tokenCountContent = restoreLiteralBraces(entry.tokenCountContent);
-    }
-  }
-}
-
 export async function resolvePromptMacrosAfterRegexPass(
   result: LlmMessage[],
   macroEnv: MacroEnv,
@@ -944,10 +879,6 @@ export async function resolvePromptMacrosAfterRegexPass(
       if (isChatHistoryMessage(msg)) markAsChatHistory(result[i]);
     }
   }
-
-  // Last macro pass: the braces that {{#escape}} shielded come back now, so no
-  // pass above this point can re-expand them.
-  restoreEscapeLiteralBraces(result);
 }
 
 function isDecorativeNewChatSeparator(text: string): boolean {
@@ -1395,22 +1326,11 @@ async function evaluateHostPromptSource(
   macroEnv: MacroEnv,
   sourceHint = "prompt_source:preset_setting",
 ): Promise<string> {
-  return (await evaluateForPromptAssembly(content, macroEnv, {
+  return (await evaluate(content, macroEnv, registry, {
     phase: "prompt",
     sourceHint,
     sourceOwner: "host",
   })).text;
-}
-
-function evaluateForPromptAssembly(
-  content: string,
-  macroEnv: MacroEnv,
-  options: NonNullable<Parameters<typeof evaluate>[3]> = {},
-) {
-  return evaluate(content, macroEnv, registry, {
-    ...options,
-    deferLiteralBraceRestore: true,
-  });
 }
 
 export const DEFAULT_REGEN_FEEDBACK_FORMAT = "[OOC: {{$regenInput}}]";
@@ -1432,7 +1352,7 @@ export async function resolveRegenFeedbackPrompt(
 
   const guardedTemplate = template.split(REGEN_INPUT_PLACEHOLDER).join(guard);
   const resolved = (
-    await evaluateForPromptAssembly(guardedTemplate, macroEnv, {
+    await evaluate(guardedTemplate, macroEnv, registry, {
       phase: "prompt",
       sourceHint: "prompt_source:regen_feedback",
     })
@@ -2985,7 +2905,7 @@ export async function assemblePrompt(
           throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
         }
         entry.content = (
-          await evaluateForPromptAssembly(entry.content, macroEnv)
+          await evaluate(entry.content, macroEnv, registry)
         ).text;
       }
     }
@@ -3270,7 +3190,7 @@ export async function assemblePrompt(
           rawContent.includes("<CHAR>");
         const visibleResolvedContent = needsEval
           ? healFormattingArtifacts(
-              (await evaluateForPromptAssembly(rawContent, macroEnv)).text,
+              (await evaluate(rawContent, macroEnv, registry)).text,
             )
           : rawContent;
         const resolvedContent = appendAssociativeRegexContext(visibleResolvedContent, msg);
@@ -3789,9 +3709,8 @@ export async function assemblePrompt(
   // ---- Author's Note injection ----
   const authorsNote: AuthorsNote | null = chat.metadata?.authors_note ?? null;
   if (authorsNote && authorsNote.content) {
-    const resolvedAN = (
-      await evaluateForPromptAssembly(authorsNote.content, macroEnv)
-    ).text;
+    const resolvedAN = (await evaluate(authorsNote.content, macroEnv, registry))
+      .text;
     if (resolvedAN) {
       // Count backward from the latest chat message, ignoring other prompt
       // content. Depth 0 belongs immediately after the latest chat message.
@@ -4206,12 +4125,6 @@ export async function assemblePrompt(
   await profiler.measure("post-regex-macros", () =>
     resolvePromptMacrosAfterRegexPass(result, macroEnv)
   );
-  if (assistantPrefill !== undefined) {
-    assistantPrefill = restoreLiteralBraces(assistantPrefill);
-  }
-  if (assistantReasoningPrefill !== undefined) {
-    assistantReasoningPrefill = restoreLiteralBraces(assistantReasoningPrefill);
-  }
   stripEmptyTextParts(result);
 
   // {{webSearchContext}} resolves to a private token while prompt blocks are
@@ -4222,10 +4135,6 @@ export async function assemblePrompt(
   for (const message of result) {
     captureInlineWebSearchContextSlot(message);
   }
-  // The breakdown snapshots block content as it looked between the two macro
-  // passes, so it carries {{#escape}} sentinels too. Restore them here: the
-  // breakdown feeds prompt display and block token counts.
-  restoreEscapeLiteralBracesInBreakdown(breakdown);
   for (let index = breakdown.length - 1; index >= 0; index--) {
     const entry = breakdown[index];
     if (typeof entry.content !== "string") continue;
@@ -4409,7 +4318,7 @@ async function applyGuidedGenerations(
 
   for (const guide of guides) {
     const resolved = (
-      await evaluateForPromptAssembly(guide.content, macroEnv)
+      await evaluate(guide.content, macroEnv, registry)
     ).text.trim();
     if (!resolved) continue;
     if (guide.position === "system") systemInjections.push(resolved);
@@ -4693,7 +4602,7 @@ export async function resolveWorldInfoOutlets(
         }
       }
 
-      const next = (await evaluateForPromptAssembly(template, macroEnv)).text;
+      const next = (await evaluate(template, macroEnv, registry)).text;
       if (resolved.get(name) !== next) {
         resolved.set(name, next);
         changed = true;
@@ -7941,15 +7850,6 @@ async function onelinerImpersonation(
     }
   }
 
-  restoreEscapeLiteralBraces(result);
-  restoreEscapeLiteralBracesInBreakdown(breakdown);
-  if (assistantPrefill !== undefined) {
-    assistantPrefill = restoreLiteralBraces(assistantPrefill);
-  }
-  if (assistantReasoningPrefill !== undefined) {
-    assistantReasoningPrefill = restoreLiteralBraces(assistantReasoningPrefill);
-  }
-
   // Build parameters from sampler overrides + reasoning settings
   const parameters = buildParameters(
     samplerOverrides,
@@ -8319,11 +8219,6 @@ async function legacyAssembly(
       );
     }
   }
-
-  // This path has no post-regex macro pass, so the {{#escape}} restoration that
-  // pass performs for the preset path happens here instead.
-  restoreEscapeLiteralBraces(llmMessages);
-  restoreEscapeLiteralBracesInBreakdown(breakdown);
 
   // Drop empty text parts or empty messages to avoid proxy/provider errors
   stripEmptyTextParts(llmMessages);
