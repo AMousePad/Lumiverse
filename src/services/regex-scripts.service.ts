@@ -1025,6 +1025,7 @@ export function updateRegexScript(
   // Ownership, not the preset link, decides mutability: a row this extension
   // owns stays editable after it is bound to a preset.
   const ownsRow = !!extensionIdentifier && existing.owner_extension_identifier === extensionIdentifier;
+  const presetActivationManaged = existing.owner_extension_identifier == null;
   if (extensionIdentifier && !ownsRow && !context?.allowUnownedMutation) {
     return EXTENSION_REGEX_OWNERSHIP_ERROR;
   }
@@ -1071,12 +1072,12 @@ export function updateRegexScript(
   const nextPresetId = hasPresetIdUpdate ? normalizeOptionalId(nextInput.preset_id) : existing.preset_id;
   const mayPersistPresetEnablement = !!nextPresetId && nextPresetId === activePresetId;
 
-  if (isPresetBound && nextInput.disabled !== undefined && nextPresetId && !mayPersistPresetEnablement && !ownsRow) {
+  if (isPresetBound && nextInput.disabled !== undefined && nextPresetId && !mayPersistPresetEnablement && presetActivationManaged) {
     // The preset's own enable snapshot owns host rows; an extension-owned row is
     // outside that snapshot, so its owner keeps control of `disabled`.
     delete nextInput.disabled;
   }
-  if (nextPresetId && nextPresetId !== activePresetId && hasPresetIdUpdate) {
+  if (nextPresetId && nextPresetId !== activePresetId && hasPresetIdUpdate && presetActivationManaged) {
     nextInput.disabled = true;
   }
 
@@ -1141,10 +1142,10 @@ export function updateRegexScript(
   }
 
   const updated = getRegexScript(userId, id)!;
-  if (existing.preset_id && existing.preset_id !== updated.preset_id) {
+  if (presetActivationManaged && existing.preset_id && existing.preset_id !== updated.preset_id) {
     setPresetBoundScriptEnabledInRestoreList(userId, existing.preset_id, updated.id, false);
   }
-  if (updated.preset_id && (hasPresetIdUpdate || (mayPersistPresetEnablement && nextInput.disabled !== undefined))) {
+  if (presetActivationManaged && updated.preset_id && (hasPresetIdUpdate || (mayPersistPresetEnablement && nextInput.disabled !== undefined))) {
     setPresetBoundScriptEnabledInRestoreList(userId, updated.preset_id, updated.id, !updated.disabled);
   }
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
@@ -1189,8 +1190,12 @@ export function deleteRegexScripts(userId: string, ids: string[]): string[] {
   const db = getDb();
   const placeholders = ids.map(() => "?").join(", ");
   const existingRows = db
-    .query(`SELECT id, preset_id FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
-    .all(userId, ...ids) as Array<{ id: string; preset_id?: string | null }>;
+    .query(`SELECT id, preset_id, owner_extension_identifier FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
+    .all(userId, ...ids) as Array<{
+      id: string;
+      preset_id?: string | null;
+      owner_extension_identifier?: string | null;
+    }>;
   if (existingRows.length === 0) return [];
 
   const existingIds = existingRows.map((r) => r.id);
@@ -1203,7 +1208,7 @@ export function deleteRegexScripts(userId: string, ids: string[]): string[] {
   })();
 
   for (const row of existingRows) {
-    if (row.preset_id) {
+    if (row.preset_id && row.owner_extension_identifier == null) {
       setPresetBoundScriptEnabledInRestoreList(userId, row.preset_id, row.id, false);
     }
   }
@@ -1283,7 +1288,8 @@ export function toggleRegexScript(
   if (!existing) return null;
 
   const activePresetId = normalizeOptionalId(context?.activePresetId);
-  if (existing.preset_id && existing.preset_id !== activePresetId) {
+  const presetActivationManaged = existing.owner_extension_identifier == null;
+  if (presetActivationManaged && existing.preset_id && existing.preset_id !== activePresetId) {
     return existing;
   }
 
@@ -1292,14 +1298,19 @@ export function toggleRegexScript(
     .run(disabled ? 1 : 0, Math.floor(Date.now() / 1000), id, userId);
 
   const updated = getRegexScript(userId, id)!;
-  if (updated.preset_id) {
+  if (presetActivationManaged && updated.preset_id) {
     setPresetBoundScriptEnabledInRestoreList(userId, updated.preset_id, updated.id, !updated.disabled);
   }
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
   return updated;
 }
 
-type RegexToggleRow = { id: string; preset_id?: string | null; disabled: number };
+type RegexToggleRow = {
+  id: string;
+  preset_id?: string | null;
+  owner_extension_identifier?: string | null;
+  disabled: number;
+};
 
 function toggleRegexScriptRows(
   userId: string,
@@ -1312,14 +1323,15 @@ function toggleRegexScriptRows(
   const targets: Array<{ id: string; preset_id: string | null }> = [];
 
   for (const row of rows) {
-    if (row.preset_id && row.preset_id !== activePresetId) {
+    const presetActivationManaged = row.owner_extension_identifier == null;
+    if (presetActivationManaged && row.preset_id && row.preset_id !== activePresetId) {
       skippedIds.push(row.id);
       continue;
     }
     if (row.disabled === (disabled ? 1 : 0)) {
       continue;
     }
-    targets.push({ id: row.id, preset_id: row.preset_id ?? null });
+    targets.push({ id: row.id, preset_id: presetActivationManaged ? row.preset_id ?? null : null });
   }
 
   if (targets.length === 0) {
@@ -1367,7 +1379,7 @@ export function toggleRegexScriptsByIds(
 
   const placeholders = uniqueIds.map(() => "?").join(", ");
   const unorderedRows = getDb()
-    .query(`SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
+    .query(`SELECT id, preset_id, owner_extension_identifier, disabled FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
     .all(userId, ...uniqueIds) as RegexToggleRow[];
   const rowsById = new Map(unorderedRows.map((row) => [row.id, row]));
   const rows = uniqueIds.flatMap((id) => {
@@ -1393,7 +1405,7 @@ export function toggleRegexScriptsByFolder(
 ): { changedIds: string[]; skippedIds: string[] } {
   const activePresetId = normalizeOptionalId(context?.activePresetId);
   const rows = getDb()
-    .query("SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND folder = ?")
+    .query("SELECT id, preset_id, owner_extension_identifier, disabled FROM regex_scripts WHERE user_id = ? AND folder = ?")
     .all(userId, folder) as RegexToggleRow[];
 
   return toggleRegexScriptRows(userId, rows, disabled, activePresetId);
@@ -1511,7 +1523,9 @@ export function getPresetActivationScripts(
   const enabledIds = new Set(saved.ids);
   const scopeOrder = { global: 0, character: 1, chat: 2 };
   return scripts.filter((script) =>
-    (saved.exists ? enabledIds.has(script.id) : !script.disabled)
+    (script.owner_extension_identifier == null && saved.exists
+      ? enabledIds.has(script.id)
+      : !script.disabled)
     && readPromptActivation(script.metadata)
     && (script.scope === "global"
       || (script.scope === "chat" && script.scope_id === context.chatId)
@@ -1668,7 +1682,7 @@ function foldFingerprint(
 }
 
 function macroOptionsForRegexScript(script: RegexScript): EvaluateOptions | undefined {
-  if (script.preset_id) {
+  if (script.preset_id && script.owner_extension_identifier == null) {
     return { sourceOwner: "host", sourceHint: "regex_script:preset" };
   }
   return undefined;
@@ -2258,7 +2272,9 @@ export function exportRegexScripts(userId: string, options?: string[] | RegexScr
     const stored = readStoredPresetRegexIdsRecord(userId, presetIdFilter);
     if (stored.exists) {
       const enabledIds = new Set(stored.ids);
-      normalizedRows = normalizedRows.map((s) => ({ ...s, disabled: !enabledIds.has(s.id) }));
+      normalizedRows = normalizedRows.map((s) => s.owner_extension_identifier == null
+        ? { ...s, disabled: !enabledIds.has(s.id) }
+        : s);
     }
   }
 
@@ -2391,6 +2407,7 @@ function retireRemotePresetRegexScriptsForUpdate(
   const rows = getRegexScriptsByPresetId(userId, options.presetId);
   const matching = rows.flatMap((script) => {
     if (preserveIds.has(script.id)) return [];
+    if (script.owner_extension_identifier != null) return [];
     const attribution = getRemotePresetRegexAttribution(script.metadata, options.source);
     if (attribution?.id && !acceptedRemoteIds.has(attribution.id)) return [];
 
