@@ -243,4 +243,15 @@ describe("resolvePromptMacrosAfterRegexPass + {{#escape}}", () => {
       "Lore: moonlit doors",
     );
   });
+
+  test("preserves literal ETX and EOT characters in prompt content", async () => {
+    const env = makeEnv();
+    const messages: LlmMessage[] = [
+      { role: "user", content: "A\x03B\x04C" },
+    ];
+
+    await resolvePromptMacrosAfterRegexPass(messages, env);
+
+    expect(messages[0].content).toBe("A\x03B\x04C");
+  });
 });

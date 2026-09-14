@@ -209,6 +209,7 @@ describe("{{#escape}} block", () => {
     expect(restoreLiteralBraces("plain {braces} {{user}}")).toBe(
       "plain {braces} {{user}}",
     );
+    expect(restoreLiteralBraces("A\x03B\x04C")).toBe("A\x03B\x04C");
     expect(restoreLiteralBraces(shieldLiteralBraces("{{a}} {{b}}"))).toBe(
       "{{a}} {{b}}",
     );

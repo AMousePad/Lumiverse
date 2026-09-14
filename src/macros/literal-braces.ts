@@ -16,8 +16,13 @@ import { ESCAPED_CLOSE, ESCAPED_OPEN } from "./MacroParser";
  * converts those back to braces at the end of every `evaluate()` call, so they
  * cannot survive into a later pass.
  */
-export const LITERAL_BRACE_OPEN = "\x03";
-export const LITERAL_BRACE_CLOSE = "\x04";
+// These deliberately use long reserved tokens rather than single control
+// characters. Ordinary text can legitimately contain ASCII ETX/EOT, and the
+// final restoration pass must never reinterpret those bytes as braces.
+export const LITERAL_BRACE_OPEN =
+  "\x00LUMIVERSE_LITERAL_BRACE_OPEN_7f37c911\x00";
+export const LITERAL_BRACE_CLOSE =
+  "\x00LUMIVERSE_LITERAL_BRACE_CLOSE_7f37c911\x00";
 
 /**
  * Replace every brace with its literal sentinel so later macro passes leave the
