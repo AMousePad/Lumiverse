@@ -300,6 +300,19 @@ _install_bun_termux() {
     exit 1
   fi
 
+  local glibc_sources_dir="${PREFIX}/etc/apt/sources.list.d"
+  local glibc_source_file="${glibc_sources_dir}/glibc.list"
+  local glibc_repo_entry="deb https://packages-cf.termux.dev/apt/termux-glibc/ glibc stable"
+
+  # Repair repository entries written by older launcher versions before the
+  # first package refresh, otherwise `pkg update` exits on their missing
+  # `stable` Release file and never reaches the repository setup below.
+  if [[ -f "$glibc_source_file" ]] \
+     && grep -Eq 'packages(-cf)?\.termux\.dev/apt/termux-glibc/?[[:space:]]+stable[[:space:]]+main' "$glibc_source_file"; then
+    warn "Repairing outdated Termux glibc repository configuration..."
+    echo "$glibc_repo_entry" > "$glibc_source_file"
+  fi
+
   # ── Step 1: Base packages ────────────────────────────────────────────────
   info "Installing base Termux prerequisites..."
   pkg update -y
@@ -310,7 +323,6 @@ _install_bun_termux() {
   # termux-main repo. The glibc-repo package registers this repo source.
   info "Setting up glibc package repository..."
   local glibc_runner_installed=false
-  local glibc_sources_dir="${PREFIX}/etc/apt/sources.list.d"
 
   # Try installing glibc-repo (the repo enabler package)
   if pkg install -y glibc-repo 2>/dev/null; then
@@ -320,14 +332,12 @@ _install_bun_termux() {
     else
       warn "glibc-repo installed but repo source not found — adding manually..."
       mkdir -p "$glibc_sources_dir"
-      echo "deb https://packages-cf.termux.dev/apt/termux-glibc stable main" \
-        > "${glibc_sources_dir}/glibc.list"
+      echo "$glibc_repo_entry" > "$glibc_source_file"
     fi
   else
     warn "glibc-repo package not available — adding glibc repository manually..."
     mkdir -p "$glibc_sources_dir"
-    echo "deb https://packages-cf.termux.dev/apt/termux-glibc stable main" \
-      > "${glibc_sources_dir}/glibc.list"
+    echo "$glibc_repo_entry" > "$glibc_source_file"
   fi
 
   # Refresh package lists to pick up the glibc repo
@@ -338,14 +348,12 @@ _install_bun_termux() {
     glibc_runner_installed=true
     ok "glibc-runner installed via apt"
   else
-    warn "glibc-runner not found via apt — trying alternate mirror..."
-    # Some mirrors don't serve termux-glibc; try the primary mirror directly
+    warn "glibc-runner not found via apt — repairing the repository source and retrying..."
     mkdir -p "$glibc_sources_dir"
-    echo "deb https://packages.termux.dev/apt/termux-glibc stable main" \
-      > "${glibc_sources_dir}/glibc.list"
+    echo "$glibc_repo_entry" > "$glibc_source_file"
     if apt-get update -y 2>/dev/null && pkg install -y glibc-runner 2>/dev/null; then
       glibc_runner_installed=true
-      ok "glibc-runner installed via apt (alternate mirror)"
+      ok "glibc-runner installed via apt after repairing the repository source"
     fi
   fi
 
