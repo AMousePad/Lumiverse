@@ -71,4 +71,49 @@ describe("database migrations", () => {
       db.close();
     }
   });
+
+  test("moves extension-owned preset rows from restore snapshots to independent state", async () => {
+    const db = new Database(":memory:");
+    try {
+      db.run(`CREATE TABLE settings (
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        PRIMARY KEY (key, user_id)
+      )`);
+      db.run(`CREATE TABLE regex_scripts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        preset_id TEXT,
+        disabled INTEGER NOT NULL,
+        owner_extension_identifier TEXT
+      )`);
+      db.run(`INSERT INTO regex_scripts VALUES
+        ('extension-enabled', 'user', 'preset-1', 1, 'extension.a'),
+        ('extension-disabled', 'user', 'preset-1', 0, 'extension.a'),
+        ('host-enabled', 'user', 'preset-1', 1, NULL),
+        ('no-snapshot', 'user', 'preset-2', 1, 'extension.a'),
+        ('malformed-snapshot', 'user', 'preset-3', 0, 'extension.a')`);
+      db.run(`INSERT INTO settings VALUES
+        ('presetRegexEnabled:preset-1', '["extension-enabled","host-enabled"]', 'user'),
+        ('presetRegexEnabled:preset-3', 'not-json', 'user')`);
+
+      const sql = await Bun.file(`${import.meta.dir}/migrations/115_extension_preset_regex_state.sql`).text();
+      db.run(sql);
+
+      expect(db.query("SELECT id, disabled FROM regex_scripts ORDER BY id").all()).toEqual([
+        { id: "extension-disabled", disabled: 1 },
+        { id: "extension-enabled", disabled: 0 },
+        { id: "host-enabled", disabled: 1 },
+        { id: "malformed-snapshot", disabled: 0 },
+        { id: "no-snapshot", disabled: 1 },
+      ]);
+      expect(db.query("SELECT value FROM settings WHERE key = 'presetRegexEnabled:preset-1'").get())
+        .toEqual({ value: '["host-enabled"]' });
+      expect(db.query("SELECT value FROM settings WHERE key = 'presetRegexEnabled:preset-3'").get())
+        .toEqual({ value: "not-json" });
+    } finally {
+      db.close();
+    }
+  });
 });
