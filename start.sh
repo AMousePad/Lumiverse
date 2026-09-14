@@ -288,6 +288,38 @@ _resolve_bun() {
   return 1
 }
 
+# Install the standard Termux autobuild signing key when the current Termux
+# channel does not package glibc-repo (notably the Google Play channel).
+_install_termux_autobuild_key() {
+  local key_dir="${PREFIX}/etc/apt/trusted.gpg.d"
+  local key_file="${key_dir}/lumiverse-termux-autobuilds.gpg"
+  local key_url="https://raw.githubusercontent.com/termux/termux-packages/fc8cedb2e0a6ac296133631390823bf70d349281/packages/termux-keyring/termux-autobuilds.gpg"
+  local key_sha256="21c385d5a30107453bd60582d64e2f6e5f5ce11e340ac05e57f943f9c0235420"
+  local temp_key
+
+  if [[ -f "$key_file" ]] \
+     && printf '%s  %s\n' "$key_sha256" "$key_file" | sha256sum -c - &>/dev/null; then
+    return 0
+  fi
+
+  mkdir -p "$key_dir"
+  temp_key="$(mktemp "${TMPDIR:-${PREFIX}/tmp}/lumiverse-termux-key.XXXXXX")"
+  if ! curl --retry 3 -fsSL "$key_url" -o "$temp_key"; then
+    rm -f "$temp_key"
+    return 1
+  fi
+
+  if ! printf '%s  %s\n' "$key_sha256" "$temp_key" | sha256sum -c - &>/dev/null; then
+    err "Downloaded Termux repository signing key failed verification."
+    rm -f "$temp_key"
+    return 1
+  fi
+
+  install -m 600 "$temp_key" "$key_file"
+  rm -f "$temp_key"
+  ok "Installed verified Termux autobuild repository signing key"
+}
+
 # Install Termux prerequisites for running glibc-linked Bun binaries.
 # Bun is compiled against glibc, but Termux uses Android's bionic libc.
 # We need glibc-runner to bridge the gap, plus bun-termux for a proper
@@ -348,6 +380,10 @@ _install_bun_termux() {
     info "glibc repository registered, refreshing package lists..."
   else
     warn "glibc-repo package not available — adding glibc repository manually..."
+    if command -v apt-get &>/dev/null && ! _install_termux_autobuild_key; then
+      err "Could not install the verified signing key for the Termux glibc repository."
+      exit 1
+    fi
   fi
 
   # Restore a valid custom mirror, migrate only the known-broken legacy entry,
@@ -368,12 +404,10 @@ _install_bun_termux() {
     glibc_runner_installed=true
     ok "glibc-runner installed via apt"
   else
-    warn "glibc-runner not found via apt — repairing the repository source and retrying..."
-    mkdir -p "$glibc_sources_dir"
-    echo "$glibc_repo_entry" > "$glibc_source_file"
-    if apt-get update -y 2>/dev/null && pkg install -y glibc-runner 2>/dev/null; then
+    warn "glibc-runner not found — refreshing package lists and retrying..."
+    if pkg update -y 2>/dev/null && pkg install -y glibc-runner 2>/dev/null; then
       glibc_runner_installed=true
-      ok "glibc-runner installed via apt after repairing the repository source"
+      ok "glibc-runner installed after refreshing package lists"
     fi
   fi
 
