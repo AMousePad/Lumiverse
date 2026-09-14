@@ -3715,6 +3715,7 @@
     "toast": {
       "exportFailed": "Failed to export preset",
       "invalidPresetSelection": "This preset is malformed. Your current selection has been kept.",
+      "invalidPresetImport": "This preset payload is malformed and could not be imported. Your current selection has been kept.",
       "presetRecovered": "The selected preset is malformed. Switched to {{name}}. The original preset has been kept.",
       "presetRecoveryFailed": "The selected preset is malformed and a fallback could not be loaded. Try selecting another preset.",
       "importedRegexFromPreset": "Imported {{count}} regex script from preset",
