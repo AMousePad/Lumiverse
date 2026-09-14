@@ -149,7 +149,11 @@ describe("resolvePromptMacrosAfterRegexPass + {{#escape}}", () => {
 
   /** Content as prompt block evaluation leaves it: escaped body shielded. */
   async function escapedBlock(template: string, env: MacroEnv): Promise<string> {
-    return (await evaluate(template, env, registry)).text;
+    return (
+      await evaluate(template, env, registry, {
+        deferLiteralBraceRestore: true,
+      })
+    ).text;
   }
 
   test("emits the escaped body literally instead of re-expanding it", async () => {
@@ -208,6 +212,21 @@ describe("resolvePromptMacrosAfterRegexPass + {{#escape}}", () => {
     expect(parts[0].text).toBe("{{user}}");
     // Non-text parts are passed through untouched.
     expect(parts[1]).toEqual(imagePart);
+  });
+
+  test("restores escaped bodies inside reasoning content", async () => {
+    const env = makeEnv();
+    const reasoningContent = await escapedBlock(
+      "{{#escape}}{{user}}{{/escape}}",
+      env,
+    );
+    const messages: LlmMessage[] = [
+      { role: "assistant", content: "", reasoning_content: reasoningContent },
+    ];
+
+    await resolvePromptMacrosAfterRegexPass(messages, env);
+
+    expect(messages[0].reasoning_content).toBe("{{user}}");
   });
 
   test("leaves unescaped content untouched", async () => {

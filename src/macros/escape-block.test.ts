@@ -87,7 +87,11 @@ function makeEnv(): MacroEnv {
 }
 
 async function ev(template: string, env: MacroEnv = makeEnv()): Promise<string> {
-  return (await evaluate(template, env, registry)).text;
+  return (
+    await evaluate(template, env, registry, {
+      deferLiteralBraceRestore: true,
+    })
+  ).text;
 }
 
 /** The text the model receives: the escaped body with its braces back. */
@@ -129,6 +133,13 @@ describe("{{#escape}} block", () => {
     expect(await ev(shielded)).toBe(shielded);
     // ...even when real macros in the same text are still resolved.
     expect(await render(`{{user}} ${shielded}`)).toBe("Alice {{user}}");
+  });
+
+  test("restores literal braces for standalone evaluator consumers", async () => {
+    expect(
+      (await evaluate("{{#escape}}{{user}}{{/escape}}", makeEnv(), registry))
+        .text,
+    ).toBe("{{user}}");
   });
 
   test("does not run side-effect macros inside the body", async () => {
