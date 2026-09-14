@@ -303,19 +303,38 @@ _install_bun_termux() {
   local glibc_sources_dir="${PREFIX}/etc/apt/sources.list.d"
   local glibc_source_file="${glibc_sources_dir}/glibc.list"
   local glibc_repo_entry="deb https://packages-cf.termux.dev/apt/termux-glibc/ glibc stable"
+  local saved_glibc_source=""
+  local restore_glibc_source=false
+  local migrate_glibc_source=false
 
-  # Repair repository entries written by older launcher versions before the
-  # first package refresh, otherwise `pkg update` exits on their missing
-  # `stable` Release file and never reaches the repository setup below.
+  # Resume cleanly if an earlier setup attempt stopped while this source was
+  # temporarily disabled (for example, because the network dropped).
+  if [[ -f "$glibc_source_file" ]]; then
+    sed -i -E 's/^# Lumiverse setup: temporarily disabled: (deb[[:space:]].*termux-glibc.*)$/\1/' "$glibc_source_file"
+  fi
+
+  # Keep an existing glibc source out of the first package refresh. Older
+  # launchers wrote an invalid suite, while Google Play Termux installations
+  # may not have the official repository signing key linked yet. Re-enable the
+  # source after refreshing termux-keyring from the main repository, preserving
+  # any valid custom mirror the user already configured.
   if [[ -f "$glibc_source_file" ]] \
-     && grep -Eq 'packages(-cf)?\.termux\.dev/apt/termux-glibc/?[[:space:]]+stable[[:space:]]+main' "$glibc_source_file"; then
-    warn "Repairing outdated Termux glibc repository configuration..."
-    echo "$glibc_repo_entry" > "$glibc_source_file"
+     && grep -Eq '^[[:space:]]*deb[[:space:]].*termux-glibc' "$glibc_source_file"; then
+    saved_glibc_source="$(cat "$glibc_source_file")"
+    restore_glibc_source=true
+    if grep -Eq 'packages(-cf)?\.termux\.dev/apt/termux-glibc/?[[:space:]]+stable[[:space:]]+main' "$glibc_source_file"; then
+      migrate_glibc_source=true
+      restore_glibc_source=false
+    fi
+    warn "Temporarily disabling the Termux glibc repository while refreshing its signing key..."
+    sed -i -E '/^[[:space:]]*deb[[:space:]].*termux-glibc/s/^/# Lumiverse setup: temporarily disabled: /' "$glibc_source_file"
   fi
 
   # ── Step 1: Base packages ────────────────────────────────────────────────
   info "Installing base Termux prerequisites..."
   pkg update -y
+  info "Refreshing Termux repository signing keys..."
+  pkg reinstall -y termux-keyring
   pkg install -y git curl build-essential proot
 
   # ── Step 2: Set up the glibc repository ──────────────────────────────────
@@ -326,22 +345,23 @@ _install_bun_termux() {
 
   # Try installing glibc-repo (the repo enabler package)
   if pkg install -y glibc-repo 2>/dev/null; then
-    # Verify the glibc repo source was actually registered
-    if ls "${glibc_sources_dir}/"*glibc* &>/dev/null 2>&1; then
-      info "glibc repository registered, refreshing package lists..."
-    else
-      warn "glibc-repo installed but repo source not found — adding manually..."
-      mkdir -p "$glibc_sources_dir"
-      echo "$glibc_repo_entry" > "$glibc_source_file"
-    fi
+    info "glibc repository registered, refreshing package lists..."
   else
     warn "glibc-repo package not available — adding glibc repository manually..."
-    mkdir -p "$glibc_sources_dir"
+  fi
+
+  # Restore a valid custom mirror, migrate only the known-broken legacy entry,
+  # or add the canonical source if glibc-repo did not create one.
+  mkdir -p "$glibc_sources_dir"
+  if [[ "$restore_glibc_source" == true ]]; then
+    printf '%s\n' "$saved_glibc_source" > "$glibc_source_file"
+  elif [[ "$migrate_glibc_source" == true ]] \
+       || ! grep -Eq '^[[:space:]]*deb[[:space:]].*termux-glibc' "$glibc_source_file" 2>/dev/null; then
     echo "$glibc_repo_entry" > "$glibc_source_file"
   fi
 
   # Refresh package lists to pick up the glibc repo
-  pkg update -y 2>/dev/null || apt-get update -y 2>/dev/null || true
+  pkg update -y
 
   # ── Step 3: Install glibc-runner ─────────────────────────────────────────
   if pkg install -y glibc-runner 2>/dev/null; then
