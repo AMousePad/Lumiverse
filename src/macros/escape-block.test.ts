@@ -154,6 +154,17 @@ describe("{{#escape}} block", () => {
     expect(await render("A{{#escape}}{bkspc}{{/escape}}B")).toBe("A{bkspc}B");
   });
 
+  test("preserves macro-looking source text byte for byte", async () => {
+    expect(
+      await render("A{{#escape}}{{ user }}|{{getvar:x}}{{/escape}}B"),
+    ).toBe("A{{ user }}|{{getvar:x}}B");
+    expect(
+      await render(
+        "{{#escape}}{{foo::{{bar}}x{{/bar}}}}{{/escape}}",
+      ),
+    ).toBe("{{foo::{{bar}}x{{/bar}}}}");
+  });
+
   test("accepts the {{escape}} form and Risu's ::keep argument", async () => {
     expect(await render("A{{escape}}{{user}}{{/escape}}B")).toBe("A{{user}}B");
     expect(await render("A{{#escape::keep}}{{user}}{{/escape}}B")).toBe("A{{user}}B");

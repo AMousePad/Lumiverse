@@ -95,7 +95,7 @@ export function registerCoreMacros(): void {
       // convergence loop and prompt assembly's post-regex pass) cannot expand
       // the body; prompt assembly restores them once every pass is done.
       // Risu's optional `::keep` form is accepted: the body is always verbatim.
-      return shieldLiteralBraces(ctx.body);
+      return shieldLiteralBraces(ctx.bodySource);
     },
   });
 

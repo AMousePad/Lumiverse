@@ -29,6 +29,8 @@ export function shieldLiteralBraces(text: string): string {
     return text;
   }
   return text
+    .replaceAll("\\{", LITERAL_BRACE_OPEN)
+    .replaceAll("\\}", LITERAL_BRACE_CLOSE)
     .replaceAll(ESCAPED_OPEN, LITERAL_BRACE_OPEN)
     .replaceAll(ESCAPED_CLOSE, LITERAL_BRACE_CLOSE)
     .replaceAll("{", LITERAL_BRACE_OPEN)
