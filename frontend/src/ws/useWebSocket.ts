@@ -1856,6 +1856,16 @@ export function useWebSocket() {
           }
         }
       }),
+      wsClient.on(EventType.MULTI_CHARACTER_EXPRESSIONS_CHANGED, (payload: {
+        chatId: string
+        characterId: string
+        expressions: Record<string, { label: string; imageId: string }>
+      }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId && payload.characterId === state.activeCharacterId) {
+          state.setMultiCharacterExpressions(payload.expressions)
+        }
+      }),
       // LumiHub remote install notifications
       wsClient.on(EventType.LUMIHUB_INSTALL_STARTED, (payload: { characterName: string; source: string }) => {
         toast.info(i18n.t('common.toast.lumiHubInstalling', { name: payload.characterName }), { title: i18n.t('common.toast.lumiHubTitle') })

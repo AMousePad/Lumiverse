@@ -91,7 +91,7 @@ import {
 } from "./summarization-prompts.service";
 import {
   detectExpression,
-  detectMultiCharacterExpression,
+  detectMultiCharacterExpressions,
   getExpressionDetectionSettings,
   resolveDetectedExpressionLabel,
 } from "./expression-detection.service";
@@ -4359,8 +4359,8 @@ async function fireExpressionDetection(
 
   // ── Multi-character expression groups ──────────────────────────────────────
   // Cards with expression_groups (e.g., multi-character RisuAI imports) use a
-  // two-stage pipeline: identify the focus character, then detect expression
-  // within that character's label set.
+  // two-stage pipeline: identify every visible character, then detect each
+  // expression within that character's own label set.
   const expressionGroups = getExpressionGroups(userId, characterId);
   if (expressionGroups && Object.keys(expressionGroups).length > 0) {
     const detectionSettings = getExpressionDetectionSettings(userId);
@@ -4374,7 +4374,7 @@ async function fireExpressionDetection(
         content: m.content,
       }));
 
-    const result = await detectMultiCharacterExpression(
+    const results = await detectMultiCharacterExpressions(
       {
         userId,
         chatId,
@@ -4387,16 +4387,8 @@ async function fireExpressionDetection(
       rawGenerate,
     );
 
-    if (result) {
-      emitExpressionChanged(
-        userId,
-        chatId,
-        chat,
-        characterId,
-        result.expression,
-        result.imageId,
-        result.characterGroup,
-      );
+    if (results !== null) {
+      emitMultiCharacterExpressionsChanged(userId, chatId, characterId, results);
     }
     return;
   }
@@ -4460,6 +4452,49 @@ async function fireExpressionDetection(
       characterId,
       detectedLabel,
       expressionConfig.mappings[detectedLabel],
+    );
+  }
+}
+
+function emitMultiCharacterExpressionsChanged(
+  userId: string,
+  chatId: string,
+  characterId: string,
+  results: Array<{ characterGroup: string; expression: string; imageId: string }>,
+): void {
+  const expressions = Object.fromEntries(results.map((result) => [
+    result.characterGroup,
+    { label: result.expression, imageId: result.imageId },
+  ]));
+  const primary = results[0];
+
+  // This is a snapshot of the characters visible in the latest response, not
+  // an accumulating history. Replacing it removes sprites that left the scene.
+  chatsSvc.mergeChatMetadata(userId, chatId, {
+    multi_character_expressions: expressions,
+    active_expression: primary?.expression ?? null,
+    active_expression_group: primary?.characterGroup ?? null,
+  });
+
+  eventBus.emit(
+    EventType.MULTI_CHARACTER_EXPRESSIONS_CHANGED,
+    { chatId, characterId, expressions },
+    userId,
+  );
+
+  // Keep the original single-expression signal for older clients and
+  // extensions. New clients use the batch event above to render every result.
+  if (primary) {
+    eventBus.emit(
+      EventType.EXPRESSION_CHANGED,
+      {
+        chatId,
+        characterId,
+        label: primary.expression,
+        imageId: primary.imageId,
+        expressionGroup: primary.characterGroup,
+      },
+      userId,
     );
   }
 }

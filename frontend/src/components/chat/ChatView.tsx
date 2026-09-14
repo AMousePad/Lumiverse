@@ -734,6 +734,17 @@ export default function ChatView() {
           useStore.getState().clearGroupExpressions()
         }
 
+        // Restore the visible sprite set for cards that represent multiple
+        // named characters. This is independent of Lumiverse group chats.
+        const savedMultiCharacterExprs = chat.metadata?.multi_character_expressions as
+          | Record<string, { label: string; imageId: string }>
+          | undefined
+        if (savedMultiCharacterExprs) {
+          useStore.getState().setMultiCharacterExpressions(savedMultiCharacterExprs)
+        } else {
+          useStore.getState().clearMultiCharacterExpressions()
+        }
+
         // Restore active expression from chat metadata (async, fire-and-forget)
         const savedExpr = chat.metadata?.active_expression as string | undefined
         if (savedExpr && chat.character_id) {
