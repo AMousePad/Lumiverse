@@ -123,7 +123,7 @@ describe("worker regex-script RPC preset links", () => {
       expect(input).toMatchObject({ preset_id: "preset-1" });
       expect(input).not.toHaveProperty("folder_version");
       expect(context).toEqual({ extensionIdentifier: "realm.test", extensionFolderVersion: "2.4.0" });
-      expect(response.result).toMatchObject({ id: "script-1", can_mutate: true });
+      expect(response.result).toMatchObject({ id: "script-1", can_mutate: true, preset_id: "preset-1" });
     } finally {
       create.mockRestore();
     }
@@ -142,6 +142,39 @@ describe("worker regex-script RPC preset links", () => {
       expect(response.result).toBeUndefined();
     } finally {
       create.mockRestore();
+    }
+  });
+
+  test("projects the preset link on list, get, getActive, and update responses", async () => {
+    const unboundRow = { ...extensionOwnedRow, id: "script-2", preset_id: null };
+    const list = spyOn(regexScriptsSvc, "listRegexScripts")
+      .mockReturnValue({ data: [extensionOwnedRow, unboundRow], total: 2 } as any);
+    const get = spyOn(regexScriptsSvc, "getRegexScript").mockReturnValue(extensionOwnedRow as any);
+    const update = spyOn(regexScriptsSvc, "updateRegexScript").mockReturnValue(extensionOwnedRow as any);
+    const active = spyOn(regexScriptsSvc, "getActiveScripts").mockReturnValue([unboundRow] as any);
+    try {
+      const listed = await invoke((api) => api.handleRegexScriptsList("list-1"));
+      expect(listed.error).toBeUndefined();
+      expect(listed.result.data).toMatchObject([
+        { id: "script-1", preset_id: "preset-1", can_mutate: true },
+        { id: "script-2", preset_id: null, can_mutate: true },
+      ]);
+
+      const got = await invoke((api) => api.handleRegexScriptsGet("get-1", "script-1"));
+      expect(got.result).toMatchObject({ id: "script-1", preset_id: "preset-1" });
+
+      const updated = await invoke(
+        (api) => api.handleRegexScriptsUpdate("update-1", "script-1", { name: "Renamed" }),
+      );
+      expect(updated.result).toMatchObject({ id: "script-1", preset_id: "preset-1" });
+
+      const activeList = await invoke((api) => api.handleRegexScriptsGetActive("active-1", "display"));
+      expect(activeList.result).toMatchObject([{ id: "script-2", preset_id: null }]);
+    } finally {
+      list.mockRestore();
+      get.mockRestore();
+      update.mockRestore();
+      active.mockRestore();
     }
   });
 

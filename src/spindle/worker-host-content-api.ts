@@ -2426,6 +2426,11 @@ export class WorkerHostContentApi {
       sort_order: s.sort_order,
       description: s.description || "",
       folder: s.folder || "",
+      // The preset link is stored on the row and projected back to callers. It is
+      // declared in lumiverse-spindle-types alongside this change; until that
+      // types release is pinned here, the assertion below keeps the extra field
+      // out of the compile-time contract.
+      preset_id: s.preset_id ?? null,
       folder_version: regexScriptsSvc.getSpindleExtensionRegexFolderVersion(s),
       metadata: s.metadata || {},
       created_at: s.created_at,

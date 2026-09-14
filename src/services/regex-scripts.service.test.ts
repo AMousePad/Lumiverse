@@ -235,6 +235,10 @@ describe("preset prompt activation mappings", () => {
   });
 });
 
+// Byte-exact ownership message: callers compare it verbatim, so this literal is
+// asserted in more than one place. Update it only with a deliberate migration.
+const OWNERSHIP_ERROR = "Regex script is not an unbound script owned by this extension";
+
 describe("extension regex ownership", () => {
   test("attributes an explicitly versioned Spindle folder without affecting unversioned scripts", () => {
     const versioned = createRegexScript(USER_ID, {
@@ -402,7 +406,7 @@ describe("extension regex ownership", () => {
     expect(getRegexScript(USER_ID, hostBound.id)).toBeNull();
 
     expect(deleteRegexScript(USER_ID, created.id, { extensionIdentifier: "extension.b" }))
-      .toBe("Regex script is not owned by this extension");
+      .toBe(OWNERSHIP_ERROR);
     expect(getRegexScript(USER_ID, created.id)).not.toBeNull();
 
     expect(deleteRegexScript(USER_ID, created.id, { extensionIdentifier: "extension.a" })).toBe(true);
@@ -561,10 +565,10 @@ describe("extension regex ownership", () => {
     for (const script of [legacy, foreign, hostOwnedBound]) {
       expect(updateRegexScript(USER_ID, script.id, { name: "Hijacked" }, {
         extensionIdentifier: "extension.a",
-      })).toBe("Regex script is not owned by this extension");
+      })).toBe(OWNERSHIP_ERROR);
       expect(deleteRegexScript(USER_ID, script.id, {
         extensionIdentifier: "extension.a",
-      })).toBe("Regex script is not owned by this extension");
+      })).toBe(OWNERSHIP_ERROR);
       expect(getRegexScript(USER_ID, script.id)).not.toBeNull();
     }
 
@@ -573,6 +577,37 @@ describe("extension regex ownership", () => {
       [mustGetScript(legacy.id)],
       "ai_output",
     )).toBe("");
+  });
+
+  test("keeps the historical ownership error message byte-identical", () => {
+    // Compatibility contract: the refusal text is compared verbatim by callers, so
+    // it is asserted as a literal here in addition to OWNERSHIP_ERROR above.
+    const hostOwned = createRegexScript(USER_ID, { name: "Host rule", find_regex: "host_rule" }) as RegexScript;
+    const foreignOwned = createRegexScript(USER_ID, { name: "Foreign rule", find_regex: "foreign_rule" }, {
+      extensionIdentifier: "extension.b",
+    }) as RegexScript;
+
+    for (const script of [hostOwned, foreignOwned]) {
+      expect(updateRegexScript(USER_ID, script.id, { name: "Hijacked" }, {
+        extensionIdentifier: "extension.a",
+      })).toBe("Regex script is not an unbound script owned by this extension");
+      expect(deleteRegexScript(USER_ID, script.id, {
+        extensionIdentifier: "extension.a",
+      })).toBe("Regex script is not an unbound script owned by this extension");
+      expect(getRegexScript(USER_ID, script.id)).not.toBeNull();
+    }
+
+    // The same call on a preset-bound row the caller owns is no longer a refusal,
+    // so the historical text is not reachable for it.
+    seedPreset("preset-1");
+    const ownedBound = createRegexScript(USER_ID, {
+      name: "Owned bound rule",
+      find_regex: "owned_bound",
+      preset_id: "preset-1",
+    }, { extensionIdentifier: "extension.a" }) as RegexScript;
+    expect(updateRegexScript(USER_ID, ownedBound.id, { name: "Owned bound rule v2" }, {
+      extensionIdentifier: "extension.a",
+    })).toMatchObject({ name: "Owned bound rule v2", preset_id: "preset-1" });
   });
 
   test("allows explicitly-authorized editors to mutate protected scripts without taking ownership", () => {

@@ -6,6 +6,8 @@ Read access to the user's regex scripts, CRUD access to scripts created by the c
 
 Extension-created scripts are attributed by the host. Ownership, not the preset link, decides what an extension may change: it cannot update or delete legacy/unattributed scripts, another extension's scripts, or rows it does not own. A script it created stays writable after it is bound to a preset, and deleting that preset deletes the script with it. Protected scripts remain visible through `list`, `get`, and `getActive` and continue to execute normally.
 
+A refused mutation rejects with `Regex script is not an unbound script owned by this extension`. The wording predates the preset-link change and is kept verbatim because callers match on it; the rule it enforces is ownership only.
+
 Extensions whose purpose is to edit the user's complete regex library may also request the privileged `regex_scripts_unrestricted` permission. It is additive: both permissions must be granted. With it, `update` and `delete` may target legacy, card-bound, preset-bound, and other-extension-owned scripts. The host still protects ownership, binding, and trusted folder-version attribution from reassignment.
 
 ## Usage
@@ -151,7 +153,7 @@ const active = await spindle.regex_scripts.getActive({
 
 ## RegexScriptUpdateDTO
 
-Same fields as `RegexScriptCreateDTO`, all optional.
+Same fields as `RegexScriptCreateDTO`, all optional, except that `preset_id` is create-only: `update` strips it from extension input, so an owner re-points a script by deleting and recreating it. The field stays in the published `RegexScriptUpdateDTO` type as excluded, so passing it is a type error instead of a silent no-op.
 
 `folder_version` is script-level, host-managed attribution used by the regex panel. When creating a versioned bundle, provide the same `folder` and `folder_version` on every script in that folder. Lumiverse renders the unique attributed versions as Spindle-colored chips beside the folder name.
 
@@ -209,6 +211,7 @@ Multi-select options toggle in a provisional client-side pool. They can be remov
   sort_order: number            // lower runs earlier within the same scope tier
   description: string
   folder: string
+  preset_id: string | null      // preset this row is bound to for the delete cascade; null when unbound
   folder_version?: string | null // host-validated Spindle folder version; older hosts may omit it
   metadata: Record<string, unknown>
   created_at: number            // unix epoch seconds

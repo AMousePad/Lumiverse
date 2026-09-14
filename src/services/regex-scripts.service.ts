@@ -117,7 +117,11 @@ interface RegexMutationContext {
   extensionFolderVersion?: unknown;
 }
 
-const EXTENSION_REGEX_OWNERSHIP_ERROR = "Regex script is not owned by this extension";
+// Wording is intentionally unchanged from the pre-preset-link behaviour. The rule
+// behind it is now ownership-only, but extensions and other callers compare this
+// string verbatim, so the message is kept byte-identical and the semantics live in
+// the docs instead. Change it only with a deliberate breaking migration.
+const EXTENSION_REGEX_OWNERSHIP_ERROR = "Regex script is not an unbound script owned by this extension";
 
 function normalizeOptionalId(value: unknown): string | null {
   if (typeof value !== "string") return null;
