@@ -1127,6 +1127,8 @@
     "rawOverrideInvalidJson": "Invalid JSON — generation will fail until this is fixed or cleared",
     "rawOverrideNotObject": "Must be a JSON object of request fields, e.g. {\"steps\": 30}",
     "directorReferences": "Director References",
+    "novelaiV5ReferencesUnavailable": "Not available for NovelAI V5",
+    "novelaiV5ReferencesUnavailableHint": "NovelAI V5 does not currently support Vibe Transfer or Precise Reference. Switch to a V4.5 model to use these reference images.",
     "includeCharacterAvatar": "Include Character Avatar",
     "includeCharacterAvatarHint": "Send current character avatar as director reference",
     "includePersonaAvatar": "Include Persona Avatar",
