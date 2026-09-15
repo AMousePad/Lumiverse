@@ -2083,6 +2083,39 @@ async function applyTable(
   return { imported, skipped };
 }
 
+function backfillImportedChatChunkMessageRanges(userId: string): void {
+  getDb().run(
+    `UPDATE chat_chunks
+     SET message_range_start = (
+           SELECT MIN(m.index_in_chat)
+           FROM json_each(
+             CASE WHEN json_valid(chat_chunks.message_ids)
+               THEN chat_chunks.message_ids
+               ELSE '[]'
+             END
+           ) AS chunk_message
+           JOIN messages AS m
+             ON m.id = chunk_message.value
+            AND m.chat_id = chat_chunks.chat_id
+         ),
+         message_range_end = (
+           SELECT MAX(m.index_in_chat)
+           FROM json_each(
+             CASE WHEN json_valid(chat_chunks.message_ids)
+               THEN chat_chunks.message_ids
+               ELSE '[]'
+             END
+           ) AS chunk_message
+           JOIN messages AS m
+             ON m.id = chunk_message.value
+            AND m.chat_id = chat_chunks.chat_id
+         )
+     WHERE chat_id IN (SELECT id FROM chats WHERE user_id = ?)
+       AND (message_range_start IS NULL OR message_range_end IS NULL)`,
+    [userId],
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Phase 3: apply binary files
 // ---------------------------------------------------------------------------
@@ -2571,6 +2604,13 @@ async function runImportJob(job: ImportJob): Promise<void> {
       if (IMPORT_ORDER.includes(table)) continue;
       if (EXCLUDED_TABLES.has(table)) continue;
       await applyTable(ctx, table, entry.stagingPath);
+    }
+
+    // Older archives predate positional chunk ranges. Migrations have already
+    // run by import time, so repair restored rows explicitly before any vector
+    // or Cortex consumers can observe them.
+    if (tableEntries.has("chat_chunks")) {
+      backfillImportedChatChunkMessageRanges(ctx.userId);
     }
 
     // Phase 2c: binary files.

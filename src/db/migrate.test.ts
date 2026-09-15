@@ -116,4 +116,46 @@ describe("database migrations", () => {
       db.close();
     }
   });
+
+  test("backfills chat chunk order from canonical message positions", async () => {
+    const db = new Database(":memory:");
+    try {
+      db.run(`CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        index_in_chat INTEGER NOT NULL
+      )`);
+      db.run(`CREATE TABLE chat_chunks (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        message_ids TEXT NOT NULL,
+        message_range_start INTEGER,
+        message_range_end INTEGER
+      )`);
+      db.run(`INSERT INTO messages VALUES
+        ('m10', 'chat', 10),
+        ('m11', 'chat', 11),
+        ('m12', 'chat', 12)`);
+      db.run(`INSERT INTO chat_chunks VALUES
+        ('chunk-a', 'chat', '["m10","m11"]', NULL, NULL),
+        ('chunk-b', 'chat', '["deleted","m12"]', NULL, NULL),
+        ('malformed', 'chat', 'not-json', NULL, NULL)`);
+
+      const sql = await Bun.file(
+        `${import.meta.dir}/migrations/116_backfill_chat_chunk_message_ranges.sql`,
+      ).text();
+      db.run(sql);
+
+      expect(db.query(
+        `SELECT id, message_range_start, message_range_end
+         FROM chat_chunks ORDER BY id`,
+      ).all()).toEqual([
+        { id: "chunk-a", message_range_start: 10, message_range_end: 11 },
+        { id: "chunk-b", message_range_start: 12, message_range_end: 12 },
+        { id: "malformed", message_range_start: null, message_range_end: null },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
 });
