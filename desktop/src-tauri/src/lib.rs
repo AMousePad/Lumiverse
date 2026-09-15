@@ -217,6 +217,13 @@ pub fn run() {
             let _ = app;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Lumiverse");
+        .build(tauri::generate_context!())
+        .expect("error while building Lumiverse")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Cover native exit paths on every platform, including ones
+                // that never passed through the tray's JS quit handshake.
+                runner::force_stop(app);
+            }
+        });
 }

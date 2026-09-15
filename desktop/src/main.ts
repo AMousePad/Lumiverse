@@ -277,11 +277,17 @@ async function startServer(): Promise<void> {
 }
 
 async function stopServer(): Promise<void> {
+  openIntegratedBrowserWhenReady = false;
   serverState = "stopping";
-  await updateMenu();
-  await client.request("stop-server", undefined, 30_000);
-  await refreshStatus();
-  await updateMenu();
+  updateMenuInBackground();
+  try {
+    await client.request("stop-server", undefined, 30_000);
+  } finally {
+    // Restore the actual state if the runner rejects the request (for example
+    // while an update is in progress), instead of leaving Stop disabled.
+    await refreshStatus();
+    updateMenuInBackground();
+  }
 }
 
 async function checkForUpdates(interactive: boolean): Promise<void> {
@@ -420,23 +426,20 @@ async function rebuildDesktop(): Promise<void> {
  * process tree if the handshake times out.
  */
 async function shutdownRunner(): Promise<void> {
-  if (!(await client.alive())) return;
-  try {
-    const exited = client.waitForExit(15_000);
-    await client.request("quit", undefined, 15_000).catch(() => {});
-    await exited;
-  } catch {
-    await client.kill();
-  }
+  openIntegratedBrowserWhenReady = false;
+  await client.shutdown();
 }
 
 async function quit(): Promise<void> {
-  if (await client.alive()) {
-    busyMessage = "Shutting down…";
-    await updateMenu();
+  busyMessage = "Shutting down…";
+  updateMenuInBackground();
+  try {
     await shutdownRunner();
+  } finally {
+    // The native command performs a final process cleanup even if the JS
+    // handshake or its force-kill invoke failed.
+    await invoke("quit_app");
   }
-  await invoke("quit_app");
 }
 
 /** Detect a server started outside the tray (start.sh / terminal). */
@@ -460,11 +463,16 @@ async function detectExternalServer(): Promise<void> {
 
 // ─── Action wrapper ─────────────────────────────────────────────────────────
 
+function updateMenuInBackground(): void {
+  // Menu IPC must not gate server control or prevent an error being shown.
+  void updateMenu().catch((error) => console.warn("Unable to update tray menu", error));
+}
+
 function action(fn: () => Promise<void>): () => void {
   return () => {
     fn().catch(async (err) => {
       busyMessage = null;
-      await updateMenu();
+      updateMenuInBackground();
       await alert("Lumiverse", err instanceof Error ? err.message : String(err), true);
     });
   };
@@ -597,7 +605,7 @@ async function buildTray(): Promise<void> {
       const wasRunning = hadRunner && serverState !== "stopped" && serverState !== "crashed";
       if (hadRunner) {
         busyMessage = "Switching folder…";
-        await updateMenu();
+        updateMenuInBackground();
         await shutdownRunner();
       }
 

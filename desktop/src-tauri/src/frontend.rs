@@ -426,6 +426,8 @@ pub fn set_frontend_task_switcher_visible<R: tauri::Runtime>(
     #[cfg(target_os = "macos")]
     app.set_dock_visibility(visible)
         .map_err(|error| error.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
 
     window
         .set_skip_taskbar(!visible)
@@ -441,7 +443,11 @@ pub fn hide_frontend_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
-#[tauri::command]
+// WebView2 creation deadlocks inside a synchronous Windows IPC callback.
+// Dispatch on Tauri's worker pool there; macOS's WebKit configuration below
+// requires the main thread. Use the same dispatch for every window creator.
+#[cfg_attr(windows, tauri::command(async))]
+#[cfg_attr(not(windows), tauri::command)]
 pub fn show_frontend(
     app: AppHandle,
     port: u16,
@@ -583,12 +589,8 @@ pub fn show_frontend(
 }
 
 #[tauri::command]
-pub fn hide_frontend(app: AppHandle, state: State<'_, FrontendState>) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(FRONTEND_LABEL) {
-        persist_bounds(&app, &state, &window);
-        let _ = window.hide();
-        let _ = set_frontend_task_switcher_visible(&app, &window, false);
-    }
+pub fn hide_frontend(app: AppHandle) -> Result<(), String> {
+    hide_frontend_window(&app);
     Ok(())
 }
 
@@ -767,7 +769,8 @@ pub fn resize_extension_widget(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(windows, tauri::command(async))]
+#[cfg_attr(not(windows), tauri::command)]
 pub fn show_extension_widget(
     app: AppHandle,
     state: State<'_, DesktopWidgetCatalogState>,
@@ -918,7 +921,8 @@ pub fn return_extension_widget_from_tray(
 /// extension-provided floating widget will need. The actual extension bridge
 /// comes later; keeping this page app-local avoids giving a remote frontend
 /// permission to create arbitrary native windows.
-#[tauri::command]
+#[cfg_attr(windows, tauri::command(async))]
+#[cfg_attr(not(windows), tauri::command)]
 pub fn show_widget_poc(app: AppHandle, state: State<'_, WidgetPocState>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(WIDGET_POC_LABEL) {
         window
@@ -1056,12 +1060,13 @@ fn apply_frontend_native_appearance(
     {
         use tauri::window::{Effect, EffectsBuilder};
 
+        // DWM blur has no material/intensity selection.
+        let _ = (dark, blur_intensity);
         if blur {
             // Mica is a wallpaper-tint material, not a blur effect, and the
             // content beneath it remains visually crisp. The desktop theme's
             // "Blur" switch promises an actual frosted surface, so use DWM
             // blur here. The document still supplies the theme tint above it.
-            let _ = dark;
             window
                 .set_effects(EffectsBuilder::new().effect(Effect::Blur).build())
                 .map_err(|error| error.to_string())?;
@@ -1123,7 +1128,8 @@ pub fn cache_frontend_startup_appearance(
 }
 
 /// Show the small native settings window used to configure a cloud frontend.
-#[tauri::command]
+#[cfg_attr(windows, tauri::command(async))]
+#[cfg_attr(not(windows), tauri::command)]
 pub fn show_frontend_url_settings(app: AppHandle) -> Result<(), String> {
     const LABEL: &str = "frontend-url-settings";
     if let Some(window) = app.get_webview_window(LABEL) {

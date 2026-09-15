@@ -271,9 +271,9 @@ pub fn runner_kill(state: State<'_, RunnerState>) {
     }
 }
 
-/// Stop a runner before a native application-menu quit. The tray's normal
-/// Quit action performs a graceful protocol shutdown first; this is the safe
-/// fallback for Cmd-Q and the macOS application menu.
+/// Clean up any owned runner left at application exit. The tray's normal
+/// Quit action performs a graceful protocol shutdown first; native exit paths
+/// and a failed JS handshake use this process-tree fallback on every platform.
 pub fn force_stop<R: tauri::Runtime>(app: &AppHandle<R>) {
     let state: State<'_, RunnerState> = app.state();
     let running = state.inner.lock().unwrap().take();
@@ -365,9 +365,11 @@ fn bun_name() -> &'static str {
     }
 }
 
-/// Exit the app. Called by TS after the graceful quit handshake.
-#[tauri::command]
+/// Exit after the JS graceful handshake, cleaning up any remaining runner.
+/// Process-tree termination can block, so keep it off the native event loop.
+#[tauri::command(async)]
 pub fn quit_app(app: AppHandle) {
+    force_stop(&app);
     app.exit(0);
 }
 
