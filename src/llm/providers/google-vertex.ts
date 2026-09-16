@@ -520,7 +520,7 @@ export class GoogleVertexProvider implements LlmProvider {
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(body),
-    }, request.signal);
+    }, request.signal, { observer: request.onProviderRequest, provider: this.name, model: request.model, credentials: [apiKey, accessToken] });
 
     if (!res.ok) await throwProviderResponseError("Vertex AI", "generate", res);
 
@@ -572,7 +572,7 @@ export class GoogleVertexProvider implements LlmProvider {
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(body),
-    }, request.signal);
+    }, request.signal, { observer: request.onProviderRequest, provider: this.name, model: request.model, credentials: [apiKey, accessToken] });
 
     if (!res.ok) await throwProviderResponseError("Vertex AI", "stream", res);
 

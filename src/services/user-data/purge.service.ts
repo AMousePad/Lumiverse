@@ -20,6 +20,7 @@ import { getUserBaseDir } from "../../auth/provision";
 import { deleteUserVectors } from "../embeddings.service";
 import { getMcpClientManager } from "../mcp-client-manager";
 import { stopUserGenerations } from "../generate.service";
+import { requestHistoryStore } from "../request-history-store";
 import * as spindleLifecycle from "../../spindle/lifecycle";
 import {
   TABLE_REGISTRY,
@@ -74,6 +75,7 @@ export async function purgeUser(userId: string): Promise<PurgeReport> {
 
   // ── 4) SQL wipe. One transaction; FK cascades handle children.
   const deletedRows = performSqlWipe(userId);
+  requestHistoryStore.clear(userId);
 
   // ── 5) Filesystem. Run after commit — if the transaction had thrown we'd
   //    still want the files around for forensic recovery.

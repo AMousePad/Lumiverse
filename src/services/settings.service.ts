@@ -1,4 +1,5 @@
 import { getDb } from "../db/connection";
+import { REQUEST_HISTORY_SETTING, requestHistoryStore } from "./request-history-store";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import {
@@ -162,6 +163,7 @@ export function putSetting(
   }
 
   const setting = { key, value, updated_at: now };
+  if (key === REQUEST_HISTORY_SETTING && value !== true) requestHistoryStore.clear(userId);
   if (!options.suppressBroadcast) {
     eventBus.emit(EventType.SETTINGS_UPDATED, { key, value }, userId);
   }
@@ -216,6 +218,10 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
   });
   transaction();
 
+  if (prepared.some((entry) => entry.key === REQUEST_HISTORY_SETTING && entry.value !== true)) {
+    requestHistoryStore.clear(userId);
+  }
+
   const worldBookVectorSettingsChanged = prepared.some(
     (entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY
       && worldBookVectorIndexSettingsChanged(existingValues?.get(entry.key), entry.value),
@@ -233,6 +239,7 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
 }
 
 export function deleteSetting(userId: string, key: string): boolean {
+  if (key === REQUEST_HISTORY_SETTING) requestHistoryStore.clear(userId);
   const result = getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run(key, userId);
   return result.changes > 0;
 }

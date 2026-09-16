@@ -31,6 +31,7 @@ import { scoreChunkHeuristic } from "./salience-heuristic";
 
 type ConsolidationGenerateRawFn = (opts: {
   connectionId: string;
+  requestPurpose?: string;
   messages: Array<{ role: string; content: string }>;
   parameters: Record<string, any>;
   signal?: AbortSignal;
@@ -724,6 +725,7 @@ export async function generateConsolidationSummary(
       // here from config.maxTokensPerSummary regardless of what the caller passed.
       const userParams = samplingParameters ?? { temperature: 0.1 };
       const response = await generateRawFn({
+        requestPurpose: "memory summarization",
         connectionId: target.connectionProfileId,
         messages: [
           { role: "system", content: "You are a factual memory summarizer. Output one valid JSON object only. Omit anything not directly supported by the source passages." },
@@ -791,6 +793,7 @@ async function generateArcSummary(
 
       const userParams = samplingParameters ?? { temperature: 0.1 };
       const response = await generateRawFn({
+        requestPurpose: "arc summarization",
         connectionId: target.connectionProfileId,
         messages: [
           { role: "system", content: "You are a factual memory summarizer. Output one valid JSON object only. Omit anything not directly supported by the supplied summaries." },

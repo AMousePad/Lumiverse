@@ -33,6 +33,14 @@ Solutions to common issues you might encounter.
 
 ## Generation Issues
 
+### Inspect the provider request
+
+Open **Settings → Account** and enable **Recent generation requests**. Lumiverse keeps your last 20 outgoing generation attempts, including retries and requests that fail. Expand a row to see the finalized provider request and response, its source, the time it was sent, and the HTTP status. Use **Copy JSON** or **Copy response** to copy each displayed body. Streaming responses are combined into one JSON body after the response ends, including text, tool calls, usage, and provider error details. Interrupted responses are marked as partial.
+
+Tracking starts disabled and belongs to your account. Other users, including admins and operators, cannot access your history through the app. API keys and credential fields are redacted from both bodies before records are retained. Failed attempts include the provider error payload when received; connection failures show the transport error.
+
+Records stay in server memory and are cleared when tracking is disabled or the server restarts. **Clear** removes existing records while keeping tracking enabled. The oldest record is discarded when a new request exceeds the 20-entry limit. Each body has an 8 MiB retention limit. Oversized or unsafe bodies are marked unavailable. Error bodies may be partial when the provider reader reaches its existing size limit; tracking does not continue reading an abandoned response.
+
 ### AI responses are empty or cut off
 
 - Check your **max tokens** setting — it might be too low

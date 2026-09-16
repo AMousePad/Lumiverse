@@ -1396,6 +1396,7 @@ export function scheduleProcessChunk(
   characterNames: string[],
   generateRawFn?: (opts: {
     connectionId: string;
+    requestPurpose?: string;
     messages: Array<{ role: string; content: string }>;
     parameters: Record<string, any>;
     tools?: import("../../llm/types").ToolDefinition[];
@@ -1454,6 +1455,7 @@ export async function processChunk(
   characterNames: string[],
   generateRawFn?: (opts: {
     connectionId: string;
+    requestPurpose?: string;
     messages: Array<{ role: string; content: string }>;
     parameters: Record<string, any>;
     tools?: import("../../llm/types").ToolDefinition[];
@@ -2280,6 +2282,7 @@ export async function rebuildCortex(
   characterNames: string[],
   generateRawFn?: (opts: {
     connectionId: string;
+    requestPurpose?: string;
     messages: Array<{ role: string; content: string }>;
     parameters: Record<string, any>;
     tools?: import("../../llm/types").ToolDefinition[];
@@ -2960,6 +2963,7 @@ async function curateEntityFactsWithLLM(
   maxFacts: number,
   generateRawFn: (opts: {
     connectionId: string;
+    requestPurpose?: string;
     messages: Array<{ role: string; content: string }>;
     parameters: Record<string, any>;
     tools?: import("../../llm/types").ToolDefinition[];
@@ -3005,6 +3009,7 @@ ${scoredFacts.map((f, i) => `${i + 1}. [salience:${f.importance}] ${f.text}`).jo
 
   try {
     const result = await generateRawFn({
+      requestPurpose: "fact curation",
       connectionId,
       messages: [
         { role: "system", content: "You are a factual memory curator. Output valid JSON only — an array of {\"text\": string, \"salience\": number} objects." },
@@ -3088,6 +3093,7 @@ async function evaluatePendingReactivations(
   passageContent: string,
   generateRawFn: (opts: {
     connectionId: string;
+    requestPurpose?: string;
     messages: Array<{ role: string; content: string }>;
     parameters: Record<string, any>;
     tools?: import("../../llm/types").ToolDefinition[];
@@ -3147,6 +3153,7 @@ Only include entries where you have a clear signal. Omit entries you're unsure a
 
   try {
     const result = await generateRawFn({
+      requestPurpose: "relationship reactivation",
       connectionId,
       messages: [
         { role: "system", content: "You are a relationship status evaluator. Output valid JSON only." },

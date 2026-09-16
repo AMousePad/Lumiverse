@@ -154,7 +154,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
-    }, request.signal);
+    }, request.signal, { observer: request.onProviderRequest, provider: this.name, model: request.model, credentials: [apiKey] });
 
     if (!res.ok) await throwProviderResponseError(this.displayName, GENERATE_OPERATION, res);
 
@@ -227,7 +227,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
-    }, request.signal);
+    }, request.signal, { observer: request.onProviderRequest, provider: this.name, model: request.model, credentials: [apiKey] });
 
     if (!res.ok) await throwProviderResponseError(this.displayName, STREAM_OPERATION, res);
 

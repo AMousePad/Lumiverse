@@ -63,7 +63,11 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabName: 'Account Settings',
     tabDescription: 'Manage your account details and password',
     tabIcon: UserRound,
-    keywords: ['account', 'profile', 'password', 'credentials', 'security', 'me'],
+    keywords: ['account', 'profile', 'password', 'credentials', 'security', 'me', 'request', 'history', 'raw', 'json', 'generation'],
+    sections: [
+      { key: 'general', titleKey: 'account.title', titleFallback: 'Account', keywords: ['account', 'password', 'profile'] },
+      { key: 'requestHistory', titleKey: 'requestHistory.title', titleFallback: 'Recent generation requests', keywords: ['request history', 'raw body', 'json', 'provider', 'tracking', 'copy'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {

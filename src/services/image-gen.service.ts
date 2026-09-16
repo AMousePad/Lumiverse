@@ -855,7 +855,7 @@ export async function captionImage(
       ],
       parameters: parser.parameters,
       signal: timeout.signal,
-    });
+    }, { origin: { kind: "sidecar", name: "Image Generation", operation: "caption" } });
     return { caption: (response.content || "").trim() };
   } catch (err) {
     throw resolveAbortReason(timeout.signal) ?? err;
@@ -1471,7 +1471,7 @@ async function parseCustomPrompt(
     ],
     parameters: parser.parameters,
     signal,
-  });
+  }, { chatId, origin: { kind: "sidecar", name: "Image Generation", operation: "prompt parsing" } });
 
   return parsePromptResponse(response.content || "", input.negativePrompt);
 }
@@ -1547,7 +1547,7 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
       ...parser.parameters,
     },
     signal,
-  });
+  }, { chatId, origin: { kind: "sidecar", name: "Image Generation", operation: "scene analysis" } });
 
   return parseSceneJson(response.content || "");
 }

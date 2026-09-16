@@ -108,7 +108,8 @@ try {
 try {
   const { providerRegistry } = await import("./spindle/provider-registry");
   const { getSecret } = await import("./services/secrets.service");
-  providerRegistry.configure({ getSecret });
+  const { observeSidecarBrokerRequest } = await import("./services/request-history.service");
+  providerRegistry.configure({ getSecret, observeRequest: observeSidecarBrokerRequest });
 } catch (err) {
   console.error("[startup] provider registry secret hook failed:", err);
 }

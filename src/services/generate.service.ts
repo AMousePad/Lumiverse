@@ -122,6 +122,8 @@ import {
 import { toolRegistry } from "../spindle/tool-registry";
 import { executeHostCouncilTool } from "./council/host-tools";
 import { applyPromptCaching } from "./caching";
+import type { GenerationCallOptions, ProviderRequestObserver, RequestOrigin } from "../llm/request-observer";
+import { createRequestObserver } from "./request-history.service";
 import {
   applyPersonaAddonStates,
   getChatPersonaAddonStates,
@@ -264,6 +266,7 @@ const readEditAndSendAlwaysUseActiveConnection = (userId: string): boolean =>
 
 /** Lifecycle context passed from startGeneration → runGeneration */
 interface GenerationLifecycle {
+  onProviderRequest?: ProviderRequestObserver;
   /** User-authored messages that immediately preceded this generation. */
   sourceUserMessageIds?: string[];
   /** For regenerate: update swipe on this message instead of creating new */
@@ -1494,11 +1497,11 @@ function reusableStagedSwipeIndex(message: Message): number | undefined {
  * so any in-band field would be settable by any client on `POST /generate`,
  * `/regenerate`, and `/continue` — handing a forged interactive send the
  * Edit-and-Send override. `chatRoute` calls `handler(inputObject)` with exactly
- * one argument, as do `multiplayer.triggerHostGeneration` and
- * `src/spindle/worker-host.ts`, so a second parameter is structurally
- * unreachable from body spreading and is `undefined` on every interactive path.
+ * one argument. Multiplayer and WorkerHost supply trusted `requestOrigin`
+ * metadata separately; none of these options can come from body spreading.
  */
 export interface StartGenerationOptions {
+  requestOrigin?: RequestOrigin;
   origin?: "edit_and_send";
   /**
    * The connection profile the Edit-and-Send request was COMMITTED against, read
@@ -1826,6 +1829,9 @@ export async function startGeneration(
     );
 
     const lifecycle: GenerationLifecycle = {
+      onProviderRequest: createRequestObserver(input.userId, options?.requestOrigin ?? {
+        kind: "chat", name: "Chat", operation: options?.origin ?? genType,
+      }, { chatId: input.chat_id, generationId, connectionId: connection.id }, [apiKey]),
       characterName,
       connectionName: connection.name,
       generationType: genType,
@@ -2249,6 +2255,7 @@ export async function startGeneration(
 
               // Execute pre-generation tool calls (abort-aware)
               councilResult = await executeCouncil({
+                generationId,
                 userId: input.userId,
                 chatId: input.chat_id,
                 personaId: input.persona_id,
@@ -2329,6 +2336,7 @@ export async function startGeneration(
                     );
                     // Re-execute only the failed tools by creating a retry run
                     const retryResult = await executeCouncil({
+                      generationId,
                       userId: input.userId,
                       chatId: input.chat_id,
                       personaId: input.persona_id,
@@ -3538,6 +3546,7 @@ async function runGeneration(
       // Wrapped in a factory so the pre-token retry below can re-issue a clean request.
       const makeStream = (): AsyncGenerator<StreamChunk, void, unknown> => useStreaming
         ? provider.generateStream(apiKey, apiUrl, {
+            onProviderRequest: lifecycle.onProviderRequest,
             messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
             model,
             parameters,
@@ -3547,6 +3556,7 @@ async function runGeneration(
           })
         : (async function* () {
             const result = await provider.generate(apiKey, apiUrl, {
+              onProviderRequest: lifecycle.onProviderRequest,
               messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
               model,
               parameters,
@@ -4655,6 +4665,9 @@ export async function summarizeGenerate(
     );
 
     const request: GenerationRequest = {
+      onProviderRequest: createRequestObserver(userId, { kind: "sidecar", name: "Loom Summary", operation: "summarize" }, {
+        chatId, generationId, connectionId: connection.id,
+      }, [apiKey]),
       messages: cached.messages,
       model: resolvedModel,
       parameters: cached.params,
@@ -4775,6 +4788,9 @@ async function processRebuildBatch(
   );
 
   const request = {
+    onProviderRequest: createRequestObserver(userId, { kind: "sidecar", name: "Loom Summary", operation: `rebuild batch ${batchIdx + 1}/${totalBatches}` }, {
+      chatId, generationId, connectionId: ctx.connection.id,
+    }, [apiKey]),
     messages: cached.messages,
     model: sidecarModel || ctx.connection.model,
     parameters: cached.params,
@@ -5154,6 +5170,7 @@ function applyPostProcessing(messages: LlmMessage[], mode: string): void {
 export async function batchGenerate(
   userId: string,
   input: BatchGenerateInput,
+  options?: GenerationCallOptions,
 ): Promise<BatchResultItem[]> {
   const processOne = async (
     req: RawGenerateInput,
@@ -5163,7 +5180,7 @@ export async function batchGenerate(
       const result = await rawGenerate(userId, {
         ...req,
         signal: input.signal,
-      });
+      }, { ...options, origin: options?.origin ?? { kind: "api", name: "Local API", operation: "batch" } });
       return {
         index,
         success: true,

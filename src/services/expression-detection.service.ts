@@ -1,4 +1,5 @@
 import type { LlmMessage, GenerationResponse } from "../llm/types";
+import type { GenerationCallOptions } from "../llm/request-observer";
 import * as connectionsSvc from "./connections.service";
 import * as settingsSvc from "./settings.service";
 import { getSidecarSettings } from "./sidecar-settings.service";
@@ -9,7 +10,7 @@ type RawGenerateFn = (userId: string, input: {
   messages: LlmMessage[];
   connection_id: string;
   parameters?: Record<string, unknown>;
-}) => Promise<GenerationResponse>;
+}, options?: GenerationCallOptions) => Promise<GenerationResponse>;
 
 interface DetectExpressionInput {
   userId: string;
@@ -93,7 +94,7 @@ export async function detectExpression(input: DetectExpressionInput, generateFn:
       temperature,
       max_tokens: maxTokens,
     },
-  });
+  }, { chatId: input.chatId, origin: { kind: "sidecar", name: "Expression Detection", operation: input.characterName ?? "expression" } });
 
   return resolveDetectedExpressionLabel(response.content || "", labels);
 }
@@ -370,7 +371,7 @@ async function identifyCharactersLLM(
       messages,
       connection_id: connectionId,
       parameters: { temperature: 0.1, max_tokens: 150 },
-    });
+    }, { origin: { kind: "sidecar", name: "Expression Detection", operation: "visible characters" } });
 
     return resolveDetectedCharacterNames(response.content || "", characterNames);
   } catch {

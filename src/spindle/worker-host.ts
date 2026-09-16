@@ -3069,6 +3069,19 @@ export class WorkerHost {
 
   // ─── Generation ──────────────────────────────────────────────────────
 
+  private generationRequestOptions(requestId: string, operation: string, chatId?: string) {
+    return {
+      origin: {
+        kind: "extension" as const,
+        name: this.manifest.name || this.manifest.identifier,
+        extensionId: this.extensionId,
+        operation,
+      },
+      generationId: requestId,
+      chatId,
+    };
+  }
+
   private async handleGeneration(
     requestId: string,
     input: any
@@ -3111,7 +3124,7 @@ export class WorkerHost {
             tools: input.tools,
             reasoning: input.reasoning,
             signal: abortController.signal,
-          });
+          }, this.generationRequestOptions(requestId, input.type));
           break;
         case "quiet":
           result = await generateSvc.quietGenerate(resolvedUserId, {
@@ -3121,14 +3134,14 @@ export class WorkerHost {
             tools: input.tools,
             reasoning: input.reasoning,
             signal: abortController.signal,
-          });
+          }, this.generationRequestOptions(requestId, input.type));
           break;
         case "batch":
           result = await generateSvc.batchGenerate(resolvedUserId, {
             requests: input.requests || [],
             concurrent: input.concurrent,
             signal: abortController.signal,
-          });
+          }, this.generationRequestOptions(requestId, input.type));
           break;
         default:
           throw new Error(`Unknown generation type: ${input.type}`);
@@ -3214,7 +3227,7 @@ export class WorkerHost {
             tools: input.tools,
             reasoning: input.reasoning,
             signal: abortController.signal,
-          });
+          }, this.generationRequestOptions(requestId, `${input.type} stream`));
           break;
         case "quiet":
           stream = await generateSvc.quietGenerateStream(resolvedUserId, {
@@ -3224,7 +3237,7 @@ export class WorkerHost {
             tools: input.tools,
             reasoning: input.reasoning,
             signal: abortController.signal,
-          });
+          }, this.generationRequestOptions(requestId, `${input.type} stream`));
           break;
         default:
           throw new Error(`Streaming is not supported for generation type: ${input.type}`);
@@ -3569,7 +3582,7 @@ export class WorkerHost {
           reasoning: input.reasoning as any,
           tools: input.tools as any,
           signal: controller.signal,
-        });
+        }, this.generationRequestOptions(requestId, "tracked quiet", context.chatId));
         this.postToWorker({
           type: "response",
           requestId,
@@ -3756,7 +3769,7 @@ export class WorkerHost {
           parameters: generationOptions?.parameters,
           target_character_id: generationOptions?.target_character_id,
           retain_council: generationOptions?.retain_council,
-        });
+        }, { requestOrigin: this.generationRequestOptions(requestId, "chat append").origin });
         generationId = generation.generationId;
       }
 

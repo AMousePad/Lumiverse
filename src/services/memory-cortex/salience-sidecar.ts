@@ -556,6 +556,7 @@ export function getExtractionStructuredParams(_provider: string, _batch: boolean
 
 export type SidecarGenerateFn = (opts: {
   connectionId: string;
+  requestPurpose?: string;
   messages: Array<{ role: string; content: string }>;
   parameters: Record<string, any>;
   tools?: ToolDefinition[];
@@ -777,6 +778,8 @@ export async function extractWithSidecar(
     const sentAt = Date.now();
 
     const response = await generateRawFn({
+
+      requestPurpose: "extraction",
       connectionId: sidecarConnectionId,
       messages: [
         { role: "system", content: systemPrompt },
@@ -868,6 +871,7 @@ export async function scoreChunkWithSidecar(
   content: string,
   generateRawFn: (opts: {
     connectionId: string;
+    requestPurpose?: string;
     messages: Array<{ role: string; content: string }>;
     parameters: Record<string, any>;
   }) => Promise<{ content: string }>,
@@ -1059,6 +1063,8 @@ export async function extractBatchWithSidecar(
     const sentAt = Date.now();
 
     const response = await generateRawFn({
+
+      requestPurpose: "batch extraction",
       connectionId: sidecarConnectionId,
       messages: [
         { role: "system", content: systemPrompt },
@@ -1126,6 +1132,7 @@ function logSidecarDispatch(
     arbiter: boolean;
     userContent: string;
     connectionId: string;
+    requestPurpose?: string;
     tokenCounter?: (text: string) => number;
     batchExistingCount?: number;
   },

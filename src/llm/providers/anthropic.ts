@@ -264,7 +264,7 @@ export class AnthropicProvider implements LlmProvider {
       method: "POST",
       headers: this.requestHeaders(apiKey, request),
       body: JSON.stringify(body),
-    }, request.signal);
+    }, request.signal, { observer: request.onProviderRequest, provider: this.name, model: request.model, credentials: [apiKey] });
 
     if (!res.ok) {
       const rawBody = await readBoundedText(res);
@@ -338,7 +338,7 @@ export class AnthropicProvider implements LlmProvider {
       method: "POST",
       headers: this.requestHeaders(apiKey, request),
       body: JSON.stringify(body),
-    }, request.signal);
+    }, request.signal, { observer: request.onProviderRequest, provider: this.name, model: request.model, credentials: [apiKey] });
 
     if (!res.ok) {
       const rawBody = await readBoundedText(res);
