@@ -36,7 +36,7 @@ export function createRequestObserver(
   credentials: readonly string[] = [],
 ): ProviderRequestObserver {
   return (snapshot) => {
-    // Check at dispatch, including each retry, rather than at assembly time.
+    // Check at dispatch rather than at assembly time.
     if (!enabled(userId)) return;
     let secrets = [...credentials, ...snapshot.credentials];
     const id = requestHistoryStore.record(userId, { ...context, origin }, { ...snapshot, credentials: secrets });

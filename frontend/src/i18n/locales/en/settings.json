@@ -1176,8 +1176,6 @@
     "onSidecarFailure": "On sidecar failure",
     "fallbackHeuristic": "Fall back to heuristic",
     "fallbackSkip": "AI Only — skip chunk, retry on warmup",
-    "retryAttempts": "Retry attempts",
-    "retryDelay": "Retry delay (ms)",
     "arbitratesHeuristics": "Sidecar arbitrates heuristics",
     "arbitratesHeuristicsHint": "When the sidecar succeeds, it sees the heuristic candidates for this chunk and can drop bad ones or rename them to a canonical form before merging.",
     "pruneGraph": "Sidecar can prune existing graph entities",

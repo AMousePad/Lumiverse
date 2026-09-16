@@ -141,7 +141,7 @@ describe("edit-and-send dispatcher", () => {
     expect(getGenerationOutboxById(firstId)?.status).toBe("claimed");
   });
 
-  test("crash/retry/cancellation/reconciliation", async () => {
+  test("single dispatch, cancellation and reconciliation", async () => {
     const starts: string[] = [];
     const stops: string[] = [];
     const active = new Set<string>();
@@ -169,8 +169,9 @@ describe("edit-and-send dispatcher", () => {
       attempt_count: 1,
     });
     const expired = claimNextEditAndSendOutbox();
-    expect(expired?.id).toBe("expired");
-    expect(expired?.attempt_count).toBe(2);
+    expect(expired).toBeNull();
+    reconcileEditAndSendOutbox();
+    expect(getGenerationOutboxById("expired")?.status).toBe("failed");
 
     insertOutbox({
       id: "fail-row",
@@ -179,9 +180,9 @@ describe("edit-and-send dispatcher", () => {
       status: "pending",
     });
     const failed = await dispatchEditAndSendRequest("u1", "c1", "req-fail");
-    expect(failed?.status).toBe("pending");
+    expect(failed?.status).toBe("failed");
     expect(failed?.last_error_code).toBe("provider_down");
-    expect(failed?.next_attempt_at).toBeGreaterThan(Date.now());
+    expect(failed?.next_attempt_at).toBeNull();
 
     insertOutbox({
       id: "run-row",
@@ -212,14 +213,13 @@ describe("edit-and-send dispatcher", () => {
       status: "running",
       dispatched_at: Date.now() - 1_000,
     });
-    // No active pool entry + no persisted output: durable verification resets
-    // to pending (never a blind completion).
+    // No active generation and no persisted output: fail without replaying.
     expect(reconcileEditAndSendOutbox()).toBe(1);
     const recon = getGenerationOutboxById("recon");
-    expect(recon?.status).toBe("pending");
-    expect(recon?.attempt_count).toBe(1);
+    expect(recon?.status).toBe("failed");
+    expect(recon?.attempt_count).toBe(0);
     expect(recon?.last_error_code).toBe("output_not_verified");
-    expect(recon?.next_attempt_at).toBeGreaterThan(Date.now());
+    expect(recon?.next_attempt_at).toBeNull();
   });
 
   test("periodic reconcile skips live generations and durably resolves dead ones", async () => {
@@ -248,7 +248,7 @@ describe("edit-and-send dispatcher", () => {
     });
     insertMessage({ id: "asst-dead-verified", chat_id: "branch-dead-verified", created_at: nowSec });
 
-    // Dead pool entry + NO persisted output -> reset to pending, not completed.
+    // Dead pool entry + NO persisted output -> failed without redispatch.
     insertOutbox({
       id: "dead-lost-row",
       request_id: "req-dead-lost",
@@ -270,10 +270,10 @@ describe("edit-and-send dispatcher", () => {
 
     const lost = getGenerationOutboxById("dead-lost-row");
     expect(lost?.status).not.toBe("completed");
-    expect(lost?.status).toBe("pending");
-    expect(lost?.attempt_count).toBe(4);
+    expect(lost?.status).toBe("failed");
+    expect(lost?.attempt_count).toBe(3);
     expect(lost?.last_error_code).toBe("output_not_verified");
-    expect(lost?.next_attempt_at).toBeGreaterThan(Date.now());
+    expect(lost?.next_attempt_at).toBeNull();
     expect(lost?.lease_owner).toBeNull();
   });
 
@@ -400,7 +400,7 @@ describe("edit-and-send dispatcher", () => {
     });
     insertMessage({ id: "asst-verified", chat_id: "branch-verified", created_at: nowSec });
 
-    // (b) running row + NO message -> pending, attempt_count+1, backoff scheduled
+    // (b) running row + NO message -> failed, no further provider attempt
     insertOutbox({
       id: "lost-row",
       request_id: "req-lost",
@@ -420,12 +420,12 @@ describe("edit-and-send dispatcher", () => {
     expect(verified?.terminal_reason).toBe("verified_output");
 
     const lost = getGenerationOutboxById("lost-row");
-    expect(lost?.status).toBe("pending");
-    expect(lost?.attempt_count).toBe(2);
+    expect(lost?.status).toBe("failed");
+    expect(lost?.attempt_count).toBe(1);
     expect(lost?.lease_owner).toBeNull();
     expect(lost?.lease_expires_at).toBeNull();
     expect(lost?.last_error_code).toBe("output_not_verified");
-    expect(lost?.next_attempt_at).toBeGreaterThan(Date.now());
+    expect(lost?.next_attempt_at).toBeNull();
   });
 
   test("crash recovery marks swipe output verified via target message revision bump", async () => {
@@ -476,7 +476,7 @@ describe("edit-and-send dispatcher", () => {
 
     const row = getGenerationOutboxById("exhausted-row");
     expect(row?.status).toBe("failed");
-    expect(row?.terminal_reason).toBe("max_attempts");
+    expect(row?.terminal_reason).toBe("output_not_verified");
     expect(row?.last_error_code).toBe("output_not_verified");
     expect(row?.lease_owner).toBeNull();
   });

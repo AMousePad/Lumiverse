@@ -50,8 +50,6 @@ export interface CortexConfig {
   sidecarTimeoutMs: number;
   sidecarReliability: {
     fallback: "heuristic" | "skip";
-    maxRetries: number;
-    retryDelayMs: number;
     arbitratesHeuristics: boolean;
     gradesExistingRecords: boolean;
   };

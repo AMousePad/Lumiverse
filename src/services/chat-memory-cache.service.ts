@@ -455,10 +455,8 @@ async function computeFreshMemoryResult(
   }
 
   try {
-    // Shrink-and-retry on oversized-input errors so a long multi-message query
-    // doesn't silently collapse to the recency fallback on token-limited
-    // embedding backends (llama.cpp n_ubatch, 512-token models, etc.).
-    const queryVector = await embeddingsSvc.embedQueryAdaptive(userId, queryText);
+    // Provider failures use the recency fallback below without resending the query.
+    const queryVector = await embeddingsSvc.embedQuery(userId, queryText);
     if (!queryVector || queryVector.length === 0) {
       return {
         settingsKey,

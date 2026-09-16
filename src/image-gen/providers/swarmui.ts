@@ -616,11 +616,8 @@ export class SwarmUIImageProvider implements ImageProvider {
       }
     }
 
-    let sessionId = await this.getSession(base, token, request.signal)
-    let body = this.buildBody(sessionId, request)
-
-    // sessionId can change after an invalid_session_id retry, so the abort
-    // handler reads it through a closure that follows reassignment.
+    const sessionId = await this.getSession(base, token, request.signal)
+    const body = this.buildBody(sessionId, request)
     const abortHandler = () => {
       fetch(`${base}/API/InterruptAll`, {
         method: "POST",
@@ -632,46 +629,35 @@ export class SwarmUIImageProvider implements ImageProvider {
     request.signal?.addEventListener("abort", abortHandler, { once: true })
 
     try {
-      let res = await fetch(`${base}/API/GenerateText2Image`, {
+      const res = await fetch(`${base}/API/GenerateText2Image`, {
         method: "POST",
         headers: this.buildHeaders(token),
         body: JSON.stringify(body),
         signal: request.signal,
       })
 
-      // Retry once on invalid session
       if (!res.ok) {
-        const text = await readBoundedText(res)
-        if (text.includes("invalid_session_id") || text.includes("Invalid session")) {
+        const rawBody = await readBoundedText(res)
+        if (rawBody.includes("invalid_session_id") || rawBody.includes("Invalid session")) {
           await this.invalidateSession(base, token, sessionId)
-          sessionId = await this.getSession(base, token, request.signal)
-          body = this.buildBody(sessionId, request)
-          res = await fetch(`${base}/API/GenerateText2Image`, {
-            method: "POST",
-            headers: this.buildHeaders(token),
-            body: JSON.stringify(body),
-            signal: request.signal,
-          })
         }
-        if (!res.ok) {
-          // Body of the first response has already been read into `text`; the
-          // retry (if any) has its own untouched body.
-          const rawBody = res.bodyUsed ? text : await readBoundedText(res)
-          const parsed = parseProviderErrorBody(rawBody)
-          throw new ProviderRequestError({
-            provider: "SwarmUI",
-            operation: "image generate",
-            status: res.status,
-            code: parsed.code || res.statusText || undefined,
-            detail: parsed.detail || res.statusText || undefined,
-            rawBody,
-          })
-        }
+        const parsed = parseProviderErrorBody(rawBody)
+        throw new ProviderRequestError({
+          provider: "SwarmUI",
+          operation: "image generate",
+          status: res.status,
+          code: parsed.code || res.statusText || undefined,
+          detail: parsed.detail || res.statusText || undefined,
+          rawBody,
+        })
       }
 
       const data = await res.json() as unknown
       const responseError = parseSwarmResponseError(data, "image generate")
-      if (responseError) throw responseError
+      if (responseError) {
+        if (isStaleSessionError(responseError)) await this.invalidateSession(base, token, sessionId)
+        throw responseError
+      }
 
       const response = data && typeof data === "object" && !Array.isArray(data)
         ? data as Record<string, unknown>

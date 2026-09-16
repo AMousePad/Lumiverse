@@ -39,6 +39,8 @@ Open **Settings → Account** and enable **Recent generation requests**. Lumiver
 
 Tracking starts disabled and belongs to your account. Other users, including admins and operators, cannot access your history through the app. API keys and credential fields are redacted from both bodies before records are retained. Failed attempts include the provider error payload when received; connection failures show the transport error.
 
+Chat completions, Loom rebuilds, Memory Cortex extraction and summaries, embeddings, and image generation do not automatically resend failed provider requests. Configured fallback connections remain available, with one attempt per connection. Council retains its existing sidecar retry behavior. Interrupted Edit-and-Send dispatches preserve saved output or finish as failed; they are not replayed automatically after a restart.
+
 Records stay in server memory and are cleared when tracking is disabled or the server restarts. **Clear** removes existing records while keeping tracking enabled. The oldest record is discarded when a new request exceeds the 20-entry limit. Each body has an 8 MiB retention limit. Oversized or unsafe bodies are marked unavailable. Error bodies may be partial when the provider reader reaches its existing size limit; tracking does not continue reading an abandoned response.
 
 ### AI responses are empty or cut off

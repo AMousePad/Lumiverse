@@ -1097,7 +1097,7 @@ export async function queryCortex(
   }
 }
 
-// ─── Sidecar primary → retry → secondary → heuristic|skip ──────
+// ─── Sidecar primary → configured fallbacks → heuristic|skip ──────
 
 export const CORTEX_SIDECAR_CIRCUIT_FAILURE_THRESHOLD = 3;
 export const CORTEX_SIDECAR_CIRCUIT_COOLDOWN_MS = 30_000;
@@ -1206,22 +1206,6 @@ function throwIfCallerAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw callerAbortReason(signal);
 }
 
-async function delayWithCallerSignal(ms: number, signal?: AbortSignal): Promise<void> {
-  throwIfCallerAborted(signal);
-  if (ms <= 0) return;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(callerAbortReason(signal));
-    };
-    if (signal) signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 export function collectQueryGenerationTargets(
   config: MemoryCortexConfig,
   fallbackConnectionId?: string,
@@ -1268,8 +1252,6 @@ export async function runQueryGenerationSidecar<T>(options: {
 }): Promise<CortexSidecarIngestDecision<T>> {
   const { userId, config, sidecarConnectionId, signal, extract } = options;
   const fallback = config.sidecarReliability.fallback === "skip" ? "skip" : "heuristic";
-  const maxAttempts = 1 + (config.sidecarReliability.maxRetries ?? 0);
-  const baseDelayMs = config.sidecarReliability.retryDelayMs ?? 500;
   const sidecarTimeoutMs = config.sidecarTimeoutMs ?? 60000;
   const targets = collectQueryGenerationTargets(config, sidecarConnectionId);
 
@@ -1310,63 +1292,48 @@ export async function runQueryGenerationSidecar<T>(options: {
       continue;
     }
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const timeoutController = sidecarTimeoutMs > 0 ? new AbortController() : null;
+    const timer = timeoutController
+      ? setTimeout(() => {
+          console.warn("[memory-cortex] Sidecar extraction timed out, aborting LLM call");
+          timeoutController.abort();
+        }, sidecarTimeoutMs)
+      : null;
+    const combinedSignal = signal && timeoutController
+      ? AbortSignal.any([signal, timeoutController.signal])
+      : signal ?? timeoutController?.signal;
+
+    attempts += 1;
+    invokedAny = true;
+    try {
+      const result = await extract({
+        ...target,
+        attempt: 1,
+        signal: combinedSignal,
+      });
       if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
-      if (attempt > 0) {
-        const delay = baseDelayMs * Math.pow(2, attempt - 1);
-        try {
-          await delayWithCallerSignal(delay, signal);
-        } catch {
-          return finish("aborted", { role: lastRole, attempts });
-        }
-        console.info(
-          `[memory-cortex] Sidecar ${target.role} retry attempt ${attempt + 1}/${maxAttempts} after ${delay}ms`,
+      if (result != null) {
+        recordCortexSidecarSuccess(userId, target.connectionProfileId);
+        return finish("ok", { result, role: target.role, attempts });
+      }
+      throw new Error("sidecar returned empty extraction");
+    } catch (err: unknown) {
+      if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
+      const timedOut = timeoutController?.signal.aborted === true;
+      if (timedOut) sawTimeout = true;
+      const transient = isTransientCortexSidecarError(err, false) || timedOut;
+      if (transient) {
+        recordCortexSidecarTransientFailure(userId, target.connectionProfileId);
+      }
+      const name = err && typeof err === "object" && "name" in err ? String((err as { name?: unknown }).name) : "";
+      if (name !== "AbortError" && !timedOut) {
+        console.warn(
+          `[memory-cortex] Sidecar ${target.role} failed:`,
+          err instanceof Error ? err.message : err,
         );
       }
-
-      const timeoutController = sidecarTimeoutMs > 0 ? new AbortController() : null;
-      const timer = timeoutController
-        ? setTimeout(() => {
-            console.warn("[memory-cortex] Sidecar extraction timed out, aborting LLM call");
-            timeoutController.abort();
-          }, sidecarTimeoutMs)
-        : null;
-      const combinedSignal = signal && timeoutController
-        ? AbortSignal.any([signal, timeoutController.signal])
-        : signal ?? timeoutController?.signal;
-
-      attempts += 1;
-      invokedAny = true;
-      try {
-        const result = await extract({
-          ...target,
-          attempt: attempt + 1,
-          signal: combinedSignal,
-        });
-        if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
-        if (result != null) {
-          recordCortexSidecarSuccess(userId, target.connectionProfileId);
-          return finish("ok", { result, role: target.role, attempts });
-        }
-        throw new Error("sidecar returned empty extraction");
-      } catch (err: unknown) {
-        if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
-        const timedOut = timeoutController?.signal.aborted === true;
-        if (timedOut) sawTimeout = true;
-        const transient = isTransientCortexSidecarError(err, false) || timedOut;
-        if (transient) {
-          recordCortexSidecarTransientFailure(userId, target.connectionProfileId);
-        }
-        const name = err && typeof err === "object" && "name" in err ? String((err as { name?: unknown }).name) : "";
-        if (name !== "AbortError" && !timedOut) {
-          console.warn(
-            `[memory-cortex] Sidecar ${target.role} attempt ${attempt + 1}/${maxAttempts} failed:`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

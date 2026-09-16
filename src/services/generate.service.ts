@@ -4720,29 +4720,19 @@ async function processRebuildBatch(
       await provider.generate(apiKey, apiUrl, request),
     );
   } catch (err: any) {
-    // Retry once on failure
-    try {
-      await new Promise<void>((r) => setTimeout(r, 500));
-      result = applyDelimitedReasoningParsing(
-        userId,
-        await provider.generate(apiKey, apiUrl, request),
-      );
-    } catch (retryErr: any) {
-      // On retry failure, keep the previous summary unchanged
-      console.warn(
-        `[rebuild] Batch ${batchIdx + 1}/${totalBatches} failed, keeping previous summary`,
-        retryErr?.message,
-      );
-      summarizePool.emitSummarizationProgress({
-        chatId,
-        generationId,
-        batchNumber: batchIdx + 1,
-        totalBatches,
-        messagesProcessed: messagesProcessed + batch.length,
-        userId,
-      });
-      return { summary: currentSummary, messagesProcessed: messagesProcessed + batch.length, failed: true };
-    }
+    console.warn(
+      `[rebuild] Batch ${batchIdx + 1}/${totalBatches} failed, keeping previous summary`,
+      err?.message,
+    );
+    summarizePool.emitSummarizationProgress({
+      chatId,
+      generationId,
+      batchNumber: batchIdx + 1,
+      totalBatches,
+      messagesProcessed: messagesProcessed + batch.length,
+      userId,
+    });
+    return { summary: currentSummary, messagesProcessed: messagesProcessed + batch.length, failed: true };
   }
 
   const batchSummary = result.content?.trim();

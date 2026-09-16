@@ -137,14 +137,13 @@ The connection picker includes both built-in connections and sidecar providers c
 !!! note "Sidecar Costs"
     The sidecar makes one LLM call per chunk during live chat, and one per chunk during rebuilds. A chat with 200 chunks would make 200 API calls on rebuild. Choose an inexpensive model for the sidecar to keep costs reasonable.
 
-### Reliability & Retries
+### Failure Handling
 
-The sidecar is wrapped in a small reliability layer you can tune:
+Choose how to handle a failed sidecar call:
 
 | Setting | Description |
 |---------|-------------|
 | **Fallback** | `heuristic` writes the heuristic result if the sidecar fails; `skip` holds the chunk for reprocessing on the next pass. |
-| **Max Retries** | Additional attempts after the first failed call (exponential backoff). |
 | **Sidecar Timeout** | Per-call timeout in milliseconds before the call is abandoned. |
 
 ### Connection Failover
@@ -154,7 +153,7 @@ Memory Cortex keeps two independent ordered chains because extraction and summar
 - **Extraction secondary / fallbacks** handle query generation, entity extraction, relationships, and related analysis.
 - **Summary secondary / fallbacks** handle scene and story-arc consolidation.
 
-The primary connection is attempted first, including its configured retries. If it remains unavailable or times out, Lumiverse tries the corresponding secondary connection and then each additional fallback in order. Only after that chain is exhausted does the **Fallback** reliability setting decide whether to use heuristics or leave the work for a later pass.
+The primary connection is attempted once. Lumiverse does not automatically retry requests against the same connection. If it remains unavailable or times out, Lumiverse tries the corresponding secondary connection and then each additional fallback in order, once per connection. Only after that chain is exhausted does the **Fallback** reliability setting decide whether to use heuristics or leave the work for a later pass.
 
 Fallback connections keep their own models and credentials. Removing a fallback from one chain does not remove it from the other.
 

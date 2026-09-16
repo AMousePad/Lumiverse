@@ -39,8 +39,6 @@ const config = {
   sidecarTimeoutMs: 60000,
   sidecarReliability: {
     fallback: "heuristic" as const,
-    maxRetries: 0,
-    retryDelayMs: 500,
     arbitratesHeuristics: false,
     gradesExistingRecords: false,
   },

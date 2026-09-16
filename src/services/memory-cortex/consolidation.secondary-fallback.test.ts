@@ -23,8 +23,6 @@ function sidecarOpts(overrides: Partial<ConsolidationSidecarOptions> = {}): Cons
     sidecarReliability: {
       ...DEFAULT_CORTEX_CONFIG.sidecarReliability,
       fallback: "heuristic",
-      maxRetries: 1,
-      retryDelayMs: 1,
     },
     sidecarTimeoutMs: 5_000,
     sidecar: {
@@ -157,7 +155,7 @@ describe("generateConsolidationSummary secondary fallback", () => {
     expect(calls).toEqual(["primary-conn:primary-model"]);
   });
 
-  test("fails over to secondary after primary retries exhaust", async () => {
+  test("fails over to secondary after one primary failure", async () => {
     const calls: string[] = [];
     const decision = await generateConsolidationSummary(
       [{ content: "Alice crossed the river and told Bob the news." }],
@@ -180,7 +178,6 @@ describe("generateConsolidationSummary secondary fallback", () => {
     expect(decision.result?.summary).toBe("Bob heard Alice at the river.");
     expect(calls).toEqual([
       "primary-conn:primary-model",
-      "primary-conn:primary-model",
       "secondary-conn:secondary-model",
     ]);
   });
@@ -199,8 +196,6 @@ describe("generateConsolidationSummary secondary fallback", () => {
         sidecarReliability: {
           ...DEFAULT_CORTEX_CONFIG.sidecarReliability,
           fallback: "heuristic",
-          maxRetries: 0,
-          retryDelayMs: 0,
         },
       }),
     );
@@ -225,8 +220,6 @@ describe("generateConsolidationSummary secondary fallback", () => {
         sidecarReliability: {
           ...DEFAULT_CORTEX_CONFIG.sidecarReliability,
           fallback: "skip",
-          maxRetries: 0,
-          retryDelayMs: 0,
         },
       }),
     );
@@ -281,8 +274,6 @@ describe("generateConsolidationSummary secondary fallback", () => {
         sidecarReliability: {
           ...DEFAULT_CORTEX_CONFIG.sidecarReliability,
           fallback: "heuristic",
-          maxRetries: 0,
-          retryDelayMs: 0,
         },
       }),
     );
@@ -343,8 +334,6 @@ describe("maybeConsolidate secondary fallback writes", () => {
         sidecarReliability: {
           ...DEFAULT_CORTEX_CONFIG.sidecarReliability,
           fallback: "heuristic",
-          maxRetries: 0,
-          retryDelayMs: 0,
         },
       }),
     );
@@ -372,8 +361,6 @@ describe("maybeConsolidate secondary fallback writes", () => {
         sidecarReliability: {
           ...DEFAULT_CORTEX_CONFIG.sidecarReliability,
           fallback: "skip",
-          maxRetries: 0,
-          retryDelayMs: 0,
         },
       }),
     );
@@ -406,8 +393,6 @@ describe("maybeConsolidate secondary fallback writes", () => {
         sidecarReliability: {
           ...DEFAULT_CORTEX_CONFIG.sidecarReliability,
           fallback: "heuristic",
-          maxRetries: 1,
-          retryDelayMs: 30,
         },
       }),
     );

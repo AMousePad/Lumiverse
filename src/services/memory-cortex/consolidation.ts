@@ -57,7 +57,7 @@ export interface MemorySummarizationDecision<T = unknown> {
 
 export interface ConsolidationSidecarOptions {
   memorySummarization?: CortexModelFallbackPair;
-  sidecarReliability?: Pick<SidecarReliabilityConfig, "fallback" | "maxRetries" | "retryDelayMs">;
+  sidecarReliability?: Pick<SidecarReliabilityConfig, "fallback">;
   sidecarTimeoutMs?: number;
   sidecar?: { connectionProfileId?: string | null; model?: string | null };
   signal?: AbortSignal;
@@ -166,25 +166,9 @@ function throwIfCallerAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw callerAbortReason(signal);
 }
 
-async function delayWithCallerSignal(ms: number, signal?: AbortSignal): Promise<void> {
-  throwIfCallerAborted(signal);
-  if (ms <= 0) return;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(callerAbortReason(signal));
-    };
-    if (signal) signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 export async function runMemorySummarizationSidecar<T>(options: {
   memorySummarization?: CortexModelFallbackPair;
-  sidecarReliability?: Pick<SidecarReliabilityConfig, "fallback" | "maxRetries" | "retryDelayMs">;
+  sidecarReliability?: Pick<SidecarReliabilityConfig, "fallback">;
   sidecarTimeoutMs?: number;
   sidecar?: { connectionProfileId?: string | null; model?: string | null };
   sidecarConnectionId?: string;
@@ -200,8 +184,6 @@ export async function runMemorySummarizationSidecar<T>(options: {
     extract,
   } = options;
   const fallback = sidecarReliability?.fallback === "skip" ? "skip" : "heuristic";
-  const maxAttempts = 1 + (sidecarReliability?.maxRetries ?? 0);
-  const baseDelayMs = sidecarReliability?.retryDelayMs ?? 500;
   const sidecarTimeoutMs = options.sidecarTimeoutMs ?? 30_000;
   const targets = collectMemorySummarizationTargets(memorySummarization, sidecarConnectionId, sidecar);
 
@@ -232,58 +214,43 @@ export async function runMemorySummarizationSidecar<T>(options: {
     if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
     lastRole = target.role;
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const timeoutController = sidecarTimeoutMs > 0 ? new AbortController() : null;
+    const timer = timeoutController
+      ? setTimeout(() => {
+          console.warn(`[memory-cortex] Consolidation sidecar timed out after ${sidecarTimeoutMs}ms, aborting LLM call`);
+          timeoutController.abort();
+        }, sidecarTimeoutMs)
+      : null;
+    const combinedSignal = signal && timeoutController
+      ? AbortSignal.any([signal, timeoutController.signal])
+      : signal ?? timeoutController?.signal;
+
+    attempts += 1;
+    invokedAny = true;
+    try {
+      const result = await extract({
+        ...target,
+        attempt: 1,
+        signal: combinedSignal,
+      });
       if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
-      if (attempt > 0) {
-        const delay = baseDelayMs * Math.pow(2, attempt - 1);
-        try {
-          await delayWithCallerSignal(delay, signal);
-        } catch {
-          return finish("aborted", { role: lastRole, attempts });
-        }
-        console.info(
-          `[memory-cortex] Consolidation ${target.role} retry attempt ${attempt + 1}/${maxAttempts} after ${delay}ms`,
+      if (result != null) {
+        return finish("ok", { result, role: target.role, attempts });
+      }
+      throw new Error("sidecar returned empty consolidation");
+    } catch (err: unknown) {
+      if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
+      const timedOut = timeoutController?.signal.aborted === true;
+      if (timedOut) sawTimeout = true;
+      const name = err && typeof err === "object" && "name" in err ? String((err as { name?: unknown }).name) : "";
+      if (name !== "AbortError" && !timedOut) {
+        console.warn(
+          `[memory-cortex] Consolidation ${target.role} failed:`,
+          err instanceof Error ? err.message : err,
         );
       }
-
-      const timeoutController = sidecarTimeoutMs > 0 ? new AbortController() : null;
-      const timer = timeoutController
-        ? setTimeout(() => {
-            console.warn(`[memory-cortex] Consolidation sidecar timed out after ${sidecarTimeoutMs}ms, aborting LLM call`);
-            timeoutController.abort();
-          }, sidecarTimeoutMs)
-        : null;
-      const combinedSignal = signal && timeoutController
-        ? AbortSignal.any([signal, timeoutController.signal])
-        : signal ?? timeoutController?.signal;
-
-      attempts += 1;
-      invokedAny = true;
-      try {
-        const result = await extract({
-          ...target,
-          attempt: attempt + 1,
-          signal: combinedSignal,
-        });
-        if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
-        if (result != null) {
-          return finish("ok", { result, role: target.role, attempts });
-        }
-        throw new Error("sidecar returned empty consolidation");
-      } catch (err: unknown) {
-        if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
-        const timedOut = timeoutController?.signal.aborted === true;
-        if (timedOut) sawTimeout = true;
-        const name = err && typeof err === "object" && "name" in err ? String((err as { name?: unknown }).name) : "";
-        if (name !== "AbortError" && !timedOut) {
-          console.warn(
-            `[memory-cortex] Consolidation ${target.role} attempt ${attempt + 1}/${maxAttempts} failed:`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

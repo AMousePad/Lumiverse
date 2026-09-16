@@ -718,7 +718,7 @@ export default function MemoryCortexSettings() {
             )}
             {sidecarVisibility === "timeout" && (
               <div className={styles.hintText} data-cortex-sidecar-state="timeout" role="status">
-                {t("memoryCortex.sidecarTimeoutState", { defaultValue: "Sidecar timed out. Primary will retry, then secondary, then the configured fallback." })}
+                {t("memoryCortex.sidecarTimeoutState", { defaultValue: "Sidecar timed out. Configured fallback connections are tried once each before applying the failure policy." })}
               </div>
             )}
             {config.sidecar.connectionProfileId && (
@@ -851,34 +851,6 @@ export default function MemoryCortexSettings() {
                     <option value="heuristic">{t("memoryCortex.fallbackHeuristic")}</option>
                     <option value="skip">{t("memoryCortex.fallbackSkip")}</option>
                   </select>
-                </div>
-                <div className={styles.infoRow}>
-                  <span className={styles.infoLabel}>{t("memoryCortex.retryAttempts")}</span>
-                  <NumericInput
-                    className={styles.numberInput}
-                    value={config.sidecarReliability?.maxRetries ?? 0}
-                    min={0}
-                    max={10}
-                    step={1}
-                    integer
-                    onChange={(value) => updateConfig({
-                      sidecarReliability: { ...config.sidecarReliability, maxRetries: value ?? 0 },
-                    })}
-                  />
-                </div>
-                <div className={styles.infoRow}>
-                  <span className={styles.infoLabel}>{t("memoryCortex.retryDelay")}</span>
-                  <NumericInput
-                    className={styles.numberInput}
-                    value={config.sidecarReliability?.retryDelayMs ?? 500}
-                    min={0}
-                    max={10000}
-                    step={100}
-                    integer
-                    onChange={(value) => updateConfig({
-                      sidecarReliability: { ...config.sidecarReliability, retryDelayMs: value ?? 500 },
-                    })}
-                  />
                 </div>
                 <div className={styles.toggleRow}>
                   <Toggle.Checkbox

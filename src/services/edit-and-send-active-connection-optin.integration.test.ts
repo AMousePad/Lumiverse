@@ -366,7 +366,7 @@ describe("the committed connection survives live-state churn", () => {
     });
   });
 
-  test("switching activeProfileId after commit does not retarget a RETRY-TICK dispatch", async () => {
+  test("a failed legacy dispatch is never replayed by the periodic tick", async () => {
     seedSetting("quickToolbarSettings", { editAndSendAlwaysUseActiveConnection: true });
     const observed = observeRealDispatches();
 
@@ -384,15 +384,10 @@ describe("the committed connection survives live-state churn", () => {
     ).run(Date.now() - 60_000, USER, requestId);
 
     switchActiveProfileTo(BOUND);
-    expect(await dispatcher.dispatchPendingEditAndSendOutbox()).toBe(1);
-
-    expect(observed).toEqual([
-      {
-        options: { origin: "edit_and_send", connectionId: ACTIVE },
-        connectionId: ACTIVE,
-        model: "model-active",
-      },
-    ]);
+    expect(await dispatcher.dispatchPendingEditAndSendOutbox()).toBe(0);
+    dispatcher.reconcileEditAndSendOutbox();
+    expect(dispatcher.getGenerationOutboxByRequest(USER, "switch-retry", requestId)?.status).toBe("failed");
+    expect(observed).toEqual([]);
   });
 
   test("switching activeProfileId after commit does not retarget STARTUP RECOVERY", async () => {

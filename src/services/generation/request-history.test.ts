@@ -7,7 +7,7 @@ import * as connections from "../connections.service";
 import * as secrets from "../secrets.service";
 import * as pool from "../generation-pool.service";
 import { rawGenerate, quietGenerateStream } from "./direct-generation";
-import { startGeneration, stopAllGenerations, stopGenerationSweep } from "../generate.service";
+import { startGeneration, startRebuildSummary, stopAllGenerations, stopGenerationSweep } from "../generate.service";
 import { getRequestHistory, getRequestHistoryEntry, setRequestHistoryTracking, observeSidecarBrokerRequest } from "../request-history.service";
 import { requestHistoryStore } from "../request-history-store";
 import { ProviderRegistry } from "../../spindle/provider-registry";
@@ -143,6 +143,18 @@ for (const status of [429, 503]) {
     });
   }
 }
+
+test("Loom rebuild failures send once and keep the existing summary", async () => {
+  fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json({ error: { message: "Unavailable" } }, { status: 503 })) as unknown as typeof fetch);
+  const chat = chats.createChat(userId, { character_id: null, name: "Rebuild", metadata: { temporary: true, no_preset: true, loom_summary: "Saved summary" } });
+  chats.createMessage(chat.id, { is_user: true, name: "User", content: "Hello" }, userId);
+  await startRebuildSummary(userId, { chat_id: chat.id, batch_size: 20, userName: "User", connection_id: connectionId });
+  expect(fetchSpy).toHaveBeenCalledTimes(1);
+  expect(chats.getChat(userId, chat.id)?.metadata.loom_summary).toBe("Saved summary");
+  const rows = getRequestHistory(userId).entries;
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ origin: { name: "Loom Summary" }, response: { status: 503, state: "failed" } });
+});
 
 test("sidecar broker sends are attributed and sanitized; embedding and system sends are excluded", async () => {
   const sent: string[] = [];
