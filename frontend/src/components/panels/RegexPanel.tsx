@@ -190,7 +190,7 @@ export default function RegexPanel() {
   const popoverRef = useRef<HTMLDivElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
 
-  const { folders, createFolder } = useFolders('regexScriptFolders', regexScripts)
+  const { folders, createFolder, deleteFolder } = useFolders('regexScriptFolders', regexScripts)
 
   useEffect(() => {
     loadRegexScripts()
@@ -425,9 +425,12 @@ export default function RegexPanel() {
     }
   }, [removeRegexScript, expandedId, t])
 
-  const handleDeleteGroup = useCallback(async (scripts: RegexScript[]) => {
+  const handleDeleteGroup = useCallback(async (scripts: RegexScript[], folder: string) => {
     setDeleteGroupTarget(null)
-    if (scripts.length === 0) return
+    if (scripts.length === 0) {
+      if (folder) deleteFolder(folder)
+      return
+    }
     const ids = scripts.map((s) => s.id)
     try {
       const deleted = await bulkRemoveRegexScripts(ids)
@@ -435,12 +438,13 @@ export default function RegexPanel() {
       if (deleted < ids.length) {
         toast.error(t('regexPanel.deleteSomeFailed', { count: ids.length - deleted }))
       } else {
+        if (folder) deleteFolder(folder)
         toast.success(t('regexPanel.deletedScripts', { count: deleted }))
       }
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [bulkRemoveRegexScripts, expandedId, t])
+  }, [bulkRemoveRegexScripts, deleteFolder, expandedId, t])
 
   const handleDeleteBulk = useCallback(async (ids: string[]) => {
     setDeleteBulkTarget(null)
@@ -949,7 +953,7 @@ export default function RegexPanel() {
                             className={clsx(styles.folderActionBtn, styles.folderDeleteBtn)}
                             onClick={(e) => {
                               e.stopPropagation()
-                              setDeleteGroupTarget({ scripts: group.scripts, folder: folderLabel })
+                              setDeleteGroupTarget({ scripts: group.scripts, folder: group.folder })
                             }}
                             title={t('regexPanel.deleteFolderScripts', { folder: folderLabel })}
                             aria-label={t('regexPanel.deleteFolderScriptsAria', { folder: folderLabel })}
@@ -1004,10 +1008,13 @@ export default function RegexPanel() {
         <ConfirmationModal
           isOpen={true}
           title={t('regexPanel.deleteFolderTitle')}
-          message={t('regexPanel.deleteFolderConfirm', { count: deleteGroupTarget.scripts.length, folder: deleteGroupTarget.folder })}
+          message={t('regexPanel.deleteFolderConfirm', {
+            count: deleteGroupTarget.scripts.length,
+            folder: deleteGroupTarget.folder || t('shared:uncategorized'),
+          })}
           variant="danger"
           confirmText={tc('actions.delete')}
-          onConfirm={() => { void handleDeleteGroup(deleteGroupTarget.scripts) }}
+          onConfirm={() => { void handleDeleteGroup(deleteGroupTarget.scripts, deleteGroupTarget.folder) }}
           onCancel={() => setDeleteGroupTarget(null)}
         />
       )}

@@ -329,4 +329,57 @@ describe('RegexPanel folders', () => {
     expect(host.textContent).toContain('Reusable targets')
     expect(host.textContent).not.toContain(panels.regexPanel.noScripts)
   })
+
+  test('deletes a persisted empty folder after confirmation', async () => {
+    storedRegexFolders = ['Reusable targets']
+    storeState = baseStoreState([])
+
+    const host = await mount(<RegexPanel />)
+    await click(byAriaLabel(host, 'Delete all scripts in Reusable targets')!)
+    await click(document.querySelector<HTMLButtonElement>('button[type="submit"]')!)
+
+    expect(host.textContent).not.toContain('Reusable targets')
+    expect(host.textContent).toContain(panels.regexPanel.noScripts)
+  })
+
+  test('removes a populated folder from settings after all scripts are deleted', async () => {
+    storedRegexFolders = ['Reusable targets']
+    const folderScript = script('folder-script', { folder: 'Reusable targets' })
+    const bulkRemoveRegexScripts = jest.fn(async () => 1)
+    storeState = {
+      ...baseStoreState([folderScript]),
+      bulkRemoveRegexScripts,
+    }
+
+    const host = await mount(<RegexPanel />)
+    await click(byAriaLabel(host, 'Delete all scripts in Reusable targets')!)
+    await click(document.querySelector<HTMLButtonElement>('button[type="submit"]')!)
+
+    expect(bulkRemoveRegexScripts).toHaveBeenCalledWith(['folder-script'])
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(storedRegexFolders).toEqual([])
+  })
+
+  test('keeps a populated folder in settings when some scripts cannot be deleted', async () => {
+    storedRegexFolders = ['Reusable targets']
+    const scripts = [
+      script('deletable-script', { folder: 'Reusable targets' }),
+      script('protected-script', { folder: 'Reusable targets' }),
+    ]
+    const bulkRemoveRegexScripts = jest.fn(async () => 1)
+    storeState = {
+      ...baseStoreState(scripts),
+      bulkRemoveRegexScripts,
+    }
+
+    const host = await mount(<RegexPanel />)
+    await click(byAriaLabel(host, 'Delete all scripts in Reusable targets')!)
+    await click(document.querySelector<HTMLButtonElement>('button[type="submit"]')!)
+
+    expect(bulkRemoveRegexScripts).toHaveBeenCalledWith(['deletable-script', 'protected-script'])
+    expect(storedRegexFolders).toEqual(['Reusable targets'])
+    expect(errorToasts).toEqual(['1 scripts could not be deleted'])
+  })
 })
