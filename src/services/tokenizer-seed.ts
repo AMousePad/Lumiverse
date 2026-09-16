@@ -194,6 +194,15 @@ const BUILT_IN_CONFIGS = [
     }),
   },
   {
+    id: "deepseek-v4-1-flash",
+    name: "DeepSeek V4.1 Flash",
+    type: "huggingface",
+    config: JSON.stringify({
+      url: "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/resolve/main/tokenizer.json",
+      configUrl: "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/resolve/main/tokenizer_config.json",
+    }),
+  },
+  {
     id: "deepseek-v4-flash",
     name: "DeepSeek V4 Flash",
     type: "huggingface",
@@ -264,7 +273,9 @@ const BUILT_IN_PATTERNS = [
   // Kimi K3 before the general kimi- pattern. Its BPE is currently identical
   // to K2.5, but a dedicated config lets it be refreshed independently.
   { id: "pat-kimi-k3", tokenizer_id: "kimi-k3", pattern: "(?:^|[/:.])kimi-?k3", priority: 85 },
-  // DeepSeek V4 family — Pro first so it doesn't fall through to Flash.
+  // DeepSeek V4 family — V4.1 and Pro first so they don't fall through to
+  // the looser V4 Flash pattern.
+  { id: "pat-deepseek-v4-1-flash", tokenizer_id: "deepseek-v4-1-flash", pattern: "(?:^|[/:.])deepseek-?v4[-.]?1[-.]?flash", priority: 90 },
   { id: "pat-deepseek-v4-pro", tokenizer_id: "deepseek-v4-pro", pattern: "(?:^|[/:.])deepseek-?v4[-.]?pro", priority: 85 },
   { id: "pat-deepseek-v4-flash", tokenizer_id: "deepseek-v4-flash", pattern: "(?:^|[/:.])deepseek-?v4[-.]?flash", priority: 80 },
   { id: "pat-fallback", tokenizer_id: "approximate-4", pattern: ".*", priority: -1 },

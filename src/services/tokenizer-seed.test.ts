@@ -35,6 +35,32 @@ beforeEach(() => {
 afterEach(() => closeDatabase());
 
 describe("built-in tokenizer defaults", () => {
+  test("seeds and resolves the current MiMo and MiniMax Hugging Face tokenizers", () => {
+    expect(getConfig("mimo-v2-5")?.config.url).toBe(
+      "https://huggingface.co/XiaomiMiMo/MiMo-V2.5/resolve/main/tokenizer.json",
+    );
+    expect(getConfig("mimo-v2-5-pro")?.config.url).toBe(
+      "https://huggingface.co/XiaomiMiMo/MiMo-V2.5-Pro/resolve/main/tokenizer.json",
+    );
+    expect(getConfig("minimax-m3")?.config.url).toBe(
+      "https://huggingface.co/MiniMaxAI/MiniMax-M3/resolve/main/tokenizer.json",
+    );
+
+    expect(getTokenizerIdForModel("XiaomiMiMo/MiMo-V2.5")).toBe("mimo-v2-5");
+    expect(getTokenizerIdForModel("mimo-v2.5-pro")).toBe("mimo-v2-5-pro");
+    expect(getTokenizerIdForModel("MiniMaxAI/MiniMax-M3")).toBe("minimax-m3");
+  });
+
+  test("resolves DeepSeek V4.1 Flash separately from the V4 tokenizer", () => {
+    expect(getConfig("deepseek-v4-1-flash")?.config.url).toBe(
+      "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/resolve/main/tokenizer.json",
+    );
+    expect(getTokenizerIdForModel("deepseek-ai/DeepSeek-V4.1-Flash")).toBe(
+      "deepseek-v4-1-flash",
+    );
+    expect(getTokenizerIdForModel("deepseek-v4-1-flash")).toBe("deepseek-v4-1-flash");
+  });
+
   test("resolves Kimi K3 and GLM 5.3 to their dedicated current tokenizers", () => {
     expect(getConfig("kimi-k3")?.config.url).toBe(
       "https://huggingface.co/moonshotai/Kimi-K3/resolve/main/tiktoken.model",
