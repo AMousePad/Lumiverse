@@ -262,11 +262,14 @@ export default function RegexPanel() {
     const groups: Array<{ folder: string; scripts: RegexScript[] }> = []
     const folderMap = new Map<string, RegexScript[]>()
     // `folders` also contains names persisted by useFolders that do not have a
-    // script yet. Seed the map with them so creating a folder produces a
-    // visible empty target instead of appearing to do nothing.
-    for (const folder of folders) {
-      folderMap.set(folder, [])
-      groups.push({ folder, scripts: folderMap.get(folder)! })
+    // script yet. They are useful empty drop targets in the complete library,
+    // but scoped views must only show folders containing a matching script.
+    // Otherwise every library folder appears with a misleading zero count.
+    if (scopeFilter === 'all') {
+      for (const folder of folders) {
+        folderMap.set(folder, [])
+        groups.push({ folder, scripts: folderMap.get(folder)! })
+      }
     }
     for (const s of filteredScripts) {
       const key = s.folder || ''
@@ -283,7 +286,7 @@ export default function RegexPanel() {
       return a.folder.localeCompare(b.folder)
     })
     return groups
-  }, [filteredScripts, folders])
+  }, [filteredScripts, folders, scopeFilter])
 
   const toggleFolder = useCallback((folder: string) => {
     setCollapsedFolders((prev) => {

@@ -290,6 +290,35 @@ describe('RegexPanel quarantine recovery', () => {
 })
 
 describe('RegexPanel folders', () => {
+  test('scoped views omit folders that contain no matching scripts', async () => {
+    storedRegexFolders = ['Empty folder']
+    storeState = {
+      ...baseStoreState([
+        script('global-script', { folder: 'Global folder' }),
+        script('matching-chat-script', { folder: 'Matching chat folder', scope: 'chat', scope_id: 'chat-1' }),
+        script('other-chat-script', { folder: 'Other chat folder', scope: 'chat', scope_id: 'chat-2' }),
+      ]),
+      activeChatId: 'chat-1',
+    }
+
+    const host = await mount(<RegexPanel />)
+
+    expect(host.textContent).toContain('Empty folder')
+    expect(host.textContent).toContain('Global folder')
+    expect(host.textContent).toContain('Matching chat folder')
+    expect(host.textContent).toContain('Other chat folder')
+
+    const chatScopeButton = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === panels.regexPanel.scopeThisChat)
+    expect(chatScopeButton).not.toBeUndefined()
+    await click(chatScopeButton!)
+
+    expect(host.textContent).toContain('Matching chat folder')
+    expect(host.textContent).not.toContain('Empty folder')
+    expect(host.textContent).not.toContain('Global folder')
+    expect(host.textContent).not.toContain('Other chat folder')
+  })
+
   test('creating a folder with no scripts renders a blank folder target', async () => {
     storeState = baseStoreState([])
     const host = await mount(<RegexPanel />)
