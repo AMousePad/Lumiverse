@@ -24,6 +24,7 @@ import {
   type GenerationParameters,
   type GenerationRequest,
   type GenerationResponse,
+  type GenerationUsage,
   type StreamChunk,
   type GenerationType,
   type ImpersonateMode,
@@ -178,6 +179,10 @@ import {
   rawGenerate,
   type RawGenerateInput,
 } from "./generation/direct-generation";
+import {
+  calculateGenerationTimingMetrics,
+  resolveGenerationTokenCounts,
+} from "./generation/metrics";
 
 export {
   getActiveChatGeneration,
@@ -3229,9 +3234,7 @@ async function runGeneration(
       ? getResponseBehaviorOptions()
       : { source: "response_backend" as const };
 
-  let streamUsage:
-    | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
-    | undefined;
+  let streamUsage: GenerationUsage | undefined;
   let finishReason: string | undefined;
   let stopDetails: GenerationResponse["stop_details"];
   let stopSequence: string | null | undefined;
@@ -4085,19 +4088,26 @@ async function runGeneration(
 
         // ── Generation metrics (tokenCount, TTFT, TPS) ───────────────────
         const finalPoolEntry = pool.getPoolEntry(generationId);
-        let resolvedTokenCount: number | undefined;
-        const fullOutput = fullReasoning
-          ? fullReasoning + fullContent
-          : fullContent;
-        if (fullOutput.length > 0) {
+        let calculatedResponseTokenCount: number | undefined;
+        // Calculate visible response tokens separately for TPS. Provider usage
+        // below remains authoritative for the message's total completion count,
+        // but may include hidden OpenAI/Claude/Gemini reasoning tokens.
+        if (fullContent.length > 0) {
           try {
-            resolvedTokenCount =
-              (await tokenizerSvc.countForModel(model, fullOutput)) ??
+            calculatedResponseTokenCount =
+              (await tokenizerSvc.countForModel(model, fullContent)) ??
               undefined;
           } catch {
-            resolvedTokenCount = undefined;
+            calculatedResponseTokenCount = undefined;
           }
         }
+        const {
+          messageTokenCount: resolvedTokenCount,
+          responseTokenCount,
+        } = resolveGenerationTokenCounts(
+          streamUsage?.completion_tokens,
+          calculatedResponseTokenCount,
+        );
 
         let generationMetrics:
           | {
@@ -4112,37 +4122,15 @@ async function runGeneration(
             }
           | undefined;
         if (finalPoolEntry) {
-          const wasStreaming = finalPoolEntry.wasStreaming ?? true;
-          const streamStart = finalPoolEntry.streamingStartedAt;
-          const now = Date.now();
-          const durationMs = streamStart ? now - streamStart : 0;
-          let ttft: number | undefined;
-          let tps: number | undefined;
-
-          if (wasStreaming && streamStart) {
-            if (finalPoolEntry.firstTokenAt) {
-              ttft = finalPoolEntry.firstTokenAt - streamStart;
-            }
-            if (
-              finalPoolEntry.firstTokenAt &&
-              resolvedTokenCount &&
-              resolvedTokenCount > 1
-            ) {
-              const streamDurationSec =
-                (now - finalPoolEntry.firstTokenAt) / 1000;
-              if (streamDurationSec > 0) {
-                tps =
-                  Math.round((resolvedTokenCount / streamDurationSec) * 10) /
-                  10;
-              }
-            }
-          }
+          // completedAt freezes the response boundary before this deferred
+          // tokenizer/bookkeeping work runs.
+          const timingMetrics = calculateGenerationTimingMetrics(
+            finalPoolEntry,
+            responseTokenCount,
+          );
 
           generationMetrics = {
-            durationMs,
-            wasStreaming,
-            ...(ttft != null ? { ttft } : {}),
-            ...(tps != null ? { tps } : {}),
+            ...timingMetrics,
             ...(lifecycle.model ? { model: lifecycle.model } : {}),
             ...(lifecycle.providerName
               ? { provider: lifecycle.providerName }

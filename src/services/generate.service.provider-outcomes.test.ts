@@ -7,6 +7,7 @@ import * as connections from "./connections.service";
 import * as secrets from "./secrets.service";
 import * as pool from "./generation-pool.service";
 import * as presets from "./presets.service";
+import * as tokenizer from "./tokenizer.service";
 import { startGeneration, stopAllGenerations, stopGenerationSweep } from "./generate.service";
 
 const userId = "provider-outcomes-test";
@@ -151,6 +152,48 @@ test("generation metrics retain the preset used for the generated swipe", async 
     presetId: preset!.id,
     presetName: "Raven",
   });
+});
+test("generation meta token count falls back to visible response tokenization", async () => {
+  const tokenizerSpy = spyOn(tokenizer, "countForModel").mockResolvedValue(4);
+  try {
+    const { generationId } = await run("openai", [
+      chatThought,
+      { choices: [{ delta: { content: "Visible answer." }, finish_reason: "stop" }] },
+    ]);
+    const deadline = Date.now() + 3000;
+    while (!metricsReady.some((event) => event.generationId === generationId) && Date.now() < deadline) {
+      await Bun.sleep(5);
+    }
+
+    const metricsEvent = metricsReady.find((event) => event.generationId === generationId);
+    expect(tokenizerSpy).toHaveBeenCalledWith("test-model", "Visible answer.");
+    expect(metricsEvent?.tokenCount).toBe(4);
+  } finally {
+    tokenizerSpy.mockRestore();
+  }
+});
+test("generation meta token count prefers final provider usage", async () => {
+  const tokenizerSpy = spyOn(tokenizer, "countForModel").mockResolvedValue(4);
+  try {
+    const { generationId } = await run("openai", [
+      chatThought,
+      { choices: [{ delta: { content: "Visible answer." }, finish_reason: "stop" }] },
+      {
+        choices: [],
+        usage: { prompt_tokens: 10, completion_tokens: 128, total_tokens: 138 },
+      },
+    ]);
+    const deadline = Date.now() + 3000;
+    while (!metricsReady.some((event) => event.generationId === generationId) && Date.now() < deadline) {
+      await Bun.sleep(5);
+    }
+
+    const metricsEvent = metricsReady.find((event) => event.generationId === generationId);
+    expect(tokenizerSpy).toHaveBeenCalledWith("test-model", "Visible answer.");
+    expect(metricsEvent?.tokenCount).toBe(128);
+  } finally {
+    tokenizerSpy.mockRestore();
+  }
 });
 for (const fixture of [
   { provider: "openai", body: [{ choices: [{ delta: { content: "Hello." }, finish_reason: "stop" }] }] },
