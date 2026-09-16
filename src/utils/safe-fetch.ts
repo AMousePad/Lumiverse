@@ -334,6 +334,7 @@ export async function validateHost(hostname: string, options?: ValidateHostOptio
 // ─── safeFetch ────────────────────────────────────────────────────────────
 
 export interface SafeFetchOptions {
+  signal?: AbortSignal;
   method?: string;
   body?: BodyInit | null;
   maxBytes?: number;
@@ -361,6 +362,7 @@ export async function safeFetch(
   let body = options?.body ?? null;
 
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+    options?.signal?.throwIfAborted();
     let parsed: URL;
     try {
       parsed = new URL(currentUrl);
@@ -403,7 +405,7 @@ export async function safeFetch(
         method,
         body,
         redirect: "manual",
-        signal: controller.signal,
+        signal: options?.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
         headers,
       });
     } catch (err: any) {

@@ -12,6 +12,7 @@ import { resetUserScopedStoreState } from '@/store/user-scoped-reset'
 import { setSettingsPersistenceScope } from '@/store/slices/settings'
 import { setPresetSaveCoordinatorScope } from '@/lib/loom/preset-save-coordinator'
 import { listAllConnections } from '@/api/listAllConnections'
+import { useTokenizerWarmup } from './useTokenizerWarmup'
 
 let appInitGeneration = 0
 
@@ -29,6 +30,7 @@ let appInitGeneration = 0
  * sections so a partial outage can't block sign-in.
  */
 export function useAppInit() {
+  useTokenizerWarmup()
   const isAuthenticated = useStore((s) => s.isAuthenticated)
   const userId = useStore((s) => s.user?.id ?? null)
   const initializedUserId = useRef<string | null>(null)

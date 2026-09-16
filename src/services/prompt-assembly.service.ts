@@ -13,6 +13,9 @@ import {
 import {
   resolveCounter,
   APPROXIMATE_TOKENIZER_NAME,
+  warmTokenizerForModel,
+  tokenizerRuntime,
+  type TokenCounterMetrics,
 } from "./tokenizer.service";
 import type {
   PromptBlock,
@@ -1807,6 +1810,10 @@ export async function assemblePrompt(
     pf?.connection !== undefined
       ? pf.connection
       : connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId);
+
+  // Start cold file loading while the rest of assembly resolves its inputs.
+  // Clipping joins this pending load in the same runtime if it is not ready.
+  if (connection?.model) void warmTokenizerForModel(connection.model);
 
   // Resolve preset: request presetId takes priority, then connection's
   // preset_id, then any more-specific preset-profile binding can override that
@@ -7011,6 +7018,11 @@ export async function clipToContextBudget(
   maxResponseTokens: number | null | undefined,
   signal?: AbortSignal,
 ): Promise<ContextClipStats> {
+  const meta: Record<string, string | number | boolean | undefined> = { model: modelId ?? undefined, runtime: tokenizerRuntime() };
+  const clipProfiler = createPromptAssemblyProfiler("context-clip", meta);
+  let metrics: TokenCounterMetrics | undefined;
+  let countingStarted: number | undefined;
+  try {
   const resolvedContext =
     typeof maxContext === "number" && maxContext > 0 ? maxContext : 0;
   const resolvedResponse =
@@ -7076,7 +7088,10 @@ export async function clipToContextBudget(
   );
   const inputBudget = resolvedContext - resolvedResponse - safetyMargin;
 
-  const counter = await resolveCounter(modelId || "");
+  const counter = await clipProfiler.measure("tokenizer-wait", () => resolveCounter(modelId || ""));
+  metrics = counter.metrics;
+  meta.tokenizer = counter.name;
+  countingStarted = performance.now();
 
   // Tokenizing every message is the dominant cost on long chats. The clip only
   // ever keeps the newest run of history that fits the budget, so we tokenize
@@ -7304,6 +7319,16 @@ export async function clipToContextBudget(
     protectedHistoryTokens,
     remainingBeforeAnchor,
   });
+  } finally {
+    if (countingStarted !== undefined) clipProfiler.addPhase("count-and-clip", performance.now() - countingStarted);
+    if (metrics) {
+      meta.instance = metrics.instance;
+      meta.cacheHits = metrics.hits;
+      meta.cacheMisses = metrics.misses;
+      clipProfiler.addPhase("encode", metrics.encodeMs);
+    }
+    clipProfiler.finish();
+  }
 }
 
 /**

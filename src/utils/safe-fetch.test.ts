@@ -121,6 +121,22 @@ describe("safeFetch SSRF protections", () => {
 });
 
 describe("safeFetch User-Agent", () => {
+  test("propagates caller cancellation after response headers have arrived", async () => {
+    const originalFetch = globalThis.fetch;
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | null | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      receivedSignal = init?.signal;
+      return new Response("ok");
+    }) as typeof fetch;
+    try {
+      await safeFetch("http://93.184.216.34/model", { signal: controller.signal });
+      expect(receivedSignal?.aborted).toBe(false);
+      controller.abort();
+      expect(receivedSignal?.aborted).toBe(true);
+      await expect(safeFetch("http://93.184.216.34/model", { signal: controller.signal })).rejects.toThrow();
+    } finally { globalThis.fetch = originalFetch; }
+  });
   test("sends a product/version User-Agent when the caller omitted one", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
