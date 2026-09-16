@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand'
-import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource } from '@/types/store'
+import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource, ToastPosition } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
@@ -143,6 +143,20 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'voiceSettings',
   ...Object.keys(PRODUCTIVITY_DEFAULTS),
 ])
+
+/** Toast corner values accepted from storage; mirrors the ToastPosition union. */
+const TOAST_POSITIONS: ReadonlySet<string> = new Set([
+  'top-right',
+  'top-left',
+  'bottom-right',
+  'bottom-left',
+  'top',
+  'bottom',
+])
+
+function isToastPosition(value: unknown): value is ToastPosition {
+  return typeof value === 'string' && TOAST_POSITIONS.has(value)
+}
 
 // ── Debounced batch persistence ──────────────────────────────────────────
 // Dirty keys accumulate and flush as a single PUT after FLUSH_DELAY ms of
@@ -819,6 +833,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     if (settings.connectionsOrder && typeof settings.connectionsOrder === 'object') {
       patch.connectionsOrder = normalizeConnectionsOrder(settings.connectionsOrder)
     }
+    if (isToastPosition(settings.toastPosition)) {
+      patch.toastPosition = settings.toastPosition
+    }
 
     set(patch as any)
     if (Object.prototype.hasOwnProperty.call(settings, 'activeProfileId')) {
@@ -1185,6 +1202,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           // Prefer a canonical setting row when both its legacy and current
           // names are present in the account.
           || (canonicalKey !== row.key && rows.some((candidate) => candidate.key === canonicalKey))
+          // Drop values outside the ToastPosition union; the startup payload
+          // validates identically so the two hydration paths cannot disagree.
+          || (canonicalKey === 'toastPosition' && !isToastPosition(row.value))
         ) continue
         const storedValue = migrateStoredSettingValue(canonicalKey, row.value)
         if (canonicalKey === 'quickToolbarSettings' && !pendingValuesMatch(storedValue, row.value)) {

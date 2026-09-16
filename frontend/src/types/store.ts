@@ -142,6 +142,7 @@ export interface StartupSettings {
   spindleSettings?: Partial<SpindleSettings>
   connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
   activeProfileId?: string | null
+  toastPosition?: ToastPosition
 }
 
 export interface CharactersSlice {
