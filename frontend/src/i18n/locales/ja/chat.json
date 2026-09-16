@@ -120,6 +120,8 @@
     "restoreLastInput": "最後の入力を復元",
     "presetPrompts": "プリセットプロンプト",
     "presetPromptsDesc": "偽装トリガーされたブロックによる完全な組み立て",
+    "impersonationPreset": "なりすましプリセット",
+    "impersonationPresetDesc": "設定済みプリセット全体 + チャット履歴 + なりすまし指示",
     "oneLiner": "ワンライナー",
     "oneLinerDesc": "チャット履歴+なりすましナッジのみ",
     "comingSoon": "近日登場",

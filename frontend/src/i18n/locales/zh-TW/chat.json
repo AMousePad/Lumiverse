@@ -120,6 +120,8 @@
     "restoreLastInput": "恢復上次輸入",
     "presetPrompts": "預設提示詞",
     "presetPromptsDesc": "完整組裝，含代寫觸發的區塊",
+    "impersonationPreset": "代寫預設",
+    "impersonationPresetDesc": "完整的指定預設 + 聊天歷史 + 代寫提示",
     "oneLiner": "單行代寫",
     "oneLinerDesc": "僅聊天曆史 + 代寫提示",
     "comingSoon": "即將推出",

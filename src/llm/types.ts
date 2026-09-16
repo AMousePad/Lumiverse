@@ -276,7 +276,7 @@ export interface StreamChunk {
 
 export type GenerationType = 'normal' | 'continue' | 'regenerate' | 'swipe' | 'impersonate' | 'quiet';
 
-export type ImpersonateMode = 'prompts' | 'oneliner' | 'sovereign_hand';
+export type ImpersonateMode = 'prompts' | 'preset' | 'oneliner' | 'sovereign_hand';
 
 export interface AssemblyContext {
   userId: string;
@@ -295,7 +295,7 @@ export interface AssemblyContext {
   personaId?: string;
   /** Effective persona add-on states for this generation. Applied to a cloned persona only. */
   personaAddonStates?: Record<string, boolean>;
-  /** For impersonate: controls how much of the preset is included. */
+  /** For impersonate: selects the active-preset, dedicated-preset, or one-liner assembly path. */
   impersonateMode?: ImpersonateMode;
   /** For impersonate: free-form user text from the input box, appended to the impersonation prompt. */
   impersonateInput?: string;

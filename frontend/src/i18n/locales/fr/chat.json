@@ -120,6 +120,8 @@
     "restoreLastInput": "Restaurer la dernière entrée",
     "presetPrompts": "Invites prédéfinies",
     "presetPromptsDesc": "Assemblage complet avec Blocs déclenchés par l'usurpation d'identité",
+    "impersonationPreset": "Préréglage d'usurpation d'identité",
+    "impersonationPresetDesc": "Préréglage configuré complet + historique + instruction d'usurpation",
     "oneLiner": "Une seule ligne",
     "oneLinerDesc": "Historique des discussions + emprunt d'identité uniquement",
     "comingSoon": "Bientôt disponible",

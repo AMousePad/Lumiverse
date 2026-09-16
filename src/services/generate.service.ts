@@ -1693,7 +1693,8 @@ export async function startGeneration(
       if (
         input.force_preset_id &&
         genType === "impersonate" &&
-        input.impersonate_mode === "oneliner" &&
+        (input.impersonate_mode === "oneliner" ||
+          input.impersonate_mode === "preset") &&
         input.preset_id &&
         !presetsSvc.getPreset(input.userId, input.preset_id)
       ) {

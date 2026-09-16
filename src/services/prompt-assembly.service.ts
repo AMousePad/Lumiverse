@@ -2675,6 +2675,10 @@ export async function assemblePrompt(
     );
   }
 
+  // `preset` intentionally continues through the normal full-assembly path.
+  // Its only difference from `prompts` is that the caller force-selects the
+  // chat's dedicated impersonation preset.
+
   // ---- Pre-loop: retrieve chat vector memories ----
   phaseStartedAt = performance.now();
   // Reuse settings resolved during cortex pre-flight (avoids duplicate DB reads).
@@ -3952,11 +3956,18 @@ export async function assemblePrompt(
       resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
     }
     if (resolved) {
-      result.push({ role: "system", content: resolved });
+      // Without a native assistant prefill, finish on a conventional user
+      // turn so providers that reject or mishandle prefills still receive an
+      // explicit request to answer. Prefill mode retains the system
+      // instruction followed by the partial assistant message below.
+      const role = completionSettings.continuePrefill === true
+        ? "system"
+        : "user";
+      result.push({ role, content: resolved });
       breakdown.push({
         type: "utility",
         name: "Impersonation Prompt",
-        role: "system",
+        role,
         content: resolved,
       });
     }
@@ -4046,6 +4057,9 @@ export async function assemblePrompt(
   // the response still gets appended to the original chat message.
   const prefillParts: string[] = [];
   let assistantReasoningPrefill: string | undefined;
+  const impersonationPrefillEnabled =
+    ctx.generationType !== "impersonate" ||
+    completionSettings.continuePrefill === true;
 
   // A connection profile can bind its own Start Reply With value alongside its
   // reasoning settings (metadata.reasoningBindings.promptBias). When present,
@@ -4056,6 +4070,7 @@ export async function assemblePrompt(
     ? boundPromptBias
     : settingsMap.get("promptBias");
   if (
+    impersonationPrefillEnabled &&
     ctx.generationType !== "continue" &&
     promptBiasVal &&
     typeof promptBiasVal === "string" &&
@@ -4070,7 +4085,7 @@ export async function assemblePrompt(
   }
 
   const csPrefill =
-    ctx.generationType === "continue"
+    ctx.generationType === "continue" || !impersonationPrefillEnabled
       ? ""
       : ctx.generationType === "impersonate" && completionSettings.assistantImpersonation
         ? completionSettings.assistantImpersonation
@@ -4085,6 +4100,7 @@ export async function assemblePrompt(
   // `reasoning_content`. Keep it separate from the visible assistant prefix;
   // the generation service displays it in the reasoning pane.
   if (
+    impersonationPrefillEnabled &&
     ctx.generationType !== "continue" &&
     (connection?.provider === "moonshot" || connection?.provider === "deepseek") &&
     completionSettings.reasoningPrefill
@@ -7801,7 +7817,8 @@ export function applyProviderReasoningOffSwitch(
 /**
  * One-liner impersonation: skip all preset blocks, include only chat history
  * and the impersonation prompt from preset behaviors. Optionally includes the
- * assistantImpersonation prefill as a trailing assistant message.
+ * assistantImpersonation prefill as a trailing assistant message when the
+ * preset's prefill checkbox is enabled.
  */
 async function onelinerImpersonation(
   messages: Message[],
@@ -7880,22 +7897,27 @@ async function onelinerImpersonation(
     resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
   }
   if (resolved) {
-    result.push({ role: "system", content: resolved });
+    const role = completionSettings.continuePrefill === true
+      ? "system"
+      : "user";
+    result.push({ role, content: resolved });
     breakdown.push({
       type: "utility",
       name: "Impersonation Prompt",
-      role: "system",
+      role,
       content: resolved,
     });
   }
 
-  // assistantImpersonation prefill — sent as actual assistant message
+  // assistantImpersonation prefill — sent as an actual assistant message only
+  // when the preset explicitly opts into native prefilling.
   let assistantPrefill: string | undefined;
   let assistantReasoningPrefill: string | undefined;
+  const prefillEnabled = completionSettings.continuePrefill === true;
   const csPrefill =
     completionSettings.assistantImpersonation ||
     completionSettings.assistantPrefill;
-  if (csPrefill) {
+  if (prefillEnabled && csPrefill) {
     const resolvedPrefill = await evaluateHostPromptSource(csPrefill, macroEnv);
     if (resolvedPrefill) {
       assistantPrefill = resolvedPrefill;
@@ -7910,6 +7932,7 @@ async function onelinerImpersonation(
   }
 
   if (
+    prefillEnabled &&
     (connection?.provider === "moonshot" || connection?.provider === "deepseek") &&
     completionSettings.reasoningPrefill
   ) {

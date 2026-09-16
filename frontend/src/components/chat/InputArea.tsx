@@ -19,6 +19,7 @@ import { audioApi } from '@/api/audio'
 import { getPersonaAvatarThumbUrl, getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
+import { resolveImpersonationPresetSelection } from '@/lib/impersonationPreset'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import { unmarshalPreset } from '@/lib/loom/service'
 import {
@@ -2405,15 +2406,20 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       requestAnimationFrame(() => resizeTextarea(textareaRef.current))
     }
     try {
-      const forcedPresetId = mode === 'oneliner' ? impersonationPresetId : null
-      const presetId = forcedPresetId || getActivePresetForGeneration() || undefined
+      const presetSelection = resolveImpersonationPresetSelection(
+        mode,
+        impersonationPresetId,
+        getActivePresetForGeneration(),
+      )
+      const presetId = presetSelection.presetId
       const res = await generateApi.start({
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        force_preset_id: presetSelection.forcePresetId
+          || shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'impersonate',
         impersonate_mode: mode,
         impersonate_input: impersonateInput || undefined,
@@ -3860,6 +3866,24 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
                     <span className={styles.personaNameGroup}>
                       <span>{t('quickMenu.presetPrompts')}</span>
                       <span className={styles.personaTitle}>{t('quickMenu.presetPromptsDesc')}</span>
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.popRowBtn}
+                  onClick={() => {
+                    setOpenPopover(null)
+                    handleImpersonate('preset')
+                  }}
+                  disabled={isGeneratingInChat}
+                  style={isGeneratingInChat ? { opacity: 0.5 } : undefined}
+                >
+                  <span className={styles.personaMain}>
+                    <FileText size={14} />
+                    <span className={styles.personaNameGroup}>
+                      <span>{t('quickMenu.impersonationPreset')}</span>
+                      <span className={styles.personaTitle}>{t('quickMenu.impersonationPresetDesc')}</span>
                     </span>
                   </span>
                 </button>

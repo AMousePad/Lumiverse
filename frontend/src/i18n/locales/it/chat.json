@@ -120,6 +120,8 @@
     "restoreLastInput": "Ripristina ultimo input",
     "presetPrompts": "Prompt predefiniti",
     "presetPromptsDesc": "Assemblaggio completo con blocchi attivati dall'impersonificazione",
+    "impersonationPreset": "Preset di impersonificazione",
+    "impersonationPresetDesc": "Preset configurato completo + cronologia chat + istruzione di impersonificazione",
     "oneLiner": "One-liner",
     "oneLinerDesc": "Solo storico chat + impersonificazione",
     "comingSoon": "In arrivo",

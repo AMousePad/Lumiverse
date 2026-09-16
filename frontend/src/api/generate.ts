@@ -8,7 +8,7 @@ const LONG: RequestOptions = { timeout: 120_000 }
 
 export type GenerationType = 'normal' | 'continue' | 'regenerate' | 'swipe' | 'impersonate' | 'quiet'
 
-export type ImpersonateMode = 'prompts' | 'oneliner' | 'sovereign_hand'
+export type ImpersonateMode = 'prompts' | 'preset' | 'oneliner' | 'sovereign_hand'
 
 export interface GenerateRequest {
   chat_id: string

@@ -156,6 +156,8 @@
     "restoreLastInput": "Restore last input",
     "presetPrompts": "Preset Prompts",
     "presetPromptsDesc": "Full assembly with impersonate-triggered blocks",
+    "impersonationPreset": "Impersonation Preset",
+    "impersonationPresetDesc": "Full configured preset + chat history + impersonation nudge",
     "oneLiner": "One-liner",
     "oneLinerDesc": "Chat history + impersonation nudge only",
     "comingSoon": "Coming soon",

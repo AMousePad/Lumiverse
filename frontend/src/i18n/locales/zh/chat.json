@@ -125,6 +125,8 @@
     "restoreLastInput": "恢复上次输入",
     "presetPrompts": "预设提示词",
     "presetPromptsDesc": "完整组装，含代写触发的区块",
+    "impersonationPreset": "代写预设",
+    "impersonationPresetDesc": "完整的指定预设 + 聊天历史 + 代写提示",
     "oneLiner": "单行代写",
     "oneLinerDesc": "仅聊天历史 + 代写提示",
     "comingSoon": "即将推出",
