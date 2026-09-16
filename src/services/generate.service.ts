@@ -882,18 +882,6 @@ function raceWithSignal<T>(
   });
 }
 
-// ── Pre-token transient retry ────────────────────────────────────────────────
-// A momentary provider 429/5xx/529 otherwise fails the whole generation. We
-// retry establishing the upstream stream a few times with full-jitter backoff,
-// but ONLY before the first chunk is emitted — once tokens flow, mid-stream
-// failures propagate unchanged (retrying then would duplicate output).
-const GENERATION_MAX_RETRIES = (() => {
-  const raw = Number(process.env.LUMIVERSE_GENERATION_MAX_RETRIES);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 3;
-})();
-const GENERATION_RETRY_BASE_MS = 500;
-const GENERATION_RETRY_MAX_MS = 8_000;
-
 // Max inline tool-call rounds within a single generation (model → tools →
 // model → …). Interleaved-thinking agents can chain many tool calls, so this
 // is tunable; defaults to 3 to preserve historical behaviour.
@@ -901,36 +889,6 @@ const INLINE_TOOL_MAX_ROUNDS = (() => {
   const raw = Number(process.env.LUMIVERSE_INLINE_TOOL_MAX_ROUNDS);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 3;
 })();
-
-function computeBackoffMs(attempt: number, retryAfterMs?: number): number {
-  // Honor a server Retry-After hint when present, clamped to our ceiling.
-  if (retryAfterMs != null && retryAfterMs > 0) {
-    return Math.min(retryAfterMs, GENERATION_RETRY_MAX_MS);
-  }
-  // Full jitter: random in [0, min(cap, base * 2^attempt)].
-  const ceil = Math.min(GENERATION_RETRY_MAX_MS, GENERATION_RETRY_BASE_MS * 2 ** attempt);
-  return Math.floor(Math.random() * ceil);
-}
-
-/** Sleep that rejects immediately if the signal aborts (e.g. user hits Stop). */
-function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise<void>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
 
 function resolveActivePresetId(userId: string): string | undefined {
   const activePresetSetting = settingsSvc.getSetting(
@@ -3543,8 +3501,8 @@ async function runGeneration(
       let pendingThoughtSignature: string | undefined;
 
       // Non-streaming path: call generate() once, then synthesize a single-chunk stream.
-      // Wrapped in a factory so the pre-token retry below can re-issue a clean request.
-      const makeStream = (): AsyncGenerator<StreamChunk, void, unknown> => useStreaming
+      // Each tool round gets one provider attempt; failures surface without retries.
+      const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
         ? provider.generateStream(apiKey, apiUrl, {
             onProviderRequest: lifecycle.onProviderRequest,
             messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
@@ -3578,42 +3536,7 @@ async function runGeneration(
             };
           })();
 
-      // Establish the stream and pull its FIRST chunk under a bounded retry.
-      // Streaming providers throw transport/HTTP errors on the first `.next()`
-      // (before the body reader exists), so a retry here re-issues a clean
-      // request and cannot duplicate emitted tokens. Once the first chunk lands
-      // we never retry — mid-stream failures fall through to the outer catch.
-      let iter!: AsyncIterator<StreamChunk, void>;
-      let firstResult!: IteratorResult<StreamChunk, void>;
-      for (let attempt = 0; ; attempt++) {
-        const candidate = makeStream()[Symbol.asyncIterator]();
-        try {
-          firstResult = await raceWithSignal(candidate.next(), signal);
-          iter = candidate;
-          break;
-        } catch (err) {
-          try {
-            await candidate.return?.(undefined);
-          } catch {
-            /* best-effort */
-          }
-          const retryable =
-            attempt < GENERATION_MAX_RETRIES &&
-            !signal.aborted &&
-            err instanceof ProviderRequestError &&
-            err.retryable;
-          if (!retryable) throw err;
-          try {
-            await abortableSleep(
-              computeBackoffMs(attempt, (err as ProviderRequestError).retryAfterMs),
-              signal,
-            );
-          } catch {
-            // Aborted during backoff — surface the original provider error.
-            throw err;
-          }
-        }
-      }
+      const iter = stream[Symbol.asyncIterator]();
 
       // Drive the iterator manually so each `.next()` can be raced against the
       // abort signal. Streaming providers forward aborts only until response
@@ -3621,27 +3544,19 @@ async function runGeneration(
       // switch to user-space read cancellation to avoid Bun's mid-stream abort
       // crash on Windows.
       const maybeYieldDuringStream = createCooperativeYielder(32, signal);
-      let consumedFirst = false;
       while (true) {
         let result: IteratorResult<StreamChunk, void>;
-        if (!consumedFirst) {
-          // The first chunk was already obtained (and signal-raced) during
-          // stream establishment above; process it before resuming the pull.
-          consumedFirst = true;
-          result = firstResult;
-        } else {
+        try {
+          result = await raceWithSignal(iter.next(), signal);
+        } catch (err) {
+          // Close the generator on abort or provider failure, then let the
+          // outer catch surface the error and persist any partial output.
           try {
-            result = await raceWithSignal(iter.next(), signal);
-          } catch (err) {
-            // Signal won the race. Tell the generator to clean up (best-effort)
-            // and rethrow so the outer catch handles emission.
-            try {
-              await iter.return?.(undefined);
-            } catch {
-              /* best-effort */
-            }
-            throw err;
+            await iter.return?.(undefined);
+          } catch {
+            /* best-effort */
           }
+          throw err;
         }
         if (result.done) break;
         const chunk = result.value;

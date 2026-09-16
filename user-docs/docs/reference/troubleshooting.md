@@ -35,7 +35,7 @@ Solutions to common issues you might encounter.
 
 ### Inspect the provider request
 
-Open **Settings → Account** and enable **Recent generation requests**. Lumiverse keeps your last 20 outgoing generation attempts, including retries and requests that fail. Expand a row to see the finalized provider request and response, its source, the time it was sent, and the HTTP status. Use **Copy JSON** or **Copy response** to copy each displayed body. Streaming responses are combined into one JSON body after the response ends, including text, tool calls, usage, and provider error details. Interrupted responses are marked as partial.
+Open **Settings → Account** and enable **Recent generation requests**. Lumiverse keeps your last 20 outgoing generation attempts, including requests that fail. Chat requests do not automatically retry provider failures; retry manually when you are ready. Expand a row to see the finalized provider request and response, its source, the time it was sent, and the HTTP status. Use **Copy JSON** or **Copy response** to copy each displayed body. Streaming responses are combined into one JSON body after the response ends, including text, tool calls, usage, and provider error details. Interrupted responses are marked as partial.
 
 Tracking starts disabled and belongs to your account. Other users, including admins and operators, cannot access your history through the app. API keys and credential fields are redacted from both bodies before records are retained. Failed attempts include the provider error payload when received; connection failures show the transport error.
 

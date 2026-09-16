@@ -107,27 +107,42 @@ test("Spindle generation records the host's extension identity instead of input 
   expect(requestHistoryStore.list("untrusted-user")).toEqual([]);
 });
 
-test("chat retries produce separate records correlated to the same generation", async () => {
-  let count = 0;
-  fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => {
-    if (count++ === 0) return Response.json({ error: { message: "retry" } }, { status: 503, headers: { "retry-after": "0" } });
-    return reply();
-  }) as unknown as typeof fetch);
-  const chat = chats.createChat(userId, { character_id: null, name: "Test", metadata: { temporary: true, no_preset: true } });
-  chats.createMessage(chat.id, { is_user: true, name: "User", content: "Hello" }, userId);
-  const result = await startGeneration({ userId, chat_id: chat.id, connection_id: connectionId }, {
-    requestOrigin: { kind: "extension", name: "Example", extensionId: "installation-1", operation: "chat append" },
-  });
-  const deadline = Date.now() + 3000;
-  while (!ended.some((entry) => entry.generationId === result.generationId) && Date.now() < deadline) await Bun.sleep(5);
-  expect(ended.some((entry) => entry.generationId === result.generationId)).toBe(true);
-  const rows = getRequestHistory(userId).entries;
-  expect(rows).toHaveLength(2);
-  expect(rows[0].id).not.toBe(rows[1].id);
-  expect(rows.every((row) => row.generationId === result.generationId && row.chatId === chat.id && row.origin.name === "Example")).toBe(true);
-  expect(rows.map((row) => row.response.status)).toEqual([200, 503]);
-  expect(getRequestHistoryEntry(userId, rows[1].id)!.responseBody).toContain('"retry"');
-});
+for (const status of [429, 503]) {
+  for (const streaming of [true, false]) {
+    test(`${streaming ? "streaming" : "non-streaming"} chat sends once on HTTP ${status} and retains the failure response`, async () => {
+      const body = { error: { code: `http_${status}`, message: "Provider unavailable" } };
+      let count = 0;
+      fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => {
+        if (count++ === 0) return Response.json(body, { status, headers: { "retry-after": "0" } });
+        // A recovering provider must not cause the failed chat to be retried silently.
+        return streaming ? reply() : Response.json({ choices: [{ message: { content: "Hello" }, finish_reason: "stop" }] });
+      }) as unknown as typeof fetch);
+      const chat = chats.createChat(userId, { character_id: null, name: "Test", metadata: { temporary: true, no_preset: true } });
+      chats.createMessage(chat.id, { is_user: true, name: "User", content: "Hello" }, userId);
+      const result = await startGeneration({ userId, chat_id: chat.id, connection_id: connectionId, parameters: { _streaming: streaming } }, {
+        requestOrigin: { kind: "extension", name: "Example", extensionId: "installation-1", operation: "chat append" },
+      });
+      const deadline = Date.now() + 3000;
+      while (!ended.some((entry) => entry.generationId === result.generationId) && Date.now() < deadline) await Bun.sleep(5);
+      const events = ended.filter((entry) => entry.generationId === result.generationId);
+      expect(events).toHaveLength(1);
+      expect(events[0].error).toContain("Provider unavailable");
+      expect(events[0].errorCode).toBe(`http_${status}`);
+      expect(pool.getPoolEntry(result.generationId)?.status).toBe("error");
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const rows = getRequestHistory(userId).entries;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        generationId: result.generationId, chatId: chat.id, connectionId,
+        origin: { name: "Example", extensionId: "installation-1", operation: "chat append" },
+        response: { status, state: "failed", format: "json" },
+      });
+      const entry = getRequestHistoryEntry(userId, rows[0].id)!;
+      expect(JSON.parse(entry.bodyJson!).stream).toBe(streaming);
+      expect(JSON.parse(entry.responseBody!)).toEqual(body);
+    });
+  }
+}
 
 test("sidecar broker sends are attributed and sanitized; embedding and system sends are excluded", async () => {
   const sent: string[] = [];
