@@ -37,14 +37,16 @@ function autoResize(el: HTMLTextAreaElement | null) {
       ? Math.min(maxHeight, availableHeight)
       : availableHeight
   }
+  // Measure the content at its natural height. Scrolling is deliberately
+  // owned by CSS so this helper cannot strand a resized or viewport-clamped
+  // editor with an inline `overflow-y: hidden` declaration.
+  el.style.height = 'auto'
   const nextHeight = el.scrollHeight
   if (Number.isFinite(maxHeight) && maxHeight > 0) {
     el.style.height = `${Math.min(nextHeight, maxHeight)}px`
-    el.style.overflowY = nextHeight > maxHeight ? 'auto' : 'hidden'
     return
   }
   el.style.height = `${nextHeight}px`
-  el.style.overflowY = 'hidden'
 }
 
 function getEditorOcclusion(target: HTMLTextAreaElement | null) {
