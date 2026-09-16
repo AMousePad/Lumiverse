@@ -505,6 +505,8 @@
     "chatName": "Nome chat",
     "groupNamePlaceholder": "Inserisci nome gruppo...",
     "chatNamePlaceholder": "Inserisci nome chat...",
+    "impersonationMode": "Modalità di impersonificazione",
+    "impersonationModeHint": "Scegli cosa deve assemblare l'azione Impersonifica nella barra di input per questa chat.",
     "impersonationPreset": "Preset di impersonificazione",
     "useMainPreset": "Usa preset principale",
     "connectionProfile": "Profilo di connessione",

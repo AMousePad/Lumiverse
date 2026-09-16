@@ -505,6 +505,8 @@
     "chatName": "聊天名称",
     "groupNamePlaceholder": "输入群组名称…",
     "chatNamePlaceholder": "输入聊天名称…",
+    "impersonationMode": "代写模式",
+    "impersonationModeHint": "选择此聊天中输入栏的代写操作要组装的内容。",
     "impersonationPreset": "代写预设",
     "useMainPreset": "使用主预设",
     "connectionProfile": "连接配置",

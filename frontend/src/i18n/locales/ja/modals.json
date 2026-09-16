@@ -505,6 +505,8 @@
     "chatName": "チャット名",
     "groupNamePlaceholder": "グループ名を入力...",
     "chatNamePlaceholder": "チャット名を入力してください...",
+    "impersonationMode": "なりすましモード",
+    "impersonationModeHint": "このチャットで入力バーのなりすまし操作が組み立てる内容を選択します。",
     "impersonationPreset": "なりすましプリセット",
     "useMainPreset": "メイン プリセットを使用",
     "connectionProfile": "接続プロファイル",

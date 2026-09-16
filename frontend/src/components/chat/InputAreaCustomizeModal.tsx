@@ -92,7 +92,7 @@ export const COMPOSER_ACTION_CATALOG: ComposerActionItem[] = [
   { id: 'home', label: 'Home', description: 'Return to the home screen', icon: Home },
   { id: 'regen', label: 'Regenerate', description: 'Regenerate the last assistant reply', icon: RotateCw },
   { id: 'continue', label: 'Continue', description: 'Continue the last assistant reply', icon: CornerDownLeft },
-  { id: 'oneliner', label: 'One-liner', description: 'Generate a one-liner as the user', icon: MessageSquare },
+  { id: 'oneliner', label: 'Impersonate', description: 'Generate a user draft with the selected impersonation mode', icon: MessageSquare },
   { id: 'persona', label: 'Persona', description: 'Send as or switch the active persona', icon: UserCircle },
   { id: 'connections', label: 'Connections', description: 'Switch the active connection profile', icon: Link2 },
   { id: 'connectionsPicker', label: 'Connections Picker', description: 'Open the Waypoints connections picker', icon: Waypoints },

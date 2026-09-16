@@ -19,7 +19,12 @@ import { audioApi } from '@/api/audio'
 import { getPersonaAvatarThumbUrl, getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
-import { resolveImpersonationPresetSelection } from '@/lib/impersonationPreset'
+import {
+  DEFAULT_IMPERSONATION_MODE,
+  resolveImpersonationMode,
+  resolveImpersonationPresetSelection,
+  type ImpersonationPreference,
+} from '@/lib/impersonationPreset'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import { unmarshalPreset } from '@/lib/loom/service'
 import {
@@ -316,6 +321,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   }>>([])
   const [characterName, setCharacterName] = useState('')
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
+  const [impersonationMode, setImpersonationMode] = useState<ImpersonationPreference>(DEFAULT_IMPERSONATION_MODE)
   const [promptVariablesModalOpen, setPromptVariablesModalOpen] = useState(false)
   const [promptVariablesPreset, setPromptVariablesPreset] = useState<LoomPreset | null>(null)
   const [promptVariablesBinding, setPromptVariablesBinding] = useState<PromptVariableProfileTarget | null>(null)
@@ -617,22 +623,36 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setAltFieldSelections({})
       setGroupAltFieldSelections({})
       setGroupScenarioMode('individual')
+      setImpersonationMode(DEFAULT_IMPERSONATION_MODE)
       return
     }
     setAltFieldSelections((activeChatMetadata?.alternate_field_selections as Record<string, string>) || {})
     setGroupAltFieldSelections((activeChatMetadata?.group_alternate_field_selections as Record<string, Record<string, string>>) || {})
     const mode = activeChatMetadata?.group_scenario_override?.mode
     setGroupScenarioMode(mode === 'member' || mode === 'custom' ? mode : 'individual')
+    setImpersonationMode(resolveImpersonationMode(activeChatMetadata?.impersonation_mode))
   }, [activeChatMetadata, chatId])
 
   useEffect(() => {
-    if (!chatId) { setImpersonationPresetId(null); return }
+    if (!chatId) {
+      setImpersonationPresetId(null)
+      setImpersonationMode(DEFAULT_IMPERSONATION_MODE)
+      return
+    }
+    let cancelled = false
     chatsApi.get(chatId, { messages: false })
       .then((chat) => {
+        if (cancelled) return
         const value = chat.metadata?.impersonation_preset_id
         setImpersonationPresetId(typeof value === 'string' && value ? value : null)
+        setImpersonationMode(resolveImpersonationMode(chat.metadata?.impersonation_mode))
       })
-      .catch(() => setImpersonationPresetId(null))
+      .catch(() => {
+        if (cancelled) return
+        setImpersonationPresetId(null)
+        setImpersonationMode(DEFAULT_IMPERSONATION_MODE)
+      })
+    return () => { cancelled = true }
   }, [chatId])
 
   const handleAltFieldSelect = useCallback(async (field: string, variantId: string | null) => {
@@ -2572,6 +2592,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           onSaved: (updatedChat: import('@/types/api').Chat) => {
             const value = updatedChat.metadata?.impersonation_preset_id
             setImpersonationPresetId(typeof value === 'string' && value ? value : null)
+            setImpersonationMode(resolveImpersonationMode(updatedChat.metadata?.impersonation_mode))
             const mode = updatedChat.metadata?.group_scenario_override?.mode
             setGroupScenarioMode(mode === 'member' || mode === 'custom' ? mode : 'individual')
           },
@@ -3288,9 +3309,15 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             <button
               type="button"
               className={styles.actionBtn}
-              onClick={() => handleImpersonate('oneliner')}
-              title={`${t('quickMenu.oneLiner')}: ${t('quickMenu.oneLinerDesc')}`}
-              aria-label={t('quickMenu.oneLiner')}
+              onClick={() => handleImpersonate(impersonationMode)}
+              title={`${t('quickMenu.impersonate')}: ${
+                impersonationMode === 'prompts'
+                  ? t('quickMenu.presetPrompts')
+                  : impersonationMode === 'preset'
+                    ? t('quickMenu.impersonationPreset')
+                    : t('quickMenu.oneLiner')
+              }`}
+              aria-label={t('quickMenu.impersonate')}
               disabled={isGeneratingInChat}
               style={isGeneratingInChat ? { opacity: 0.5 } : undefined}
             >
@@ -3851,60 +3878,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
                     </span>
                   </button>
                 )}
-                <button
-                  type="button"
-                  className={styles.popRowBtn}
-                  onClick={() => {
-                    setOpenPopover(null)
-                    handleImpersonate('prompts')
-                  }}
-                  disabled={isGeneratingInChat}
-                  style={isGeneratingInChat ? { opacity: 0.5 } : undefined}
-                >
-                  <span className={styles.personaMain}>
-                    <ScrollText size={14} />
-                    <span className={styles.personaNameGroup}>
-                      <span>{t('quickMenu.presetPrompts')}</span>
-                      <span className={styles.personaTitle}>{t('quickMenu.presetPromptsDesc')}</span>
-                    </span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className={styles.popRowBtn}
-                  onClick={() => {
-                    setOpenPopover(null)
-                    handleImpersonate('preset')
-                  }}
-                  disabled={isGeneratingInChat}
-                  style={isGeneratingInChat ? { opacity: 0.5 } : undefined}
-                >
-                  <span className={styles.personaMain}>
-                    <FileText size={14} />
-                    <span className={styles.personaNameGroup}>
-                      <span>{t('quickMenu.impersonationPreset')}</span>
-                      <span className={styles.personaTitle}>{t('quickMenu.impersonationPresetDesc')}</span>
-                    </span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className={styles.popRowBtn}
-                  onClick={() => {
-                    setOpenPopover(null)
-                    handleImpersonate('oneliner')
-                  }}
-                  disabled={isGeneratingInChat}
-                  style={isGeneratingInChat ? { opacity: 0.5 } : undefined}
-                >
-                  <span className={styles.personaMain}>
-                    <MessageSquare size={14} />
-                    <span className={styles.personaNameGroup}>
-                      <span>{t('quickMenu.oneLiner')}</span>
-                      <span className={styles.personaTitle}>{t('quickMenu.oneLinerDesc')}</span>
-                    </span>
-                  </span>
-                </button>
                 <button
                   type="button"
                   className={styles.popRowBtn}

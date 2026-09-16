@@ -1,8 +1,19 @@
 import type { ImpersonateMode } from '@/api/generate'
 
+export type ImpersonationPreference = Extract<ImpersonateMode, 'prompts' | 'preset' | 'oneliner'>
+
+export const DEFAULT_IMPERSONATION_MODE: ImpersonationPreference = 'oneliner'
+
 export interface ImpersonationPresetSelection {
   presetId: string | undefined
   forcePresetId: boolean
+}
+
+/** Safely read the untyped per-chat metadata value. */
+export function resolveImpersonationMode(value: unknown): ImpersonationPreference {
+  return value === 'prompts' || value === 'preset' || value === 'oneliner'
+    ? value
+    : DEFAULT_IMPERSONATION_MODE
 }
 
 /**

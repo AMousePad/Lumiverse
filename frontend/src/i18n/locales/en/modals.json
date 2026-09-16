@@ -522,6 +522,8 @@
     "chatName": "Chat Name",
     "groupNamePlaceholder": "Enter group name...",
     "chatNamePlaceholder": "Enter chat name...",
+    "impersonationMode": "Impersonation Mode",
+    "impersonationModeHint": "Choose what the input-bar Impersonate action assembles for this chat.",
     "impersonationPreset": "Impersonation Preset",
     "useMainPreset": "Use main preset",
     "connectionProfile": "Connection Profile",

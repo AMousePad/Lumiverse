@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 
-import { resolveImpersonationPresetSelection } from './impersonationPreset'
+import {
+  DEFAULT_IMPERSONATION_MODE,
+  resolveImpersonationMode,
+  resolveImpersonationPresetSelection,
+} from './impersonationPreset'
 
 describe('impersonation preset selection', () => {
   test('keeps Preset Prompts on the active chat preset', () => {
@@ -26,4 +30,14 @@ describe('impersonation preset selection', () => {
       forcePresetId: false,
     })
   })
+
+  test.each(['prompts', 'preset', 'oneliner'] as const)(
+    'accepts the persisted %s preference',
+    (mode) => expect(resolveImpersonationMode(mode)).toBe(mode),
+  )
+
+  test.each([undefined, null, '', 'sovereign_hand', 'invalid'])(
+    'defaults invalid metadata value %p to the existing one-liner behavior',
+    (value) => expect(resolveImpersonationMode(value)).toBe(DEFAULT_IMPERSONATION_MODE),
+  )
 })

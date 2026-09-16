@@ -505,6 +505,8 @@
     "chatName": "Nom du chat",
     "groupNamePlaceholder": "Entrer le nom du groupe...",
     "chatNamePlaceholder": "Entrez le nom du chat...",
+    "impersonationMode": "Mode d'usurpation d'identité",
+    "impersonationModeHint": "Choisissez ce que l'action d'usurpation de la barre de saisie assemble pour cette discussion.",
     "impersonationPreset": "Préréglage d'usurpation d'identité",
     "useMainPreset": "Utiliser le préréglage principal",
     "connectionProfile": "Profil de connexion",
