@@ -1,3 +1,5 @@
+import { sortFolderGroups } from './folderSorting'
+
 export interface PersonaFolderGroup<T> {
   folder: string
   personas: T[]
@@ -46,13 +48,13 @@ export function groupPersonasByFolder<T extends { folder?: string | null }>(
     folderMap.get(key)!.push(persona)
   }
 
-  return groups
+  return sortFolderGroups(groups)
 }
 
 /**
- * Preserve page-group order and append persisted folders that have no persona
- * anywhere in the collection. A populated folder absent from the current page
- * must not be presented as empty.
+ * Include persisted folders that have no persona anywhere in the collection,
+ * then apply the same alphabetical ordering as populated folders. A populated
+ * folder absent from the current page must not be presented as empty.
  */
 export function includeEmptyPersonaFolders<T extends { folder?: string | null }>(
   groups: Array<PersonaFolderGroup<T>>,
@@ -65,5 +67,5 @@ export function includeEmptyPersonaFolders<T extends { folder?: string | null }>
     .filter((folder) => folder && !visibleFolders.has(folder) && !populatedFolders.has(folder))
     .map((folder) => ({ folder, personas: [] as T[] }))
 
-  return emptyGroups.length > 0 ? [...groups, ...emptyGroups] : groups
+  return sortFolderGroups(emptyGroups.length > 0 ? [...groups, ...emptyGroups] : groups)
 }

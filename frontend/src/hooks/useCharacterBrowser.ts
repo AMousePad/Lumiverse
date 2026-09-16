@@ -12,6 +12,7 @@ import type { LorebookInfo } from '@/components/modals/BulkImportProgressModal'
 import type { ExpressionsImportInfo } from '@/components/modals/ExpressionsImportModal'
 import type { AlternateFieldsSummaryInfo } from '@/components/modals/AlternateFieldsSummaryModal'
 import { getEmbeddedCharacterBookEntryCount } from '@/utils/character-world-books'
+import { sortFolderGroups } from '@/lib/folderSorting'
 import i18n from '@/i18n'
 
 /**
@@ -186,7 +187,7 @@ export function useCharacterBrowser() {
       }
       folderMap.get(key)!.push(character)
     }
-    return groups
+    return sortFolderGroups(groups)
   }, [browserItems])
 
   const allFolders = useMemo(() => {

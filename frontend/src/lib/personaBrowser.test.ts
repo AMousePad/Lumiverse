@@ -38,8 +38,27 @@ describe('persona browser derivation', () => {
     ])
     expect(groups.map((group) => [group.folder, group.personas.map((persona) => persona.id)])).toEqual([
       ['Friends', ['recent-foldered']],
-      ['', ['recent-uncategorized']],
       ['Work', ['other']],
+      ['', ['recent-uncategorized']],
+    ])
+  })
+
+  test('sorts folders alphabetically without changing persona order within them', () => {
+    const personas: TestPersona[] = [
+      { id: 'zulu-first', folder: 'Zulu' },
+      { id: 'uncategorized' },
+      { id: 'alpha', folder: 'Alpha' },
+      { id: 'zulu-second', folder: 'Zulu' },
+      { id: 'middle', folder: 'Middle' },
+    ]
+
+    const groups = groupPersonasByFolder(personas)
+
+    expect(groups.map((group) => [group.folder, group.personas.map((persona) => persona.id)])).toEqual([
+      ['Alpha', ['alpha']],
+      ['Middle', ['middle']],
+      ['Zulu', ['zulu-first', 'zulu-second']],
+      ['', ['uncategorized']],
     ])
   })
 
@@ -66,8 +85,8 @@ describe('persona browser derivation', () => {
     const visibleGroups = includeEmptyPersonaFolders(groups, ['Empty folder'], personas)
 
     expect(visibleGroups.map((group) => [group.folder, group.personas.length])).toEqual([
-      ['', 1],
       ['Empty folder', 0],
+      ['', 1],
     ])
   })
 
