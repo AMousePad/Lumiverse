@@ -249,6 +249,20 @@ CREATE TABLE databanks (
   updated_at  INTEGER NOT NULL
 );
 
+CREATE TABLE desktop_notification_destinations (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  token_prefix TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT 'Lumiverse Desktop',
+  platform TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  last_seen_at INTEGER
+);
+
 CREATE TABLE dream_weaver_messages (
   id            TEXT PRIMARY KEY,
   session_id    TEXT NOT NULL,
@@ -1198,6 +1212,15 @@ CREATE INDEX idx_databank_docs_user ON databank_documents(user_id);
 CREATE INDEX idx_databanks_scope ON databanks(user_id, scope, scope_id);
 
 CREATE INDEX idx_databanks_user ON databanks(user_id);
+
+CREATE UNIQUE INDEX idx_desktop_notification_token
+  ON desktop_notification_destinations(token_hash);
+
+CREATE INDEX idx_desktop_notification_user
+  ON desktop_notification_destinations(user_id, created_at DESC);
+
+CREATE UNIQUE INDEX idx_desktop_notification_user_device
+  ON desktop_notification_destinations(user_id, device_id);
 
 CREATE INDEX idx_dw_saved_prompts_user
   ON dream_weaver_saved_prompts(user_id, updated_at DESC);

@@ -148,6 +148,17 @@ Closing the tray app stops the runner and the server it started. If Lumiverse
 was started separately from a terminal, the tray can show that it is running,
 but it does not take ownership of or stop that process.
 
+### Native notifications
+
+Enable notifications from **Settings > Notifications** inside the integrated
+browser to register Lumiverse Desktop as a native notification destination.
+The tray keeps a notification-only connection while the server is available,
+including when the integrated browser is closed or its login session has
+expired. Its device identity and revocable credential live in the standard
+per-app configuration directory, so rebuilding the desktop app does not
+silently unregister it. The credential is pinned to that server's origin and
+identity. Removing the destination in Settings revokes it.
+
 ---
 
 ## Uninstalling
@@ -220,7 +231,8 @@ also stops any server the tray started).
 
 #### 3. Remove the tray app's data
 
-The tray stores its settings and logs in the standard per-app locations:
+The tray stores its settings, logs, notification device identity, and revocable
+notification credential in the standard per-app locations:
 
 === "macOS"
 

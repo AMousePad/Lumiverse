@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { pushApi, type PushSubscriptionRecord, type PushTestResult } from '@/api/push'
+import {
+  clearDesktopNotificationEnrollment,
+  getDesktopNotificationDevice,
+  getDesktopNotificationPermission,
+  isTauriDesktop,
+  saveDesktopNotificationEnrollment,
+} from '@/lib/desktop-notifications'
 
 interface PushCapability {
   checked: boolean
@@ -88,6 +95,14 @@ async function getExistingPushSubscription(reg: ServiceWorkerRegistration): Prom
 }
 
 async function detectPushCapability(): Promise<Omit<PushCapability, 'checked'>> {
+  if (isTauriDesktop()) {
+    return {
+      supported: true,
+      reason: null,
+      registrationStatus: 'ready',
+      registrationReason: null,
+    }
+  }
   if (!window.isSecureContext) {
     return {
       supported: false,
@@ -168,6 +183,7 @@ function serializePushSubscription(sub: PushSubscription): PushSubscriptionJSON 
 }
 
 function describeSubscribeError(error: unknown): string {
+  if (typeof error === 'string' && error) return error
   if (error instanceof Error) {
     if (error.name === 'AbortError') {
       return 'Timed out while waiting for the service worker to become active for push registration.'
@@ -190,12 +206,15 @@ function describeSubscribeError(error: unknown): string {
 }
 
 export function usePushSubscription() {
+  const desktop = isTauriDesktop()
   const [capability, setCapability] = useState<PushCapability>(DEFAULT_PUSH_CAPABILITY)
   const [isSubscribed, setIsSubscribed] = useState(false)
   const [subscriptions, setSubscriptions] = useState<PushSubscriptionRecord[]>([])
   const [permissionState, setPermissionState] = useState<NotificationPermission>(
-    typeof Notification !== 'undefined' ? Notification.permission : 'default'
+    !desktop && typeof Notification !== 'undefined' ? Notification.permission : 'default'
   )
+  const [desktopDeviceId, setDesktopDeviceId] = useState<string | null>(null)
+  const [desktopDestinationId, setDesktopDestinationId] = useState<string | null>(null)
 
   // Check current subscription status on mount
   useEffect(() => {
@@ -205,6 +224,39 @@ export function usePushSubscription() {
       if (cancelled) return
       setCapability({ checked: true, ...result })
       if (!result.supported) return
+
+      if (desktop) {
+        Promise.all([
+          getDesktopNotificationDevice(),
+          getDesktopNotificationPermission(),
+          pushApi.listSubscriptions(),
+          pushApi.getDesktopInfo(),
+        ]).then(([device, permission, rows, info]) => {
+          if (cancelled) return
+          const destination = rows.find(
+            (row) => row.type === 'tauri_desktop' && row.device_id === device.deviceId,
+          )
+          const enrolled = destination
+            && device.enrollment?.destinationId === destination.id
+            && device.enrollment.serverInstanceId === info.serverInstanceId
+            && device.enrollment.serverOrigin === window.location.origin
+          setDesktopDeviceId(device.deviceId)
+          setDesktopDestinationId(enrolled ? destination.id : null)
+          setPermissionState(permission)
+          setSubscriptions(rows)
+          setIsSubscribed(Boolean(enrolled))
+        }).catch((error) => {
+          if (!cancelled) {
+            setCapability((prev) => ({
+              ...prev,
+              checked: true,
+              registrationStatus: 'error',
+              registrationReason: error instanceof Error ? error.message : String(error),
+            }))
+          }
+        })
+        return
+      }
 
       getPushRegistrationOrThrow().then(async (reg) => {
         if (cancelled) return
@@ -237,18 +289,46 @@ export function usePushSubscription() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [desktop])
 
   const subscribe = useCallback(async (): Promise<boolean> => {
     if (!capability.supported) {
       throw new Error(capability.reason || 'Push notifications are not supported in this browser.')
     }
 
-    const permission = await Notification.requestPermission()
+    const permission = desktop
+      ? await getDesktopNotificationPermission(true)
+      : await Notification.requestPermission()
     setPermissionState(permission)
     if (permission !== 'granted') return false
 
     try {
+      if (desktop) {
+        const device = desktopDeviceId
+          ? { deviceId: desktopDeviceId }
+          : await getDesktopNotificationDevice()
+        const enrollment = await pushApi.subscribeDesktop({
+          deviceId: device.deviceId,
+          label: 'Lumiverse Desktop',
+          platform: navigator.platform || 'desktop',
+        })
+        await saveDesktopNotificationEnrollment({
+          deviceId: device.deviceId,
+          destinationId: enrollment.destination.id,
+          credential: enrollment.credential,
+          serverInstanceId: enrollment.serverInstanceId,
+          serverOrigin: window.location.origin,
+        })
+        setDesktopDeviceId(device.deviceId)
+        setDesktopDestinationId(enrollment.destination.id)
+        setIsSubscribed(true)
+        setSubscriptions((prev) => [
+          enrollment.destination,
+          ...prev.filter((row) => row.id !== enrollment.destination.id),
+        ])
+        return true
+      }
+
       const reg = await getPushRegistrationOrThrow()
       const existing = await getExistingPushSubscription(reg)
       const sub = existing ?? await (async () => {
@@ -284,11 +364,21 @@ export function usePushSubscription() {
       }))
       throw new Error(message)
     }
-  }, [capability])
+  }, [capability, desktop, desktopDeviceId])
 
   const unsubscribe = useCallback(async (id: string): Promise<void> => {
+    const destination = subscriptions.find((row) => row.id === id)
     await pushApi.unsubscribe(id)
     setSubscriptions((prev) => prev.filter((s) => s.id !== id))
+
+    if (desktop) {
+      if (destination?.type === 'tauri_desktop' && destination.device_id === desktopDeviceId) {
+        await clearDesktopNotificationEnrollment(id)
+        setDesktopDestinationId(null)
+        setIsSubscribed(false)
+      }
+      return
+    }
 
     // If we just removed the current browser's subscription, update browser state
     const reg = await navigator.serviceWorker.ready
@@ -302,25 +392,57 @@ export function usePushSubscription() {
         setIsSubscribed(false)
       }
     }
-  }, [subscriptions])
+  }, [desktop, desktopDeviceId, subscriptions])
 
   const unsubscribeAll = useCallback(async (): Promise<void> => {
-    // Unsubscribe browser-level
-    const reg = await navigator.serviceWorker.ready
-    const sub = await getExistingPushSubscription(reg)
-    if (sub) await sub.unsubscribe()
+    if (desktop) {
+      await clearDesktopNotificationEnrollment()
+      setDesktopDestinationId(null)
+    } else {
+      // Unsubscribe browser-level
+      const reg = await navigator.serviceWorker.ready
+      const sub = await getExistingPushSubscription(reg)
+      if (sub) await sub.unsubscribe()
+    }
 
     // Unsubscribe all server-side
     await Promise.allSettled(subscriptions.map((s) => pushApi.unsubscribe(s.id)))
     setSubscriptions([])
     setIsSubscribed(false)
-  }, [subscriptions])
+  }, [desktop, subscriptions])
 
   const testPush = useCallback(async (): Promise<PushTestResult> => {
-    return pushApi.test()
-  }, [])
+    return pushApi.test(desktop ? desktopDestinationId ?? undefined : undefined)
+  }, [desktop, desktopDestinationId])
 
   const refresh = useCallback(async () => {
+    if (desktop) {
+      const [subs, device, permission, info] = await Promise.all([
+        pushApi.listSubscriptions(),
+        getDesktopNotificationDevice(),
+        getDesktopNotificationPermission(),
+        pushApi.getDesktopInfo(),
+      ])
+      const destination = subs.find(
+        (row) => row.type === 'tauri_desktop' && row.device_id === device.deviceId,
+      )
+      const enrolled = destination
+        && device.enrollment?.destinationId === destination.id
+        && device.enrollment.serverInstanceId === info.serverInstanceId
+        && device.enrollment.serverOrigin === window.location.origin
+      setSubscriptions(subs)
+      setDesktopDeviceId(device.deviceId)
+      setDesktopDestinationId(enrolled ? destination.id : null)
+      setPermissionState(permission)
+      setIsSubscribed(Boolean(enrolled))
+      setCapability((prev) => ({
+        ...prev,
+        checked: true,
+        registrationStatus: 'ready',
+        registrationReason: null,
+      }))
+      return
+    }
     const [subs, registration] = await Promise.all([
       pushApi.listSubscriptions(),
       capability.supported ? inspectRegistrationState() : Promise.resolve({
@@ -335,7 +457,7 @@ export function usePushSubscription() {
       registrationStatus: registration.registrationStatus,
       registrationReason: registration.registrationReason,
     }))
-  }, [capability.registrationReason, capability.registrationStatus, capability.supported])
+  }, [capability.registrationReason, capability.registrationStatus, capability.supported, desktop])
 
   return {
     isSupported: capability.supported,
@@ -351,5 +473,6 @@ export function usePushSubscription() {
     unsubscribeAll,
     testPush,
     refresh,
+    registrationKind: desktop ? 'native' as const : 'service_worker' as const,
   }
 }

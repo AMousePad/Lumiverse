@@ -50,6 +50,7 @@ import { loadoutsRoutes } from "./routes/loadouts.routes";
 import { regexScriptsRoutes } from "./routes/regex-scripts.routes";
 import { expressionsRoutes } from "./routes/expressions.routes";
 import { pushRoutes } from "./routes/push.routes";
+import { desktopNotificationTransportRoutes } from "./routes/desktop-notifications.routes";
 import { memoryCortexRoutes } from "./routes/memory-cortex.routes";
 import { operatorRoutes } from "./routes/operator.routes";
 import { openrouterRoutes } from "./routes/openrouter.routes";
@@ -108,6 +109,7 @@ const PUBLIC_POST_PREFIXES = [
   "/api/v1/lumihub",
   "/api/v1/openrouter/oauth-landing",
   "/api/v1/nanogpt/oauth-landing",
+  "/api/desktop-notifications/v1",
 ];
 app.use("/api/*", async (c, next) => {
   const clientId = getClientIp(c);
@@ -167,7 +169,21 @@ app.use("/api/*", async (c, next) => {
 app.use("/api/*", async (c, next) => {
   const clientId = getClientIp(c);
   const origin = c.req.header("origin");
-  if (!env.trustAnyOrigin && origin && !isOriginAllowed(origin)) {
+  const notificationTicket = c.req.query("notificationTicket");
+  const desktopNotificationWs = c.req.path === "/api/ws"
+    && typeof notificationTicket === "string"
+    && notificationTicket.length > 0
+    && (
+      origin === "http://tauri.localhost"
+      || origin === "tauri://localhost"
+      || origin === "http://localhost:1430"
+      || origin === "http://127.0.0.1:1430"
+    );
+  // The bundled tray host has a Tauri-local origin rather than the backend's
+  // origin. Only the notification-only, single-use-ticket upgrade may cross
+  // this boundary; ordinary API and user WebSocket traffic stays on the
+  // trusted-origin allowlist.
+  if (!env.trustAnyOrigin && origin && !isOriginAllowed(origin) && !desktopNotificationWs) {
     const result = authLockoutService.recordFailure(clientId, "origin", {
       method: c.req.method,
       path: c.req.path,
@@ -457,6 +473,11 @@ app.get("/api/v1/image-gen/results/:id", async (c) => {
 // Stream Deck uses dedicated, hashed, revocable tokens rather than browser
 // sessions. Keep this deliberately narrow and outside the general v1 API.
 app.route("/api/integrations/stream-deck/v1", streamDeckIntegrationRoutes);
+// The desktop companion exchanges a durable, narrowly-scoped credential for
+// a single-use notification WebSocket ticket. This deliberately sits outside
+// browser-session auth so a desktop rebuild or WebView cookie loss does not
+// silently unregister the native destination.
+app.route("/api/desktop-notifications/v1", desktopNotificationTransportRoutes);
 
 app.get("/api/v1/sso-providers/login-options", (c) => {
   return c.json(listSsoLoginOptions());

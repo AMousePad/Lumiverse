@@ -1,14 +1,20 @@
 import { buildPushHTTPRequest } from "@pushforge/builder";
+import { createHash, randomBytes } from "node:crypto";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
+import { invalidateDesktopNotificationTickets } from "../ws/tickets";
 import { EventType } from "../ws/events";
-import { getVapidPrivateJWK } from "../crypto/vapid";
+import { getVapidPrivateJWK, getVapidPublicKey } from "../crypto/vapid";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
 import { clampErrorMessage } from "../utils/provider-errors";
 import { getSetting } from "./settings.service";
 import type {
   PushSubscriptionRecord,
+  DesktopNotificationDestinationRecord,
+  NotificationDestinationRecord,
   CreatePushSubscriptionInput,
+  CreateDesktopNotificationDestinationInput,
+  DesktopNotificationEnrollment,
   PushPayload,
   PushNotificationPreferences,
 } from "../types/push";
@@ -25,6 +31,11 @@ interface GenerationEndedPushPayload {
 export interface PushDispatchResult {
   sent: number;
   reason?: "no_subscriptions" | "disabled" | "event_disabled" | "user_active";
+}
+
+interface PushDeliveryOptions {
+  bypassPresence?: boolean;
+  destinationId?: string;
 }
 
 const DEFAULT_PREFERENCES: PushNotificationPreferences = {
@@ -44,9 +55,119 @@ const PUSH_FETCH_TIMEOUT_MS = 15_000;
 // ── Subscription CRUD ───────────────────────────────────────────────
 
 export function listSubscriptions(userId: string): PushSubscriptionRecord[] {
-  return getDb()
+  return (getDb()
     .query("SELECT * FROM push_subscriptions WHERE user_id = ? ORDER BY created_at DESC")
-    .all(userId) as PushSubscriptionRecord[];
+    .all(userId) as Array<Omit<PushSubscriptionRecord, "type">>)
+    .map((row) => ({ ...row, type: "web_push" }));
+}
+
+export function listDesktopDestinations(userId: string): DesktopNotificationDestinationRecord[] {
+  return (getDb().query(`
+    SELECT id, user_id, device_id, user_agent, label, platform,
+           created_at, updated_at, last_seen_at
+    FROM desktop_notification_destinations
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  `).all(userId) as Array<Omit<DesktopNotificationDestinationRecord, "type">>)
+    .map((row) => ({ ...row, type: "tauri_desktop" }));
+}
+
+export function listNotificationDestinations(userId: string): NotificationDestinationRecord[] {
+  return [...listDesktopDestinations(userId), ...listSubscriptions(userId)]
+    .sort((a, b) => b.created_at - a.created_at);
+}
+
+function hashDesktopCredential(credential: string): string {
+  return createHash("sha256").update(credential, "utf8").digest("hex");
+}
+
+export function getDesktopNotificationServerInstanceId(): string {
+  return `lvdi_${createHash("sha256").update(getVapidPublicKey(), "utf8").digest("base64url").slice(0, 32)}`;
+}
+
+export function createDesktopDestination(
+  userId: string,
+  input: CreateDesktopNotificationDestinationInput,
+): DesktopNotificationEnrollment {
+  const deviceId = input.deviceId.trim();
+  if (!/^[a-zA-Z0-9_-]{16,128}$/.test(deviceId)) {
+    throw new Error("Invalid desktop device ID");
+  }
+
+  const credential = `lvd_${randomBytes(32).toString("base64url")}`;
+  const tokenHash = hashDesktopCredential(credential);
+  const now = Math.floor(Date.now() / 1000);
+  const existing = getDb().query(`
+    SELECT id, created_at FROM desktop_notification_destinations
+    WHERE user_id = ? AND device_id = ?
+  `).get(userId, deviceId) as { id: string; created_at: number } | null;
+  const id = existing?.id ?? crypto.randomUUID();
+  const label = input.label?.trim().slice(0, 100) || "Lumiverse Desktop";
+  const platform = input.platform?.trim().slice(0, 80) || "";
+  const userAgent = input.userAgent?.trim().slice(0, 500) || "";
+
+  getDb().query(`
+    INSERT INTO desktop_notification_destinations
+      (id, user_id, device_id, token_hash, token_prefix, label, platform,
+       user_agent, created_at, updated_at, last_seen_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    ON CONFLICT(user_id, device_id) DO UPDATE SET
+      token_hash = excluded.token_hash,
+      token_prefix = excluded.token_prefix,
+      label = excluded.label,
+      platform = excluded.platform,
+      user_agent = excluded.user_agent,
+      updated_at = excluded.updated_at,
+      last_seen_at = NULL
+  `).run(
+    id,
+    userId,
+    deviceId,
+    tokenHash,
+    credential.slice(0, 12),
+    label,
+    platform,
+    userAgent,
+    existing?.created_at ?? now,
+    now,
+  );
+
+  if (existing) {
+    invalidateDesktopNotificationTickets(userId, id);
+    eventBus.disconnectDesktopNotificationDestination(userId, id);
+  }
+
+  const destination = listDesktopDestinations(userId).find((row) => row.id === id);
+  if (!destination) throw new Error("Desktop notification destination was not saved");
+  return {
+    destination,
+    credential,
+    serverInstanceId: getDesktopNotificationServerInstanceId(),
+  };
+}
+
+export function authenticateDesktopDestinationCredential(
+  credential: string,
+): { userId: string; destinationId: string } | null {
+  if (!credential.startsWith("lvd_") || credential.length < 40) return null;
+  const row = getDb().query(`
+    SELECT id, user_id, last_seen_at
+    FROM desktop_notification_destinations
+    WHERE token_hash = ?
+  `).get(hashDesktopCredential(credential)) as {
+    id: string;
+    user_id: string;
+    last_seen_at: number | null;
+  } | null;
+  if (!row) return null;
+
+  const now = Math.floor(Date.now() / 1000);
+  if (row.last_seen_at === null || now - row.last_seen_at >= 60) {
+    getDb().query(`
+      UPDATE desktop_notification_destinations SET last_seen_at = ? WHERE id = ?
+    `).run(now, row.id);
+  }
+  return { userId: row.user_id, destinationId: row.id };
 }
 
 export function createSubscription(
@@ -81,8 +202,8 @@ export function createSubscription(
   // Return the actual row (may be the upserted one with a different id)
   const row = getDb()
     .query("SELECT * FROM push_subscriptions WHERE user_id = ? AND endpoint = ?")
-    .get(userId, input.endpoint) as PushSubscriptionRecord;
-  return row;
+    .get(userId, input.endpoint) as Omit<PushSubscriptionRecord, "type">;
+  return { ...row, type: "web_push" };
 }
 
 export function deleteSubscription(userId: string, id: string): boolean {
@@ -92,19 +213,46 @@ export function deleteSubscription(userId: string, id: string): boolean {
   return result.changes > 0;
 }
 
+export function deleteNotificationDestination(userId: string, id: string): boolean {
+  if (deleteSubscription(userId, id)) return true;
+  const deleted = getDb().query(`
+    DELETE FROM desktop_notification_destinations WHERE id = ? AND user_id = ?
+  `).run(id, userId).changes > 0;
+  if (deleted) {
+    invalidateDesktopNotificationTickets(userId, id);
+    eventBus.disconnectDesktopNotificationDestination(userId, id);
+  }
+  return deleted;
+}
+
 // ── Push Sending (PushForge — uses Web Crypto + fetch) ──────────────
 
 export async function sendPushToUser(
   userId: string,
-  notification: PushPayload
+  notification: PushPayload,
+  options: PushDeliveryOptions = {},
 ): Promise<number> {
-  if (eventBus.isUserVisible(userId)) return 0;
+  if (!options.bypassPresence && eventBus.isUserVisible(userId)) return 0;
 
-  const subs = listSubscriptions(userId);
-  if (subs.length === 0) return 0;
+  const subs = listSubscriptions(userId).filter(
+    (sub) => !options.destinationId || sub.id === options.destinationId,
+  );
+  const desktopDestinations = listDesktopDestinations(userId).filter(
+    (destination) => !options.destinationId || destination.id === options.destinationId,
+  );
+  if (subs.length === 0 && desktopDestinations.length === 0) return 0;
 
-  const privateJWK = getVapidPrivateJWK();
   let sent = 0;
+  if (options.bypassPresence || !eventBus.isUserVisible(userId)) {
+    sent += eventBus.sendDesktopNotification(
+      userId,
+      desktopDestinations.map((destination) => destination.id),
+      notification,
+    );
+  }
+
+  if (subs.length === 0) return sent;
+  const privateJWK = getVapidPrivateJWK();
 
   const results = await Promise.allSettled(
     subs.map(async (sub) => {
@@ -146,7 +294,7 @@ export async function sendPushToUser(
         // Presence can change while encryption and DNS validation are in
         // flight. Suppress before delivery: WebKit requires every received
         // push to display a notification, even if the PWA is now foregrounded.
-        if (eventBus.isUserVisible(userId)) return;
+        if (!options.bypassPresence && eventBus.isUserVisible(userId)) return;
 
         // Send via fetch (Bun-native, no Node http/https needed)
         const response = await fetch(request.endpoint, {
@@ -271,14 +419,15 @@ function notificationText(value: string | undefined, maxLength: number): string 
 
 export async function dispatchGenerationEndedPush(
   userId: string,
-  payload: GenerationEndedPushPayload
+  payload: GenerationEndedPushPayload,
+  options: PushDeliveryOptions = {},
 ): Promise<PushDispatchResult> {
   const prefs = getPreferences(userId);
   if (!prefs.enabled) return { sent: 0, reason: "disabled" };
 
   // Presence is user-wide, not device-local: if any Lumiverse session is
   // currently visible, suppress push fanout to every device.
-  if (eventBus.isUserVisible(userId)) {
+  if (!options.bypassPresence && eventBus.isUserVisible(userId)) {
     return { sent: 0, reason: "user_active" };
   }
 
@@ -290,12 +439,15 @@ export async function dispatchGenerationEndedPush(
     return { sent: 0, reason: "event_disabled" };
   }
 
-  if (listSubscriptions(userId).length === 0) {
+  const destinations = listNotificationDestinations(userId).filter(
+    (destination) => !options.destinationId || destination.id === options.destinationId,
+  );
+  if (destinations.length === 0) {
     return { sent: 0, reason: "no_subscriptions" };
   }
 
   const notification = await buildGenerationEndedNotification(payload);
-  const sent = await sendPushToUser(userId, notification);
+  const sent = await sendPushToUser(userId, notification, options);
   return { sent };
 }
 

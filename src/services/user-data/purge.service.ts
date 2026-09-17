@@ -343,11 +343,16 @@ function performSqlWipe(userId: string): Record<string, number> {
       );
     }
 
-    // 4d) Tables excluded from export/import but still user-scoped. Today
-    //     that's just push_subscriptions (device-bound).
+    // 4d) Tables excluded from export/import but still user-scoped. These
+    //     notification destinations are device-bound.
     counts["push_subscriptions"] = runDelete(
       db,
       "DELETE FROM push_subscriptions WHERE user_id = ?",
+      userId,
+    );
+    counts["desktop_notification_destinations"] = runDelete(
+      db,
+      "DELETE FROM desktop_notification_destinations WHERE user_id = ?",
       userId,
     );
 

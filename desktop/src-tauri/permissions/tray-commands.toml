@@ -24,7 +24,19 @@ commands.allow = [
   "show_widget_poc",
   "toggle_widget_poc_click_through",
   "show_extension_widget",
-  "return_extension_widget_from_tray"
+  "return_extension_widget_from_tray",
+  "desktop_notification_connection",
+  "show_desktop_notification"
+]
+
+[[permission]]
+identifier = "desktop-notification-registration"
+description = "Allows the trusted Lumiverse frontend to enroll this desktop install for native notifications without exposing notification delivery itself."
+commands.allow = [
+  "desktop_notification_device",
+  "desktop_notification_permission",
+  "save_desktop_notification_enrollment",
+  "clear_desktop_notification_enrollment"
 ]
 
 [[permission]]

@@ -3,9 +3,11 @@
 !!! warning "Permission required: `push_notification`"
     This is a privileged permission. The user must explicitly grant it from the Extensions panel.
 
-Send OS-level push notifications to users' devices. Notifications are delivered even when the Lumiverse app is closed or backgrounded — ideal for alerting users to completed tasks, character activity, or time-sensitive events.
+Send OS-level push notifications to users' devices. Browser Web Push destinations can receive while the Lumiverse page is closed or backgrounded; native desktop destinations receive while the Lumiverse Desktop companion is running. This is ideal for completed tasks, character activity, or time-sensitive events.
 
-Notifications are automatically **suppressed** on the server when any of the user's connected sessions reports the app as visible. This applies across devices and to test notifications. Presence is refreshed after each WebSocket connection and authentication, including PWA resume.
+Notifications are automatically **suppressed** on the server when any of the user's connected sessions reports the app as visible. Presence is refreshed after each WebSocket connection and authentication, including PWA resume. User-triggered, per-destination test notifications bypass this suppression so they can be verified from the open Settings page.
+
+Registered destinations may be browser Web Push subscriptions or Lumiverse Desktop native destinations. The desktop companion receives the same payload through a notification-only socket and presents it through the operating system; it never joins the user's general event channel.
 
 Once a push has been sent, the service worker displays it even if the app returns to the foreground before delivery. [WebKit requires every received push to display a notification](https://webkit.org/blog/12945/meet-web-push/); silently discarding it can revoke the subscription.
 
@@ -62,7 +64,7 @@ Check if push notifications are available for a user.
 
 **Returns:** `Promise<{ available: boolean; subscriptionCount: number }>`
 
-- `available`: `true` if the user has at least one registered push subscription
+- `available`: `true` if the user has at least one registered browser or desktop notification destination
 - `subscriptionCount`: number of registered devices
 
 ## Attribution

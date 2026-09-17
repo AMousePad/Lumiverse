@@ -23,6 +23,7 @@
     "core:window:allow-is-visible",
     "core:window:allow-set-focus",
     "core:webview:default",
+    "notification:allow-is-permission-granted",
     "tray-commands",
     "store:default",
     "autostart:allow-enable",

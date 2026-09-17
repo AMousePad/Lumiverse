@@ -18,6 +18,7 @@
     "core:window:allow-set-ignore-cursor-events",
     "core:window:allow-hide",
     "core:event:allow-listen",
-    "core:event:allow-unlisten"
+    "core:event:allow-unlisten",
+    "notification:allow-is-permission-granted"
   ]
 }

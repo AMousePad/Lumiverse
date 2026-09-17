@@ -16,6 +16,8 @@
     "allow-configure-frontend-appearance",
     "desktop-startup-appearance",
     "desktop-widget-catalog",
+    "desktop-notification-registration",
+    "notification:allow-is-permission-granted",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-start-dragging",

@@ -266,7 +266,7 @@ export class WorkerHostPresentationApi {
       this.enforceScopedUser(resolvedUserId);
 
       const pushSvc = await import("../services/push.service");
-      const subs = pushSvc.listSubscriptions(resolvedUserId);
+      const subs = pushSvc.listNotificationDestinations(resolvedUserId);
       this.postToWorker({
         type: "response",
         requestId,

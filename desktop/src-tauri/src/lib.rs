@@ -1,4 +1,5 @@
 mod frontend;
+mod notifications;
 mod runner;
 
 use tauri_plugin_autostart::MacosLauncher;
@@ -155,6 +156,7 @@ fn handle_macos_menu_event<R: tauri::Runtime>(
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
@@ -197,6 +199,12 @@ pub fn run() {
             frontend::show_extension_widget,
             frontend::return_extension_widget,
             frontend::return_extension_widget_from_tray,
+            notifications::desktop_notification_device,
+            notifications::desktop_notification_permission,
+            notifications::save_desktop_notification_enrollment,
+            notifications::clear_desktop_notification_enrollment,
+            notifications::desktop_notification_connection,
+            notifications::show_desktop_notification,
         ]);
 
     #[cfg(target_os = "macos")]

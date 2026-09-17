@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { eventBus } from "./bus";
 import { EventType } from "./events";
 import { auth } from "../auth";
-import { consumeTicket } from "./tickets";
+import { consumeDesktopNotificationTicket, consumeTicket } from "./tickets";
 import { getWorkerHost } from "../spindle/lifecycle";
 import * as managerSvc from "../spindle/manager.service";
 import { getFirstUserId } from "../auth/seed";
@@ -19,6 +19,7 @@ export const wsHandler = upgradeWebSocket((c) => {
   let userRole: string | null = null;
   let sessionId: string | null = null;
   let heartbeatOnly = false;
+  let desktopNotificationOnly = false;
   // Multiplayer: set when this socket is a room participant (peer or joined
   // local account). The participantId is connection-scoped and authoritative —
   // inbound room_* messages NEVER trust a participantId from the payload.
@@ -31,6 +32,41 @@ export const wsHandler = upgradeWebSocket((c) => {
       try {
         const url = new URL(c.req.url);
         heartbeatOnly = url.searchParams.get("heartbeat") === "1";
+
+        // Auth path 4: a single-use ticket issued from a durable desktop
+        // destination credential. This socket never joins the user's normal
+        // pub/sub topic and can only receive native-notification frames.
+        const desktopNotificationTicket = url.searchParams.get("notificationTicket");
+        if (desktopNotificationTicket !== null) {
+          const destination = consumeDesktopNotificationTicket(desktopNotificationTicket);
+          if (!destination) {
+            ws.send(JSON.stringify({
+              event: "AUTH_ERROR",
+              payload: { message: "Invalid or expired desktop notification ticket" },
+              timestamp: Date.now(),
+            }));
+            ws.close(1008, "Invalid desktop notification ticket");
+            return;
+          }
+
+          const raw = (ws as any).raw as import("bun").ServerWebSocket<unknown>;
+          if (!raw) {
+            ws.close(1011, "Notification transport unavailable");
+            return;
+          }
+          desktopNotificationOnly = true;
+          eventBus.addDesktopNotificationClient(raw, destination.userId, destination.destinationId);
+          ws.send(JSON.stringify({
+            event: EventType.CONNECTED,
+            payload: {
+              message: "Desktop notification destination connected",
+              destinationId: destination.destinationId,
+              notificationOnly: true,
+            },
+            timestamp: Date.now(),
+          }));
+          return;
+        }
 
         // Auth path 3: room token (remote multiplayer peer, synthetic identity).
         // A peer is NOT a host-local account: it gets NO userId, NO user:/system
@@ -216,6 +252,7 @@ export const wsHandler = upgradeWebSocket((c) => {
           return;
         }
 
+        if (desktopNotificationOnly) return;
         if (heartbeatOnly) return;
 
         if (data.type === "visibility") {

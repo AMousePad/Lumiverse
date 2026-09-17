@@ -171,14 +171,6 @@ export default function DesktopFloatingWidgetHost() {
 
   return (
     <div
-      onPointerDownCapture={(event) => {
-        if (event.button === 0) {
-          // A Tauri drag region consumes the native pointer-down before macOS
-          // assigns key status. Focus this WebView first, so a drag or control
-          // click never falls through to the minimized main window.
-          void nativeWindow.setFocus().catch(() => {})
-        }
-      }}
       style={{
         position: 'relative',
         width: '100vw',

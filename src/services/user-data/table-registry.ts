@@ -379,6 +379,7 @@ export const EXCLUDED_TABLES = new Set<string>([
   "verification",
   // Device-specific
   "push_subscriptions",
+  "desktop_notification_destinations",
   // System / built-in
   "_migrations",
   "tokenizer_configs",

@@ -28,7 +28,7 @@ function registeredCommands(): string[] {
   const lib = readSource("lib.rs");
   const block = lib.match(/generate_handler!\[([\s\S]*?)\]/);
   if (!block) throw new Error("generate_handler! block not found in lib.rs");
-  return [...block[1].matchAll(/(?:runner|frontend)::([a-z0-9_]+)/g)].map((m) => m[1]);
+  return [...block[1].matchAll(/(?:runner|frontend|notifications)::([a-z0-9_]+)/g)].map((m) => m[1]);
 }
 
 /** Every command name appearing in any `commands.allow` list. */

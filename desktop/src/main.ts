@@ -64,6 +64,25 @@ let desktopShellNoticeShown = false;
 let customFrontendUrl: string | null = null;
 let openIntegratedBrowserWhenReady = false;
 
+interface DesktopNotificationConnection {
+  websocketUrl: string;
+  destinationId: string;
+}
+
+interface DesktopNotificationPayload {
+  title: string;
+  body: string;
+  tag?: string;
+}
+
+let desktopNotificationSocket: WebSocket | null = null;
+let desktopNotificationHeartbeat: ReturnType<typeof setInterval> | null = null;
+let desktopNotificationRetry: ReturnType<typeof setTimeout> | null = null;
+let desktopNotificationConnectInFlight = false;
+let desktopNotificationRetryAttempt = 0;
+let desktopNotificationBlocked = false;
+let desktopNotificationGeneration = 0;
+
 // ─── Menu items (created once, text/enabled updated in place) ───────────────
 
 let statusItem: MenuItem;
@@ -150,6 +169,115 @@ function frontendUrl(): string {
   // scoped, so mixing 127.0.0.1 here with a localhost callback loses the
   // newly-created SSO session when the provider returns.
   return customFrontendUrl ?? `http://localhost:${port}`;
+}
+
+function notificationServerAvailable(): boolean {
+  return customFrontendUrl !== null || serverState === "running" || externalRunning;
+}
+
+function stopDesktopNotificationTransport(): void {
+  desktopNotificationGeneration++;
+  if (desktopNotificationHeartbeat) {
+    clearInterval(desktopNotificationHeartbeat);
+    desktopNotificationHeartbeat = null;
+  }
+  if (desktopNotificationRetry) {
+    clearTimeout(desktopNotificationRetry);
+    desktopNotificationRetry = null;
+  }
+  const socket = desktopNotificationSocket;
+  desktopNotificationSocket = null;
+  if (socket) {
+    socket.onclose = null;
+    socket.close(1000, "Desktop notification transport reset");
+  }
+}
+
+function scheduleDesktopNotificationReconnect(): void {
+  if (desktopNotificationRetry || desktopNotificationBlocked || !notificationServerAvailable()) return;
+  const delay = Math.min(30_000, 2_000 * 2 ** Math.min(desktopNotificationRetryAttempt, 4));
+  desktopNotificationRetryAttempt++;
+  desktopNotificationRetry = setTimeout(() => {
+    desktopNotificationRetry = null;
+    void ensureDesktopNotificationTransport();
+  }, delay);
+}
+
+async function ensureDesktopNotificationTransport(force = false): Promise<void> {
+  if (!notificationServerAvailable()) {
+    stopDesktopNotificationTransport();
+    return;
+  }
+  if (force) {
+    stopDesktopNotificationTransport();
+    desktopNotificationBlocked = false;
+    desktopNotificationRetryAttempt = 0;
+  }
+  if (
+    desktopNotificationConnectInFlight
+    || desktopNotificationBlocked
+    || desktopNotificationSocket?.readyState === WebSocket.OPEN
+    || desktopNotificationSocket?.readyState === WebSocket.CONNECTING
+  ) return;
+
+  desktopNotificationConnectInFlight = true;
+  const generation = desktopNotificationGeneration;
+  try {
+    // Rust reads the durable credential and exchanges it for a one-use ticket;
+    // neither the long-lived secret nor the normal login cookie enters this JS.
+    const connection = await invoke<DesktopNotificationConnection>("desktop_notification_connection", {
+      baseUrl: frontendUrl(),
+    });
+    if (generation !== desktopNotificationGeneration) return;
+    const socket = new WebSocket(connection.websocketUrl);
+    desktopNotificationSocket = socket;
+    socket.onopen = () => {
+      if (desktopNotificationSocket !== socket) return;
+      desktopNotificationRetryAttempt = 0;
+      desktopNotificationHeartbeat = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 30_000);
+    };
+    socket.onmessage = (event) => {
+      if (desktopNotificationSocket !== socket) return;
+      try {
+        const message = JSON.parse(String(event.data));
+        if (message.event === "AUTH_ERROR") {
+          desktopNotificationBlocked = true;
+          return;
+        }
+        if (message.event !== "DESKTOP_NOTIFICATION") return;
+        const payload = message.payload as DesktopNotificationPayload;
+        void invoke("show_desktop_notification", { payload }).catch((error) => {
+          console.warn("Unable to present desktop notification", error);
+        });
+      } catch {
+        // Ignore malformed transport frames.
+      }
+    };
+    socket.onclose = () => {
+      if (desktopNotificationSocket !== socket) return;
+      desktopNotificationSocket = null;
+      if (desktopNotificationHeartbeat) {
+        clearInterval(desktopNotificationHeartbeat);
+        desktopNotificationHeartbeat = null;
+      }
+      scheduleDesktopNotificationReconnect();
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Enrollment and instance mismatches require a fresh authenticated opt-in;
+    // retrying them every few seconds can never repair the credential.
+    desktopNotificationBlocked = /not enrolled|no longer valid|different server (?:instance|origin)/i.test(message);
+    if (!desktopNotificationBlocked) scheduleDesktopNotificationReconnect();
+  } finally {
+    desktopNotificationConnectInFlight = false;
+    if (generation !== desktopNotificationGeneration && notificationServerAvailable()) {
+      void ensureDesktopNotificationTransport();
+    }
+  }
 }
 
 async function updateMenu(): Promise<void> {
@@ -679,6 +807,7 @@ async function tick(): Promise<void> {
   } else {
     await detectExternalServer();
   }
+  await ensureDesktopNotificationTransport();
   await updateMenu();
 }
 
@@ -690,7 +819,11 @@ async function boot(): Promise<void> {
     customFrontendUrl = payload.url;
     settings.customFrontendUrl = payload.url;
     await saveSetting("customFrontendUrl", payload.url);
+    await ensureDesktopNotificationTransport(true);
     await updateMenu();
+  });
+  await listen("desktop-notification-enrollment-changed", () => {
+    void ensureDesktopNotificationTransport(true);
   });
   await listen<DesktopWidgetCatalogEntry[]>("desktop-widget-catalog", ({ payload }) => {
     desktopWidgetCatalog = Array.isArray(payload) ? payload : [];
@@ -721,6 +854,9 @@ async function boot(): Promise<void> {
     // rather than on this call, so restarting the server cannot nag.
     if (state === "running") {
       void refreshDesktopShellState();
+      void ensureDesktopNotificationTransport(true);
+    } else if (state === "stopped" || state === "crashed") {
+      stopDesktopNotificationTransport();
     }
     void refreshStatus().then(updateMenu);
   };
@@ -748,6 +884,7 @@ async function boot(): Promise<void> {
 
   await buildTray();
   await updateMenu();
+  void ensureDesktopNotificationTransport();
 
   if (!repoDir && !customFrontendUrl) {
     await alert(

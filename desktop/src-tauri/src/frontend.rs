@@ -519,6 +519,10 @@ pub fn show_frontend(
         // The frontend renders the title bar and window controls so it can
         // inherit the active Lumiverse theme on every desktop platform.
         .decorations(false)
+        // The titlebar is rendered inside the WebView. On macOS an inactive
+        // WebView otherwise consumes the first click only to activate the
+        // window, so its drag region does not see that gesture.
+        .accept_first_mouse(true)
         // The frontend owns its rounded document edge. A native shadow creates
         // a square-ish outline around that curve on transparent windows.
         .shadow(false)
@@ -888,6 +892,9 @@ pub fn show_extension_widget(
             .always_on_top(true)
             .skip_taskbar(true)
             .focused(false)
+            // Keep creation non-activating while still delivering the user's
+            // first deliberate click to the WebView's controls/drag regions.
+            .accept_first_mouse(true)
             // Do not take focus when it opens, but accept focus from a click
             // so the operating system does not redirect that activation to
             // the minimized main frontend window.

@@ -1,4 +1,5 @@
 export interface PushSubscriptionRecord {
+  type: "web_push";
   id: string;
   user_id: string;
   endpoint: string;
@@ -10,6 +11,23 @@ export interface PushSubscriptionRecord {
   updated_at: number;
 }
 
+export interface DesktopNotificationDestinationRecord {
+  type: "tauri_desktop";
+  id: string;
+  user_id: string;
+  device_id: string;
+  user_agent: string;
+  label: string;
+  platform: string;
+  created_at: number;
+  updated_at: number;
+  last_seen_at: number | null;
+}
+
+export type NotificationDestinationRecord =
+  | PushSubscriptionRecord
+  | DesktopNotificationDestinationRecord;
+
 export interface CreatePushSubscriptionInput {
   endpoint: string;
   keys: {
@@ -18,6 +36,19 @@ export interface CreatePushSubscriptionInput {
   };
   userAgent?: string;
   label?: string;
+}
+
+export interface CreateDesktopNotificationDestinationInput {
+  deviceId: string;
+  label?: string;
+  platform?: string;
+  userAgent?: string;
+}
+
+export interface DesktopNotificationEnrollment {
+  destination: DesktopNotificationDestinationRecord;
+  credential: string;
+  serverInstanceId: string;
 }
 
 export interface PushPayload {
