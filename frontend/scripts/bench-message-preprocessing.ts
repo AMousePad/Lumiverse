@@ -1,5 +1,6 @@
 import { JSDOM } from 'jsdom'
 import { loadBenchmarkFunction, measureBenchmarkFixture } from './benchmark-source'
+import { mapOutsideJsonBlocks } from '../src/lib/jsonBlocks'
 
 // Usage: bun scripts/bench-message-preprocessing.ts [git-ref|-] [target]
 const ref = process.argv[2] === '-' ? undefined : process.argv[2]
@@ -7,6 +8,7 @@ const target = process.argv[3]
 const path = 'frontend/src/components/chat/MessageContent.tsx'
 const dom = new JSDOM('', { url: 'https://lumiverse.test/' })
 const globals = {
+  mapOutsideJsonBlocks,
   DOMParser: dom.window.DOMParser,
   window: dom.window,
   i18n: { t: () => 'Video' },
@@ -33,6 +35,24 @@ const cases = {
       lateLoading: (n: number) => '<img '.repeat(n) + 'loading=eager>',
       completeImages: (n: number) => '<img src="/image.png">'.repeat(n),
       loadedImages: (n: number) => '<img src="/image.png" loading=eager>'.repeat(n),
+    },
+  },
+  healingFences: {
+    path: 'frontend/src/lib/formatHealing.ts',
+    functionName: 'healFormattingArtifacts', normal: 'Before " spaced ".\n~~~lang\n" protected "\n~~~\nAfter " spaced ".',
+    fixtures: {
+      missingCloses: (n: number) => '```lang\nx\n'.repeat(n),
+      completeFences: (n: number) => '~~~lang\n" protected "\n~~~\n'.repeat(n),
+      longOpeningRun: (n: number) => '~'.repeat(n) + 'lang\nx\n~~~\n',
+    },
+  },
+  healingInline: {
+    path: 'frontend/src/lib/formatHealing.ts',
+    functionName: 'healFormattingArtifacts', normal: 'Before " spaced ". `" protected "` After " spaced ".',
+    fixtures: {
+      longOpeningRun: (n: number) => '`'.repeat(n) + 'x'.repeat(n),
+      completeSpans: (n: number) => 'Before `code` then " spaced ". '.repeat(n),
+      shortClosers: (n: number) => '`'.repeat(n) + ('x`').repeat(n),
     },
   },
   dialogue: {
