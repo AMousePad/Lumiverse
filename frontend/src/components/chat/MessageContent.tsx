@@ -5,6 +5,7 @@ import { marked } from 'marked'
 import { highlightCode } from '@/lib/codeHighlight'
 import { ISLAND_BLANK_LINE_RE, processMarkdownInHtmlIsland } from './htmlIslandMarkdown'
 import { resolveGalleryImageId, resolveGalleryImageSourcesInHtml } from '@/lib/galleryImageReference'
+import { replaceHtmlImageSources } from '@/lib/htmlImageSources'
 import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
@@ -1524,12 +1525,6 @@ function TrustedYouTubeEmbed({ embed }: { embed: TrustedYouTubeEmbed }) {
 // Risu <img="AssetName"> tag pattern — resolved at display time using character's asset map
 const RISU_IMG_TAG_RE = /<img="([^"]+)">/gi
 
-// Standard <img src="AssetName"> where src is a relative asset reference (not a URL)
-const IMG_SRC_ASSET_RE = /<img\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>/gi
-
-// Markdown ![alt](src) where src is a relative asset reference (not a URL)
-const MARKDOWN_IMG_RE = /!\[([^\]]*)\]\(([^)]+)\)/g
-
 /** Strip path prefix and file extension to get the asset stem. */
 function assetStem(name: string): string {
   const base = name.split('/').pop() || name
@@ -1561,13 +1556,12 @@ function resolveRisuAssetTags(text: string, assetMap: Record<string, string>): s
  *  Unresolved asset refs are converted to markdown images so they go through the same
  *  custom renderer (proseImageWrap, lightbox) as Risu <img="..."> tags.
  *  Already-resolved URLs (absolute paths, http, data:) are left as raw HTML. */
-function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>): string {
+export function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>): string {
   // Gallery sources retain their original HTML tag so display-regex styling
   // and wrapper behavior survive. Other legacy asset references continue to
   // use the standard Markdown image renderer below.
   text = resolveGalleryImageSourcesInHtml(text, assetMap)
-  IMG_SRC_ASSET_RE.lastIndex = 0
-  return text.replace(IMG_SRC_ASSET_RE, (match, before: string, src: string, after: string) => {
+  return replaceHtmlImageSources(text, 'asset', (match, _before, _quote, src) => {
     // Skip already-resolved URLs — these are valid img tags that should render as-is
     if (/^(?:https?:\/\/|\/|data:)/i.test(src)) return match
     const imageId = resolveAssetId(src, assetMap)
@@ -1583,18 +1577,30 @@ function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>):
  *  Handles the common AI-generated pattern of referencing Risu assets by relative
  *  filename (including extensions like .webp/.png/.jpg). Already-resolved URLs are
  *  left as-is. Strips a trailing markdown title ("...") before lookup. */
-function resolveMarkdownImgTags(text: string, assetMap: Record<string, string>): string {
-  if (!text.includes('![')) return text
-  MARKDOWN_IMG_RE.lastIndex = 0
-  return text.replace(MARKDOWN_IMG_RE, (match, alt: string, rawSrc: string) => {
-    // Strip trailing markdown title: ![alt](src "title") → src
-    const src = rawSrc.trim().replace(/\s+["'][^"']*["']\s*$/, '').trim()
-    if (!src) return match
-    if (/^(?:https?:\/\/|\/|data:)/i.test(src)) return match
-    const imageId = resolveAssetId(src, assetMap)
-    if (imageId) return `![${alt}](/api/v1/images/${imageId})`
-    return match
-  })
+export function resolveMarkdownImgTags(text: string, assetMap: Record<string, string>): string {
+  let copied = 0
+  let cursor = 0
+  const output: string[] = []
+  while ((cursor = text.indexOf('![', cursor)) !== -1) {
+    const labelEnd = text.indexOf(']', cursor + 2)
+    if (labelEnd === -1) break
+    if (text[labelEnd + 1] !== '(') { cursor = labelEnd + 1; continue }
+    const sourceEnd = text.indexOf(')', labelEnd + 2)
+    if (sourceEnd === -1) break
+    if (sourceEnd === labelEnd + 2) { cursor = labelEnd + 1; continue }
+    const rawSrc = text.slice(labelEnd + 2, sourceEnd)
+    const src = rawSrc.trim().replace(/(?<!\s)\s+["'][^"']*["']\s*$/, '').trim()
+    if (src && !/^(?:https?:\/\/|\/|data:)/i.test(src)) {
+      const imageId = resolveAssetId(src, assetMap)
+      if (imageId) {
+        const alt = text.slice(cursor + 2, labelEnd)
+        output.push(text.slice(copied, cursor), `![${alt}](/api/v1/images/${imageId})`)
+        copied = sourceEnd + 1
+      }
+    }
+    cursor = sourceEnd + 1
+  }
+  return output.length ? output.join('') + text.slice(copied) : text
 }
 
 export default function MessageContent({

@@ -735,3 +735,84 @@ describe('Dialogue measurement quotes', () => {
     expect(inspectedLength).toBeLessThan(raw.length * 4)
   })
 })
+
+describe('HTML image asset resolution', () => {
+  test.each([
+    ['<img src="first" src="last">', '\n\n![last](/api/v1/images/last-id)\n\n'],
+    ['<img src="first" src="https://example.com/image.png">', '<img src="first" src="https://example.com/image.png">'],
+    ['<img src="/image.png"><img src="data:image/png;base64,x">', '<img src="/image.png"><img src="data:image/png;base64,x">'],
+    ['<img src="missing" class="unchanged">', '<img src="missing" class="unchanged">'],
+    ['<img src="folder/portrait.webp">', '\n\n![folder/portrait.webp](/api/v1/images/portrait-id)\n\n'],
+    ['<img src="first\'>', '\n\n![first](/api/v1/images/first-id)\n\n'],
+    ['<img src="a>b">', '\n\n![a>b](/api/v1/images/greater-id)\n\n'],
+    ['<img src="first" src="later>value"', '\n\n![first](/api/v1/images/first-id)\n\nvalue"'],
+    ['<img src="first src="last">', '\n\n![last](/api/v1/images/last-id)\n\n'],
+  ])('preserves asset selection and surrounding text for %s', async (raw, expected) => {
+    const { resolveImgSrcAssetTags } = await import('./MessageContent')
+    expect(resolveImgSrcAssetTags(raw, { first: 'first-id', last: 'last-id', portrait: 'portrait-id', 'a>b': 'greater-id' })).toBe(expected)
+  })
+
+  test('uses the supplied asset map for every resolution', async () => {
+    const { resolveImgSrcAssetTags } = await import('./MessageContent')
+    const raw = '<img src="portrait">'
+    expect(resolveImgSrcAssetTags(raw, { portrait: 'first-chat' })).toContain('/api/v1/images/first-chat')
+    expect(resolveImgSrcAssetTags(raw, { portrait: 'second-chat' })).toContain('/api/v1/images/second-chat')
+    expect(resolveImgSrcAssetTags(raw, {})).toBe(raw)
+  })
+
+  test('preserves unfinished images and later complete images', async () => {
+    const { resolveImgSrcAssetTags } = await import('./MessageContent')
+    const raw = '<img '.repeat(512) + 'src="a" '.repeat(512)
+    expect(resolveImgSrcAssetTags(raw, { a: 'image-id' })).toBe(raw)
+    expect(resolveImgSrcAssetTags(raw + '>tail<img src="a">', { a: 'image-id' })).toBe(
+      '\n\n![a](/api/v1/images/image-id)\n\ntail\n\n![a](/api/v1/images/image-id)\n\n',
+    )
+  })
+})
+
+describe('Markdown image asset boundaries', () => {
+  test.each([
+    ['![a](portrait)', '![a](/api/v1/images/image-id)'],
+    ['![![nested](portrait)', '![![nested](/api/v1/images/image-id)'],
+    ['![]() ![a](portrait)', '![]() ![a](/api/v1/images/image-id)'],
+    ['![a] x ![b](portrait)', '![a] x ![b](/api/v1/images/image-id)'],
+    ['![a](missing) ![b](portrait)', '![a](missing) ![b](/api/v1/images/image-id)'],
+    ['![a](https://example.com/x) ![b](/x) ![c](data:x)', '![a](https://example.com/x) ![b](/x) ![c](data:x)'],
+    ['![a](portrait', '![a](portrait'],
+    ['![a](portrait "title")', '![a](/api/v1/images/image-id)'],
+  ])('preserves Markdown resolution for %s', async (raw, expected) => {
+    const { resolveMarkdownImgTags } = await import('./MessageContent')
+    expect(resolveMarkdownImgTags(raw, { portrait: 'image-id' })).toBe(expected)
+  })
+
+  test('keeps incomplete labels literal and still resolves a later complete image', async () => {
+    const { resolveMarkdownImgTags } = await import('./MessageContent')
+    const prefix = '!['.repeat(4096)
+    expect(resolveMarkdownImgTags(prefix, { portrait: 'image-id' })).toBe(prefix)
+    expect(resolveMarkdownImgTags(prefix + '] ordinary ![a](portrait)', { portrait: 'image-id' })).toBe(prefix + '] ordinary ![a](/api/v1/images/image-id)')
+    expect(resolveMarkdownImgTags('![a](portrait)', {})).toBe('![a](portrait)')
+  })
+})
+
+describe('Markdown image title whitespace', () => {
+  test.each([
+    ['![a](portrait "title")', '![a](/api/v1/images/image-id)'],
+    ["![a](portrait \t'title')", '![a](/api/v1/images/image-id)'],
+    ['![a](portrait "title\')', '![a](/api/v1/images/image-id)'],
+    ['![a](portrait "")', '![a](/api/v1/images/image-id)'],
+    ['![a](portrait "unfinished)', '![a](portrait "unfinished)'],
+    ['![a](portrait "a"b")', '![a](portrait "a"b")'],
+    ['![a](portrait"title")', '![a](portrait"title")'],
+    ['![a](  portrait  )', '![a](/api/v1/images/image-id)'],
+  ])('preserves title handling for %s', async (raw, expected) => {
+    const { resolveMarkdownImgTags } = await import('./MessageContent')
+    expect(resolveMarkdownImgTags(raw, { portrait: 'image-id' })).toBe(expected)
+  })
+
+  test('leaves long whitespace runs without a title unchanged', async () => {
+    const { resolveMarkdownImgTags } = await import('./MessageContent')
+    const raw = '![a](portrait' + ' '.repeat(8192) + 'x)'
+    expect(resolveMarkdownImgTags(raw, { portrait: 'image-id' })).toBe(raw)
+    expect(resolveMarkdownImgTags('![a](portrait' + ' '.repeat(8192) + '"title")', { portrait: 'image-id' })).toBe('![a](/api/v1/images/image-id)')
+  })
+})
