@@ -51,6 +51,26 @@ export function currentDesktopPlatform(): DesktopPlatform {
   }
 }
 
+/** Platform-native Rust installation instructions printed by the doctor. */
+export function rustInstallRemedy(target: DesktopPlatform = currentDesktopPlatform()): string[] {
+  if (target === "windows") {
+    return [
+      "Run these PowerShell commands to install Rust:",
+      "  $cpu = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }",
+      "  $arch = if ($cpu -eq 'ARM64') { 'aarch64' } elseif ([Environment]::Is64BitOperatingSystem) { 'x86_64' } else { 'i686' }",
+      "  $rustup = Join-Path $env:TEMP 'rustup-init.exe'",
+      "  Invoke-WebRequest \"https://win.rustup.rs/$arch\" -UseBasicParsing -OutFile $rustup",
+      "  & $rustup",
+      "After rustup finishes, rerun .\\start.ps1 -InstallDesktop.",
+    ];
+  }
+
+  return [
+    "Install the Rust toolchain:",
+    "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",
+  ];
+}
+
 interface ProbeResult {
   ok: boolean;
   out: string;
@@ -111,19 +131,15 @@ function checkBun(): ToolchainCheck {
  * different PATHs, so fall back to the standard rustup location the same way
  * the tray's own bun lookup does.
  */
-async function checkCargo(): Promise<ToolchainCheck> {
-  const remedy = [
-    "Install the Rust toolchain:",
-    "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",
-    "  (Windows: download rustup-init.exe from https://rustup.rs)",
-  ];
+async function checkCargo(target: DesktopPlatform): Promise<ToolchainCheck> {
+  const remedy = rustInstallRemedy(target);
 
   const onPath = await probe(["cargo", "--version"]);
   if (onPath.ok) {
     return { id: "cargo", label: "Rust (cargo)", status: "ok", detail: onPath.out, remedy: [] };
   }
 
-  const fallback = join(homedir(), ".cargo", "bin", platform() === "win32" ? "cargo.exe" : "cargo");
+  const fallback = join(homedir(), ".cargo", "bin", target === "windows" ? "cargo.exe" : "cargo");
   if (existsSync(fallback)) {
     const direct = await probe([fallback, "--version"]);
     if (direct.ok) {
@@ -237,7 +253,7 @@ function checkWindowsPrerequisites(): ToolchainCheck[] {
 
 export async function inspectDesktopToolchain(): Promise<DesktopToolchainReport> {
   const target = currentDesktopPlatform();
-  const checks: ToolchainCheck[] = [checkBun(), await checkCargo()];
+  const checks: ToolchainCheck[] = [checkBun(), await checkCargo(target)];
 
   switch (target) {
     case "macos":

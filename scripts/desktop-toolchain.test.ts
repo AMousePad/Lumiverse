@@ -4,6 +4,7 @@ import {
   inspectDesktopToolchain,
   meetsVersion,
   MIN_BUN_VERSION,
+  rustInstallRemedy,
 } from "./desktop-toolchain";
 
 describe("meetsVersion", () => {
@@ -37,6 +38,25 @@ describe("meetsVersion", () => {
   test("treats unparseable parts as zero rather than throwing", () => {
     expect(meetsVersion("1.4.0-canary", "1.4.0")).toBe(true);
     expect(() => meetsVersion("", "1.4.0")).not.toThrow();
+  });
+});
+
+describe("rustInstallRemedy", () => {
+  test("prints runnable PowerShell commands on native Windows", () => {
+    const remedy = rustInstallRemedy("windows").join("\n");
+    expect(remedy).toContain("Invoke-WebRequest");
+    expect(remedy).toContain("& $rustup");
+    expect(remedy).toContain("win.rustup.rs/$arch");
+    expect(remedy).not.toContain("| sh");
+    expect(remedy).not.toContain("download rustup-init.exe");
+  });
+
+  test("keeps the rustup shell command on Unix platforms", () => {
+    for (const target of ["macos", "linux"] as const) {
+      const remedy = rustInstallRemedy(target).join("\n");
+      expect(remedy).toContain("https://sh.rustup.rs | sh");
+      expect(remedy).not.toContain("Invoke-WebRequest");
+    }
   });
 });
 
