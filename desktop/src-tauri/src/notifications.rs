@@ -800,7 +800,7 @@ async fn prepare_notification_media(
 }
 
 fn show_desktop_notification(
-    app: AppHandle,
+    _app: AppHandle,
     payload: DesktopNotificationPayload,
     media_path: Option<PathBuf>,
 ) -> Result<(), String> {
@@ -809,7 +809,7 @@ fn show_desktop_notification(
     let body = payload.body.trim();
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    let identifier = app.config().identifier.clone();
+    let identifier = _app.config().identifier.clone();
     #[cfg(target_os = "macos")]
     {
         let _ = notify_rust::set_application(if tauri::is_dev() {
