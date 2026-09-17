@@ -1,5 +1,74 @@
-const FENCED_CODE_RE = /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g
-const INLINE_CODE_RE = /(`+)([\s\S]*?)\1/g
+function getFencedCodeRanges(text: string): Array<[number, number]> {
+  if (!text.includes('```') && !text.includes('~~~')) return []
+  const lines = text.split('\n')
+  type ClosingLines = { lines: Array<{ line: number; end: number }>; next: number }
+  const closers = [new Map<number, ClosingLines>(), new Map<number, ClosingLines>()]
+  const openers: Array<{ line: number; start: number; marker: number; length: number }> = []
+  let offset = 0
+  for (let line = 0; line < lines.length; line++) {
+    const match = /^(`{3,}|~{3,})/.exec(lines[line])
+    if (match) {
+      const length = match[0].length
+      const marker = match[0][0] === '`' ? 0 : 1
+      if (lines[line].length === length) {
+        let group = closers[marker].get(length)
+        if (!group) {
+          group = { lines: [], next: 0 }
+          closers[marker].set(length, group)
+        }
+        group.lines.push({ line, end: offset + length })
+      }
+      if (line + 1 < lines.length) openers.push({ line, start: offset === 0 ? 0 : offset - 1, marker, length })
+    }
+    offset += lines[line].length + 1
+  }
+  const ranges: Array<[number, number]> = []
+  let consumed = 0
+  for (const open of openers) {
+    if (open.start < consumed) continue
+    // The old greedy opener prefers the longest matching run before choosing its earliest close.
+    for (let length = open.length; length >= 3; length--) {
+      const group = closers[open.marker].get(length)
+      if (!group) continue
+      while (group.next < group.lines.length && group.lines[group.next].line < open.line + 2) group.next++
+      const close = group.lines[group.next]
+      if (!close) continue
+      ranges.push([open.start, close.end])
+      consumed = close.end
+      break
+    }
+  }
+  return ranges
+}
+
+function getInlineCodeRanges(text: string): Array<[number, number]> {
+  const runs = Array.from(text.matchAll(/`+/g), match => ({
+    start: match.index!, end: match.index! + match[0].length, longestAfter: 0,
+  }))
+  let longest = 0
+  for (let index = runs.length - 1; index >= 0; index--) {
+    runs[index].longestAfter = longest
+    longest = Math.max(longest, runs[index].end - runs[index].start)
+  }
+  const ranges: Array<[number, number]> = []
+  for (let index = 0; index < runs.length;) {
+    const open = runs[index]
+    const start = open.start
+    const length = open.end - start
+    // Match the longest opener that can close, including inside its own run.
+    const marker = Math.max(Math.floor(length / 2), Math.min(length, open.longestAfter))
+    if (!marker) break
+    let end = start + marker * 2
+    if (end > open.end) {
+      do { index++ } while (runs[index].end - runs[index].start < marker)
+      end = runs[index].start + marker
+    }
+    ranges.push([start, end])
+    if (end === runs[index].end) index++
+    else runs[index].start = end
+  }
+  return ranges
+}
 const FONT_QUOTE_EDGE_RE = /(<font\b[^>]*>)(["“”«»])([\s\S]*?)(<\/font>)(["“”«»])/gi
 const COLOR_SPAN_QUOTE_EDGE_RE = /(<span\b[^>]*\bstyle\s*=\s*["'][^"']*\bcolor\s*:[^"']*["'][^>]*>)(["“”«»])([\s\S]*?)(<\/span>)(["“”«»])/gi
 const FONT_TAG_RE = /<\/?font\b[^>]*>/gi
@@ -184,15 +253,14 @@ function healUnshieldedSegment(text: string): string {
  * Keeping protected content out of the working string avoids temporary marker
  * tokens leaking into user content when an intermediate string is normalized.
  */
-function healAroundMatches(text: string, pattern: RegExp): string {
+function healAroundInlineCode(text: string): string {
   let healed = ''
   let cursor = 0
 
-  for (const match of text.matchAll(pattern)) {
-    const index = match.index!
-    healed += healUnshieldedSegment(text.slice(cursor, index))
-    healed += match[0]
-    cursor = index + match[0].length
+  for (const [start, end] of getInlineCodeRanges(text)) {
+    healed += healUnshieldedSegment(text.slice(cursor, start))
+    healed += text.slice(start, end)
+    cursor = end
   }
 
   return healed + healUnshieldedSegment(text.slice(cursor))
@@ -205,11 +273,10 @@ export function healFormattingArtifacts(text: string): string {
   // backticks. Inline spans are then protected in each prose segment.
   let healed = ''
   let cursor = 0
-  for (const match of text.matchAll(FENCED_CODE_RE)) {
-    const index = match.index!
-    healed += healAroundMatches(text.slice(cursor, index), INLINE_CODE_RE)
-    healed += match[0]
-    cursor = index + match[0].length
+  for (const [start, end] of getFencedCodeRanges(text)) {
+    healed += healAroundInlineCode(text.slice(cursor, start))
+    healed += text.slice(start, end)
+    cursor = end
   }
-  return healed + healAroundMatches(text.slice(cursor), INLINE_CODE_RE)
+  return healed + healAroundInlineCode(text.slice(cursor))
 }
