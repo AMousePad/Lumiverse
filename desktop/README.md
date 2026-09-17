@@ -163,5 +163,30 @@ bun run tauri build
 
 Bundles land in `desktop/src-tauri/target/release/bundle/` (`.app`/`.dmg`
 on macOS, `.msi`/`.exe` installers on Windows, and Linux packages such as
-`.deb`, `.rpm`, or `.AppImage` when built on Linux). Builds are unsigned;
-signing/notarization is left to release infrastructure.
+`.deb`, `.rpm`, or `.AppImage` when built on Linux).
+
+## Automated releases
+
+Installers are built for Windows x64 (`.exe`/`.msi`), Linux x64
+(`.AppImage`/`.deb`, built on Ubuntu 22.04), and separate macOS Apple Silicon
+and Intel (`.dmg`).
+
+- **`desktop-build.yml` — version-bump builds.** Pushes to any branch other
+  than `main` trigger a build only when `desktop/package.json` or
+  `src-tauri/tauri.conf.json` changed. Results are downloadable workflow
+  artifacts; no release is created. Manual dispatch works the same way.
+- **`desktop-release.yml` — staging → main merges.** Merging a `staging` PR
+  that touches `desktop/**` into `main` builds fresh installers from the merge
+  commit and attaches them to a `desktop-v<version>` release on GitHub,
+  creating it if missing and pinning it to the merge commit. Reruns replace
+  matching assets; if any platform build fails, nothing is attached.
+- Desktop versioning is independent of server release tags. Keep
+  `desktop/package.json`, `src-tauri/Cargo.toml`, the app entry in
+  `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` in sync when bumping.
+
+## License
+
+Lumiverse Desktop is covered by the project's
+[Lumiverse Community License 2.1](../LICENSE.md). Cargo and the installer
+configuration reference that canonical file; desktop bundles include it as
+`LICENSE.md`. Third-party dependencies retain their own licenses.

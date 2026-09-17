@@ -1,0 +1,82 @@
+name: Build Desktop
+
+# Builds installers as downloadable workflow artifacts whenever the desktop
+# manifests change on a non-main branch — version bumps included. Releases are
+# handled separately by desktop-release.yml on staging→main merges.
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - "desktop/package.json"
+      - "desktop/src-tauri/tauri.conf.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Desktop (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+          - os: macos-15
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf xdg-utils
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Build desktop installers
+        uses: tauri-apps/tauri-action@v1
+        env:
+          # Ad-hoc signing needs no Apple certificate, but is NOT notarization.
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+          # Let AppImage packaging run without a FUSE mount in hosted CI.
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        with:
+          projectPath: desktop
+          tauriScript: bun run tauri
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --ci -- --locked
+          uploadUpdaterJson: false
+          uploadUpdaterSignatures: false
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: desktop-[platform]-[arch]-[bundle]
