@@ -125,6 +125,19 @@ startup failures.
 
 ## Build
 
+For a normal user-local install from the repository root, use:
+
+```bash
+./start.sh --install-desktop
+```
+
+On Windows, run `.\start.ps1 -InstallDesktop` instead. The launcher checks the
+native toolchain, builds the Tauri bundle, installs it for the current user,
+and creates the platform launcher plus a desktop shortcut when that folder is
+available. `--desktop` and `-Desktop` are shorter aliases.
+
+To build bundles without installing them:
+
 ```bash
 cd desktop
 bun install

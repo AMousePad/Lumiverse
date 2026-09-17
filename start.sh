@@ -14,6 +14,7 @@ set -euo pipefail
 #   ./start.sh --edit-env       Edit the .env configuration file in a terminal editor
 #   ./start.sh -m|--migrate-st  Run SillyTavern migration helper
 #   ./start.sh -k|--kill-pkgs   Nuke lockfiles + node_modules, reinstall backend deps
+#   ./start.sh --install-desktop  Build/install Tauri desktop app and create launcher shortcuts
 #   ./start.sh --no-runner      Start without the visual runner
 #   ./start.sh --safe-theme     Suppress custom CSS/component overrides for recovery
 #   ./start.sh --upgrade-bun    Upgrade Bun to the latest stable release before running
@@ -177,7 +178,7 @@ verify_termux_bun_install_path() {
 
 # ─── Parse arguments ─────────────────────────────────────────────────────────
 
-MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | edit-env | migrate-st | kill-pkgs
+MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | edit-env | migrate-st | kill-pkgs | install-desktop
 USE_RUNNER=true
 FORCE_BUILD=false
 AUTO_OPEN=false
@@ -196,12 +197,13 @@ for arg in "$@"; do
     --edit-env)     MODE="edit-env" ;;
     --migrate-st|-m) MODE="migrate-st" ;;
     --kill-pkgs|-k) MODE="kill-pkgs" ;;
+    --install-desktop|--desktop) MODE="install-desktop" ;;
     --no-runner)    USE_RUNNER=false ;;
     --safe-theme)   SAFE_THEME=true ;;
     --upgrade-bun)        BUN_UPGRADE_CHANNEL="stable" ;;
     --upgrade-bun-canary) BUN_UPGRADE_CHANNEL="canary" ;;
     --help|-h)
-      sed -n '3,19p' "$0" | sed 's/^# *//'
+      sed -n '3,21p' "$0" | sed 's/^# *//'
       exit 0
       ;;
     *) err "Unknown argument: $arg"; exit 1 ;;
@@ -998,5 +1000,8 @@ case "$MODE" in
     ;;
   kill-pkgs)
     kill_pkgs
+    ;;
+  install-desktop)
+    (cd "$BACKEND_DIR" && _bun run desktop:install)
     ;;
 esac

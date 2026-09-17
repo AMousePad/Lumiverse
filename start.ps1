@@ -17,6 +17,7 @@
     edit-env        - Edit the .env file ($env:VISUAL/$env:EDITOR, else Notepad)
     migrate-st      - Run SillyTavern migration helper
     kill-pkgs       - Nuke lockfiles + node_modules, reinstall backend deps
+    install-desktop - Build/install Tauri desktop app and create launcher shortcuts
 
 .PARAMETER Build
     Rebuild the frontend before starting the backend
@@ -26,6 +27,9 @@
 
 .PARAMETER EditEnv
     Open the .env file in an editor ($env:VISUAL/$env:EDITOR if set, else Notepad)
+
+.PARAMETER InstallDesktop
+    Build and install the Tauri desktop app for the current user
 
 .PARAMETER FrontendPath
     Path to frontend directory (default: ./frontend)
@@ -47,7 +51,7 @@
 #>
 
 param(
-    [ValidateSet("all", "build-only", "backend-only", "dev", "setup", "reset-password", "edit-env", "migrate-st", "kill-pkgs")]
+    [ValidateSet("all", "build-only", "backend-only", "dev", "setup", "reset-password", "edit-env", "migrate-st", "kill-pkgs", "install-desktop")]
     [string]$Mode = "all",
 
     [Alias("b")]
@@ -66,6 +70,9 @@ param(
     [switch]$KillPkgs,
 
     [switch]$EditEnv,
+
+    [Alias("Desktop")]
+    [switch]$InstallDesktop,
 
     [switch]$UpgradeBun,
 
@@ -509,6 +516,7 @@ Ensure-MinimumBunVersion
 if ($MigrateST) { $Mode = "migrate-st" }
 if ($KillPkgs)  { $Mode = "kill-pkgs" }
 if ($EditEnv)   { $Mode = "edit-env" }
+if ($InstallDesktop) { $Mode = "install-desktop" }
 
 switch ($Mode) {
     "all" {
@@ -543,5 +551,12 @@ switch ($Mode) {
     }
     "kill-pkgs" {
         Invoke-KillPkgs
+    }
+    "install-desktop" {
+        Push-Location $BackendDir
+        try {
+            & bun run desktop:install
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        } finally { Pop-Location }
     }
 }

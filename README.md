@@ -219,6 +219,7 @@ On Linux, disk access and installation normally require local administrator perm
 | `./start.sh --backend-only` | `.\start.ps1 -Mode backend-only` | Start the backend only, skip frontend serving |
 | `./start.sh --dev` | `.\start.ps1 -Mode dev` | Start the backend in watch mode |
 | `./start.sh --setup` | `.\start.ps1 -Mode setup` | Run the setup wizard only |
+| `./start.sh --install-desktop` | `.\start.ps1 -InstallDesktop` | Build and install the Tauri desktop app, including launcher shortcuts |
 | `./start.sh --no-runner` | `.\start.ps1 -NoRunner` | Start directly without runner IPC or Operator Panel control hooks |
 
 ### Runner & Operator Panel
@@ -248,9 +249,13 @@ with Lumiverse's integrated browser as its primary interface and a macOS menu
 bar / Windows system tray / Linux StatusNotifier icon for controls. It starts
 and stops a local server, shows serving stats, opens the same address in your
 default browser on request, and applies updates through the runner. See
-[desktop/README.md](desktop/README.md) for build instructions. There is no
-prebuilt download — run `bun run desktop:doctor` to check whether this machine
-can build it.
+[desktop/README.md](desktop/README.md) for development instructions. There is
+no prebuilt download; use `./start.sh --install-desktop` on macOS/Linux or
+`.\start.ps1 -InstallDesktop` on Windows to check prerequisites, build it, and
+set up its application launcher plus a desktop shortcut when that folder is
+available. The shorter
+`--desktop`/`-Desktop` aliases are also accepted. Run `bun run desktop:doctor`
+to check the build toolchain without installing anything.
 
 ## Configuration
 
