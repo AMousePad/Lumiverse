@@ -1288,7 +1288,7 @@ export default function ChatView() {
               findTarget={chatFindTarget}
               findQuery={chatFindQuery}
             />
-            <ScrollToBottom />
+            <ScrollToBottom key={chatId} displayReady={!chatChromeEntering} />
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
             <div data-spindle-mount="chat_bottom_dock" data-spindle-scope={`chat:${chatId}:bottom-dock`} data-dock-request="strip" />
