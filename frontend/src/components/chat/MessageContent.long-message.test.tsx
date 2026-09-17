@@ -555,3 +555,14 @@ describe('MessageContent image reuse', () => {
     })
   }
 })
+
+describe('MessageContent island whitespace', () => {
+  test.each([' ', '\t', '\u00a0', '\u2028'])('preserves whitespace in block and inline island text: %j', async (gap) => {
+    const text = ' \ta' + gap.repeat(128) + 'b\t '
+    const content = `<div><style>.text{white-space:pre-wrap}</style><div class="block text">${text}</div><span class="inline text">${text}</span></div>`
+    await act(async () => { root?.render(<MessageContent content={content} isUser={false} userName="User" disableInterceptors />) })
+    const island = host.querySelector('[data-lumiverse-html-island]')?.shadowRoot
+    expect(island?.querySelector('.block')?.textContent).toBe(text)
+    expect(island?.querySelector('.inline')?.textContent).toBe(text)
+  })
+})
