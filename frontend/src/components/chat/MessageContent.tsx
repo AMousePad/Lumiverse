@@ -1295,6 +1295,23 @@ function replaceHtmlPreservingImages(root: HTMLElement | ShadowRoot, html: strin
     if (!src) continue
     const preserved = stableImgs.get(src)
     if (preserved && newImg.parentNode) {
+      // Reuse the decoded image, but keep the current render's layout and metadata.
+      if (!preserved.isEqualNode(newImg)) {
+        const oldAttributes = preserved.attributes
+        for (let i = oldAttributes.length - 1; i >= 0; i--) {
+          const attribute = oldAttributes[i]
+          const value = newImg.getAttribute(attribute.name)
+          if (value === null) preserved.removeAttribute(attribute.name)
+          else if (attribute.value !== value) attribute.value = value
+        }
+        const newAttributes = newImg.attributes
+        if (oldAttributes.length !== newAttributes.length) {
+          for (let i = 0; i < newAttributes.length; i++) {
+            const { name, value } = newAttributes[i]
+            if (!preserved.hasAttribute(name)) preserved.setAttribute(name, value)
+          }
+        }
+      }
       newImg.replaceWith(preserved)
       stableImgs.delete(src)
     }

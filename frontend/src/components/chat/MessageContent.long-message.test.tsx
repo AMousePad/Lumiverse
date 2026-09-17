@@ -482,3 +482,76 @@ describe('MessageContent long-message collapsing', () => {
     expect(host.querySelector('[data-long-message-toggle]')).toBeNull()
   })
 })
+
+describe('MessageContent image reuse', () => {
+  for (const island of [false, true]) {
+    const imageRoot = () => island ? host.firstElementChild!.shadowRoot! : host
+    const render = async (html: string) => {
+      const { ProseHtml, IsolatedHtml } = await import('./MessageContent')
+      await act(async () => {
+        root?.render(island ? <IsolatedHtml html={html} isStreaming={false} /> : <ProseHtml html={html} />)
+      })
+    }
+    test(`skips unchanged image attributes when surrounding ${island ? 'island' : 'prose'} content changes`, async () => {
+      await render('<p>Before</p><img src="/scene.png" class="scene" alt="Scene" width="400">')
+      const original = imageRoot().querySelector('img')!
+      const readAttribute = original.getAttribute.bind(original)
+      const reads: string[] = []
+      original.getAttribute = name => {
+        reads.push(name)
+        return readAttribute(name)
+      }
+
+      await render('<p>After</p><img width="400" alt="Scene" class="scene" src="/scene.png">')
+      expect(imageRoot().querySelector('img')).toBe(original)
+      expect(imageRoot().querySelector('p')?.textContent).toBe('After')
+      expect(reads.filter(name => name !== 'src')).toEqual([])
+    })
+
+    test(`updates reused image attributes in ${island ? 'islands' : 'prose'}`, async () => {
+      await render('<img src="/scene.png" class="preview" style="height:20px" alt="Old" data-lightbox>')
+      const original = imageRoot().querySelector('img')!
+      const changes: MutationRecord[] = []
+      const attributes = new MutationObserver(records => changes.push(...records))
+      attributes.observe(original, { attributes: true })
+
+      await render('<div class="frame"><img src="/scene.png" class="scene" style="position:absolute;bottom:3%;height:60%" alt="New" width="400" data-role="background"></div>')
+      const updated = imageRoot().querySelector('img')!
+      expect(updated).toBe(original)
+      expect(updated.className).toBe('scene')
+      expect(updated.style.position).toBe('absolute')
+      expect(updated.style.bottom).toBe('3%')
+      expect(updated.style.height).toBe('60%')
+      expect(updated.alt).toBe('New')
+      expect(updated.getAttribute('width')).toBe('400')
+      expect(updated.getAttribute('data-role')).toBe('background')
+      expect(updated.hasAttribute('data-lightbox')).toBe(false)
+      changes.push(...attributes.takeRecords())
+      expect(changes.some(record => record.attributeName === 'class')).toBe(true)
+      expect(changes.some(record => record.attributeName === 'src')).toBe(false)
+      attributes.disconnect()
+
+      await render('<img src="/scene.png">')
+      expect(imageRoot().querySelector('img')).toBe(original)
+      expect(original.hasAttribute('class')).toBe(false)
+      expect(original.hasAttribute('style')).toBe(false)
+      expect(original.hasAttribute('width')).toBe(false)
+      expect(original.hasAttribute('data-role')).toBe(false)
+
+      await render('<img src="/other.png" class="other">')
+      expect(imageRoot().querySelector('img')).not.toBe(original)
+    })
+
+    test(`retains distinct attributes for repeated sources in ${island ? 'islands' : 'prose'}`, async () => {
+      await render('<img src="/sprite.png" class="idle"><img src="/sprite.png" class="hover">')
+      const original = imageRoot().querySelector('img')!
+      await render('<img src="/sprite.png" class="front"><img src="/sprite.png" class="back">')
+      const images = imageRoot().querySelectorAll('img')
+      expect(images).toHaveLength(2)
+      expect(images[0]).toBe(original)
+      expect(images[0]!.className).toBe('front')
+      expect(images[1]!.className).toBe('back')
+      expect(images[0]).not.toBe(images[1])
+    })
+  }
+})
