@@ -169,13 +169,13 @@ on macOS, `.msi`/`.exe` installers on Windows, and Linux packages such as
 
 Installers are built for Windows x64 (`.exe`/`.msi`), Windows ARM64
 (`.exe`, NSIS-only — WiX/MSI has no ARM64 support, cross-compiled on the x64
-Windows runner), Linux x64 (`.AppImage`/`.deb`, built on Ubuntu 22.04), and
-separate macOS Apple Silicon and Intel (`.dmg`).
+Windows runner), Linux x64 and ARM64 (`.AppImage`/`.deb`, built natively on
+Ubuntu 22.04), and separate macOS Apple Silicon and Intel (`.dmg`).
 
 - **`desktop-build.yml` — version-bump builds.** Pushes to any branch other
-  than `main` trigger a build only when `desktop/package.json` or
-  `src-tauri/tauri.conf.json` changed. Results are downloadable workflow
-  artifacts; no release is created. Manual dispatch works the same way.
+  than `main` trigger a build when a desktop version manifest or `Cargo.lock`
+  changes. Results are downloadable workflow artifacts; no release is created.
+  Manual dispatch works the same way.
 - **`desktop-release.yml` — staging → main merges.** Merging a `staging` PR
   that touches `desktop/**` into `main` builds fresh installers from the merge
   commit and attaches them to a `desktop-v<version>` release on GitHub,
@@ -184,6 +184,10 @@ separate macOS Apple Silicon and Intel (`.dmg`).
 - Desktop versioning is independent of server release tags. Keep
   `desktop/package.json`, `src-tauri/Cargo.toml`, the app entry in
   `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` in sync when bumping.
+  After changing the three manifest versions, run `bun run desktop:lock` from
+  the repository root and commit the resulting `Cargo.lock` change. CI checks
+  the locked dependency resolution and version agreement before starting any
+  platform builds.
 
 ## License
 

@@ -18,8 +18,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate desktop manifests
+    if: >-
+      github.event.pull_request.merged &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'staging'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify versions and Cargo.lock
+        run: |
+          cargo_version="$(cargo metadata --locked --no-deps --format-version 1 \
+            --manifest-path desktop/src-tauri/Cargo.toml \
+            | jq -r '.packages[] | select(.name == "lumiverse-tray") | .version')"
+          package_version="$(jq -r .version desktop/package.json)"
+          tauri_version="$(jq -r .version desktop/src-tauri/tauri.conf.json)"
+          if [[ "$cargo_version" != "$package_version" || "$cargo_version" != "$tauri_version" ]]; then
+            echo "::error::Desktop versions differ: Cargo.toml=$cargo_version, package.json=$package_version, tauri.conf.json=$tauri_version"
+            exit 1
+          fi
+
   build:
     name: Desktop (${{ matrix.target }})
+    needs: validate
     if: >-
       github.event.pull_request.merged &&
       github.event.pull_request.base.ref == 'main' &&
@@ -33,6 +60,10 @@ jobs:
             bundles: nsis,msi
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+          # AppImage cannot be cross-compiled, so build Linux ARM64 natively.
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
             bundles: appimage,deb
           - os: macos-15
             target: aarch64-apple-darwin
