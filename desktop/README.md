@@ -167,9 +167,10 @@ on macOS, `.msi`/`.exe` installers on Windows, and Linux packages such as
 
 ## Automated releases
 
-Installers are built for Windows x64 (`.exe`/`.msi`), Linux x64
-(`.AppImage`/`.deb`, built on Ubuntu 22.04), and separate macOS Apple Silicon
-and Intel (`.dmg`).
+Installers are built for Windows x64 (`.exe`/`.msi`), Windows ARM64
+(`.exe`, NSIS-only — WiX/MSI has no ARM64 support, cross-compiled on the x64
+Windows runner), Linux x64 (`.AppImage`/`.deb`, built on Ubuntu 22.04), and
+separate macOS Apple Silicon and Intel (`.dmg`).
 
 - **`desktop-build.yml` — version-bump builds.** Pushes to any branch other
   than `main` trigger a build only when `desktop/package.json` or

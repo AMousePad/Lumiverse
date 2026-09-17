@@ -40,6 +40,11 @@ jobs:
           - os: macos-15-intel
             target: x86_64-apple-darwin
             bundles: dmg
+          # ARM64 Windows: NSIS only — WiX/MSI has no ARM64 support.
+          # Cross-compiled on the x64 runner, the documented approach.
+          - os: windows-2022
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
