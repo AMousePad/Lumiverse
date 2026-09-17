@@ -146,7 +146,10 @@ async function updateFrontendMenuText(): Promise<void> {
 }
 
 function frontendUrl(): string {
-  return customFrontendUrl ?? `http://127.0.0.1:${port}`;
+  // Match BetterAuth's default AUTH_BASE_URL host. OAuth cookies are host
+  // scoped, so mixing 127.0.0.1 here with a localhost callback loses the
+  // newly-created SSO session when the provider returns.
+  return customFrontendUrl ?? `http://localhost:${port}`;
 }
 
 async function updateMenu(): Promise<void> {

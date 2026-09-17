@@ -26,6 +26,12 @@ export function isSafeBrowserNavigationTarget(rawUrl: unknown): rawUrl is string
   }
 }
 
+/** Allow the inert placeholder used to reserve an SSO popup during a user
+ * gesture without admitting other non-web schemes as navigation targets. */
+export function isSafeWindowOpenTarget(rawUrl: unknown): rawUrl is string {
+  return rawUrl === 'about:blank' || isSafeBrowserNavigationTarget(rawUrl)
+}
+
 export function getSafeInAppNavigationUrl(rawUrl: unknown, fallback: string = '/'): string {
   if (typeof rawUrl !== 'string') return fallback
 

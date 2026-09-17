@@ -1,6 +1,12 @@
 //! Frontend window — a native WebView loading the local Lumiverse server.
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
+};
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
@@ -96,6 +102,7 @@ const DEFAULT_WIDTH: u32 = 1200;
 const DEFAULT_HEIGHT: u32 = 800;
 const RESTORE_MARGIN: i32 = 24;
 const FRONTEND_STARTUP_APPEARANCE_FILE: &str = "frontend_startup_appearance.json";
+static NEXT_FRONTEND_POPUP_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
 pub struct FrontendState {
@@ -454,7 +461,10 @@ pub fn show_frontend(
     custom_url: Option<String>,
     state: State<'_, FrontendState>,
 ) -> Result<(), String> {
-    let target = custom_url.unwrap_or_else(|| format!("http://127.0.0.1:{port}"));
+    // BetterAuth's default callback origin is localhost. Keep the embedded
+    // frontend on that exact host so its host-scoped SSO cookie survives the
+    // provider callback (127.0.0.1 is a distinct cookie origin).
+    let target = custom_url.unwrap_or_else(|| format!("http://localhost:{port}"));
     let url: tauri::Url = target
         .parse()
         .map_err(|e| format!("Invalid Lumiverse frontend URL: {e}"))?;
@@ -498,6 +508,7 @@ pub fn show_frontend(
         let [red, green, blue] = startup_appearance.native_color;
         tauri::webview::Color(red, green, blue, 255)
     };
+    let popup_app = app.clone();
     let mut builder = WebviewWindowBuilder::new(&app, FRONTEND_LABEL, WebviewUrl::External(url))
         .title(FRONTEND_TITLE)
         .inner_size(DEFAULT_WIDTH as f64, DEFAULT_HEIGHT as f64)
@@ -520,6 +531,35 @@ pub fn show_frontend(
         // Install a lightweight titlebar/surface before the remote frontend's
         // bundle executes. It removes itself as soon as the app root mounts.
         .initialization_script(frontend_startup_shell_script(&startup_appearance))
+        // Wry denies window.open by default. SSO relies on a user-initiated
+        // about:blank popup so the provider does not replace the companion's
+        // main frontend. Reuse the opener's WebView configuration/environment;
+        // that keeps cookies and window.opener available for the completion
+        // page's authenticated handoff on macOS, Windows, and Linux.
+        .on_new_window(move |popup_url, features| {
+            if !matches!(popup_url.scheme(), "about" | "http" | "https") {
+                return tauri::webview::NewWindowResponse::Deny;
+            }
+
+            let popup_id = NEXT_FRONTEND_POPUP_ID.fetch_add(1, Ordering::Relaxed);
+            let label = format!("frontend-popup-{popup_id}");
+            let popup =
+                WebviewWindowBuilder::new(&popup_app, &label, WebviewUrl::External(popup_url))
+                    .title("Lumiverse Sign-In")
+                    .window_features(features)
+                    .on_document_title_changed(|window, title| {
+                        let _ = window.set_title(&title);
+                    })
+                    .build();
+
+            match popup {
+                Ok(window) => tauri::webview::NewWindowResponse::Create { window },
+                Err(error) => {
+                    eprintln!("[desktop-window] could not create frontend popup: {error}");
+                    tauri::webview::NewWindowResponse::Deny
+                }
+            }
+        })
         .visible(false);
 
     // Use the high-refresh WebView configuration where macOS supports it. The
