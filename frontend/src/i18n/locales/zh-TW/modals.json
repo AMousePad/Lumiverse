@@ -507,6 +507,8 @@
     "chatNamePlaceholder": "輸入聊天名稱…",
     "impersonationMode": "代寫模式",
     "impersonationModeHint": "選擇此聊天中輸入欄的代寫操作要組裝的內容。",
+    "useGlobalImpersonationMode": "使用全域預設值",
+    "useGlobalImpersonationModeHint": "目前為「{{mode}}」，可在設定 → 聊天中選擇。",
     "impersonationPreset": "代寫預設",
     "useMainPreset": "使用主預設",
     "connectionProfile": "連線設定檔",

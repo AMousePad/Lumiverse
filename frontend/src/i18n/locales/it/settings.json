@@ -373,6 +373,8 @@
     "enterToSendMobile": "Premi Invio per inviare su mobile",
     "saveDraft": "Salva bozza input",
     "saveDraftHint": "Salva automaticamente il tuo messaggio non inviato così da persistere attraverso i refresh della pagina e i cambi di chat",
+    "defaultImpersonationMode": "Modalità di impersonificazione predefinita",
+    "defaultImpersonationModeHint": "Usata dalle chat e dalle chat di gruppo che non impostano una modalità di impersonificazione specifica.",
     "portraitSide": "Lato pannello ritratto",
     "none": "Nessuno",
     "regenTitle": "Feedback rigenerazione",

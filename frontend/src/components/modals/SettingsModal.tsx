@@ -52,6 +52,7 @@ import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { webSearchApi, type WebSearchProviderProfile, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
 import type { DrawerSettings, GuidedGeneration, LongMessageCollapsePreset, QuickReplySet } from '@/types/store'
 import type { EmbeddingConfig, ChatMemorySettings, ChatSummary, Character, CharacterSummary } from '@/types/api'
+import type { ImpersonationPreference } from '@/lib/impersonationPreset'
 import type { WorldBookVectorPresetMode, WorldBookVectorSettings } from '@/types/world-book-vector-settings'
 import AccountSettings from '@/components/settings/AccountSettings'
 import UserManagement from '@/components/settings/UserManagement'
@@ -918,6 +919,7 @@ function CompletionSoundUploader({ disabled, current, onChange, onError, onSucce
 function ChatSettings() {
   const { t } = useTranslation('settings')
   const { t: tc } = useTranslation('common')
+  const { t: tChat } = useTranslation('chat', { keyPrefix: 'quickMenu' })
   const displayMode = useStore((s) => s.chatDisplayMode)
   const minimalUseFullAvatar = useStore((s) => s.minimalUseFullAvatar ?? false)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
@@ -927,6 +929,7 @@ function ChatSettings() {
   const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)
   const enterToSend = useStore((s) => s.inputBarEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
+  const defaultImpersonationMode = useStore((s) => s.defaultImpersonationMode)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
   const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
@@ -1200,6 +1203,20 @@ function ChatSettings() {
         label={t('chat.saveDraft')}
         hint={t('chat.saveDraftHint')}
       />
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>{t('chat.defaultImpersonationMode')}</label>
+        <select
+          className={styles.select}
+          value={defaultImpersonationMode}
+          onChange={(e) => setSetting('defaultImpersonationMode', e.target.value as ImpersonationPreference)}
+        >
+          <option value="prompts">{tChat('presetPrompts')}</option>
+          <option value="preset">{tChat('impersonationPreset')}</option>
+          <option value="oneliner">{tChat('oneLiner')}</option>
+        </select>
+        <span className={styles.helperText}>{t('chat.defaultImpersonationModeHint')}</span>
+      </div>
 
       <div className={styles.field}>
         <label className={styles.fieldLabel}>{t('chat.portraitSide')}</label>

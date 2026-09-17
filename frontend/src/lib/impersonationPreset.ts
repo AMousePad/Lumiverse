@@ -9,11 +9,21 @@ export interface ImpersonationPresetSelection {
   forcePresetId: boolean
 }
 
-/** Safely read the untyped per-chat metadata value. */
-export function resolveImpersonationMode(value: unknown): ImpersonationPreference {
+export function isImpersonationPreference(value: unknown): value is ImpersonationPreference {
   return value === 'prompts' || value === 'preset' || value === 'oneliner'
-    ? value
-    : DEFAULT_IMPERSONATION_MODE
+}
+
+/** Safely read a persisted mode, falling back to the supplied account default. */
+export function resolveImpersonationMode(
+  value: unknown,
+  fallback: ImpersonationPreference = DEFAULT_IMPERSONATION_MODE,
+): ImpersonationPreference {
+  return isImpersonationPreference(value) ? value : fallback
+}
+
+/** Preserve an unset per-chat value so it can continue inheriting the account default. */
+export function resolveImpersonationModeOverride(value: unknown): ImpersonationPreference | null {
+  return isImpersonationPreference(value) ? value : null
 }
 
 /**

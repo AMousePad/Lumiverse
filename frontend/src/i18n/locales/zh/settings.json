@@ -373,6 +373,8 @@
     "enterToSendMobile": "在移动端按 Enter 发送",
     "saveDraft": "保存草稿输入",
     "saveDraftHint": "自动保存未发送的消息，在刷新页面或切换聊天后仍可恢复",
+    "defaultImpersonationMode": "默认代写模式",
+    "defaultImpersonationModeHint": "用于未指定自身代写模式的聊天和群聊。",
     "portraitSide": "立绘面板位置",
     "none": "无",
     "regenTitle": "重新生成反馈",

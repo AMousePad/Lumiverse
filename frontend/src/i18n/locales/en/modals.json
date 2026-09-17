@@ -524,6 +524,8 @@
     "chatNamePlaceholder": "Enter chat name...",
     "impersonationMode": "Impersonation Mode",
     "impersonationModeHint": "Choose what the input-bar Impersonate action assembles for this chat.",
+    "useGlobalImpersonationMode": "Use global default",
+    "useGlobalImpersonationModeHint": "Currently {{mode}}, as selected in Settings → Chat.",
     "impersonationPreset": "Impersonation Preset",
     "useMainPreset": "Use main preset",
     "connectionProfile": "Connection Profile",

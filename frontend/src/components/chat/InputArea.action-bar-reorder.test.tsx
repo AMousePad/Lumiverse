@@ -255,15 +255,19 @@ describe('InputArea action bar live reorder', () => {
     expect(source).toContain('if (!hasLumiverseSuite && isExtensionComposerActionId(id)) return null')
   })
 
-  test('the single composer impersonate action follows the per-chat mode setting', async () => {
+  test('the single composer impersonate action follows a chat override or the global default', async () => {
     const inputAreaSource = await Bun.file(new URL('./InputArea.tsx', import.meta.url)).text()
     const settingsSource = await Bun.file(new URL('../modals/GroupSettingsModal.tsx', import.meta.url)).text()
+    const globalSettingsSource = await Bun.file(new URL('../modals/SettingsModal.tsx', import.meta.url)).text()
 
     expect(inputAreaSource).toContain('handleImpersonate(impersonationMode)')
+    expect(inputAreaSource).toContain('impersonationModeOverride ?? defaultImpersonationMode')
     expect(inputAreaSource).not.toContain("handleImpersonate('prompts')")
     expect(inputAreaSource).not.toContain("handleImpersonate('preset')")
     expect(inputAreaSource).not.toContain("handleImpersonate('oneliner')")
-    expect(settingsSource).toContain('impersonation_mode: impersonationMode')
+    expect(settingsSource).toContain('impersonation_mode: impersonationMode || null')
+    expect(settingsSource).toContain('useGlobalImpersonationMode')
     expect(settingsSource).toContain('role="radiogroup"')
+    expect(globalSettingsSource).toContain("setSetting('defaultImpersonationMode'")
   })
 })

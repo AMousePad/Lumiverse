@@ -507,6 +507,8 @@
     "chatNamePlaceholder": "Entrez le nom du chat...",
     "impersonationMode": "Mode d'usurpation d'identité",
     "impersonationModeHint": "Choisissez ce que l'action d'usurpation de la barre de saisie assemble pour cette discussion.",
+    "useGlobalImpersonationMode": "Utiliser la valeur globale par défaut",
+    "useGlobalImpersonationModeHint": "Actuellement {{mode}}, comme sélectionné dans Paramètres → Discussion.",
     "impersonationPreset": "Préréglage d'usurpation d'identité",
     "useMainPreset": "Utiliser le préréglage principal",
     "connectionProfile": "Profil de connexion",

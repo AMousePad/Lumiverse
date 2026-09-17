@@ -457,6 +457,8 @@
     "enterToSendMobile": "Appuyer sur Entrée pour envoyer sur mobile",
     "saveDraft": "Enregistrez le brouillon d'entrée",
     "saveDraftHint": "Enregistre automatiquement votre message non envoyé afin qu'il persiste lors des actualisations de page et des changements de discussion.",
+    "defaultImpersonationMode": "Mode d'usurpation d'identité par défaut",
+    "defaultImpersonationModeHint": "Utilisé par les discussions et groupes qui ne définissent pas leur propre mode d'usurpation d'identité.",
     "portraitSide": "Côté panneau Portrait",
     "none": "Aucun",
     "regenTitle": "Commentaires sur la régénération",

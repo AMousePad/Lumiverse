@@ -457,6 +457,8 @@
     "enterToSendMobile": "モバイルで Enter キーを押して送信",
     "saveDraft": "下書き入力を保存",
     "saveDraftHint": "未送信のメッセージが自動的に保存されるため、ページの更新やチャットの切り替え後も保持されます",
+    "defaultImpersonationMode": "デフォルトのなりすましモード",
+    "defaultImpersonationModeHint": "独自のなりすましモードを設定していないチャットとグループチャットで使用されます。",
     "portraitSide": "ポートレート パネル側",
     "none": "なし",
     "regenTitle": "再生フィードバック",

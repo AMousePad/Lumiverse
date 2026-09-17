@@ -8,6 +8,7 @@ import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import { PRODUCTIVITY_DEFAULTS, migrateProductivitySetting } from '@/lib/uiProductivityDefaults'
 import { isMobileViewportOrDevice } from '@/lib/mobile'
+import { DEFAULT_IMPERSONATION_MODE, resolveImpersonationMode } from '@/lib/impersonationPreset'
 import { createSettingsLoadGenerationGuard } from './settings-load-generation'
 import {
   deriveReorderArgs,
@@ -47,6 +48,7 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'bubbleUseFullAvatar',
   'bubbleOpacity',
   'saveDraftInput',
+  'defaultImpersonationMode',
   'chatWidthMode',
   'chatContentMaxWidth',
   'modalWidthMode',
@@ -523,6 +525,7 @@ function migrateStoredSettingValue(key: string, value: any): any {
   let migrated = key === 'imageGeneration' ? migrateStoredImageGeneration(value) : value
   migrated = migrateProductivitySetting(key, migrated)
   migrated = key === 'summarization' ? migrateStoredSummarization(migrated) : migrated
+  migrated = key === 'defaultImpersonationMode' ? resolveImpersonationMode(migrated) : migrated
   return migrated
 }
 
@@ -688,6 +691,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   bubbleOpacity: 1,
   inputBarEnterToSend: { ...DEFAULT_ENTER_TO_SEND_SETTINGS },
   saveDraftInput: false,
+  defaultImpersonationMode: DEFAULT_IMPERSONATION_MODE,
   chatWidthMode: 'full',
   chatContentMaxWidth: 900,
   modalWidthMode: 'full',
@@ -849,6 +853,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
     if (isToastPosition(settings.toastPosition)) {
       patch.toastPosition = settings.toastPosition
+    }
+    if (settings.defaultImpersonationMode) {
+      patch.defaultImpersonationMode = resolveImpersonationMode(settings.defaultImpersonationMode)
     }
 
     set(patch as any)

@@ -20,8 +20,7 @@ import { getPersonaAvatarThumbUrl, getPersonaAvatarThumbUrlById, getCharacterAva
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import {
-  DEFAULT_IMPERSONATION_MODE,
-  resolveImpersonationMode,
+  resolveImpersonationModeOverride,
   resolveImpersonationPresetSelection,
   type ImpersonationPreference,
 } from '@/lib/impersonationPreset'
@@ -321,7 +320,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   }>>([])
   const [characterName, setCharacterName] = useState('')
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
-  const [impersonationMode, setImpersonationMode] = useState<ImpersonationPreference>(DEFAULT_IMPERSONATION_MODE)
+  const [impersonationModeOverride, setImpersonationModeOverride] = useState<ImpersonationPreference | null>(null)
   const [promptVariablesModalOpen, setPromptVariablesModalOpen] = useState(false)
   const [promptVariablesPreset, setPromptVariablesPreset] = useState<LoomPreset | null>(null)
   const [promptVariablesBinding, setPromptVariablesBinding] = useState<PromptVariableProfileTarget | null>(null)
@@ -385,6 +384,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const enterToSendSettings = useStore((s) => s.inputBarEnterToSend)
   const enterToSend = isMobile ? enterToSendSettings.mobile : enterToSendSettings.desktop
   const saveDraftInput = useStore((s) => s.saveDraftInput)
+  const defaultImpersonationMode = useStore((s) => s.defaultImpersonationMode)
+  const impersonationMode = impersonationModeOverride ?? defaultImpersonationMode
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)
   const setActiveProfile = useStore((s) => s.setActiveProfile)
@@ -624,20 +625,20 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setAltFieldSelections({})
       setGroupAltFieldSelections({})
       setGroupScenarioMode('individual')
-      setImpersonationMode(DEFAULT_IMPERSONATION_MODE)
+      setImpersonationModeOverride(null)
       return
     }
     setAltFieldSelections((activeChatMetadata?.alternate_field_selections as Record<string, string>) || {})
     setGroupAltFieldSelections((activeChatMetadata?.group_alternate_field_selections as Record<string, Record<string, string>>) || {})
     const mode = activeChatMetadata?.group_scenario_override?.mode
     setGroupScenarioMode(mode === 'member' || mode === 'custom' ? mode : 'individual')
-    setImpersonationMode(resolveImpersonationMode(activeChatMetadata?.impersonation_mode))
+    setImpersonationModeOverride(resolveImpersonationModeOverride(activeChatMetadata?.impersonation_mode))
   }, [activeChatMetadata, chatId])
 
   useEffect(() => {
     if (!chatId) {
       setImpersonationPresetId(null)
-      setImpersonationMode(DEFAULT_IMPERSONATION_MODE)
+      setImpersonationModeOverride(null)
       return
     }
     let cancelled = false
@@ -646,12 +647,12 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         if (cancelled) return
         const value = chat.metadata?.impersonation_preset_id
         setImpersonationPresetId(typeof value === 'string' && value ? value : null)
-        setImpersonationMode(resolveImpersonationMode(chat.metadata?.impersonation_mode))
+        setImpersonationModeOverride(resolveImpersonationModeOverride(chat.metadata?.impersonation_mode))
       })
       .catch(() => {
         if (cancelled) return
         setImpersonationPresetId(null)
-        setImpersonationMode(DEFAULT_IMPERSONATION_MODE)
+        setImpersonationModeOverride(null)
       })
     return () => { cancelled = true }
   }, [chatId])
@@ -2593,7 +2594,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           onSaved: (updatedChat: import('@/types/api').Chat) => {
             const value = updatedChat.metadata?.impersonation_preset_id
             setImpersonationPresetId(typeof value === 'string' && value ? value : null)
-            setImpersonationMode(resolveImpersonationMode(updatedChat.metadata?.impersonation_mode))
+            setImpersonationModeOverride(resolveImpersonationModeOverride(updatedChat.metadata?.impersonation_mode))
             const mode = updatedChat.metadata?.group_scenario_override?.mode
             setGroupScenarioMode(mode === 'member' || mode === 'custom' ? mode : 'individual')
           },

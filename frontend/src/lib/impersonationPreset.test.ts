@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   DEFAULT_IMPERSONATION_MODE,
   resolveImpersonationMode,
+  resolveImpersonationModeOverride,
   resolveImpersonationPresetSelection,
 } from './impersonationPreset'
 
@@ -40,4 +41,11 @@ describe('impersonation preset selection', () => {
     'defaults invalid metadata value %p to the existing one-liner behavior',
     (value) => expect(resolveImpersonationMode(value)).toBe(DEFAULT_IMPERSONATION_MODE),
   )
+
+  test('uses the account default only when a chat has no valid override', () => {
+    expect(resolveImpersonationMode(undefined, 'preset')).toBe('preset')
+    expect(resolveImpersonationMode('prompts', 'preset')).toBe('prompts')
+    expect(resolveImpersonationModeOverride(undefined)).toBeNull()
+    expect(resolveImpersonationModeOverride('oneliner')).toBe('oneliner')
+  })
 })

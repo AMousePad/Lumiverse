@@ -507,6 +507,8 @@
     "chatNamePlaceholder": "チャット名を入力してください...",
     "impersonationMode": "なりすましモード",
     "impersonationModeHint": "このチャットで入力バーのなりすまし操作が組み立てる内容を選択します。",
+    "useGlobalImpersonationMode": "グローバルデフォルトを使用",
+    "useGlobalImpersonationModeHint": "現在は「{{mode}}」です（設定 → チャットで選択）。",
     "impersonationPreset": "なりすましプリセット",
     "useMainPreset": "メイン プリセットを使用",
     "connectionProfile": "接続プロファイル",

@@ -471,6 +471,8 @@
     "enterToSendMobile": "Press Enter to send on mobile",
     "saveDraft": "Save draft input",
     "saveDraftHint": "Automatically saves your unsent message so it persists across page refreshes and chat switches",
+    "defaultImpersonationMode": "Default impersonation mode",
+    "defaultImpersonationModeHint": "Used by chats and group chats that do not set their own impersonation mode.",
     "portraitSide": "Portrait panel side",
     "none": "None",
     "regenTitle": "Regeneration Feedback",
