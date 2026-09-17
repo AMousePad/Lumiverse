@@ -111,4 +111,72 @@ describe('processMarkdownInHtmlIsland', () => {
     expect(outHtml).toContain('<block>The dive begins.</block>')
     expect(outHtml).toContain('<p><span><inline>"Ready?"</inline></span><inline>she asked.</inline></p>')
   })
+
+  test('restores many styles without repeatedly scanning the whole output', () => {
+    const html = '<div>' + Array.from({ length: 64 }, (_, i) => `<style>.item${i}{color:red}</style>`).join('') + '</div>'
+    const originalReplace = String.prototype.replace
+    let scannedCharacters = 0
+    let result: string
+    String.prototype.replace = function (this: string, ...args: Parameters<typeof originalReplace>) {
+      scannedCharacters += this.length
+      return originalReplace.apply(this, args)
+    } as typeof originalReplace
+    try {
+      result = processMarkdownInHtmlIsland(html, {
+        renderBlockText: (text) => text,
+        renderInlineText: (text) => text,
+      })
+    } finally {
+      String.prototype.replace = originalReplace
+    }
+
+    expect(result!).toBe(html)
+    expect(scannedCharacters).toBeLessThanOrEqual(html.length * 2)
+  })
+
+  test('keeps replacement directives literal inside CSS', () => {
+    const html = '<style>.label::after{content:"' + ['$&', '$`', "$'", '$$'].join('|') + '"}</style>'
+    expect(render(html)).toBe(html)
+  })
+
+  test('does not reinterpret placeholder text inside restored CSS', () => {
+    const html = '<style>.label::after{content:"<!--ISLAND_STYLE_1-->"}</style><style>.next{color:red}</style>'
+    expect(render(html)).toBe(html)
+  })
+
+  test('consumes each style only once when raw input repeats a placeholder', () => {
+    const marker = '<!--ISLAND_STYLE_0-->'
+    expect(render(marker + marker + '<style>x</style>')).toBe('<style>x</style>' + marker + marker)
+  })
+
+  test.each([
+    ['<STYLE media="screen">**literal**</STYLE >', '<STYLE media="screen">**literal**</STYLE >'],
+    ['<style>**open**<style>still open', '<style><inline>**open**</inline><style><inline>still open</inline>'],
+    ['<style></style><style><style>x</style>*later*</style>', '<style></style><style><style>x</style><block>*later*</block></style>'],
+    ['<div title="<style>x</style>">tail</div>', '<div title="<style>x</style><block>">tail</block></div>'],
+    ['<!--x<style>**x**</style>tail-->', '<!--x<style>**x**</style><block>tail--></block>'],
+  ])('preserves existing style boundaries in %s', (html, expected) => {
+    expect(render(html)).toBe(expected)
+  })
+
+  test('normalizes once after all styles have been restored', () => {
+    const html = '<style>.first{color:red}</style><style>.second{color:blue}</style>'
+    const normalized: string[] = []
+    expect(processMarkdownInHtmlIsland(html, {
+      renderBlockText: (text) => text,
+      renderInlineText: (text) => text,
+      normalizeHtml: (text) => {
+        normalized.push(text)
+        return '<normalized>' + text + '</normalized>'
+      },
+    })).toBe('<normalized>' + html + '</normalized>')
+    expect(normalized).toEqual([html])
+  })
+
+  test('keeps callback-generated placeholder text literal', () => {
+    expect(processMarkdownInHtmlIsland('text<style>.label{color:red}</style>', {
+      renderBlockText: () => '<!--ISLAND_STYLE_0-->',
+      renderInlineText: () => '<!--ISLAND_STYLE_0-->',
+    })).toBe('<!--ISLAND_STYLE_0--><style>.label{color:red}</style>')
+  })
 })

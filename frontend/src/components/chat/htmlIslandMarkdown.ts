@@ -125,13 +125,33 @@ export function processMarkdownInHtmlIsland(
   html: string,
   renderer: HtmlIslandMarkdownRenderer,
 ): string {
-  const styleBlocks: string[] = []
-  const shielded = html.replace(/<style[\s>][\s\S]*?<\/style\s*>/gi, (match) => {
-    styleBlocks.push(match)
-    return `<!--ISLAND_STYLE_${styleBlocks.length - 1}-->`
-  })
-
+  const styleBlocks = new Map<string, string>()
+  const chunks: string[] = []
+  const styleOpen = /<style[\s>]/gi
+  const styleClose = /<\/style\s*>/gi
+  let cursor = 0
+  let open: RegExpExecArray | null
+  while ((open = styleOpen.exec(html)) !== null) {
+    styleClose.lastIndex = styleOpen.lastIndex
+    if (!styleClose.exec(html)) break
+    const marker = '<!--ISLAND_STYLE_' + styleBlocks.size + '-->'
+    chunks.push(html.slice(cursor, open.index), marker)
+    cursor = styleClose.lastIndex
+    styleBlocks.set(marker, html.slice(open.index, cursor))
+    styleOpen.lastIndex = cursor
+  }
+  chunks.push(html.slice(cursor))
+  const shielded = chunks.join('')
   const parts = shielded.split(/(<[^>]*>)/)
+  const restoreStyle = (marker: string): string => {
+    const style = styleBlocks.get(marker)
+    if (style === undefined) return marker
+    styleBlocks.delete(marker)
+    return style
+  }
+  const restoreEmbeddedStyles = (part: string): string => styleBlocks.size > 0 && part.includes('<!--ISLAND_STYLE_')
+    ? part.replace(/<!--ISLAND_STYLE_\d+-->/g, restoreStyle)
+    : part
   const tagStack: string[] = []
   const rawTextState = { depth: 0 }
   const out: string[] = []
@@ -222,9 +242,9 @@ export function processMarkdownInHtmlIsland(
       if (part.startsWith('<!--')) {
         if (STYLE_PLACEHOLDER_RE.test(part)) {
           closeGroup()
-          out.push(part)
+          out.push(styleBlocks.size > 0 ? restoreStyle(part) : part)
         } else {
-          emit(part)
+          emit(restoreEmbeddedStyles(part))
         }
         continue
       }
@@ -235,7 +255,7 @@ export function processMarkdownInHtmlIsland(
       }
       if (name && SANITIZER_KEPT_TAGS.has(name) && !INLINE_FLOW_TAGS.has(name)) {
         closeGroup()
-        out.push(part)
+        out.push(restoreEmbeddedStyles(part))
         if (messageWrapRoot && tagStack.length > 0) rawHtml = true
       } else {
         if (
@@ -251,7 +271,7 @@ export function processMarkdownInHtmlIsland(
           group = []
           groupHasText = false
         }
-        emit(part)
+        emit(restoreEmbeddedStyles(part))
       }
       updateTagStack(part, tagStack, rawTextState)
       continue
@@ -299,10 +319,7 @@ export function processMarkdownInHtmlIsland(
 
   closeGroup()
 
-  let result = out.join('')
-  for (let i = 0; i < styleBlocks.length; i++) {
-    result = result.replace(`<!--ISLAND_STYLE_${i}-->`, styleBlocks[i])
-  }
+  const result = out.join('')
 
   return renderer.normalizeHtml ? renderer.normalizeHtml(result) : result
 }
