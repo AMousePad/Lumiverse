@@ -978,7 +978,7 @@ function getIslandEndAt(raw: string, start: number, isStreaming: boolean, index?
 
 function renderIslandMarkdownText(markdown: string, messageProse = false): string {
   const leadingWhitespace = markdown.match(/^\s*/)?.[0] ?? ''
-  const trailingWhitespace = markdown.match(/\s*$/)?.[0] ?? ''
+  const trailingWhitespace = markdown.match(/(?<!\s)\s*$/)?.[0] ?? ''
   const core = markdown.trim()
 
   if (!core) return markdown
@@ -1003,7 +1003,7 @@ function renderIslandMarkdownText(markdown: string, messageProse = false): strin
 
 function renderIslandInlineMarkdownText(markdown: string): string {
   const leadingWhitespace = markdown.match(/^\s*/)?.[0] ?? ''
-  const trailingWhitespace = markdown.match(/\s*$/)?.[0] ?? ''
+  const trailingWhitespace = markdown.match(/(?<!\s)\s*$/)?.[0] ?? ''
   const core = markdown.trim()
 
   if (!core) return markdown
