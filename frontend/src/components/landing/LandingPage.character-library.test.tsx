@@ -110,7 +110,13 @@ type StoreState = {
   activeProfileId: string | null
   activeLoomPresetId: string | null
   loomRegistry: Record<string, { name: string }>
-  characters: Array<{ id: string; image_id?: string | null }>
+  characters: Array<{
+    id: string
+    name: string
+    avatar_path: string | null
+    image_id: string | null
+    extensions: Record<string, unknown>
+  }>
   extensions: Array<{ identifier: string; enabled: boolean; has_frontend: boolean }>
   landingRecentChats: null
   setLandingRecentChats: MockFn
@@ -240,8 +246,20 @@ mock.module('@/api/chats', () => ({
   messagesApi: { list: listMessages },
 }))
 mock.module('@/api/images', () => ({ imagesApi: { largeUrl: (id: string) => `/images/${id}` } }))
-mock.module('@/ws/client', () => ({ wsClient: { on: jest.fn(() => () => {}) } }))
-mock.module('@/ws/events', () => ({ EventType: { CHAT_DELETED: 'chat-deleted' } }))
+const wsHandlers = new Map<string, Set<(payload: any) => void>>()
+const wsOn = jest.fn((event: string, handler: (payload: any) => void) => {
+  const handlers = wsHandlers.get(event) ?? new Set<(payload: any) => void>()
+  handlers.add(handler)
+  wsHandlers.set(event, handlers)
+  return () => handlers.delete(handler)
+})
+mock.module('@/ws/client', () => ({ wsClient: { on: wsOn } }))
+mock.module('@/ws/events', () => ({
+  EventType: {
+    CHAT_DELETED: 'chat-deleted',
+    CHARACTER_EDITED: 'character-edited',
+  },
+}))
 mock.module('@/hooks/useScrollGate', () => ({ useScrollGate: jest.fn() }))
 mock.module('@/hooks/useCharacterTheme', () => ({ warmCharacterPalette: jest.fn() }))
 mock.module('@/hooks/useLongPress', () => ({ useLongPress: () => ({}) }))
@@ -254,8 +272,8 @@ mock.module('@/lib/uiScale', () => ({
   renderedPxToLayoutPx: (value: number) => value,
 }))
 mock.module('@/lib/avatarUrls', () => ({
-  getCharacterAvatarLargeUrlById: () => '/avatar.png',
-  getCharacterAvatarThumbUrlById: () => '/avatar-thumb.png',
+  getCharacterAvatarLargeUrlById: (_id: string, imageId?: string | null) => imageId ? `/avatar-${imageId}.png` : '/avatar.png',
+  getCharacterAvatarThumbUrlById: (_id: string, imageId?: string | null) => imageId ? `/avatar-${imageId}-thumb.png` : '/avatar-thumb.png',
 }))
 mock.module('@/lib/formatRelativeTime', () => ({ formatRelativeTime: () => 'just now' }))
 mock.module('@/lib/tagColors', () => ({ getTagColorVar: () => '128,128,128' }))
@@ -406,6 +424,7 @@ function recentChat(id: string, name: string) {
     latest_chat_name: 'Recent chat',
     character_id: id,
     character_name: name,
+    character_avatar_path: null,
     character_image_id: null,
     updated_at: 1,
     is_group: false,
@@ -544,6 +563,8 @@ afterEach(async () => {
   branchChat.mockReset()
   listMessages.mockReset()
   navigate.mockReset()
+  wsHandlers.clear()
+  wsOn.mockClear()
   readDeviceLandingPageStartTab.mockReset()
   readDeviceLandingPageStartTab.mockReturnValue('characters')
   Object.defineProperty(domWindow, 'innerWidth', { configurable: true, value: 1024 })
@@ -689,6 +710,89 @@ describe('LandingPage character library', () => {
     expect(listRecentGrouped).toHaveBeenCalledTimes(2)
 
     await settleDeferred(refresh, page([recentChat('character-1', 'Ava')]))
+  })
+
+  test('reconciles a restored chat card with character edits before the refresh resolves', async () => {
+    storeState = createStoreState(false)
+    storeState.characters = [{
+      id: 'character-1',
+      name: 'Bea',
+      avatar_path: 'bea.png',
+      image_id: 'bea-image',
+      extensions: {},
+    }]
+    writeLandingPageSnapshot({
+      userId: 'test-user-id',
+      items: [recentChat('character-1', 'Ava')],
+      total: 1,
+      scrollTop: 0,
+      requestedTab: 'chats',
+      searchQuery: '',
+      sortField: 'recent',
+      sortDirection: 'desc',
+      pageSize: 12,
+      galleryWidth: 'compact',
+      mainWidth: 960,
+      chatViewportHeight: 700,
+      viewportWidth: domWindow.innerWidth,
+      viewportHeight: domWindow.innerHeight,
+    })
+    const refresh = createDeferred<SummaryPage>()
+    listRecentGrouped.mockReturnValue(refresh.promise)
+
+    const host = await mountLanding()
+
+    expect(countExactText(host, 'Bea')).toBeGreaterThan(0)
+    expect(countExactText(host, 'Ava')).toBe(0)
+    expect(host.querySelector('img[alt="Bea"]')?.getAttribute('src')).toBe('/avatar-bea-image.png')
+
+    await settleDeferred(refresh, page([recentChat('character-1', 'Bea')]))
+  })
+
+  test('applies a late character edit immediately and then refreshes landing ordering', async () => {
+    storeState = createStoreState(false)
+    writeLandingPageSnapshot({
+      userId: 'test-user-id',
+      items: [recentChat('character-1', 'Ava')],
+      total: 1,
+      scrollTop: 0,
+      requestedTab: 'chats',
+      searchQuery: '',
+      sortField: 'recent',
+      sortDirection: 'desc',
+      pageSize: 12,
+      galleryWidth: 'compact',
+      mainWidth: 960,
+      chatViewportHeight: 700,
+      viewportWidth: domWindow.innerWidth,
+      viewportHeight: domWindow.innerHeight,
+    })
+    const refresh = createDeferred<SummaryPage>()
+    listRecentGrouped.mockReturnValue(refresh.promise)
+    const host = await mountLanding()
+
+    await act(async () => {
+      for (const handler of wsHandlers.get('character-edited') ?? []) {
+        handler({
+          id: 'character-1',
+          character: {
+            id: 'character-1',
+            name: 'Bea',
+            avatar_path: 'bea.png',
+            image_id: 'bea-image',
+            extensions: {},
+          },
+        })
+      }
+      await Promise.resolve()
+    })
+
+    expect(countExactText(host, 'Bea')).toBeGreaterThan(0)
+    expect(countExactText(host, 'Ava')).toBe(0)
+    expect(host.querySelector('img[alt="Bea"]')?.getAttribute('src')).toBe('/avatar-bea-image.png')
+    expect(listRecentGrouped).toHaveBeenCalledTimes(2)
+
+    await settleDeferred(refresh, page([recentChat('character-1', 'Bea')]))
   })
 
   test('recovers the landing snapshot after refreshing inside a chat route', async () => {

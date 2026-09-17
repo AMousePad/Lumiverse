@@ -51,7 +51,7 @@ import {
   type DeviceRotationSnapshot,
   type DeviceRotationPermissionState,
 } from '@/lib/deviceRotation'
-import type { CharacterPerspectiveLayer, GroupedRecentChat } from '@/types/api'
+import type { Character, CharacterPerspectiveLayer, GroupedRecentChat } from '@/types/api'
 import styles from './LandingPage.module.css'
 import clsx from 'clsx'
 import type { TFunction } from 'i18next'
@@ -166,6 +166,40 @@ function getPerspectiveLayers(value: unknown): CharacterPerspectiveLayer[] {
   }
 
   return []
+}
+
+function applyLiveCharacterToRecentChat(
+  item: GroupedRecentChat,
+  character: Character,
+): GroupedRecentChat {
+  if (item.character_id !== character.id) return item
+
+  const perspectiveLayers = getPerspectiveLayers(character.extensions?.landing_perspective_layers)
+  return {
+    ...item,
+    character_name: character.name,
+    character_avatar_path: character.avatar_path,
+    character_image_id: character.image_id,
+    character_perspective_layers: perspectiveLayers.length >= 2 ? perspectiveLayers : undefined,
+  }
+}
+
+/**
+ * A chat-to-home transition restores the previous landing snapshot before its
+ * HTTP refresh finishes. Character edits made while the landing route was
+ * unmounted already live in the shared store, so merge those records into the
+ * restored rows and avoid painting an obsolete name/avatar for one frame.
+ */
+function reconcileRecentChatsWithCharacters(
+  items: GroupedRecentChat[],
+  characters: Character[],
+): GroupedRecentChat[] {
+  if (items.length === 0 || characters.length === 0) return items
+  const charactersById = new Map(characters.map((character) => [character.id, character]))
+  return items.map((item) => {
+    const character = charactersById.get(item.character_id)
+    return character ? applyLiveCharacterToRecentChat(item, character) : item
+  })
 }
 
 function getPerspectiveLayerStyle(index: number, total: number, intensity: number): CSSProperties {
@@ -1165,7 +1199,10 @@ function LandingPageNative() {
     setRequestedLandingTab(tab)
   }, [availableLandingTabs])
 
-  const [items, setItems] = useState<GroupedRecentChat[]>(() => restoredSnapshot?.items ?? [])
+  const [items, setItems] = useState<GroupedRecentChat[]>(() => reconcileRecentChatsWithCharacters(
+    restoredSnapshot?.items ?? [],
+    useStore.getState().characters,
+  ))
   const [loading, setLoading] = useState(() => !restoredSnapshot)
   const [loadingMore, setLoadingMore] = useState(false)
   const [guidesOpen, setGuidesOpen] = useState(false)
@@ -1564,6 +1601,19 @@ function LandingPageNative() {
 
   useEffect(() => {
     return wsClient.on(EventType.CHAT_DELETED, () => {
+      fetchChats()
+    })
+  }, [fetchChats])
+
+  useEffect(() => {
+    return wsClient.on(EventType.CHARACTER_EDITED, (payload: { id: string; character?: Character }) => {
+      const character = payload.character
+        ?? useStore.getState().characters.find((entry) => entry.id === payload.id)
+      if (character) {
+        // Paint the edit immediately; the fetch below remains authoritative
+        // for name sorting, filters, and any server-derived landing fields.
+        setItems((current) => current.map((item) => applyLiveCharacterToRecentChat(item, character)))
+      }
       fetchChats()
     })
   }, [fetchChats])
