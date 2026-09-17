@@ -36,3 +36,17 @@ test("does not wait for descendants holding inherited output pipes", async () =>
   expect(result.timedOut).toBe(true);
   expect(performance.now() - startedAt).toBeLessThan(1_000);
 });
+
+test("mirrors subprocess output while retaining the captured result", async () => {
+  const chunks: Array<{ source: "stdout" | "stderr"; text: string }> = [];
+  const result = await spawnAsync(
+    [process.execPath, "-e", "console.log('building'); console.error('compiling')"],
+    { onOutput: (source, text) => chunks.push({ source, text }) },
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("building");
+  expect(result.stderr).toContain("compiling");
+  expect(chunks.some((chunk) => chunk.source === "stdout" && chunk.text.includes("building"))).toBe(true);
+  expect(chunks.some((chunk) => chunk.source === "stderr" && chunk.text.includes("compiling"))).toBe(true);
+});

@@ -32,8 +32,9 @@ import trayWinIcon from "./assets/tray-win.png";
 
 const POLL_INTERVAL_MS = 15_000;
 // A cold Tauri build compiles the entire native dependency tree. This only
-// bounds the tray's wait; the runner enforces its own build deadline.
-const DESKTOP_REBUILD_TIMEOUT_MS = 35 * 60_000;
+// bounds the tray's wait; keep it above the runner's two-hour build deadline
+// so the request client can never become the earlier cutoff.
+const DESKTOP_REBUILD_TIMEOUT_MS = 2 * 60 * 60_000 + 5 * 60_000;
 const isMac = navigator.userAgent.includes("Mac");
 
 /**

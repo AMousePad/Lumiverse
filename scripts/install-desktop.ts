@@ -75,7 +75,7 @@ async function main(): Promise<void> {
   const indexLockPath = resolveGitIndexLock(PROJECT_ROOT);
   const lockExistedBeforeBuild = indexLockPath ? await Bun.file(indexLockPath).exists() : false;
   try {
-    await rebuildDesktopShell();
+    await rebuildDesktopShell(undefined, { mirrorOutput: true });
   } finally {
     // Attribute cleanup only to a lock that appeared during this build. The
     // process scan still protects a concurrent external Git command.

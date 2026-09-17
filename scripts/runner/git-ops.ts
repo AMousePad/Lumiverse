@@ -367,12 +367,19 @@ export async function runWithServerStopped(
 
 async function runCommandOrThrow(
   cmd: string[],
-  opts: { cwd: string; timeoutMs: number; label: string; env?: Record<string, string | undefined> }
+  opts: {
+    cwd: string;
+    timeoutMs: number;
+    label: string;
+    env?: Record<string, string | undefined>;
+    onOutput?: (source: "stdout" | "stderr", text: string) => void;
+  }
 ): Promise<void> {
   const result = await spawnAsync(cmd, {
     cwd: opts.cwd,
     timeoutMs: opts.timeoutMs,
     env: opts.env,
+    onOutput: opts.onOutput,
   });
 
   if (result.exitCode === 0) return;
@@ -979,7 +986,10 @@ export function selectDesktopBundleArtifact(bundleRoot: string): string | null {
  * Note this cannot replace the running tray — it produces a bundle, and
  * installing it is a separate step.
  */
-export async function rebuildDesktopShell(reportProgress?: ProgressReporter): Promise<string | null> {
+export async function rebuildDesktopShell(
+  reportProgress?: ProgressReporter,
+  options: { mirrorOutput?: boolean } = {},
+): Promise<string | null> {
   const desktopDir = join(PROJECT_ROOT, "desktop");
   if (!existsSync(join(desktopDir, "src-tauri"))) {
     throw new Error("This checkout has no desktop/src-tauri directory to build");
@@ -1004,6 +1014,9 @@ export async function rebuildDesktopShell(reportProgress?: ProgressReporter): Pr
       timeoutMs,
       label: step.label,
       env,
+      onOutput: options.mirrorOutput
+        ? (source, text) => (source === "stdout" ? process.stdout : process.stderr).write(text)
+        : undefined,
     });
   }
 
