@@ -38,7 +38,7 @@ describe("selectDesktopInstallArtifact", () => {
     const nsis = join(root, "nsis");
     mkdirSync(nsis, { recursive: true });
     const old = join(nsis, "Lumiverse Desktop_0.1.0_x64-setup.exe");
-    const fresh = join(nsis, "Lumiverse Desktop_0.2.0_x64-setup.exe");
+    const fresh = join(nsis, "Lumiverse Desktop_0.2.1_x64-setup.exe");
     writeFileSync(old, "old");
     writeFileSync(fresh, "fresh");
     const then = new Date(Date.now() - 60_000);

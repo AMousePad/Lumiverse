@@ -808,6 +808,7 @@ fn show_desktop_notification(
     let title = payload.title.trim();
     let body = payload.body.trim();
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let identifier = app.config().identifier.clone();
     #[cfg(target_os = "macos")]
     {

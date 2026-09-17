@@ -3,6 +3,22 @@ name: Build & Push Staging Docker Image
 on:
   push:
     branches: [staging]
+    # Allowlist of what the image compiles, runs, or documents (mirrors the
+    # Dockerfile COPY set plus shipped docs). Docs, workflow files, desktop/,
+    # scripts/, tests/ and other non-essential paths don't burn a two-platform
+    # image build. The daily schedule and manual dispatch are NOT path-filtered.
+    paths:
+      - "src/**"
+      - "frontend/**"
+      - "user-docs/**"
+      - "developer-docs/**"
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "package.json"
+      - "bun.lock"
+      - "Dockerfile"
+      - ".dockerignore"
   schedule:
     # Daily staging rebuild from the `staging` branch. Runs once per day so we
     # don't burn through the GitHub Actions free tier on every commit but still

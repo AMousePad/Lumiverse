@@ -1,6 +1,6 @@
 [package]
 name = "lumiverse-tray"
-version = "0.2.0"
+version = "0.2.1"
 description = "Experimental Tauri-powered Lumiverse integrated browser and tray"
 edition = "2021"
 license-file = "../../LICENSE.md"
