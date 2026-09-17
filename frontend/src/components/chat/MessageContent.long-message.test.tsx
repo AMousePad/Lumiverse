@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 
-import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import type { Root, createRoot as CreateRoot } from 'react-dom/client'
 import type { default as MessageContentType } from './MessageContent'
@@ -33,6 +33,7 @@ Object.assign(globalThis, {
   CustomEvent: domWindow.CustomEvent,
   MouseEvent: domWindow.MouseEvent,
   MutationObserver: domWindow.MutationObserver,
+  DOMParser: domWindow.DOMParser,
   getComputedStyle: domWindow.getComputedStyle.bind(domWindow),
 })
 
@@ -160,6 +161,185 @@ afterEach(async () => {
   host.remove()
   resetChatDisplaySettleForTests()
   resetMessageTagRuntimeReadinessForTests()
+})
+
+describe('MessageContent inline HTML rendering', () => {
+  function inlineScene(count: number) {
+    return `<div class="scene">${Array.from({ length: count }, (_, i) => `<span style="top:${i}px">Actor ${i}</span>`).join('')}<img src="https://images.example/scene.png"></div>`
+  }
+
+  async function render(content: string, isStreaming = false) {
+    await act(async () => {
+      root?.render(<MessageContent content={content} isUser={false} userName="User" isStreaming={isStreaming} disableInterceptors />)
+    })
+  }
+
+  test.each([0, 1, 2, 3, 4, 8])('keeps %i inline styles reachable by document selectors', async (count) => {
+    await render(inlineScene(count))
+
+    expect(host.querySelectorAll('[data-lumiverse-html-island]')).toHaveLength(0)
+    expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(count)
+    expect(host.querySelector('.scene > img')).not.toBeNull()
+  })
+
+  test('keeps document selectors working across style-count changes while streaming', async () => {
+    await render(inlineScene(2), true)
+
+    for (const count of [3, 8, 1]) {
+      await render(inlineScene(count), true)
+      expect(host.querySelectorAll('[data-lumiverse-html-island]')).toHaveLength(0)
+      expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(count)
+    }
+    await render(inlineScene(1))
+    expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(1)
+  })
+
+  test.each([
+    '<div><style>.widget { color: red }</style><span class="widget">Widget</span></div>',
+    '<html><body><div style="color:red">Document</div></body></html>',
+  ])('preserves existing stylesheet and document isolation: %s', async (content) => {
+    await render(content)
+    expect(host.querySelectorAll('[data-lumiverse-html-island]')).toHaveLength(1)
+    expect(host.querySelector('[data-lumiverse-html-island]')?.shadowRoot?.textContent).toContain(
+      content.includes('Widget') ? 'Widget' : 'Document',
+    )
+  })
+})
+
+describe('HTML island scanning', () => {
+  test.each(['\n', '\r\n', '\r'])('preserves fenced HTML offsets with %j line endings', async (newline) => {
+    const { extractHtmlIslands } = await import('./MessageContent')
+    const prefix = 'x'.repeat(4096) + newline
+    const literal = ['```html', '<div><style>.literal{color:red}</style>Literal</div>', '```', ''].join(newline)
+    const widget = '<div><style>.widget{color:blue}</style>Widget</div>'
+    for (const streaming of [false, true]) {
+      expect(extractHtmlIslands(prefix + literal + widget, streaming)).toEqual({
+        content: prefix + literal + '<!--LUMIVERSE_HTML_ISLAND_0-->',
+        islands: [widget],
+      })
+      expect(extractHtmlIslands(prefix + literal.slice(0, literal.lastIndexOf('```')), streaming).islands).toEqual([])
+    }
+  })
+
+  test('preserves fenced HTML across mixed line endings', async () => {
+    const { extractHtmlIslands } = await import('./MessageContent')
+    const raw = 'before\r\n~~~html\r<div><style>.x{color:red}</style>X</div>\n~~~\r\nafter'
+    expect(extractHtmlIslands(raw, false)).toEqual({ content: raw, islands: [] })
+  })
+
+  test.each(['\u2028', '\u2029'])('keeps Unicode separator %j inside a Markdown line', async (separator) => {
+    const { extractHtmlIslands } = await import('./MessageContent')
+    const prefix = 'x'.repeat(4096) + separator + '```html\n'
+    const widget = '<div><style>.widget{color:blue}</style>Widget</div>'
+    expect(extractHtmlIslands(prefix + widget, false)).toEqual({
+      content: prefix + '<!--LUMIVERSE_HTML_ISLAND_0-->',
+      islands: [widget],
+    })
+  })
+
+  test.each([2, 32, 128])('does not repeat %i nested islands containing fenced code', async (depth) => {
+    const { extractHtmlIslands } = await import('./MessageContent')
+    const block = '<div><style></style>\n```\nx\n```\n'.repeat(depth) + '</div>'.repeat(depth)
+    const tail = '<p>tail</p>'
+    for (const streaming of [false, true]) {
+      expect(extractHtmlIslands(block + tail, streaming)).toEqual({
+        content: '<!--LUMIVERSE_HTML_ISLAND_0-->' + tail,
+        islands: [block],
+      })
+    }
+  })
+
+  test.each(['```', '~~~'])('keeps later %s fences literal after consuming an island', async (fence) => {
+    const { extractHtmlIslands } = await import('./MessageContent')
+    const block = `<div><style></style>\n${fence}\nx\n${fence}\n</div>`
+    const literal = `\n${fence}html\n<section><style>.literal{color:red}</style></section>\n${fence}\n`
+    const next = '<div><style>.next{color:blue}</style>Next</div>'
+    for (const streaming of [false, true]) {
+      expect(extractHtmlIslands(block + literal + next, streaming)).toEqual({
+        content: '<!--LUMIVERSE_HTML_ISLAND_0-->' + literal + '<!--LUMIVERSE_HTML_ISLAND_1-->',
+        islands: [block, next],
+      })
+    }
+  })
+
+  test.each([false, true])('preserves the rest of a fence ending outside its island (closed=%s)', async (closed) => {
+    const { extractHtmlIslands } = await import('./MessageContent')
+    const block = '<div><style></style>\n```html\n</div>'
+    const tail = '\n<section><style>.literal{color:red}</style></section>' + (closed ? '\n```\n<p>tail</p>' : '')
+    for (const streaming of [false, true]) {
+      expect(extractHtmlIslands(block + tail, streaming)).toEqual({
+        content: '<!--LUMIVERSE_HTML_ISLAND_0-->' + tail,
+        islands: [block],
+      })
+    }
+  })
+
+  test.each([
+    ['<div><span></div>text<style>x</style></span>', ['<span></div>text<style>x</style></span>']],
+    ['<div title="<div>">Text</div><style>x</style>', ['<div title="<div>">Text</div><style>x</style>']],
+    ['<div data-no-island><span>x</span></div><style>x</style>', ['<span>x</span></div><style>x</style>']],
+    ['```html\n<style>x</style>\n```\n<div style="color:red">Text</div>', []],
+    ['<html><body><div style="color:red">Text</div></body></html>', ['<html><body><div style="color:red">Text</div></body></html>']],
+  ] as const)('preserves existing boundaries for %s', async (raw, islands) => {
+    const { extractHtmlIslands } = await import('./MessageContent')
+    for (const streaming of [false, true]) {
+      let content: string = raw
+      for (const [i, island] of islands.entries()) content = content.replace(island, `<!--LUMIVERSE_HTML_ISLAND_${i}-->`)
+      expect(extractHtmlIslands(raw, streaming)).toEqual({ content, islands: [...islands] })
+    }
+  })
+
+  test.each(['before', 'after', 'fenced'] as const)('bounds repeated matching with a stylesheet %s nested HTML', async (position) => {
+    const { extractHtmlIslands } = await import('./MessageContent')
+    const nativeExec = RegExp.prototype.exec
+    const countMatches = (depth: number) => {
+      const block = '<div style="padding:1px">'.repeat(depth) + 'Text' + '</div>'.repeat(depth)
+      const style = '<style>.widget{color:red}</style>'
+      const raw = position === 'before' ? style + '\n\nProse\n\n' + block
+        : position === 'after' ? block + '\n\nProse\n\n' + style
+          : '```html\n' + style + '\n```\n' + block
+      let calls = 0
+      const exec = spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+        calls++
+        return nativeExec.call(this, input)
+      })
+      try {
+        const result = extractHtmlIslands(raw, false)
+        expect(result.islands).toEqual(position === 'fenced' ? [] : [style])
+      } finally { exec.mockRestore() }
+      return calls
+    }
+    expect(countMatches(512)).toBeLessThan(countMatches(64) * 12)
+  })
+
+  test.each([
+    ['missing opening end', '<div '.repeat(128) + '<style '],
+    ['missing style end', '<style>'.repeat(128)],
+    ['unfinished tag name', '<' + 'a-'.repeat(128) + '<style '],
+    ['unfinished nested tags', '<div>' + '<div '.repeat(128) + '<style '],
+  ])('bounds failed searches in unfinished streamed HTML: %s', async (_name, raw) => {
+      const { extractHtmlIslands } = await import('./MessageContent')
+      const nativeExec = RegExp.prototype.exec
+      const nativeIndexOf = String.prototype.indexOf
+      let searched = 0
+      const exec = spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+        if (this.source === '<\\/style\\s*>' || this.source.includes('[^>]*>')) searched += input.length - this.lastIndex
+        return nativeExec.call(this, input)
+      })
+      const indexOf = spyOn(String.prototype, 'indexOf').mockImplementation(function (this: string, search: string, position = 0) {
+        const result = nativeIndexOf.call(this, search, position)
+        if (search === '>') searched += (result < 0 ? this.length : result + 1) - position
+        return result
+      })
+      try {
+        expect(extractHtmlIslands(raw, true)).toEqual({ content: raw, islands: [] })
+        expect(searched).toBeLessThan(raw.length * 8)
+      } finally {
+        exec.mockRestore()
+        indexOf.mockRestore()
+      }
+    },
+  )
 })
 
 describe('MessageContent long-message collapsing', () => {
