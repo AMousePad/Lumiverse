@@ -31,7 +31,52 @@ Start Lumiverse normally once before setting up the tray. This lets the normal
 launcher install Bun, install backend dependencies, and run the first-time
 setup wizard.
 
-You also need the following build tools:
+The tray app uses the same Bun version as Lumiverse: Bun 1.4.0 or later.
+Pre-built installers contain the desktop companion, **not** the Lumiverse
+server or Bun. You still need your local Lumiverse checkout.
+
+## Download Lumiverse Desktop
+
+Pre-built installers are available from the
+[Build Desktop workflow](https://github.com/prolix-oc/Lumiverse/actions/workflows/desktop-build.yml).
+You do not need Rust or the platform build tools to install a pre-built app.
+
+1. Sign in to GitHub and open a successful workflow run for the branch you use
+   (for example, `staging`).
+2. Scroll to **Artifacts** and download the `desktop-...` artifact matching
+   your operating system, processor, and preferred installer format.
+3. Extract the downloaded ZIP, then install the file inside:
+
+| Platform | Processor | Installer |
+|----------|-----------|-----------|
+| macOS | Apple Silicon (`aarch64`) or Intel (`x64`) | `.dmg` — open it and copy the app to Applications |
+| Windows | Intel/AMD (`x64`) | NSIS `.exe` or `.msi` — run the installer |
+| Windows | ARM64 | NSIS `.exe` — run the installer |
+| Linux | Intel/AMD (`amd64`) or ARM64 (`arm64` / `aarch64`) | `.deb` — install with your package manager; or `.AppImage` — mark executable and launch |
+
+Workflow artifacts expire according to GitHub's retention policy. If a
+download has expired, choose a newer successful run. These are branch builds,
+not necessarily a published release. Published desktop installers are attached
+to **Lumiverse Desktop** releases tagged `desktop-v...` on the
+[Releases page](https://github.com/prolix-oc/Lumiverse/releases) when available.
+
+!!! warning "Unsigned installers"
+    Windows installers are unsigned, and macOS builds use ad-hoc signing
+    without Apple notarization. SmartScreen or Gatekeeper may warn or block
+    installation or launch. Only install downloads from the official repository
+    that you trust; do not disable system-wide security protections.
+
+Windows needs WebView2 (included with most Windows 11 installations). Linux
+still needs the matching WebKitGTK 4.1 and AppIndicator runtime libraries;
+an AppImage does not remove every system dependency. GNOME Shell also needs
+an AppIndicator/KStatusNotifier extension for the tray icon to appear.
+
+After installation, skip to [Connect Lumiverse Desktop to Lumiverse](#connect-lumiverse-desktop-to-lumiverse).
+
+## Build from source (optional)
+
+Build locally if you prefer, or if no suitable pre-built installer is available.
+Only this path requires the following build tools:
 
 | Platform | Required tools |
 |----------|----------------|
@@ -39,9 +84,7 @@ You also need the following build tools:
 | Windows | [Rust](https://rustup.rs/) stable, the Microsoft C++ Build Tools, and WebView2 (included with most Windows 11 installations) |
 | Linux | [Rust](https://rustup.rs/) stable plus the GTK/WebKitGTK and AppIndicator packages listed below |
 
-The tray app uses the same Bun version as Lumiverse: Bun 1.4.0 or later.
-
-### Linux dependencies
+### Linux build dependencies
 
 The Linux tray icon uses the StatusNotifierItem/AppIndicator D-Bus protocol.
 Install the required native packages before building the app:
@@ -80,7 +123,7 @@ KStatusNotifierItem Support**, before the icon will appear.
 
 ---
 
-## Build Lumiverse Desktop
+### Build Lumiverse Desktop
 
 From the root of your Lumiverse checkout, run:
 
