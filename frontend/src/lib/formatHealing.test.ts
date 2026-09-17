@@ -118,3 +118,34 @@ test('preserves interior whitespace while trimming only spaces and tabs at edges
     expect(healFormattingArtifacts(open + '\u00a0' + body + '\u00a0' + close)).toBe(open + '\u00a0' + body + '\u00a0' + close)
   }
 })
+
+test.each([
+  ["color span closing quote", "<span style=\"color:red\">“Hello</span>”", "<span style=\"color:red\">“Hello”</span>"],
+  ["existing inner closing quote", "<span style=\"color:red\">\"Hello\"</span>\"", "<span style=\"color:red\">\"Hello\"</span>\""],
+  ["greater-than inside style", "<span style=\"color:red;--x:>\">“Hello</span>”", "<span style=\"color:red;--x:>\">“Hello”</span>"],
+  ["mixed style quotes", "<span style=\"color:red'>«Hello</span>»", "<span style=\"color:red'>«Hello»</span>"],
+  ["multiple color styles", "<span style=\"color:red\" style=\"color:blue\">“Hello</span>”", "<span style=\"color:red\" style=\"color:blue\">“Hello”</span>"],
+  ["crossed style quotes and delimiters", "<span style=\"color:red style='color:blue >\">“Hello</span>”", "<span style=\"color:red style='color:blue >\">“Hello”</span>"],
+  ["nested opening prefix", "<span x=<span style=\"color:red\">“Hello</span>”", "<span x=<span style=\"color:red\">“Hello”</span>"],
+  ["style word boundary", "<span data-style=\"color:red\">“Hello</span>”", "<span data-style=\"color:red\">“Hello”</span>"],
+  ["nonmatching style name", "<span xstyle=\"color:red\">“Hello</span>”", "<span xstyle=\"color:red\">“Hello</span>”"],
+  ["non-color style", "<span style=\"font-weight:bold\">“Hello</span>”", "<span style=\"font-weight:bold\">“Hello</span>”"],
+  ["style-looking quoted attribute", "<span title=\"style='color:blue'\">“Hello</span>”", "<span title=\"style='color:blue'\">“Hello”</span>"],
+  ["case and whitespace", "<SPAN STYLE = \"COLOR \n: red\">«Hello</SPAN>»", "<SPAN STYLE = \"COLOR \n: red\">«Hello»</SPAN>"],
+  ["missing quoted closer", "<span style=\"color:red\">“Hello", "<span style=\"color:red\">“Hello"],
+  ["multiple repaired spans", "<span style=\"color:red\">“One</span>” <span style=\"color:blue\">«Two</span>»", "<span style=\"color:red\">“One”</span> <span style=\"color:blue\">«Two»</span>"],
+])('preserves color span handling for %s', (_name, input, expected) => {
+  expect(healFormattingArtifacts(input)).toBe(expected)
+})
+
+test('leaves repeated unfinished color spans unchanged', () => {
+  const input = '<!--' + '<span style="color:x" '.repeat(32)
+  expect(healFormattingArtifacts(input)).toBe(input)
+})
+
+test('ignores style-looking text before the first span', () => {
+  const prefix = 'style="color:red" '.repeat(64)
+  const suffix = 'style="color:green" '.repeat(64)
+  expect(healFormattingArtifacts(prefix + '<span style="color:blue">“Hello</span>”' + suffix))
+    .toBe(prefix + '<span style="color:blue">“Hello”</span>' + suffix)
+})

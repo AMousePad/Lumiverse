@@ -70,7 +70,6 @@ function getInlineCodeRanges(text: string): Array<[number, number]> {
   return ranges
 }
 const FONT_QUOTE_EDGE_RE = /(<font\b[^>]*>)(["“”«»])([\s\S]*?)(?:(<\/font>)(["“”«»])|$)|<font\b[^>]*(?:>|$)/gi
-const COLOR_SPAN_QUOTE_EDGE_RE = /(<span\b[^>]*\bstyle\s*=\s*["'][^"']*\bcolor\s*:[^"']*["'][^>]*>)(["“”«»])([\s\S]*?)(<\/span>)(["“”«»])/gi
 const FONT_TAG_RE = /<\/?font\b[^>]*(>|$)/gi
 const QUOTE_CHARS = new Set(['"', '“', '”', '«', '»'])
 const MATCHING_QUOTE: Record<string, string> = {
@@ -98,9 +97,62 @@ function repairQuotedColorTagBoundaries(text: string): string {
     return `${openTag}${openQuote}${inner}${closeQuote}${closeTag}`
   }
 
-  let healed = text.replace(FONT_QUOTE_EDGE_RE, repair)
-  healed = healed.replace(COLOR_SPAN_QUOTE_EDGE_RE, repair)
-  return healed
+  const healed = text.replace(FONT_QUOTE_EDGE_RE, repair)
+  const firstSpan = /<span\b/i.exec(healed)
+  if (!firstSpan) return healed
+
+  const candidates = new Map<number, { start: number; end: number; close: RegExpExecArray }>()
+  const stylePattern = /\bstyle\s*=\s*["']/gi
+  stylePattern.lastIndex = firstSpan.index + firstSpan[0].length
+  const quotePattern = /["']/g
+  const closingPattern = /<\/span>(["“”«»])/gi
+  let firstEnd = -1
+  let openingEnd = -1
+  let closing: RegExpExecArray | null = null
+  let style: RegExpExecArray | null
+  while ((style = stylePattern.exec(healed)) !== null) {
+    if (firstEnd < stylePattern.lastIndex) firstEnd = healed.indexOf('>', stylePattern.lastIndex)
+    if (firstEnd < 0) break
+    quotePattern.lastIndex = stylePattern.lastIndex
+    const quote = quotePattern.exec(healed)
+    if (!quote) break
+    if (!/\bcolor\s*:/i.test(healed.slice(stylePattern.lastIndex, quote.index))) continue
+    if (openingEnd <= quote.index) openingEnd = healed.indexOf('>', quote.index + 1)
+    if (openingEnd < 0) break
+    if (!QUOTE_CHARS.has(healed[openingEnd + 1])) continue
+    if (!closing || closing.index < openingEnd + 2) {
+      closingPattern.lastIndex = openingEnd + 2
+      closing = closingPattern.exec(healed)
+      if (!closing) break
+    }
+    // The existing greedy attribute match chooses the last eligible style before this delimiter.
+    candidates.set(firstEnd, { start: style.index, end: openingEnd, close: closing })
+  }
+
+  const openingPattern = /<span\b/gi
+  let end = -1
+  let cursor = 0
+  let result = ''
+  let opening: RegExpExecArray | null
+  while ((opening = openingPattern.exec(healed)) !== null) {
+    if (end < openingPattern.lastIndex) end = healed.indexOf('>', openingPattern.lastIndex)
+    if (end < 0) break
+    const candidate = candidates.get(end)
+    if (!candidate || candidate.start < openingPattern.lastIndex) continue
+    const closeEnd = candidate.close.index + candidate.close[0].length
+    result += healed.slice(cursor, opening.index)
+    result += repair(
+      healed.slice(opening.index, closeEnd),
+      healed.slice(opening.index, candidate.end + 1),
+      healed[candidate.end + 1],
+      healed.slice(candidate.end + 2, candidate.close.index),
+      candidate.close[0].slice(0, -1),
+      candidate.close[1],
+    )
+    cursor = closeEnd
+    openingPattern.lastIndex = closeEnd
+  }
+  return result + healed.slice(cursor)
 }
 
 /** Repair `<font color="abc>` into a valid opening tag before balancing it. */

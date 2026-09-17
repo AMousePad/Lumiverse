@@ -83,6 +83,17 @@ const cases = {
       completeEmphasis: (n: number) => ' *text* '.repeat(n),
     },
   },
+  healingSpans: {
+    path: 'frontend/src/lib/formatHealing.ts',
+    functionName: 'healFormattingArtifacts', normal: '<span style="color:red">“Hello</span>”',
+    fixtures: {
+      missingEnds: (n: number) => '<!--' + '<span style="color:x" '.repeat(n),
+      missingQuotedCloses: (n: number) => '<span style="color:red">“Hello'.repeat(n),
+      completeSpans: (n: number) => '<span style="color:red">“Hello</span>”'.repeat(n),
+      nestedAttributes: (n: number) => '<span ' + 'style="color:x" '.repeat(n) + '>“Hello</span>”',
+      outsideStyles: (n: number) => 'style="color:red" '.repeat(n) + '<span style="color:blue">“Hello</span>”' + 'style="color:red" '.repeat(n),
+    },
+  },
   dialogue: {
     functionName: 'colorizeDialogue', normal: '<p>"Hello," she said. Height: 5\'10&quot;.</p>',
     fixtures: {
