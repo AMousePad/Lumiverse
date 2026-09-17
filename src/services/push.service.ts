@@ -7,6 +7,7 @@ import { EventType } from "../ws/events";
 import { getVapidPrivateJWK, getVapidPublicKey } from "../crypto/vapid";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
 import { clampErrorMessage } from "../utils/provider-errors";
+import { normalizePushNotificationPayload } from "../utils/notification-text";
 import { getSetting } from "./settings.service";
 import type {
   PushSubscriptionRecord,
@@ -241,13 +242,14 @@ export async function sendPushToUser(
     (destination) => !options.destinationId || destination.id === options.destinationId,
   );
   if (subs.length === 0 && desktopDestinations.length === 0) return 0;
+  const normalizedNotification = normalizePushNotificationPayload(notification);
 
   let sent = 0;
   if (options.bypassPresence || !eventBus.isUserVisible(userId)) {
     sent += eventBus.sendDesktopNotification(
       userId,
       desktopDestinations.map((destination) => destination.id),
-      notification,
+      normalizedNotification,
     );
   }
 
@@ -265,7 +267,7 @@ export async function sendPushToUser(
             keys: { p256dh: sub.p256dh, auth: sub.auth },
           },
           message: {
-            payload: notification as any,
+            payload: normalizedNotification as any,
             adminContact: "mailto:noreply@lumiverse.app",
             options: {
               ttl: PUSH_TTL_SECONDS,
@@ -348,6 +350,7 @@ function getPreferences(userId: string): PushNotificationPreferences {
 }
 
 async function buildGenerationEndedNotification(
+  userId: string,
   payload: GenerationEndedPushPayload
 ): Promise<PushPayload> {
   const chatId = payload.chatId;
@@ -355,16 +358,20 @@ async function buildGenerationEndedNotification(
 
   // Resolve character name for the notification title when the chat still exists.
   let characterName = "Lumiverse";
+  let characterId: string | undefined;
   if (chatId) {
     try {
       const chat = getDb()
-        .query("SELECT character_id FROM chats WHERE id = ?")
-        .get(chatId) as { character_id: string } | undefined;
-      if (chat) {
+        .query("SELECT character_id FROM chats WHERE id = ? AND user_id = ?")
+        .get(chatId, userId) as { character_id: string | null } | undefined;
+      if (chat?.character_id) {
         const char = getDb()
-          .query("SELECT name FROM characters WHERE id = ?")
-          .get(chat.character_id) as { name: string } | undefined;
-        if (char?.name) characterName = char.name;
+          .query("SELECT name FROM characters WHERE id = ? AND user_id = ?")
+          .get(chat.character_id, userId) as { name: string } | undefined;
+        if (char) {
+          characterId = chat.character_id;
+          if (char.name) characterName = char.name;
+        }
       }
     } catch {
       // Fallback to the generic app title.
@@ -372,6 +379,9 @@ async function buildGenerationEndedNotification(
   }
 
   const targetUrl = chatId ? `/chat/${chatId}` : "/";
+  const icon = characterId
+    ? `/api/v1/characters/${encodeURIComponent(characterId)}/avatar?size=sm`
+    : undefined;
 
   if (isError) {
     const connectionName = notificationText(payload.connectionName, 60);
@@ -399,6 +409,7 @@ async function buildGenerationEndedNotification(
         ...(errorCode ? { errorCode } : {}),
         errorMessage,
       },
+      ...(icon ? { icon } : {}),
     };
   }
 
@@ -407,6 +418,7 @@ async function buildGenerationEndedNotification(
     body: (payload.content ?? "Your generation finished.").slice(0, 120),
     tag: chatId ? `generation-${chatId}` : "generation-test",
     data: { url: targetUrl, chatId, characterName },
+    ...(icon ? { icon } : {}),
   };
 }
 
@@ -446,7 +458,7 @@ export async function dispatchGenerationEndedPush(
     return { sent: 0, reason: "no_subscriptions" };
   }
 
-  const notification = await buildGenerationEndedNotification(payload);
+  const notification = await buildGenerationEndedNotification(userId, payload);
   const sent = await sendPushToUser(userId, notification, options);
   return { sent };
 }

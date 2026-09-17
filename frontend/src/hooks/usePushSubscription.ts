@@ -4,8 +4,10 @@ import {
   clearDesktopNotificationEnrollment,
   getDesktopNotificationDevice,
   getDesktopNotificationPermission,
+  getDesktopNotificationTransportStatus,
   isTauriDesktop,
   saveDesktopNotificationEnrollment,
+  type DesktopNotificationTransportStatus,
 } from '@/lib/desktop-notifications'
 
 interface PushCapability {
@@ -30,6 +32,21 @@ const PUSH_SUBSCRIPTION_STATE_TIMEOUT_MESSAGE = 'Timed out while checking the br
 const PUSH_SUBSCRIBE_TIMEOUT_MESSAGE = 'Timed out while the browser was creating the push subscription.'
 const CHROMIUM_PUSH_TIMEOUT_REASON =
   'Chromium timed out while contacting its push service. On macOS this is usually a stuck or blocked Google push/FCM connection; try Chrome/Edge stable, disable VPN/firewall filtering for Google push endpoints, or reinstall/reset the PWA notification permission.'
+const NATIVE_TRANSPORT_REQUIRED_REASON =
+  'This frontend requires a newer Lumiverse Desktop build with the native notification transport. Rebuild and reinstall the desktop companion, then relaunch it.'
+
+function nativeTransportRegistration(status: DesktopNotificationTransportStatus): Pick<PushCapability, 'registrationStatus' | 'registrationReason'> {
+  if (status.state === 'connected' || status.state === 'not_enrolled') {
+    return { registrationStatus: 'ready', registrationReason: null }
+  }
+  if (status.state === 'connecting' || status.state === 'retrying') {
+    return { registrationStatus: 'pending', registrationReason: status.lastError }
+  }
+  return {
+    registrationStatus: 'error',
+    registrationReason: status.lastError || 'The native notification transport is stopped.',
+  }
+}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return Promise.race([
@@ -96,11 +113,21 @@ async function getExistingPushSubscription(reg: ServiceWorkerRegistration): Prom
 
 async function detectPushCapability(): Promise<Omit<PushCapability, 'checked'>> {
   if (isTauriDesktop()) {
-    return {
-      supported: true,
-      reason: null,
-      registrationStatus: 'ready',
-      registrationReason: null,
+    try {
+      const status = await getDesktopNotificationTransportStatus()
+      if (status.transportVersion !== 1) throw new Error('Unsupported native notification transport')
+      return {
+        supported: true,
+        reason: null,
+        ...nativeTransportRegistration(status),
+      }
+    } catch {
+      return {
+        supported: false,
+        reason: NATIVE_TRANSPORT_REQUIRED_REASON,
+        registrationStatus: 'error',
+        registrationReason: NATIVE_TRANSPORT_REQUIRED_REASON,
+      }
     }
   }
   if (!window.isSecureContext) {
@@ -215,6 +242,7 @@ export function usePushSubscription() {
   )
   const [desktopDeviceId, setDesktopDeviceId] = useState<string | null>(null)
   const [desktopDestinationId, setDesktopDestinationId] = useState<string | null>(null)
+  const [nativeTransportStatus, setNativeTransportStatus] = useState<DesktopNotificationTransportStatus | null>(null)
 
   // Check current subscription status on mount
   useEffect(() => {
@@ -229,9 +257,10 @@ export function usePushSubscription() {
         Promise.all([
           getDesktopNotificationDevice(),
           getDesktopNotificationPermission(),
+          getDesktopNotificationTransportStatus(),
           pushApi.listSubscriptions(),
           pushApi.getDesktopInfo(),
-        ]).then(([device, permission, rows, info]) => {
+        ]).then(([device, permission, transport, rows, info]) => {
           if (cancelled) return
           const destination = rows.find(
             (row) => row.type === 'tauri_desktop' && row.device_id === device.deviceId,
@@ -242,9 +271,15 @@ export function usePushSubscription() {
             && device.enrollment.serverOrigin === window.location.origin
           setDesktopDeviceId(device.deviceId)
           setDesktopDestinationId(enrolled ? destination.id : null)
+          setNativeTransportStatus(transport)
           setPermissionState(permission)
           setSubscriptions(rows)
           setIsSubscribed(Boolean(enrolled))
+          setCapability((prev) => ({
+            ...prev,
+            checked: true,
+            ...nativeTransportRegistration(transport),
+          }))
         }).catch((error) => {
           if (!cancelled) {
             setCapability((prev) => ({
@@ -291,6 +326,41 @@ export function usePushSubscription() {
     }
   }, [desktop])
 
+  useEffect(() => {
+    if (!desktop) return
+    let cancelled = false
+    const refreshTransport = async () => {
+      try {
+        const status = await getDesktopNotificationTransportStatus()
+        if (cancelled) return
+        setNativeTransportStatus(status)
+        setCapability((prev) => ({
+          ...prev,
+          checked: true,
+          supported: status.transportVersion === 1,
+          reason: status.transportVersion === 1 ? null : NATIVE_TRANSPORT_REQUIRED_REASON,
+          ...nativeTransportRegistration(status),
+        }))
+      } catch {
+        if (cancelled) return
+        setNativeTransportStatus(null)
+        setCapability({
+          checked: true,
+          supported: false,
+          reason: NATIVE_TRANSPORT_REQUIRED_REASON,
+          registrationStatus: 'error',
+          registrationReason: NATIVE_TRANSPORT_REQUIRED_REASON,
+        })
+      }
+    }
+    void refreshTransport()
+    const timer = window.setInterval(refreshTransport, 5_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [desktop])
+
   const subscribe = useCallback(async (): Promise<boolean> => {
     if (!capability.supported) {
       throw new Error(capability.reason || 'Push notifications are not supported in this browser.')
@@ -304,6 +374,10 @@ export function usePushSubscription() {
 
     try {
       if (desktop) {
+        const transport = await getDesktopNotificationTransportStatus().catch(() => null)
+        if (!transport || transport.transportVersion !== 1) {
+          throw new Error(NATIVE_TRANSPORT_REQUIRED_REASON)
+        }
         const device = desktopDeviceId
           ? { deviceId: desktopDeviceId }
           : await getDesktopNotificationDevice()
@@ -319,8 +393,14 @@ export function usePushSubscription() {
           serverInstanceId: enrollment.serverInstanceId,
           serverOrigin: window.location.origin,
         })
+        const restartedTransport = await getDesktopNotificationTransportStatus()
         setDesktopDeviceId(device.deviceId)
         setDesktopDestinationId(enrollment.destination.id)
+        setNativeTransportStatus(restartedTransport)
+        setCapability((prev) => ({
+          ...prev,
+          ...nativeTransportRegistration(restartedTransport),
+        }))
         setIsSubscribed(true)
         setSubscriptions((prev) => [
           enrollment.destination,
@@ -412,16 +492,23 @@ export function usePushSubscription() {
   }, [desktop, subscriptions])
 
   const testPush = useCallback(async (): Promise<PushTestResult> => {
+    if (desktop && nativeTransportStatus?.state !== 'connected') {
+      throw new Error(
+        nativeTransportStatus?.lastError
+        || 'The native notification transport is not connected yet. Try again in a moment.'
+      )
+    }
     return pushApi.test(desktop ? desktopDestinationId ?? undefined : undefined)
-  }, [desktop, desktopDestinationId])
+  }, [desktop, desktopDestinationId, nativeTransportStatus])
 
   const refresh = useCallback(async () => {
     if (desktop) {
-      const [subs, device, permission, info] = await Promise.all([
+      const [subs, device, permission, info, transport] = await Promise.all([
         pushApi.listSubscriptions(),
         getDesktopNotificationDevice(),
         getDesktopNotificationPermission(),
         pushApi.getDesktopInfo(),
+        getDesktopNotificationTransportStatus(),
       ])
       const destination = subs.find(
         (row) => row.type === 'tauri_desktop' && row.device_id === device.deviceId,
@@ -433,13 +520,13 @@ export function usePushSubscription() {
       setSubscriptions(subs)
       setDesktopDeviceId(device.deviceId)
       setDesktopDestinationId(enrolled ? destination.id : null)
+      setNativeTransportStatus(transport)
       setPermissionState(permission)
       setIsSubscribed(Boolean(enrolled))
       setCapability((prev) => ({
         ...prev,
         checked: true,
-        registrationStatus: 'ready',
-        registrationReason: null,
+        ...nativeTransportRegistration(transport),
       }))
       return
     }
@@ -473,6 +560,7 @@ export function usePushSubscription() {
     unsubscribeAll,
     testPush,
     refresh,
+    nativeTransportStatus,
     registrationKind: desktop ? 'native' as const : 'service_worker' as const,
   }
 }

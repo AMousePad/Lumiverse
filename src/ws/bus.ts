@@ -432,11 +432,11 @@ class EventBus {
     const now = Date.now();
     let closed = 0;
     for (const [ws, lastActivity] of this.clientLastActivity) {
-      // The desktop transport runs in Tauri's permanently hidden host WebView,
-      // whose timers may be background-throttled by the OS. Give it the same
-      // lease as a suspended PWA; real socket closure still removes it at once.
+      // Hidden browser/PWA sessions need a long lease because their JavaScript
+      // timers can be suspended. Desktop notification sockets now heartbeat
+      // from Tauri's native runtime and can use the normal, fast stale-client
+      // timeout even while every WebView is hidden.
       const timeoutMs = this.clientVisibility.get(ws) === false
-        || this.desktopNotificationClient.has(ws)
         ? HIDDEN_CLIENT_TIMEOUT_MS
         : CLIENT_TIMEOUT_MS;
       if (now - lastActivity > timeoutMs) {

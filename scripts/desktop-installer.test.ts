@@ -83,6 +83,9 @@ test("macOS install copies the app and refreshes its desktop symlink", async () 
   const artifact = join(root, "bundle", "Lumiverse Desktop.app");
   mkdirSync(join(artifact, "Contents", "MacOS"), { recursive: true });
   mkdirSync(join(home, "Desktop"), { recursive: true });
+  const legacyApp = join(home, "Applications", "Lumiverse Desktop.app");
+  mkdirSync(join(legacyApp, "Contents", "MacOS"), { recursive: true });
+  writeFileSync(join(legacyApp, "Contents", "MacOS", "lumiverse-tray"), "stale-binary");
   writeFileSync(join(artifact, "Contents", "MacOS", "lumiverse-tray"), "binary");
   const staleTarget = join(home, "old.app");
   symlinkSync(staleTarget, join(home, "Desktop", "Lumiverse Desktop.app"));
@@ -100,6 +103,7 @@ test("macOS install copies the app and refreshes its desktop symlink", async () 
   expect(result.installedPath).toBe(join(applications, "Lumiverse Desktop.app"));
   expect(readFileSync(join(result.installedPath, "Contents", "MacOS", "lumiverse-tray"), "utf8")).toBe("binary");
   expect(existsSync(artifact)).toBe(false);
+  expect(existsSync(legacyApp)).toBe(false);
   expect(result.shortcuts).toHaveLength(2);
   expect(commands.some((command) => command.includes("-f") && command.includes(result.installedPath))).toBe(true);
   expect(commands).toContainEqual(["/usr/bin/mdimport", result.installedPath]);

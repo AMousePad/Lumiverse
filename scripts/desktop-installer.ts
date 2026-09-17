@@ -174,6 +174,20 @@ function replaceMacApp(artifact: string, installedPath: string): void {
   cpSync(artifact, installedPath, { recursive: true, force: true });
 }
 
+function removeLegacyUserMacApp(homeDir: string, installedPath: string): void {
+  const legacyPath = join(homeDir, "Applications", "Lumiverse Desktop.app");
+  if (legacyPath === installedPath) return;
+
+  // Early installers used ~/Applications. Leaving that bundle behind gives
+  // LaunchServices two apps with the same identifier, and Spotlight may keep
+  // launching the stale per-user copy after /Applications is updated. Only
+  // remove a directory that has Lumiverse's exact executable layout.
+  const legacyExecutable = join(legacyPath, "Contents", "MacOS", "lumiverse-tray");
+  if (!existsSync(legacyExecutable)) return;
+  rmSync(legacyPath, { recursive: true, force: true });
+  console.log(`Removed stale legacy desktop install: ${legacyPath}`);
+}
+
 function isPermissionError(error: unknown): boolean {
   return error instanceof Error
     && "code" in error
@@ -212,6 +226,7 @@ async function installMacApp(
       throw new Error(`macOS application install exited with code ${exitCode}`);
     }
   }
+  removeLegacyUserMacApp(homeDir, installedPath);
 
   const shortcuts = [installedPath];
   const desktopDir = join(homeDir, "Desktop");

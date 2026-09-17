@@ -17,6 +17,25 @@ export interface DesktopNotificationEnrollmentInput {
   serverOrigin: string
 }
 
+export type DesktopNotificationTransportState =
+  | 'not_enrolled'
+  | 'connecting'
+  | 'connected'
+  | 'retrying'
+  | 'blocked'
+  | 'stopped'
+
+export interface DesktopNotificationTransportStatus {
+  transportVersion: number
+  state: DesktopNotificationTransportState
+  destinationId: string | null
+  serverOrigin: string | null
+  lastError: string | null
+  connectedAt: number | null
+  lastReceivedAt: number | null
+  lastNotificationAt: number | null
+}
+
 export function isTauriDesktop(): boolean {
   return '__TAURI_INTERNALS__' in window
 }
@@ -27,6 +46,10 @@ export function getDesktopNotificationDevice(): Promise<DesktopNotificationDevic
 
 export function getDesktopNotificationPermission(request = false): Promise<NotificationPermission> {
   return invoke<NotificationPermission>('desktop_notification_permission', { request })
+}
+
+export function getDesktopNotificationTransportStatus(): Promise<DesktopNotificationTransportStatus> {
+  return invoke<DesktopNotificationTransportStatus>('desktop_notification_transport_status')
 }
 
 export function saveDesktopNotificationEnrollment(

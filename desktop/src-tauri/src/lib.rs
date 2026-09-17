@@ -168,6 +168,7 @@ pub fn run() {
         .manage(frontend::FrontendState::default())
         .manage(frontend::WidgetPocState::default())
         .manage(frontend::DesktopWidgetCatalogState::default())
+        .manage(notifications::DesktopNotificationTransportState::default())
         .invoke_handler(tauri::generate_handler![
             runner::runner_start,
             runner::runner_send,
@@ -203,10 +204,9 @@ pub fn run() {
             frontend::return_extension_widget_from_tray,
             notifications::desktop_notification_device,
             notifications::desktop_notification_permission,
+            notifications::desktop_notification_transport_status,
             notifications::save_desktop_notification_enrollment,
             notifications::clear_desktop_notification_enrollment,
-            notifications::desktop_notification_connection,
-            notifications::show_desktop_notification,
         ]);
 
     #[cfg(target_os = "macos")]
@@ -224,7 +224,10 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
             #[cfg(target_os = "macos")]
             app.set_dock_visibility(false);
-            let _ = app;
+            if let Err(error) = notifications::restart_desktop_notification_transport(app.handle())
+            {
+                eprintln!("[desktop-notification] startup failed: {error}");
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -233,6 +236,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 // Cover native exit paths on every platform, including ones
                 // that never passed through the tray's JS quit handshake.
+                notifications::stop_desktop_notification_transport(app);
                 runner::force_stop(app);
             }
         });

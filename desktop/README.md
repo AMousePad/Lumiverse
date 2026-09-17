@@ -144,7 +144,9 @@ stopped.
 
 On macOS, the app is installed in `/Applications` so Spotlight and the system
 Applications interface discover it normally. macOS may request administrator
-approval while staging the app there.
+approval while staging the app there. The installer also removes the obsolete
+`~/Applications/Lumiverse Desktop.app` location used by early builds so
+LaunchServices cannot reopen a stale duplicate after an update.
 
 On Windows, this command also downloads the official architecture-matched
 `rustup-init.exe` and installs the minimal stable Rust toolchain automatically

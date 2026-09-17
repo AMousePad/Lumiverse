@@ -14,6 +14,7 @@
   },
   "permissions": [
     "allow-configure-frontend-appearance",
+    "desktop-frontend-presence",
     "desktop-startup-appearance",
     "desktop-widget-catalog",
     "desktop-notification-registration",

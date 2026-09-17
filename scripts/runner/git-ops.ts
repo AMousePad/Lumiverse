@@ -1,5 +1,5 @@
 import { delimiter, join } from "path";
-import { homedir } from "os";
+import { homedir, platform } from "os";
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
 import { runGit, getUpstreamRef, getCurrentBranch } from "./lib/git.js";
 import {
@@ -888,6 +888,15 @@ export const FRONTEND_BUILD_STEPS = [
   },
 ] as const;
 
+function desktopInstallBundleArgs(): string[] {
+  switch (platform()) {
+    case "darwin": return ["--bundles", "app"];
+    case "win32": return ["--bundles", "nsis"];
+    case "linux": return ["--bundles", "appimage"];
+    default: return [];
+  }
+}
+
 export const DESKTOP_BUILD_STEPS = [
   {
     label: "desktop dependency install",
@@ -899,7 +908,10 @@ export const DESKTOP_BUILD_STEPS = [
   {
     label: "desktop Tauri build",
     progress: "Compiling the desktop app — this can take several minutes...",
-    command: ["bun", "run", "tauri", "build"],
+    // The scripted workflow installs the native app artifact directly. Avoid
+    // also building optional distributable media (notably macOS DMGs), whose
+    // Finder/mount tooling can fail after the usable .app already succeeded.
+    command: ["bun", "run", "tauri", "build", ...desktopInstallBundleArgs()],
   },
 ] as const satisfies ReadonlyArray<{ label: string; progress: string; command: readonly string[] | null }>;
 

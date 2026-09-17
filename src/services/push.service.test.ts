@@ -6,6 +6,10 @@ import { eventBus } from "../ws/bus";
 const db = new Database(":memory:");
 db.exec(await Bun.file(new URL("../db/migrations/035_push_subscriptions.sql", import.meta.url)).text());
 db.exec(await Bun.file(new URL("../db/migrations/117_desktop_notification_destinations.sql", import.meta.url)).text());
+db.exec(`
+  CREATE TABLE chats (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, character_id TEXT);
+  CREATE TABLE characters (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL);
+`);
 let pushNotificationPreferences: Record<string, unknown> | null = null;
 const builtPayloads: Array<Record<string, unknown>> = [];
 mock.module("../db/connection", () => ({ getDb: () => db }));
@@ -37,7 +41,10 @@ const {
   sendPushToUser,
 } = await import("./push.service");
 const { pushRoutes } = await import("../routes/push.routes");
-const { desktopNotificationTransportRoutes } = await import("../routes/desktop-notifications.routes");
+const {
+  desktopNotificationTransportRoutes,
+  parseDesktopNotificationMediaPath,
+} = await import("../routes/desktop-notifications.routes");
 const { consumeDesktopNotificationTicket } = await import("../ws/tickets");
 const userId = "push-test-user";
 const originalFetch = globalThis.fetch;
@@ -52,6 +59,8 @@ app.route("/desktop-notifications", desktopNotificationTransportRoutes);
 beforeEach(() => {
   db.exec("DELETE FROM push_subscriptions");
   db.exec("DELETE FROM desktop_notification_destinations");
+  db.exec("DELETE FROM chats");
+  db.exec("DELETE FROM characters");
   fetchMock.mockClear();
   builtPayloads.length = 0;
   pushNotificationPreferences = null;
@@ -96,6 +105,23 @@ describe("push presence suppression", () => {
   test("delivers when no app sessions are connected", async () => {
     expect(await dispatchGenerationEndedPush(userId, { content: "Done" })).toEqual({ sent: 2 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("adds the owned chat character avatar as the notification thumbnail", async () => {
+    db.query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)")
+      .run("char-1", userId, "Alice");
+    db.query("INSERT INTO chats (id, user_id, character_id) VALUES (?, ?, ?)")
+      .run("chat-1", userId, "char-1");
+
+    expect(await dispatchGenerationEndedPush(userId, {
+      chatId: "chat-1",
+      content: "Done",
+    })).toEqual({ sent: 2 });
+    expect(builtPayloads).toHaveLength(2);
+    expect(builtPayloads[0]).toMatchObject({
+      title: "Alice",
+      icon: "/api/v1/characters/char-1/avatar?size=sm",
+    });
   });
 
   test("registers a durable desktop credential without exposing it in destination listings", () => {
@@ -159,6 +185,38 @@ describe("push presence suppression", () => {
     }
   });
 
+  test("converts notification HTML to plain text before every delivery", async () => {
+    const enrollment = createDesktopDestination(userId, {
+      deviceId: "desktop-device-plain-text",
+    });
+    const frames: string[] = [];
+    const desktopSocket = {
+      readyState: 1,
+      send: (frame: string) => frames.push(frame),
+      close: () => {},
+    } as any;
+    eventBus.addDesktopNotificationClient(desktopSocket, userId, enrollment.destination.id);
+    try {
+      expect(await sendPushToUser(userId, {
+        title: "<font color='red'>Alert</font>",
+        body: "<div>First</div><div>Second<br>Third</div>",
+      })).toBe(3);
+      expect(builtPayloads).toHaveLength(2);
+      expect(builtPayloads[0]).toMatchObject({
+        title: "Alert",
+        body: "First\nSecond\nThird",
+      });
+      expect(JSON.parse(frames[0])).toMatchObject({
+        payload: {
+          title: "Alert",
+          body: "First\nSecond\nThird",
+        },
+      });
+    } finally {
+      eventBus.removeClient(desktopSocket);
+    }
+  });
+
   test("exchanges the durable credential for a single-use notification ticket", async () => {
     const enrollment = createDesktopDestination(userId, {
       deviceId: "desktop-device-ticket",
@@ -188,6 +246,37 @@ describe("push presence suppression", () => {
       headers: { authorization: "Bearer lvd_invalid" },
     });
     expect(rejected.status).toBe(401);
+  });
+
+  test("limits desktop media credentials to supported user-owned image paths", async () => {
+    expect(parseDesktopNotificationMediaPath("/api/v1/characters/char-1/avatar?size=sm")).toEqual({
+      kind: "character_avatar",
+      id: "char-1",
+      size: "sm",
+    });
+    expect(parseDesktopNotificationMediaPath("/api/v1/images/image_1?size=lg")).toEqual({
+      kind: "image",
+      id: "image_1",
+      size: "lg",
+    });
+    for (const invalid of [
+      "//attacker.example/image.png",
+      "https://attacker.example/image.png",
+      "/api/v1/characters/char-1/avatar?variant=original",
+      "/api/v1/images/image-1?size=full",
+      "/api/v1/secrets",
+    ]) {
+      expect(parseDesktopNotificationMediaPath(invalid)).toBeNull();
+    }
+
+    const enrollment = createDesktopDestination(userId, {
+      deviceId: "desktop-device-media-scope",
+    });
+    const rejected = await app.request(
+      "/desktop-notifications/media?path=%2Fapi%2Fv1%2Fsecrets",
+      { headers: { authorization: `Bearer ${enrollment.credential}` } },
+    );
+    expect(rejected.status).toBe(400);
   });
 
   test("includes generation failure diagnostics and connection name", async () => {
