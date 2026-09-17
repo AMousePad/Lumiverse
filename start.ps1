@@ -96,6 +96,56 @@ $BackendDir  = $PSScriptRoot
 
 if (-not $FrontendPath) { $FrontendPath = Join-Path $BackendDir "frontend" }
 
+# ─── Protect Windows system directories ────────────────────────────────────
+
+function Test-IsPathWithinDirectory {
+    param([string]$Path, [string]$Directory)
+
+    try {
+        $normalizedPath = [IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\', '/'))
+        $normalizedDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd([char[]]@('\', '/'))
+    } catch {
+        return $false
+    }
+
+    if ([string]::Equals($normalizedPath, $normalizedDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+
+    return $normalizedPath.StartsWith(
+        $normalizedDirectory + [IO.Path]::DirectorySeparatorChar,
+        [StringComparison]::OrdinalIgnoreCase
+    )
+}
+
+function Assert-SafeFirstRunLocation {
+    $dataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { Join-Path $BackendDir "data" }
+    $identityFile = Join-Path $dataDir "lumiverse.identity"
+    $credentialsFile = Join-Path $dataDir "owner.credentials"
+
+    # Existing installations remain runnable; this guard only prevents a new
+    # installation from writing dependencies and application data to System32.
+    if ((Test-Path $identityFile) -and (Test-Path $credentialsFile)) { return }
+
+    $windowsDirectory = if ($env:SystemRoot) { $env:SystemRoot } else { $env:WINDIR }
+    if (-not $windowsDirectory) { return }
+
+    $system32Directory = Join-Path $windowsDirectory "System32"
+    if (-not (Test-IsPathWithinDirectory $BackendDir $system32Directory)) { return }
+
+    $suggestedRoot = if ($env:USERPROFILE) {
+        Join-Path $env:USERPROFILE "Lumiverse"
+    } else {
+        "a user-owned folder outside $windowsDirectory"
+    }
+
+    Write-Host ""
+    Write-Err "First-time installation stopped: Lumiverse cannot be installed inside $system32Directory."
+    Write-Err "Move this repository to $suggestedRoot, then run .\start.ps1 again."
+    Write-Host ""
+    exit 1
+}
+
 # ─── Ensure Bun is installed ────────────────────────────────────────────────
 
 function Ensure-Bun {
@@ -509,6 +559,7 @@ Write-Host ""
 # data directory instead of silently creating a new empty ./data directory.
 Load-EnvFile
 
+Assert-SafeFirstRunLocation
 Ensure-Bun
 Update-BunChannel
 Ensure-MinimumBunVersion
