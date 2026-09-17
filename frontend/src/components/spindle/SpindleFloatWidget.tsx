@@ -7,6 +7,7 @@ import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/compo
 import { useLongPress } from '@/hooks/useLongPress'
 import { getLiveRootRecordExact } from '@/lib/spindle/live-root-registry'
 import { scheduleSpindleDomTask } from '@/lib/spindle/browser-scheduler'
+import { getUiScale, layoutViewportSize, toLayoutDelta } from '@/lib/uiScale'
 import {
   FLOAT_WIDGET_VIEWPORT_PADDING,
   resolveFloatWidgetSize,
@@ -24,15 +25,18 @@ export default function SpindleFloatWidget({ widget }: Props) {
   const setPlacementHidden = useStore((s) => s.setPlacementHidden)
   const isMobile = useIsMobile()
 
-  const dragging = useRef(false)
-  const offset = useRef({ x: 0, y: 0 })
+  const drag = useRef<{
+    pointerId: number
+    x: number
+    y: number
+    scale: number
+    start: { x: number; y: number }
+    position: { x: number; y: number }
+  } | null>(null)
   const contentHostRef = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState({ x: widget.x, y: widget.y })
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
-  const [viewport, setViewport] = useState(() => ({
-    width: window.innerWidth,
-    height: window.innerHeight,
-  }))
+  const [viewport, setViewport] = useState(() => layoutViewportSize())
 
   const size = useMemo(() => resolveFloatWidgetSize(
     isMobile,
@@ -42,10 +46,16 @@ export default function SpindleFloatWidget({ widget }: Props) {
 
   useEffect(() => {
     const updateViewport = () => {
-      setViewport({ width: window.innerWidth, height: window.innerHeight })
+      const next = layoutViewportSize()
+      setViewport((prev) => prev.width === next.width && prev.height === next.height ? prev : next)
     }
+    const observer = new MutationObserver(updateViewport)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
     window.addEventListener('resize', updateViewport)
-    return () => window.removeEventListener('resize', updateViewport)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateViewport)
+    }
   }, [])
 
   useEffect(() => {
@@ -99,39 +109,51 @@ export default function SpindleFloatWidget({ widget }: Props) {
 
   const isFullscreen = widget.fullscreen ?? false
 
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    if (isFullscreen || e.button !== 0) return
-    dragging.current = true
-    offset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }
-    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (isFullscreen || e.button !== 0 || drag.current) return
+    drag.current = {
+      pointerId: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      scale: getUiScale(),
+      start: pos,
+      position: pos,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
     e.preventDefault()
   }, [pos, isFullscreen])
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragging.current || isFullscreen) return
-    const raw = { x: e.clientX - offset.current.x, y: e.clientY - offset.current.y }
-    setPos(clampPos(raw.x, raw.y))
+    const active = drag.current
+    if (!active || active.pointerId !== e.pointerId || isFullscreen) return
+    // Pointer coordinates are rendered CSS pixels; left/top live inside the
+    // UI zoom layer. Device pixel ratio is already handled by the WebView.
+    const delta = toLayoutDelta(e.clientX - active.x, e.clientY - active.y, active.scale)
+    active.position = clampPos(active.start.x + delta.x, active.start.y + delta.y)
+    setPos(active.position)
   }, [clampPos, isFullscreen])
 
-  const handlePointerUp = useCallback(() => {
-    if (!dragging.current || isFullscreen) return
-    dragging.current = false
-    let snapped = { x: 0, y: 0 }
-    setPos((prev) => {
-      snapped = snapToEdge(prev.x, prev.y)
-      return snapped
-    })
-    // Defer store update out of React's state-computation phase to avoid
-    // triggering a SpindleUIManager re-render while this component is mid-render.
-    requestAnimationFrame(() => {
-      updateFloatWidget(widget.id, snapped)
-      window.dispatchEvent(
-        new CustomEvent('spindle:float-drag-end', {
-          detail: { widgetId: widget.id, ...snapped },
-        })
-      )
-    })
-  }, [snapToEdge, updateFloatWidget, widget.id, isFullscreen])
+  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const active = drag.current
+    if (!active || active.pointerId !== e.pointerId) return
+    drag.current = null
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    if (isFullscreen) return
+    // Release can carry a newer position than the last pointermove. Cancellation
+    // and lost capture instead retain the last position we actually displayed.
+    if (e.type === 'pointerup') {
+      const delta = toLayoutDelta(e.clientX - active.x, e.clientY - active.y, active.scale)
+      active.position = clampPos(active.start.x + delta.x, active.start.y + delta.y)
+    }
+    const snapped = snapToEdge(active.position.x, active.position.y)
+    setPos(snapped)
+    updateFloatWidget(widget.id, snapped)
+    window.dispatchEvent(
+      new CustomEvent('spindle:float-drag-end', {
+        detail: { widgetId: widget.id, ...snapped },
+      })
+    )
+  }, [clampPos, snapToEdge, updateFloatWidget, widget.id, isFullscreen])
 
   const longPress = useLongPress({
     onLongPress: (pos) => setContextMenu(pos),
@@ -161,9 +183,10 @@ export default function SpindleFloatWidget({ widget }: Props) {
         const pad = FLOAT_WIDGET_VIEWPORT_PADDING
         const resetWidth = widget.defaultWidth
         const resetHeight = widget.defaultHeight
+        const bounds = layoutViewportSize()
         const reset = {
-          x: Math.max(pad, Math.min(widget.defaultX, window.innerWidth - resetWidth - pad)),
-          y: Math.max(pad, Math.min(widget.defaultY, window.innerHeight - resetHeight - pad)),
+          x: Math.max(pad, Math.min(widget.defaultX, bounds.width - resetWidth - pad)),
+          y: Math.max(pad, Math.min(widget.defaultY, bounds.height - resetHeight - pad)),
           width: resetWidth,
           height: resetHeight,
         }
@@ -196,6 +219,8 @@ export default function SpindleFloatWidget({ widget }: Props) {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onLostPointerCapture={handlePointerUp}
         {...longPress}
         onTouchStart={(e) => { if (!widget.root.contains(e.target as Node)) longPress.onTouchStart(e) }}
         onContextMenu={handleContextMenu}

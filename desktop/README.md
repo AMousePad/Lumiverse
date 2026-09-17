@@ -181,13 +181,19 @@ Ubuntu 22.04), and separate macOS Apple Silicon and Intel (`.dmg`).
   commit and attaches them to a `desktop-v<version>` release on GitHub,
   creating it if missing and pinning it to the merge commit. Reruns replace
   matching assets; if any platform build fails, nothing is attached.
-- Desktop versioning is independent of server release tags. Keep
-  `desktop/package.json`, `src-tauri/Cargo.toml`, the app entry in
-  `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` in sync when bumping.
-  After changing the three manifest versions, run `bun run desktop:lock` from
-  the repository root and commit the resulting `Cargo.lock` change. CI checks
-  the locked dependency resolution and version agreement before starting any
-  platform builds.
+- Desktop versioning is independent of server release tags. One command keeps
+  the four version-bearing files in sync:
+
+  ```bash
+  bun run desktop:version 0.3.0
+  ```
+
+  This rewrites `desktop/package.json`, `src-tauri/Cargo.toml`, and
+  `src-tauri/tauri.conf.json`, then refreshes `src-tauri/Cargo.lock` through
+  `bun run desktop:lock` — cargo is the lockfile's only writer, never edit it
+  by hand. Commit the four changed files together; CI checks the locked
+  dependency resolution and version agreement before starting any platform
+  builds.
 
 ## License
 
