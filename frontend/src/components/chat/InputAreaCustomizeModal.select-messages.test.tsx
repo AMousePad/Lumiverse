@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
-import { isExtensionComposerActionId } from './composerActionOwnership'
+import { isCoreOwnedComposerActionId, isExtensionComposerActionId } from './composerActionOwnership'
 
 import { ListChecks } from 'lucide-react'
 
@@ -74,16 +74,27 @@ describe('composer selectMessages catalog and migration', () => {
     const withSuite = buildComposerActionMap(quickToolbarCatalog, true)
     expect(withSuite.has('connectionsPicker')).toBe(true)
     expect(withSuite.has('qt:connections')).toBe(true)
-    expect(withSuite.has('chat.customize-composer')).toBe(true)
+    expect(withSuite.has('chat.customize-composer')).toBe(false)
     expect(withSuite.has('lumiverse_suite.lorebook.open_half')).toBe(true)
     expect(withSuite.has('lumiverse_suite.lorebook.open_enhanced')).toBe(true)
     // The extension contribution is represented by the stable native launcher.
     expect(withSuite.has('lumiverse_suite.connections_picker.open')).toBe(false)
   })
-  test('retains native composer actions when Suite-owned persisted actions are gated', () => {
-    expect(isExtensionComposerActionId('chat.customize-composer')).toBe(true)
+  test('reserves the native customizer while retaining other native composer actions', () => {
+    expect(isCoreOwnedComposerActionId('chat.customize-composer')).toBe(true)
+    expect(isExtensionComposerActionId('chat.customize-composer')).toBe(false)
     expect(isExtensionComposerActionId('home')).toBe(false)
     expect(isExtensionComposerActionId('selectMessages')).toBe(false)
+  })
+
+  test('prunes a legacy catalog-inserted customizer in favor of the pinned native launcher', () => {
+    const normalized = normalizeComposerActionBarState({
+      order: ['home', 'chat.customize-composer', 'regen'],
+      hidden: ['chat.customize-composer'],
+    })
+
+    expect(normalized.order).not.toContain('chat.customize-composer')
+    expect(normalized.hidden).not.toContain('chat.customize-composer')
   })
 
   test('pre-feature persisted blobs append and hide selectMessages', () => {

@@ -97,7 +97,7 @@ import InputAreaCustomizeModal, {
   type ComposerActionId,
 } from './InputAreaCustomizeModal'
 import { ComposerActionBarLive } from './InputAreaComposerBar'
-import { isExtensionComposerActionId } from './composerActionOwnership'
+import { isCoreOwnedComposerActionId, isExtensionComposerActionId } from './composerActionOwnership'
 import { isGuideActive, isGuideAutoEnabled } from '@/lib/guided-generations'
 
 interface InputAreaProps {
@@ -3467,6 +3467,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
                   return composerActions[id]
                 }
                 const extraId = fromComposerExtraId(id)
+                // The pinned native launcher is the sole composer presentation.
+                // Ignore the catalog contribution and any legacy persisted copy.
+                if (isCoreOwnedComposerActionId(extraId)) return null
                 if (!hasLumiverseSuite && isExtensionComposerActionId(extraId)) return null
                 if (extraId === 'lumiverse_suite.connections_picker.open') return composerActions.connectionsPicker
                 const action = qtActionById.get(extraId)
@@ -3488,7 +3491,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               }}
             >
               <span data-spindle-mount="chat_actions" data-spindle-scope={`chat:${chatId}:actions`} style={{ display: 'contents' }} />
-              {hasLumiverseSuite && showComposerCustomizeGear && (
+              {showComposerCustomizeGear && (
                 <button
                   type="button"
                   className={clsx(styles.actionBtn, styles.composerCustomizeGear, customizeOpen && styles.actionBtnActive)}
@@ -3511,7 +3514,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         )
       })()}
 
-      {hasLumiverseSuite && customizeOpen && (
+      {customizeOpen && (
         <InputAreaCustomizeModal
           onClose={() => setCustomizeOpen(false)}
           order={composerActionBar.order}

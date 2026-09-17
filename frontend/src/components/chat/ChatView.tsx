@@ -157,7 +157,9 @@ export default function ChatView() {
   const suiteExtensionEnabled = useStore((s) => hasEnabledFrontendExtension(s.extensions, 'lumiverse_suite'))
   const [portraitSurfaceOccupied, setPortraitSurfaceOccupied] = useState(false)
   const quickToolbarSettings = useStore((s) => s.quickToolbarSettings)
-  const nativeDockActionSide = suiteExtensionEnabled && quickToolbarSettings?.nativeDockActionSide === 'left' ? 'left' : 'right'
+  const nativeDockActionSide = suiteExtensionEnabled
+    ? (quickToolbarSettings?.nativeDockActionSide === 'left' ? 'left' : 'right')
+    : undefined
   const quickToolbarPlacement = readQuickToolbarPlacement(quickToolbarSettings)
   // Native chat-top visibility follows the persisted flags in both Suite states.
   // Settings exposes these checkboxes with and without the Suite, so an absent

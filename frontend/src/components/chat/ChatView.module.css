@@ -417,15 +417,23 @@
 .chatToolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  padding: 6px 8px;
-  gap: 6px;
+  justify-content: flex-end;
+  padding: 6px 12px;
+  gap: 4px;
   flex-shrink: 0;
   width: 100%;
   align-self: stretch;
   background: var(--lcs-glass-bg, var(--lumiverse-bg-elevated));
   border-bottom: 1px solid var(--lcs-glass-border, var(--lumiverse-border));
   transition: opacity 180ms ease, transform 180ms ease;
+}
+
+/* Suite owns alternate native-action placement. Keep the original core rail
+   alignment unless ChatView explicitly opts into that Suite-owned contract. */
+.chatToolbar[data-native-action-side] {
+  justify-content: flex-start;
+  padding: 6px 8px;
+  gap: 6px;
 }
 
 .chatToolbar[data-dock-request='strip'],
@@ -547,6 +555,10 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: 4px;
+}
+
+.chatToolbar[data-native-action-side] .nativeDockActions {
   gap: 6px;
   order: 2;
   margin-inline-start: auto;

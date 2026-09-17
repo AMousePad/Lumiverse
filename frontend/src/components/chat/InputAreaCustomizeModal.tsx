@@ -45,6 +45,7 @@ import { Toggle } from '@/components/shared/Toggle'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { filterActionIds, filterActions } from '@/lib/toolbarActionSearch'
 import { hasEnabledFrontendExtension } from '@/lib/spindle/frontend-extension-availability'
+import { isCoreOwnedComposerActionId } from './composerActionOwnership'
 import styles from './InputArea.module.css'
 
 /** localStorage key — no store slice exists on the InputArea allowlist. */
@@ -168,7 +169,10 @@ export function buildComposerActionMap(
   if (!hasLumiverseSuite) return map
 
   for (const action of actionCatalog) {
-    if (action.id === 'lumiverse_suite.connections_picker.open') continue
+    if (
+      action.id === 'lumiverse_suite.connections_picker.open'
+      || isCoreOwnedComposerActionId(action.id)
+    ) continue
     const item = composerExtraItem(action)
     if (map.has(item.id)) continue
     map.set(item.id, item)
@@ -184,7 +188,7 @@ export function normalizeComposerActionBarState(raw: unknown): ComposerActionBar
   const order: string[] = []
   if (Array.isArray(source.order)) {
     for (const id of source.order) {
-      if (!isPersistedActionId(id) || seen.has(id)) continue
+      if (!isPersistedActionId(id) || seen.has(id) || isCoreOwnedComposerActionId(id)) continue
       seen.add(id)
       order.push(id)
     }
