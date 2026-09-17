@@ -245,6 +245,46 @@ afterAll(async () => {
   }
 })
 
+test('floating widget leaves child presses untouched until drag intent', () => {
+  const entry = consumers('clickable').find((consumer) => consumer.name === 'float widget')!
+  unregisterRoots.push(registerLiveRoot(extensionId, entry.root, entry.permission, generation))
+  const button = document.createElement('button')
+  button.textContent = 'Extension action'
+  entry.root.append(button)
+  renderConsumers([entry])
+  runQueuedPaint()
+
+  const previousComputedStyle = globalObject.getComputedStyle
+  globalObject.getComputedStyle = domWindow.getComputedStyle.bind(domWindow)
+  const surface = document.querySelector<HTMLElement>('[data-consumer="float widget"] > div')!
+  // JSDOM has no pointer capture implementation. Real retargeting is checked
+  // in the browser; here verify default behavior and the drag-end contract.
+  surface.setPointerCapture = () => {}
+  surface.hasPointerCapture = () => false
+  let commits = 0
+  const onCommit = () => { commits++ }
+  window.addEventListener('spindle:float-drag-end', onCommit)
+  try {
+    const press = new domWindow.PointerEvent('pointerdown', {
+      bubbles: true, cancelable: true, pointerId: 1, button: 0, clientX: 100, clientY: 100,
+    })
+    flushSync(() => button.dispatchEvent(press))
+    expect(press.defaultPrevented).toBe(false)
+    flushSync(() => window.dispatchEvent(new domWindow.PointerEvent('pointermove', {
+      pointerId: 1, clientX: 102, clientY: 101,
+    })))
+    flushSync(() => window.dispatchEvent(new domWindow.PointerEvent('pointerup', {
+      pointerId: 1, clientX: 102, clientY: 101,
+    })))
+    runQueuedPaint()
+    expect(commits).toBe(0)
+  } finally {
+    window.removeEventListener('spindle:float-drag-end', onCommit)
+    if (previousComputedStyle === undefined) delete globalObject.getComputedStyle
+    else globalObject.getComputedStyle = previousComputedStyle
+  }
+})
+
 describe('deferred placement paint ownership', () => {
   test('attaches every registered detached root exactly once after its queued paint', () => {
     const entries = consumers('live')
