@@ -4,7 +4,7 @@ import { Bookmark, Download, Upload, Code2 } from 'lucide-react'
 import { useStore } from '@/store'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import { resolveMode } from '@/hooks/useThemeApplicator'
-import type { ThemeConfig, ThemeMode, BaseColors } from '@/types/theme'
+import type { ThemeConfig, ThemeMode, BaseColors, RenderingMode } from '@/types/theme'
 import ModeSelector from './theme-panel/ModeSelector'
 import PresetGrid from './theme-panel/PresetGrid'
 import SavedThemes from './theme-panel/SavedThemes'
@@ -69,6 +69,7 @@ export default function ThemePanel() {
         ...preset,
         mode: latest.mode,
         desktopBackground: preset.desktopBackground ?? latest.desktopBackground,
+        renderingMode: preset.renderingMode ?? latest.renderingMode,
       })
     },
     [setTheme, getLatest, clearAllExtensionThemeOverrides]
@@ -101,6 +102,11 @@ export default function ThemePanel() {
 
   const handleDesktopBackgroundChange = useCallback(
     (desktopBackground?: ThemeConfig['desktopBackground']) => update({ desktopBackground }),
+    [update]
+  )
+
+  const handleRenderingModeChange = useCallback(
+    (renderingMode: RenderingMode) => update({ renderingMode }),
     [update]
   )
 
@@ -154,6 +160,7 @@ export default function ThemePanel() {
           const appliedTheme = {
             ...importedTheme,
             desktopBackground: importedTheme.desktopBackground ?? getLatest().desktopBackground,
+            renderingMode: importedTheme.renderingMode ?? getLatest().renderingMode,
           }
           const baseName = file.name.replace(/\.json$/i, '').replace(/^lumiverse-theme-/i, '')
           const name = parsed.name || baseName || t('themePanel.importedTheme')
@@ -213,6 +220,8 @@ export default function ThemePanel() {
           showDesktopBackgroundControls={isTauriDesktop}
           desktopBackground={current.desktopBackground}
           onDesktopBackgroundChange={handleDesktopBackgroundChange}
+          renderingMode={current.renderingMode}
+          onRenderingModeChange={handleRenderingModeChange}
         />
       </section>
 

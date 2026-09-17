@@ -105,6 +105,11 @@ function installMacApp(artifact: string, homeDir: string): DesktopInstallResult 
     const desktopShortcut = join(desktopDir, "Lumiverse Desktop.app");
     if (createDesktopSymlink(installedPath, desktopShortcut)) shortcuts.push(desktopShortcut);
   }
+
+  // Tauri leaves the bundle under target/release/bundle/macos. Spotlight
+  // indexes that copy too, so consume the build artifact only after the
+  // user-local app and its optional shortcut have been staged successfully.
+  rmSync(artifact, { recursive: true, force: true });
   return { installedPath, shortcuts };
 }
 

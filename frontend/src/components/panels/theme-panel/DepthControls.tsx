@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Toggle } from '@/components/shared/Toggle'
-import type { DesktopBackground } from '@/types/theme'
+import type { DesktopBackground, RenderingMode } from '@/types/theme'
 import styles from './DepthControls.module.css'
 
 interface DepthControlsProps {
@@ -16,6 +16,8 @@ interface DepthControlsProps {
   showDesktopBackgroundControls?: boolean
   desktopBackground?: DesktopBackground
   onDesktopBackgroundChange?: (value?: DesktopBackground) => void
+  renderingMode?: RenderingMode
+  onRenderingModeChange?: (value: RenderingMode) => void
 }
 
 const DEFAULT_DESKTOP_COLOR = '#0a0812'
@@ -78,6 +80,8 @@ export default function DepthControls({
   showDesktopBackgroundControls = false,
   desktopBackground,
   onDesktopBackgroundChange,
+  renderingMode = 'balanced',
+  onRenderingModeChange,
 }: DepthControlsProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'themePanel' })
   // Local state for sliders that should only commit on release.
@@ -153,6 +157,21 @@ export default function DepthControls({
 
       {showDesktopBackgroundControls && onDesktopBackgroundChange && (
         <>
+          {onRenderingModeChange && (
+            <label className={styles.row}>
+              <span className={styles.label}>{t('renderingMode.label')}</span>
+              <select
+                value={renderingMode}
+                onChange={(event) => onRenderingModeChange(event.target.value as RenderingMode)}
+                className={styles.select}
+                title={t('renderingMode.hint')}
+              >
+                <option value="efficiency">{t('renderingMode.efficiency')}</option>
+                <option value="balanced">{t('renderingMode.balanced')}</option>
+                <option value="quality">{t('renderingMode.quality')}</option>
+              </select>
+            </label>
+          )}
           <Toggle.Checkbox
             checked={Boolean(desktopBackground)}
             onChange={(enabled) => onDesktopBackgroundChange(enabled

@@ -11,6 +11,7 @@ import { rememberRegistration } from './lib/swUpdater'
 import { claimServiceWorkerReload } from './lib/swUpdatePolicy'
 import { installPwaLifecycleDiagnostics } from './lib/pwaLifecycleDiagnostics'
 import { initializeSafeThemeMode } from './lib/safeThemeMode'
+import { installDisplayPerformanceTelemetry, markDisplayInteractive, markDisplayMilestone } from './lib/displayPerformance'
 import { router } from './router'
 import { installStreamDeckHandoffReceiver } from './lib/streamDeckHandoff'
 import ErrorBoundary from './components/shared/ErrorBoundary'
@@ -18,6 +19,7 @@ import './theme/variables.css'
 import './theme/reset.css'
 import './theme/global.css'
 
+installDisplayPerformanceTelemetry('application')
 installWindowOpenGuard()
 installPwaLifecycleDiagnostics()
 installStreamDeckHandoffReceiver(path => { void router.navigate(path) })
@@ -45,7 +47,9 @@ registerSW({
     // Periodically check for a new SW so deploys are picked up without
     // requiring a navigation or manual refresh.
     if (registration) {
-      setInterval(() => { registration.update() }, 60 * 60 * 1000)
+      setInterval(() => {
+        if (document.visibilityState === 'visible') registration.update()
+      }, 60 * 60 * 1000)
     }
     // Hand the registration to swUpdater so the connection-lost overlay can
     // ask for an immediate bundle check on reconnect, and so we can surface
@@ -418,6 +422,7 @@ if (navigator.maxTouchPoints > 0) {
 }
 
 void Promise.all([initI18n(), initializeSafeThemeMode()]).then(() => {
+  markDisplayMilestone('render-scheduled')
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <ErrorBoundary label="Application">
@@ -425,4 +430,5 @@ void Promise.all([initI18n(), initializeSafeThemeMode()]).then(() => {
       </ErrorBoundary>
     </StrictMode>,
   )
+  markDisplayInteractive()
 })

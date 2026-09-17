@@ -1,5 +1,6 @@
 export type ThemeMode = 'light' | 'dark' | 'system'
 export type ResolvedMode = 'light' | 'dark'
+export type RenderingMode = 'efficiency' | 'balanced' | 'quality'
 
 export type BaseColorKey =
   | 'primary'
@@ -64,4 +65,6 @@ export interface ThemeConfig {
   characterAware?: boolean
   /** Optional tint for the Tauri frontend body; ignored in browsers and PWAs. */
   desktopBackground?: DesktopBackground
+  /** Native WebView graphics policy. Quality enables high-refresh rendering on supported macOS displays. */
+  renderingMode?: RenderingMode
 }

@@ -216,6 +216,8 @@ function estimateOOCContribution(blocks: OOCBlock[], mode: OOCStyleType, bubbleW
 }
 
 export default function MessageList({ messages, chatId, isStreaming, findTarget = null, findQuery = '' }: MessageListProps) {
+  'use memo'
+
   const { t } = useTranslation('chat')
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -1053,7 +1055,6 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   // The core virtualizer exposes this as a mutable instance hook even though
   // the React wrapper's options type does not currently declare it.
   useLayoutEffect(() => {
-    // eslint-disable-next-line react-compiler/react-compiler
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustScrollPositionOnItemSizeChange
   }, [rowVirtualizer, shouldAdjustScrollPositionOnItemSizeChange])
 

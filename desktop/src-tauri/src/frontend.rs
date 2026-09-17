@@ -124,6 +124,8 @@ pub struct FrontendStartupAppearance {
     dark: bool,
     blur_intensity: String,
     native_color: [u8; 3],
+    #[serde(default)]
+    high_refresh: bool,
 }
 
 impl Default for FrontendStartupAppearance {
@@ -137,6 +139,7 @@ impl Default for FrontendStartupAppearance {
             dark: true,
             blur_intensity: "balanced".into(),
             native_color: [10, 8, 18],
+            high_refresh: false,
         }
     }
 }
@@ -562,12 +565,14 @@ pub fn show_frontend(
         })
         .visible(false);
 
-    // Use the high-refresh WebView configuration where macOS supports it. The
-    // frontend supplies dragging and window controls for this frameless shell.
+    // Quality mode opts into the high-refresh WebView configuration where
+    // macOS supports it. Balanced and efficiency retain WebKit's stock policy.
     #[cfg(target_os = "macos")]
     {
-        if let Some(configuration) = high_refresh_webview_configuration() {
-            builder = builder.with_webview_configuration(configuration);
+        if startup_appearance.high_refresh {
+            if let Some(configuration) = high_refresh_webview_configuration() {
+                builder = builder.with_webview_configuration(configuration);
+            }
         }
     }
 
@@ -831,7 +836,7 @@ pub fn show_extension_widget(
     if !matches!(url.scheme(), "http" | "https") {
         return Err("The current Lumiverse frontend cannot host extension widgets".into());
     }
-    url.set_path("/");
+    url.set_path("/widget.html");
     url.set_fragment(None);
     {
         let mut query = url.query_pairs_mut();
@@ -893,13 +898,10 @@ pub fn show_extension_widget(
         window
             .set_shadow(false)
             .map_err(|error| error.to_string())?;
-        let close_window = window.clone();
         let close_app = app.clone();
         let close_widget_id = widget.id.clone();
         window.on_window_event(move |event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = close_window.hide();
+            if let WindowEvent::CloseRequested { .. } = event {
                 let _ = emit_widget_popout_state(&close_app, close_widget_id.clone(), false);
             }
         });
@@ -909,12 +911,11 @@ pub fn show_extension_widget(
     Ok(())
 }
 
-/// Hide a native widget and mount its registered root back in the main
+/// Close a native widget and mount its registered root back in the main
 /// frontend. The calling child is checked so a pop-out cannot return some
 /// other extension's widget.
 #[tauri::command]
 pub fn return_extension_widget(
-    app: AppHandle,
     window: WebviewWindow,
     state: State<'_, DesktopWidgetCatalogState>,
     widget_id: String,
@@ -930,8 +931,7 @@ pub fn return_extension_widget(
     if window.label() != extension_widget_label(&widget) {
         return Err("A widget window may only return itself to the page".into());
     }
-    window.hide().map_err(|error| error.to_string())?;
-    emit_widget_popout_state(&app, widget.id, false)
+    window.close().map_err(|error| error.to_string())
 }
 
 /// Tray equivalent of `return_extension_widget`. The tray is part of the
@@ -952,7 +952,8 @@ pub fn return_extension_widget_from_tray(
         .cloned()
         .ok_or("That floating widget is no longer registered")?;
     if let Some(window) = app.get_webview_window(&extension_widget_label(&widget)) {
-        window.hide().map_err(|error| error.to_string())?;
+        window.close().map_err(|error| error.to_string())?;
+        return Ok(());
     }
     emit_widget_popout_state(&app, widget.id, false)
 }

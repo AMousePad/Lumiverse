@@ -2873,6 +2873,13 @@
     "fontScale": "Font Scale",
     "uiScale": "UI Scale",
     "glassEffects": "Glass effects",
+    "renderingMode": {
+      "label": "Rendering",
+      "hint": "Efficiency removes blur; Quality enables high-refresh rendering on supported macOS displays after the desktop window restarts.",
+      "efficiency": "Efficiency",
+      "balanced": "Balanced",
+      "quality": "Quality"
+    },
     "desktopBackground": {
       "enable": "Use translucent desktop background",
       "hint": "Only available in the Lumiverse desktop app.",

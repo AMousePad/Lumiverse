@@ -34,6 +34,11 @@ registerRoute(new NavigationRoute(
       /^\/uploads/,
       /^\/manifest\.json$/,
       /^\/sw\.js$/,
+      // Native extension popouts are a separate Vite HTML entry point. Their
+      // desktopWidget* query parameters prevent the precache route from
+      // matching widget.html exactly, so they must bypass the SPA fallback and
+      // reach the server's static-file handler instead of receiving index.html.
+      /^\/widget\.html(?:\?.*)?$/,
       /^\/icon(-\d+)?\.(svg|png|ico)$/,
       /\.[a-z0-9]+$/i,
     ],

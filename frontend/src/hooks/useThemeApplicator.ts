@@ -216,17 +216,20 @@ function syncThemeColorMeta(vars: Record<string, string>) {
 function cacheDesktopStartupAppearance(config: ThemeConfig, mode: ResolvedMode, vars: Record<string, string>) {
   if (!('__TAURI_INTERNALS__' in window) || new URLSearchParams(window.location.search).has('desktopWidgetExtension')) return
 
-  const background = config.desktopBackground?.color || vars['--lumiverse-bg-deep'] || '#0a0812'
+  const efficiencyMode = config.renderingMode === 'efficiency'
+  const configuredBackground = config.desktopBackground?.color || vars['--lumiverse-bg-deep'] || '#0a0812'
+  const background = efficiencyMode ? (toOpaqueRgb(configuredBackground) ?? configuredBackground) : configuredBackground
   const nativeColor = toOpaqueRgbChannels(background) ?? [10, 8, 18]
   const snapshot = {
     background,
     border: vars['--lumiverse-border'] || 'rgba(255, 255, 255, 0.08)',
     textMuted: vars['--lumiverse-text-muted'] || 'rgba(255, 255, 255, 0.64)',
     primary: vars['--lumiverse-primary'] || '#9370db',
-    blur: Boolean(config.desktopBackground?.color && config.desktopBackground.blur),
+    blur: Boolean(!efficiencyMode && config.desktopBackground?.color && config.desktopBackground.blur),
     dark: mode === 'dark',
     blurIntensity: config.desktopBackground?.blurIntensity ?? 'balanced',
     nativeColor,
+    highRefresh: config.renderingMode === 'quality',
   }
   const serialized = JSON.stringify(snapshot)
   if (serialized === cachedStartupAppearance) return
@@ -241,6 +244,9 @@ function cacheDesktopStartupAppearance(config: ThemeConfig, mode: ResolvedMode, 
 function syncDesktopBackground(config: ThemeConfig, mode: ResolvedMode, vars: Record<string, string>) {
   const root = document.documentElement
   const background = config.desktopBackground
+  const efficiencyMode = config.renderingMode === 'efficiency'
+
+  root.setAttribute('data-rendering-mode', config.renderingMode ?? 'balanced')
 
   if (!('__TAURI_INTERNALS__' in window)) {
     root.removeAttribute('data-desktop-background')
@@ -255,19 +261,26 @@ function syncDesktopBackground(config: ThemeConfig, mode: ResolvedMode, vars: Re
 
   if (background?.color) {
     root.setAttribute('data-desktop-background', '')
-    root.style.setProperty('--lumiverse-desktop-background', background.color)
+    root.style.setProperty(
+      '--lumiverse-desktop-background',
+      efficiencyMode ? (toOpaqueRgb(background.color) ?? background.color) : background.color,
+    )
   } else {
     root.removeAttribute('data-desktop-background')
     root.style.removeProperty('--lumiverse-desktop-background')
   }
 
-  if (background?.color && background.blur) {
+  if (!efficiencyMode && background?.color && background.blur) {
     root.setAttribute('data-desktop-background-blur', '')
   } else {
     root.removeAttribute('data-desktop-background-blur')
   }
 
-  const blur = Boolean(background?.color && background.blur)
+  // A widget WebView owns only its transparent child surface. Never let its
+  // independently hydrated theme reconfigure the primary window's material.
+  if (new URLSearchParams(window.location.search).has('desktopWidgetExtension')) return
+
+  const blur = Boolean(!efficiencyMode && background?.color && background.blur)
   const dark = mode === 'dark'
   const blurIntensity = background?.blurIntensity ?? 'balanced'
   const appearance = `${blur}:${dark}:${blurIntensity}`
@@ -542,7 +555,7 @@ export function useThemeApplicator() {
       }
       window.dispatchEvent(new Event('resize'))
 
-      if (config.enableGlass && !motionMq.matches) {
+      if (config.enableGlass && config.renderingMode !== 'efficiency' && !motionMq.matches) {
         root.setAttribute('data-glass', '')
       } else {
         root.removeAttribute('data-glass')
@@ -556,7 +569,7 @@ export function useThemeApplicator() {
 
     const updateGlass = () => {
       const latest = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes)
-      if (latest.config.enableGlass && !motionMq.matches) {
+      if (latest.config.enableGlass && latest.config.renderingMode !== 'efficiency' && !motionMq.matches) {
         root.setAttribute('data-glass', '')
       } else {
         root.removeAttribute('data-glass')

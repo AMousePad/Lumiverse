@@ -27,6 +27,11 @@ export interface DesktopFloatingWidgetPopoutState {
   poppedOut: boolean
 }
 
+/** Native pop-out bounds the desktop host accepts and enforces. The Rust side
+ * owns the same numbers in desktop/src-tauri/src/frontend.rs. */
+export const DESKTOP_WIDGET_MIN_SIZE = { width: 160, height: 100 } as const
+export const DESKTOP_WIDGET_MAX_SIZE = { width: 1200, height: 900 } as const
+
 function readTarget(): DesktopFloatingWidgetTarget | null {
   if (!('__TAURI_INTERNALS__' in window)) return null
 
@@ -43,11 +48,11 @@ function readTarget(): DesktopFloatingWidgetTarget | null {
     index < 0 ||
     index > 3 ||
     !Number.isInteger(width) ||
-    width < 160 ||
-    width > 1200 ||
+    width < DESKTOP_WIDGET_MIN_SIZE.width ||
+    width > DESKTOP_WIDGET_MAX_SIZE.width ||
     !Number.isInteger(height) ||
-    height < 100 ||
-    height > 900
+    height < DESKTOP_WIDGET_MIN_SIZE.height ||
+    height > DESKTOP_WIDGET_MAX_SIZE.height
   ) {
     return null
   }
@@ -89,8 +94,8 @@ export function buildDesktopFloatingWidgetCatalog(
         extensionId: widget.extensionId,
         index,
         title: `${extensionName} · Widget ${index + 1}`,
-        width: Math.max(160, Math.min(1200, Math.round(widget.width))),
-        height: Math.max(100, Math.min(900, Math.round(widget.height))),
+        width: Math.max(DESKTOP_WIDGET_MIN_SIZE.width, Math.min(DESKTOP_WIDGET_MAX_SIZE.width, Math.round(widget.width))),
+        height: Math.max(DESKTOP_WIDGET_MIN_SIZE.height, Math.min(DESKTOP_WIDGET_MAX_SIZE.height, Math.round(widget.height))),
         chromeless: widget.chromeless === true,
       }
     })
@@ -116,8 +121,8 @@ export function resizeDesktopFloatingWidget(widgetId: string, width: number, hei
   if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return Promise.resolve()
   return invoke('resize_extension_widget', {
     widgetId,
-    width: Math.max(160, Math.min(1200, Math.round(width))),
-    height: Math.max(100, Math.min(900, Math.round(height))),
+    width: Math.max(DESKTOP_WIDGET_MIN_SIZE.width, Math.min(DESKTOP_WIDGET_MAX_SIZE.width, Math.round(width))),
+    height: Math.max(DESKTOP_WIDGET_MIN_SIZE.height, Math.min(DESKTOP_WIDGET_MAX_SIZE.height, Math.round(height))),
   })
 }
 

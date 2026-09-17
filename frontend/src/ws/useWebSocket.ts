@@ -462,6 +462,7 @@ export function useWebSocket() {
     let cancelled = false
 
     const syncOperatorStatus = async () => {
+      if (document.visibilityState !== 'visible') return
       try {
         const status = await operatorApi.getStatus()
         if (cancelled) return
@@ -523,6 +524,7 @@ export function useWebSocket() {
     }
 
     async function syncExtensionUpdates() {
+      if (document.visibilityState !== 'visible') return
       try {
         const snapshot = await spindleApi.getUpdates()
         if (cancelled) return

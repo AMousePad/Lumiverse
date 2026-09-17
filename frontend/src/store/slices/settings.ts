@@ -1022,6 +1022,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       const theme = {
         ...packTheme,
         desktopBackground: packTheme.desktopBackground ?? get().theme?.desktopBackground,
+        renderingMode: pack.theme?.renderingMode ?? get().theme?.renderingMode,
       }
       patch.theme = theme
       persistKey('theme', theme)
@@ -1099,6 +1100,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       const theme = {
         ...entry.theme,
         desktopBackground: entry.theme.desktopBackground ?? get().theme?.desktopBackground,
+        renderingMode: entry.theme.renderingMode ?? get().theme?.renderingMode,
       }
       get().setTheme(theme)
     } else {

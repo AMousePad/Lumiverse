@@ -52,6 +52,8 @@ const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
 export { acknowledgePendingConnectionsDeepLink }
 
 export default function App() {
+  'use memo'
+
   const { t } = useTranslation('common')
   const safeTheme = getSafeThemeState()
   useWebSocket()

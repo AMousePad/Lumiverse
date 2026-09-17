@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -68,6 +69,7 @@ test("macOS install copies the app and refreshes its desktop symlink", async () 
   const result = await installDesktopBundle(artifact, "darwin", { homeDir: home });
 
   expect(readFileSync(join(result.installedPath, "Contents", "MacOS", "lumiverse-tray"), "utf8")).toBe("binary");
+  expect(existsSync(artifact)).toBe(false);
   expect(result.shortcuts).toHaveLength(2);
 });
 

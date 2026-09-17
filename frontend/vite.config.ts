@@ -97,6 +97,10 @@ export default defineConfig({
     cssMinify: 'esbuild',
     chunkSizeWarningLimit: 6000,
     rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, './index.html'),
+        widget: path.resolve(import.meta.dirname, './widget.html'),
+      },
       output: {
         manualChunks(id) {
           const normalized = id.replace(/\\/g, '/')
