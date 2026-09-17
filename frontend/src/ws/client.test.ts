@@ -16,9 +16,11 @@ function makeEventTarget() {
   }
 }
 
+let documentFocused = true
+
 const documentMock = {
   visibilityState: 'visible' as DocumentVisibilityState,
-  hasFocus: () => true,
+  hasFocus: () => documentFocused,
   ...makeEventTarget(),
 }
 
@@ -160,6 +162,64 @@ describe('WebSocketClient push presence', () => {
     } finally {
       client.disconnect()
       documentMock.visibilityState = 'visible'
+    }
+  })
+
+  test('reports a visible but non-frontmost browser window as inactive', () => {
+    const client = new WebSocketClient('ws://localhost:3000/api/ws') as any
+    try {
+      client.connect()
+      const socket = MockWebSocket.instances.at(-1)!
+      socket.open()
+      socket.sent = []
+
+      documentFocused = false
+      windowMock.dispatchEvent(new Event('blur'))
+      expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual({
+        type: 'visibility',
+        visible: false,
+      })
+
+      documentFocused = true
+      windowMock.dispatchEvent(new Event('focus'))
+      expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual({
+        type: 'visibility',
+        visible: true,
+      })
+    } finally {
+      client.disconnect()
+      documentFocused = true
+    }
+  })
+
+  test('reduces native hidden, minimized, and background states to inactive presence', () => {
+    const client = makeClient()
+    try {
+      const socket = client.ws as MockWebSocket
+      socket.sent = []
+      const states = [
+        { state: 'hidden', visible: false, minimized: false, focused: false },
+        { state: 'minimized', visible: true, minimized: true, focused: false },
+        { state: 'background', visible: true, minimized: false, focused: false },
+      ] as const
+
+      for (const presence of states) {
+        client.desktopPresence = { ...presence, active: false }
+        client.sendVisibility()
+      }
+
+      expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === 'visibility'))
+        .toEqual(states.map((presence) => ({
+          type: 'visibility',
+          visible: false,
+          source: 'tauri',
+          state: presence.state,
+          windowVisible: presence.visible,
+          minimized: presence.minimized,
+          focused: presence.focused,
+        })))
+    } finally {
+      client.disconnect()
     }
   })
 

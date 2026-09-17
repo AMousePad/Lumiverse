@@ -1,5 +1,10 @@
 import { EventType } from './events'
 import { BASE_URL } from '@/api/client'
+import {
+  getDesktopPresence,
+  subscribeDesktopPresence,
+  type DesktopPresence,
+} from '@/lib/desktop-presence'
 
 type EventHandler = (payload: any) => void
 
@@ -69,6 +74,7 @@ export class WebSocketClient {
   private shouldReconnect = true
   private spindleInfoLoggingEnabled = true
   private visibilityCleanup: Array<() => void> = []
+  private desktopPresence: DesktopPresence | null = null
   private focusedChatId: string | null = null
   /** Previous visibility state — used to detect hidden→visible transitions. */
   private wasVisible = false
@@ -492,6 +498,24 @@ export class WebSocketClient {
       this.pauseForBackground()
       this.sendVisibility(true)
     })
+    let desktopPresenceUnlisten: (() => void) | null = null
+    let desktopPresenceStopped = false
+    void subscribeDesktopPresence((presence) => {
+      if (desktopPresenceStopped) return
+      this.desktopPresence = presence
+      this.sendVisibility()
+    }).then((unlisten) => {
+      if (desktopPresenceStopped) unlisten()
+      else desktopPresenceUnlisten = unlisten
+    }).catch((error) => {
+      console.warn('[desktop-presence] Could not subscribe to native window state', error)
+    })
+    this.visibilityCleanup.push(() => {
+      desktopPresenceStopped = true
+      desktopPresenceUnlisten?.()
+      desktopPresenceUnlisten = null
+      this.desktopPresence = null
+    })
     this.lastLifecycleTick = Date.now()
     const wakeCheckTimer = setInterval(() => this.checkForWakeGap(), WAKE_CHECK_INTERVAL_MS)
     this.visibilityCleanup.push(() => clearInterval(wakeCheckTimer))
@@ -504,18 +528,32 @@ export class WebSocketClient {
   }
 
   private sendVisibility(forceHidden = false) {
-    const visible = !forceHidden && this.isDocumentVisible()
+    const pageVisible = !forceHidden && this.isDocumentVisible()
+    const desktopPresence = this.desktopPresence ?? getDesktopPresence()
+    const visible = pageVisible && (
+      desktopPresence ? desktopPresence.active : document.hasFocus()
+    )
     if (this.recoverIfSocketAlreadyClosed()) {
-      this.wasVisible = visible
+      this.wasVisible = pageVisible
       return
     }
-    this.send({ type: 'visibility', visible })
+    this.send({
+      type: 'visibility',
+      visible,
+      ...(desktopPresence ? {
+        source: 'tauri',
+        state: desktopPresence.state,
+        windowVisible: desktopPresence.visible,
+        minimized: desktopPresence.minimized,
+        focused: desktopPresence.focused,
+      } : {}),
+    })
     this.sendStreamFocus(forceHidden)
     // Hidden→visible transition: iOS aggressively kills WS in suspended PWAs.
     // Send a foreground proof ping instead of waiting for the next scheduled
     // heartbeat. Its deadline is deliberately patient while mobile networking
     // and the JavaScript event queues settle after suspension.
-    if (visible && !this.wasVisible) {
+    if (pageVisible && !this.wasVisible) {
       if (!this.consumeResumePingSuppression()) {
         this.sendPingNow(RESUME_PONG_TIMEOUT_MS, this.resumeRecoveryTimer !== null)
       } else if (this.resumeRecoveryTimer) {
@@ -525,7 +563,7 @@ export class WebSocketClient {
         this.completeResumeRecovery()
       }
     }
-    this.wasVisible = visible
+    this.wasVisible = pageVisible
   }
 
   private consumeResumePingSuppression() {
@@ -566,7 +604,9 @@ export class WebSocketClient {
   }
 
   private isDocumentFocused() {
-    return this.isDocumentVisible() && document.hasFocus()
+    if (!this.isDocumentVisible()) return false
+    const desktopPresence = this.desktopPresence ?? getDesktopPresence()
+    return desktopPresence ? desktopPresence.active : document.hasFocus()
   }
 
   private pauseForBackground() {

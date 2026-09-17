@@ -132,6 +132,7 @@ fn handle_macos_menu_event<R: tauri::Runtime>(
                 let _ = app.show();
                 let _ = window.show();
                 let _ = window.set_focus();
+                frontend::emit_frontend_presence(app, &window);
                 let _ = window.reload();
             }
         }
@@ -185,6 +186,7 @@ pub fn run() {
             frontend::reload_frontend,
             frontend::save_frontend_bounds,
             frontend::frontend_visible,
+            frontend::frontend_presence,
             frontend::frontend_exists,
             frontend::configure_frontend_appearance,
             frontend::cache_frontend_startup_appearance,

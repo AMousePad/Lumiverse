@@ -110,6 +110,56 @@ pub struct FrontendState {
     bounds: Mutex<Option<(i32, i32, u32, u32)>>,
 }
 
+/// Native window-presence snapshot consumed by the remote frontend. Browser
+/// page visibility cannot distinguish a hidden-to-tray window from a window
+/// that is merely covered by another app, so the desktop host owns these
+/// signals and lets the frontend reduce them to its active/away status.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendPresence {
+    state: &'static str,
+    visible: bool,
+    minimized: bool,
+    focused: bool,
+    active: bool,
+}
+
+fn frontend_presence_for_window<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> FrontendPresence {
+    let visible = window.is_visible().unwrap_or(false);
+    let minimized = window.is_minimized().unwrap_or(false);
+    let focused = window.is_focused().unwrap_or(false);
+    let state = if !visible {
+        "hidden"
+    } else if minimized {
+        "minimized"
+    } else if focused {
+        "foreground"
+    } else {
+        "background"
+    };
+
+    FrontendPresence {
+        state,
+        visible,
+        minimized,
+        focused,
+        active: visible && !minimized && focused,
+    }
+}
+
+pub fn emit_frontend_presence<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    window: &tauri::WebviewWindow<R>,
+) {
+    let _ = app.emit_to(
+        FRONTEND_LABEL,
+        "desktop-presence-changed",
+        frontend_presence_for_window(window),
+    );
+}
+
 /// A small, local-only cache written by the trusted frontend after it has
 /// resolved its theme. It lets a new remote WebView draw a familiar titlebar
 /// and surface before the full page bundle has loaded.
@@ -450,6 +500,7 @@ pub fn hide_frontend_window<R: tauri::Runtime>(app: &AppHandle<R>) {
         persist_bounds(app, &state, &window);
         let _ = window.hide();
         let _ = set_frontend_task_switcher_visible(app, &window, false);
+        emit_frontend_presence(app, &window);
     }
 }
 
@@ -501,6 +552,7 @@ pub fn show_frontend(
         app.show().map_err(|e| e.to_string())?;
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
+        emit_frontend_presence(&app, &window);
         return Ok(());
     }
 
@@ -616,12 +668,22 @@ pub fn show_frontend(
     let close_window = window.clone();
     let close_app = app.clone();
     window.on_window_event(move |event| {
-        if let WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            let state = close_app.state::<FrontendState>();
-            persist_bounds(&close_app, &state, &close_window);
-            let _ = close_window.hide();
-            let _ = set_frontend_task_switcher_visible(&close_app, &close_window, false);
+        match event {
+            WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let state = close_app.state::<FrontendState>();
+                persist_bounds(&close_app, &state, &close_window);
+                let _ = close_window.hide();
+                let _ = set_frontend_task_switcher_visible(&close_app, &close_window, false);
+                emit_frontend_presence(&close_app, &close_window);
+            }
+            // Tauri exposes focus directly. Minimize/restore is represented by
+            // a resize event on the desktop runtimes, so re-query all native
+            // flags after either transition instead of guessing from web APIs.
+            WindowEvent::Focused(_) | WindowEvent::Resized(_) => {
+                emit_frontend_presence(&close_app, &close_window);
+            }
+            _ => {}
         }
     });
     // `tauri dev` runs a debug build, where the inspector is available.
@@ -634,6 +696,7 @@ pub fn show_frontend(
     app.show().map_err(|e| e.to_string())?;
     window.show().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())?;
+    emit_frontend_presence(&app, &window);
     Ok(())
 }
 
@@ -656,6 +719,7 @@ pub fn reload_frontend(app: AppHandle) -> Result<(), String> {
     app.show().map_err(|e| e.to_string())?;
     window.show().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())?;
+    emit_frontend_presence(&app, &window);
     window.reload().map_err(|e| e.to_string())
 }
 
@@ -677,6 +741,15 @@ pub fn frontend_visible(app: AppHandle) -> bool {
     app.get_webview_window(FRONTEND_LABEL)
         .map(|w| w.is_visible().unwrap_or(false))
         .unwrap_or(false)
+}
+
+/// Return a point-in-time native presence snapshot. The frontend calls this
+/// after registering its event listener so reconnects and WebView reloads do
+/// not depend on having observed every earlier window event.
+#[tauri::command]
+pub fn frontend_presence(app: AppHandle) -> Option<FrontendPresence> {
+    app.get_webview_window(FRONTEND_LABEL)
+        .map(|window| frontend_presence_for_window(&window))
 }
 
 #[tauri::command]
