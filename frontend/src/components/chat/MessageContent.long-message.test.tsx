@@ -566,3 +566,172 @@ describe('MessageContent island whitespace', () => {
     expect(island?.querySelector('.inline')?.textContent).toBe(text)
   })
 })
+
+describe('Streaming details completion', () => {
+  test.each([
+    ['<details><summary>Title', '<details><summary>Title</summary></details>'],
+    ['<DETAILS open><SUMMARY>Title', '<DETAILS open><SUMMARY>Title</summary></details>'],
+    ['<details><summary>Title</summary></details>', '<details><summary>Title</summary></details>'],
+    ['</details><details>', '</details><details>'],
+    ['<details <summary>', '<details <summary></details>'],
+    ['<details title="a>b"><summary>', '<details title="a>b"><summary></summary></details>'],
+    ['<detailsx><summary_extra>', '<detailsx><summary_extra>'],
+    ['```\n<details><summary>\n```\n<summary>Title', '```\n<details><summary>\n```\n<summary>Title</summary>'],
+    ['~~~\n<details>\n~~~\n<summary>Title', '~~~\n<details>\n~~~\n<summary>Title</summary>'],
+    ['<details>\n```\n</details>\n```\n', '<details>\n```\n</details>\n```\n</details>'],
+  ])('retains completion boundaries in %s', async (raw, expected) => {
+    const { balanceStreamingDetails } = await import('./MessageContent')
+    expect(balanceStreamingDetails(raw)).toBe(expected)
+  })
+
+  test('leaves many unfinished detail tags unchanged', async () => {
+    const { balanceStreamingDetails } = await import('./MessageContent')
+    const raw = '<details <summary '.repeat(256)
+    expect(balanceStreamingDetails(raw)).toBe(raw)
+    expect(balanceStreamingDetails(raw + '>')).toBe(raw + '></details>')
+  })
+})
+
+describe('Trusted video extraction', () => {
+  test('retains video attributes and the surrounding text', async () => {
+    const { extractTrustedYouTubeEmbeds } = await import('./MessageContent')
+    const raw = 'Before<IFRAME src="https://www.youtube-nocookie.com/embed/abcdef?autoplay=1&amp;start=4" title=" Example "></IFRAME \n>After'
+    expect(extractTrustedYouTubeEmbeds(raw)).toEqual({
+      content: 'Before<!--LUMIVERSE_YOUTUBE_EMBED_0-->After',
+      embeds: [{ src: 'https://www.youtube-nocookie.com/embed/abcdef?autoplay=1&start=4', title: 'Example' }],
+    })
+  })
+
+  test.each([
+    'https://www.youtube-nocookie.com.evil.test/embed/abcdef',
+    'https://www.youtube.com/embed/abcdef',
+    'http://www.youtube-nocookie.com/embed/abcdef',
+    'https://www.youtube-nocookie.com/embed/short',
+    'https://www.youtube-nocookie.com/embed/abcdef#fragment',
+    'https://www.youtube-nocookie.com/embed/abcdef?autoplay=2',
+    'https://www.youtube-nocookie.com/embed/abcdef?start=1234567',
+    'https://www.youtube-nocookie.com/embed/abcdef?unknown=1',
+    'javascript:alert(1)',
+  ])('leaves rejected video URL %s unchanged', async (src) => {
+    const { extractTrustedYouTubeEmbeds } = await import('./MessageContent')
+    const raw = `<iframe src="${src}"></iframe>`
+    expect(extractTrustedYouTubeEmbeds(raw)).toEqual({ content: raw, embeds: [] })
+  })
+
+  test('leaves many unfinished video frames unchanged after a complete frame', async () => {
+    const { extractTrustedYouTubeEmbeds } = await import('./MessageContent')
+    const incomplete = '<iframe '.repeat(256)
+    for (const ending of ['', '\n', '\r\n', '\u2028', '\u2029']) {
+      expect(extractTrustedYouTubeEmbeds(incomplete + ending)).toEqual({ content: incomplete + ending, embeds: [] })
+      const complete = '<iframe src="https://www.youtube-nocookie.com/embed/abcdef" title="Example"></iframe>'
+      expect(extractTrustedYouTubeEmbeds(complete + incomplete + ending)).toEqual({
+        content: '<!--LUMIVERSE_YOUTUBE_EMBED_0-->' + incomplete + ending,
+        embeds: [{ src: 'https://www.youtube-nocookie.com/embed/abcdef', title: 'Example' }],
+      })
+    }
+  })
+})
+describe('Image lazy loading', () => {
+  test.each([
+    ['<IMG src="/scene.png">', '<img loading="lazy" src="/scene.png">'],
+    ['<img loading=eager>', '<img loading=eager>'],
+    ['<img LOADING="lazy">', '<img LOADING="lazy">'],
+    ['<img loading = eager>', '<img loading="lazy" loading = eager>'],
+    ['<img data-loading=x>', '<img data-loading=x>'],
+    ['<img title="loading=x">', '<img title="loading=x">'],
+    ['<img title=">loading=x">', '<img loading="lazy" title=">loading=x">'],
+    ['<img <IMG loading=x <IMG>', '<img <IMG loading=x <img loading="lazy">'],
+    ['<imgx><img_name><img-ok>', '<imgx><img_name><img loading="lazy"-ok>'],
+    ['<img\r\nsrc="/scene.png">', '<img loading="lazy"\r\nsrc="/scene.png">'],
+  ])('preserves attribute handling in %s', async (html, expected) => {
+    const { addLazyLoadingToImages } = await import('./MessageContent')
+    expect(addLazyLoadingToImages(html)).toBe(expected)
+  })
+
+  test('handles many image prefixes before one closing delimiter', async () => {
+    const { addLazyLoadingToImages } = await import('./MessageContent')
+    const raw = '<img '.repeat(256)
+    const expected = '<img loading="lazy" '.repeat(256)
+    expect(addLazyLoadingToImages(raw)).toBe(expected)
+    expect(addLazyLoadingToImages(raw + '>')).toBe(expected + '>')
+    expect(addLazyLoadingToImages(raw + 'loading=eager>')).toBe(raw + 'loading=eager>')
+  })
+
+  test('does not replace images that already specify loading', async () => {
+    const { addLazyLoadingToImages } = await import('./MessageContent')
+    const raw = '<img src="/image.png" loading=eager>'.repeat(256)
+    const nativeExec = RegExp.prototype.exec
+    let replacements = 0
+    const exec = spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+      const match = nativeExec.call(this, input)
+      if (match?.[0].startsWith('<img')) replacements++
+      return match
+    })
+    let output: string
+    try {
+      output = addLazyLoadingToImages(raw)
+    } finally { exec.mockRestore() }
+    expect(output).toBe(raw)
+    expect(replacements).toBe(0)
+  })
+})
+describe('Dialogue HTML boundaries', () => {
+  test.each([
+    ['<x<y>"word"', '<x<y><span class="dialogue">&quot;word&quot;</span>'],
+    ['<x "word"', '<x <span class="dialogue">&quot;word&quot;</span>'],
+    ['<x title="a>b">"word"', '<x title="a>b<span class="dialogue">&quot;>&quot;</span>word<span class="dialogue">&quot;</span>'],
+    ['<code>"code"</code>"word"', '<code>"code"</code><span class="dialogue">&quot;word&quot;</span>'],
+    ['<pre>"code"</pre>"word"', '<pre>"code"</pre><span class="dialogue">&quot;word&quot;</span>'],
+    ['"start <strong>middle</strong> end"', '<span class="dialogue">&quot;start <strong>middle</strong> end&quot;</span>'],
+    ['<p>"first</p><p>"next</p>', '<p><span class="dialogue">&quot;first</span></p><p><span class="dialogue">&quot;next</span></p>'],
+  ])('preserves existing boundaries in %s', async (raw, expected) => {
+    const { colorizeDialogue } = await import('./MessageContent')
+    expect(colorizeDialogue(raw).replace(/class="[^"]*"/g, 'class="dialogue"')).toBe(expected)
+  })
+
+  test('keeps a long unfinished HTML tail as text', async () => {
+    const { colorizeDialogue } = await import('./MessageContent')
+    const tail = '<'.repeat(4096) + '"word"'
+    const expected = '<'.repeat(4096) + '<span class="dialogue">&quot;word&quot;</span>'
+    expect(colorizeDialogue(tail).replace(/class="[^"]*"/g, 'class="dialogue"')).toBe(expected)
+    expect(colorizeDialogue('<code>"code"</code>' + tail).replace(/class="[^"]*"/g, 'class="dialogue"'))
+      .toBe('<code>"code"</code>' + expected)
+  })
+})
+describe('Dialogue measurement quotes', () => {
+  test.each(["'", '&#39;', '&#00039;', '&#x27;', '&#X00027;', '&apos;', '&APOS;'])(
+    'preserves a measurement written with %s', async (apostrophe) => {
+      const { colorizeDialogue } = await import('./MessageContent')
+      for (const quote of ['"', '&quot;']) {
+        const raw = `Height 5${apostrophe}11${quote}.`
+        expect(colorizeDialogue(raw)).toBe(`Height 5${apostrophe}11&quot;.`)
+      }
+    },
+  )
+
+  test.each(["five'11", "5'", "5'Ù¡", '5&#38;11', '5&#03911', '5&aposx;11', '5&amp;apos;11'])(
+    'keeps a dialogue quote after %s', async (prefix) => {
+      const { colorizeDialogue } = await import('./MessageContent')
+      expect(colorizeDialogue(`${prefix}"hello"`).replace(/class="[^"]*"/g, 'class="dialogue"'))
+        .toBe(`${prefix}<span class="dialogue">&quot;hello&quot;</span>`)
+    },
+  )
+
+  test('does not copy the accumulated message before every quote', async () => {
+    const { colorizeDialogue } = await import('./MessageContent')
+    const raw = 'prefix '.repeat(256) + '"word" '.repeat(256)
+    let inspectedLength = 0
+    const originalSlice = String.prototype.slice
+    const slice = spyOn(String.prototype, 'slice').mockImplementation(function (this: string, start?: number, end?: number) {
+      const result = originalSlice.call(this, start, end)
+      inspectedLength += result.length
+      return result
+    })
+    try {
+      colorizeDialogue(raw)
+    } finally {
+      slice.mockRestore()
+    }
+    expect(inspectedLength).toBeLessThan(raw.length * 4)
+  })
+})

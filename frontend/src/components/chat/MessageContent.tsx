@@ -145,16 +145,25 @@ function normalizeQuotesInHTML(html: string): string {
 const BLOCK_CLOSE_RE = /^<\/(p|div|li|blockquote|h[1-6]|pre|table|tr|td|th)\b/i
 const SKIP_OPEN_RE = /^<(pre|code)\b/i
 const SKIP_CLOSE_RE = /^<\/(pre|code)\b/i
+const FEET_INCHES_QUOTE_RE = /(?<=\d(?:'|&#(?:0*39|x0*27);|&apos;)\d+)/iy
 
 function isFeetInchesQuote(text: string, quoteIndex: number): boolean {
-  const beforeQuote = text.slice(0, quoteIndex)
-    .replace(/&#(?:0*39|x0*27);|&apos;/gi, "'")
-
-  return /\d'\d+$/.test(beforeQuote)
+  FEET_INCHES_QUOTE_RE.lastIndex = quoteIndex
+  return FEET_INCHES_QUOTE_RE.test(text)
 }
 
-function colorizeDialogue(html: string): string {
-  const parts = html.split(/(<[^>]*>)/)
+export function colorizeDialogue(html: string): string {
+  const parts: string[] = []
+  let position = 0
+  while (position < html.length) {
+    const start = html.indexOf('<', position)
+    if (start === -1) break
+    const end = html.indexOf('>', start + 1)
+    if (end === -1) break
+    parts.push(html.slice(position, start), html.slice(start, end + 1))
+    position = end + 1
+  }
+  parts.push(html.slice(position))
   let result = ''
   let inQuote = false
   let skipDepth = 0
@@ -217,8 +226,17 @@ function colorizeDialogue(html: string): string {
   return result
 }
 
-function addLazyLoadingToImages(html: string): string {
-  return html.replace(/<img\b(?![^>]*\bloading=)/gi, '<img loading="lazy"')
+export function addLazyLoadingToImages(html: string): string {
+  return html.replace(/<img\b(?:(?![^>]*\bloading=)[^>]*|(?=[^>]*<img\b)[^>]*)/gi, (tag) => {
+    if (!tag.includes('<', 1)) {
+      return '<img loading="lazy"' + tag.slice(4)
+    }
+    let lastLoading = -1
+    for (const attribute of tag.matchAll(/\bloading=/gi)) lastLoading = attribute.index
+    return tag.replace(/<img\b/gi, (match, offset: number) => (
+      offset < lastLoading ? match : '<img loading="lazy"'
+    ))
+  })
 }
 
 interface MarkdownFence {
@@ -1158,11 +1176,12 @@ function extractTrustedYouTubeEmbed(iframeHtml: string): TrustedYouTubeEmbed | n
   return { src, title }
 }
 
-function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: TrustedYouTubeEmbed[] } {
+export function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: TrustedYouTubeEmbed[] } {
   if (!/<iframe\b/i.test(raw)) return { content: raw, embeds: [] }
 
   const embeds: TrustedYouTubeEmbed[] = []
-  const content = raw.replace(/<iframe\b[\s\S]*?<\/iframe\s*>/gi, (match) => {
+  const content = raw.replace(/<iframe\b[\s\S]*?(<\/iframe\s*>|$)/gi, (match, close: string) => {
+    if (!close) return match
     const embed = extractTrustedYouTubeEmbed(match)
     if (!embed) return match
     const idx = embeds.length
@@ -1177,9 +1196,9 @@ function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: Tr
 // sanitize pipeline emit a structure where the in-progress block briefly takes
 // up real vertical space. Pre-closing any unbalanced tags keeps the rendered
 // tree stable and avoids a visible height spike followed by a snap back.
-const STREAMING_DETAILS_TAG_RE = /<\/?(details|summary)\b[^>]*>/gi
+const STREAMING_DETAILS_TAG_RE = /<\/?(details|summary)\b[^>]*(>|$)/gi
 
-function balanceStreamingDetails(raw: string): string {
+export function balanceStreamingDetails(raw: string): string {
   if (!raw.includes('<')) return raw
   const fences = getMarkdownFenceRanges(raw)
   let openDetails = 0
@@ -1188,6 +1207,7 @@ function balanceStreamingDetails(raw: string): string {
   STREAMING_DETAILS_TAG_RE.lastIndex = 0
   let match: RegExpExecArray | null
   while ((match = STREAMING_DETAILS_TAG_RE.exec(raw)) !== null) {
+    if (!match[2]) break
     const pos = match.index
     while (fenceIdx < fences.length && fences[fenceIdx][1] <= pos) fenceIdx++
     if (fenceIdx < fences.length && pos >= fences[fenceIdx][0] && pos < fences[fenceIdx][1]) continue
