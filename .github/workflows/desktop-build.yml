@@ -25,7 +25,7 @@ jobs:
     name: Validate desktop manifests
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -71,7 +71,7 @@ jobs:
             target: aarch64-pc-windows-msvc
             bundles: nsis
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
