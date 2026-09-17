@@ -44,6 +44,23 @@ const cases = {
       longOpeningRun: (n: number) => '~'.repeat(n) + 'lang\nx\n~~~\n',
     },
   },
+  healingFonts: {
+    path: 'frontend/src/lib/formatHealing.ts',
+    functionName: 'healFormattingArtifacts', normal: '<font color="abc>"Hello</font>"',
+    fixtures: {
+      missingEnds: (n: number) => '<!--' + '<font '.repeat(n),
+      missingQuotedCloses: (n: number) => '<font>"'.repeat(n),
+      completeFonts: (n: number) => '<font color=red>Text</font>'.repeat(n),
+    },
+  },
+  legacyFonts: {
+    path: 'frontend/src/lib/legacyFontTags.ts',
+    functionName: 'normalizeLegacyFontTags', normal: '<font color="#7FA83" style="font-weight:bold">Text</font>',
+    fixtures: {
+      missingEnds: (n: number) => '<!--' + '<font '.repeat(n),
+      completeFonts: (n: number) => '<font color=red>Text</font>'.repeat(n),
+    },
+  },
   healingInline: {
     path: 'frontend/src/lib/formatHealing.ts',
     functionName: 'healFormattingArtifacts', normal: 'Before " spaced ". `" protected "` After " spaced ".',
@@ -51,6 +68,19 @@ const cases = {
       longOpeningRun: (n: number) => '`'.repeat(n) + 'x'.repeat(n),
       completeSpans: (n: number) => 'Before `code` then " spaced ". '.repeat(n),
       shortClosers: (n: number) => '`'.repeat(n) + ('x`').repeat(n),
+    },
+  },
+  healingMarkers: {
+    path: 'frontend/src/lib/formatHealing.ts',
+    functionName: 'healFormattingArtifacts', normal: '" spaced " and * spaced *.',
+    fixtures: {
+      missingQuoteBoundaries: (n: number) => ' "x'.repeat(n),
+      missingCurlyQuotes: (n: number) => ' “x'.repeat(n),
+      missingEmphasisBoundaries: (n: number) => ' *x'.repeat(n),
+      interiorQuoteSpaces: (n: number) => '"a' + ' '.repeat(n) + 'b"',
+      trimmedInteriorSpaces: (n: number) => '* a' + ' '.repeat(n) + 'b*',
+      completeQuotes: (n: number) => ' "text" '.repeat(n),
+      completeEmphasis: (n: number) => ' *text* '.repeat(n),
     },
   },
   dialogue: {

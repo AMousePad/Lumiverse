@@ -63,3 +63,58 @@ test('handles a long backtick run without a later closer', () => {
   const raw = '`'.repeat(4096) + 'x'.repeat(4096)
   expect(healFormattingArtifacts(raw)).toBe(raw)
 })
+
+test.each([
+  ["unfinished color quote", "<font color=\"abc>\"Hello</font>\"", "<font color=\"abc\">\"Hello\"</font>"],
+  ["closing quote outside font", "<font color=\"#abc\">“Hello</font>”", "<font color=\"#abc\">“Hello”</font>"],
+  ["matching quote already inside", "<font color=\"#abc\">\"Hello\"</font>\"", "<font color=\"#abc\">\"Hello\"</font>\""],
+  ["nested opening prefix", "<font x=<font>\"Hello</font>\"", "<font x=<font>\"Hello\"</font>"],
+  ["quoted delimiter", "<font color=\"a>b\">\" hello \"</font>\"", "<font color=\"a\">b\">\"hello\"</font>\""],
+  ["single quoted color", "<font color='abc>«Hello</font>»", "<font color='abc'>«Hello»</font>"],
+  ["balanced font spans", "<font color=#abc>\"Hello.\"</font> <font color=#def>*She smiled.*</font>", "<font color=#abc>\"Hello.\"</font> <font color=#def>*She smiled.*</font>"],
+  ["multiple unclosed font spans", "<font color=red>\"Hello.\" Next. <font color=blue>*Action.* Tail.", "<font color=red>\"Hello.\"</font> Next. <font color=blue>*Action.*</font> Tail."],
+  ["quote inside color span", "<span style=\"color:red\">“Hello</span>”", "<span style=\"color:red\">“Hello”</span>"],
+  ["unfinished tail after font", "<font color=red>\"Hello.\"</font> <font ", "<font color=red>\"Hello.\"</font> <font "],
+  ["longer tag name", "<font_extra>\"Hello</font_extra>\"", "<font_extra>\"Hello</font_extra>\""],
+])('preserves healing fonts behavior for %s', (_name, input, expected) => {
+  expect(healFormattingArtifacts(input)).toBe(expected)
+})
+
+test('leaves repeated unfinished font tags unchanged', () => {
+  const input = '<!--' + '<font '.repeat(256)
+  expect(healFormattingArtifacts(input)).toBe(input)
+})
+
+test.each([
+  ["straight quote boundary", "\" spaced \" and \"second\".", "\"spaced\" and \"second\"."],
+  ["curly and angle quote boundaries", "“ spaced ” and « spaced ».", "“spaced” and «spaced»."],
+  ["missing straight closing boundary", " \"first \"second \"third", " \"first \"second \"third"],
+  ["missing curly closing boundary", " “first”x “second”x", " “first”x “second”x"],
+  ["missing angle closer", " «first «second", " «first «second"],
+  ["quote repair after an unfinished line", "\"unfinished\n\" spaced \"", "\"unfinished\n\"spaced\""],
+  ["emphasis repair after an unfinished line", "*unfinished\n* spaced *", "*unfinished\n*spaced*"],
+  ["CR remains inside a quote line", "\" spaced \r\"", "\"spaced \r\""],
+  ["Unicode separator remains inside an emphasis line", "* spaced \u2028*", "*spaced \u2028*"],
+  ["each emphasis length", "*** spaced *** ** spaced ** * spaced * ___ spaced ___ __ spaced __ _ spaced _.", "***spaced*** **spaced** *spaced* ___spaced___ __spaced__ _spaced_."],
+  ["embedded delimiters stay unchanged", "* first *middle* last * and ** first **middle** last **", "* first *middle* last * and ** first **middle** last **"],
+  ["required closing boundaries", " *first *second **third **fourth _fifth _sixth", " *first *second **third **fourth _fifth _sixth"],
+  ["fenced content remains protected", "~~~\n\" spaced \" * spaced *\n~~~\n\" spaced \" * spaced *", "~~~\n\" spaced \" * spaced *\n~~~\n\"spaced\" *spaced*"],
+])('preserves quote and emphasis handling for %s', (_name, input, expected) => {
+  expect(healFormattingArtifacts(input)).toBe(expected)
+})
+
+test('leaves repeated unfinished quotes and emphasis unchanged', () => {
+  for (const fragment of [' "x', ' “x', ' «x', ' *x', ' **x', ' ***x', ' _x']) {
+    const input = fragment.repeat(128)
+    expect(healFormattingArtifacts(input)).toBe(input)
+  }
+})
+
+test('preserves interior whitespace while trimming only spaces and tabs at edges', () => {
+  const body = 'a' + ' \t'.repeat(1024) + 'b'
+  for (const [open, close] of [['"', '"'], ['“', '”'], ['«', '»'], ['*', '*'], ['**', '**'], ['***', '***'], ['_', '_']]) {
+    expect(healFormattingArtifacts(open + body + close)).toBe(open + body + close)
+    expect(healFormattingArtifacts(open + ' \t' + body + ' \t' + close)).toBe(open + body + close)
+    expect(healFormattingArtifacts(open + '\u00a0' + body + '\u00a0' + close)).toBe(open + '\u00a0' + body + '\u00a0' + close)
+  }
+})

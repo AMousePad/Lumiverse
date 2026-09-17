@@ -69,18 +69,18 @@ function getInlineCodeRanges(text: string): Array<[number, number]> {
   }
   return ranges
 }
-const FONT_QUOTE_EDGE_RE = /(<font\b[^>]*>)(["“”«»])([\s\S]*?)(<\/font>)(["“”«»])/gi
+const FONT_QUOTE_EDGE_RE = /(<font\b[^>]*>)(["“”«»])([\s\S]*?)(?:(<\/font>)(["“”«»])|$)|<font\b[^>]*(?:>|$)/gi
 const COLOR_SPAN_QUOTE_EDGE_RE = /(<span\b[^>]*\bstyle\s*=\s*["'][^"']*\bcolor\s*:[^"']*["'][^>]*>)(["“”«»])([\s\S]*?)(<\/span>)(["“”«»])/gi
-const FONT_TAG_RE = /<\/?font\b[^>]*>/gi
+const FONT_TAG_RE = /<\/?font\b[^>]*(>|$)/gi
 const QUOTE_CHARS = new Set(['"', '“', '”', '«', '»'])
 const MATCHING_QUOTE: Record<string, string> = {
   '"': '"',
   '“': '”',
   '«': '»',
 }
-const STRAIGHT_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(")([^\n]*?)(")(?=$|[\s)\]},.!?:;"'”’»<—–-])/g
-const CURLY_DOUBLE_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(“)([^\n]*?)(”)(?=$|[\s)\]},.!?:;"'”’»<—–-])/g
-const ANGLE_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(«)([^\n]*?)(»)(?=$|[\s)\]},.!?:;"'”’»<—–-])/g
+const STRAIGHT_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(")([^\n]*?)(?:(")(?=$|[\s)\]},.!?:;"'”’»<—–-])|(?=\n|$))/g
+const CURLY_DOUBLE_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(“)([^\n]*?)(?:(”)(?=$|[\s)\]},.!?:;"'”’»<—–-])|(?=\n|$))/g
+const ANGLE_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(«)([^\n]*?)(?:(»)(?=$|[\s)\]},.!?:;"'”’»<—–-])|(?=\n|$))/g
 
 function repairQuotedColorTagBoundaries(text: string): string {
   const repair = (
@@ -91,6 +91,7 @@ function repairQuotedColorTagBoundaries(text: string): string {
     closeTag: string,
     closeQuote: string,
   ) => {
+    if (!closeTag) return match
     const trimmedInner = inner.trimEnd()
     const lastChar = trimmedInner[trimmedInner.length - 1]
     if (lastChar && QUOTE_CHARS.has(lastChar)) return match
@@ -105,9 +106,10 @@ function repairQuotedColorTagBoundaries(text: string): string {
 /** Repair `<font color="abc>` into a valid opening tag before balancing it. */
 function repairUnterminatedFontColorQuotes(text: string): string {
   return text.replace(
-    /<font\b([^>]*?\bcolor\s*=\s*)(["'])([^"'>]*)(>)/gi,
-    (_match, before: string, quote: string, value: string) =>
-      `<font${before}${quote}${value}${quote}>`,
+    /<font\b(?:([^>]*?\bcolor\s*=\s*)(["'])([^"'>]*)(>)|[^>]*(?:>|$))/gi,
+    (match, before: string, quote: string, value: string, end: string) => end
+      ? `<font${before}${quote}${value}${quote}>`
+      : match,
   )
 }
 
@@ -162,11 +164,15 @@ function findFontScopeBoundary(segment: string): number {
  * tag closes before the next font tag or at the message end.
  */
 function closeUnterminatedFontTags(text: string): string {
-  const tokens = [...text.matchAll(FONT_TAG_RE)].map((match) => ({
-    index: match.index!,
-    end: match.index! + match[0].length,
-    closing: /^<\/font\b/i.test(match[0]),
-  }))
+  const tokens: Array<{ index: number; end: number; closing: boolean }> = []
+  for (const match of text.matchAll(FONT_TAG_RE)) {
+    if (!match[1]) break
+    tokens.push({
+      index: match.index!,
+      end: match.index! + match[0].length,
+      closing: /^<\/font\b/i.test(match[0]),
+    })
+  }
   if (tokens.length === 0) return text
 
   const openStack: number[] = []
@@ -203,13 +209,14 @@ function trimEdgeWhitespaceInEmphasis(text: string, delimiter: '*' | '_'): strin
   for (const size of delimiters) {
     const marker = delimiter.repeat(size).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const pattern = new RegExp(
-      `(^|[\\s([{"'“‘«>—–-])(${marker})(?!\\${delimiter})([^\\n]*?)${marker}(?!\\${delimiter})(?=$|[\\s)\\]},.!?:;"'”’»<—–-])`,
+      `(^|[\\s([{"'“‘«>—–-])(${marker})(?!\\${delimiter})([^\\n]*?)(?:(${marker})(?!\\${delimiter})(?=$|[\\s)\\]},.!?:;"'”’»<—–-])|(?=\\n|$))`,
       'g',
     )
-    result = result.replace(pattern, (match, prefix: string, openingMarker: string, body: string) => {
-      if (!/^[ \t]+|[ \t]+$/.test(body)) return match
+    result = result.replace(pattern, (match, prefix: string, openingMarker: string, body: string, closingMarker: string) => {
+      if (!closingMarker) return match
+      if (!/^[ \t]|[ \t]$/.test(body)) return match
       if (body.includes(delimiter)) return match
-      const trimmed = body.replace(/^[ \t]+|[ \t]+$/g, '')
+      const trimmed = body.replace(/^[ \t]+|(?<![ \t])[ \t]+$/g, '')
       if (!trimmed) return match
       if (!/[\p{L}\p{N}]/u.test(trimmed)) return match
       return `${prefix}${openingMarker}${trimmed}${openingMarker}`
@@ -225,8 +232,9 @@ function trimEdgeWhitespaceInQuotes(text: string): string {
 
   for (const pattern of patterns) {
     result = result.replace(pattern, (match, prefix: string, openQuote: string, body: string, closeQuote: string) => {
-      if (!/^[ \t]+|[ \t]+$/.test(body)) return match
-      const trimmed = body.replace(/^[ \t]+|[ \t]+$/g, '')
+      if (!closeQuote) return match
+      if (!/^[ \t]|[ \t]$/.test(body)) return match
+      const trimmed = body.replace(/^[ \t]+|(?<![ \t])[ \t]+$/g, '')
       if (!trimmed) return match
       if (!/[\p{L}\p{N}]/u.test(trimmed)) return match
       return `${prefix}${openQuote}${trimmed}${closeQuote}`
