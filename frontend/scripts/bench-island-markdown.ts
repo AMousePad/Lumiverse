@@ -16,6 +16,9 @@ const renderer = { renderBlockText: (text: string) => text, renderInlineText: (t
 const fixtures = {
   styles: (size: number) => '<div>' + '<style>.x{color:red}</style>'.repeat(size) + '</div>',
   unfinishedStyles: (size: number) => '<div>' + '<style>'.repeat(size) + '</div>',
+  nestedText: (size: number) => '<div>x'.repeat(size) + '</div>'.repeat(size),
+  unmatchedCloses: (size: number) => '<div>'.repeat(size) + '</span>'.repeat(size) + 'x',
+  crossedCloses: (size: number) => '<div><span>'.repeat(size) + '</div>'.repeat(size) + '</span>'.repeat(size) + 'x',
   text: (size: number) => '<div>' + 'plain text '.repeat(size) + '</div>',
 }
 const results = []

@@ -73,14 +73,23 @@ export interface HtmlIslandMarkdownRenderer {
   normalizeHtml?: (html: string) => string
 }
 
-function updateTagStack(part: string, tagStack: string[], rawTextState: { depth: number }): void {
+interface TagStack {
+  tags: string[]
+  positions: Map<string, number[]>
+}
+
+function updateTagStack(part: string, tagStack: TagStack, rawTextState: { depth: number }): void {
   const closeMatch = part.match(/^<\/([a-z][\w:-]*)\b/i)
   if (closeMatch) {
     const tag = closeMatch[1].toLowerCase()
     if (RAW_TEXT_CONTEXT_TAGS.has(tag)) rawTextState.depth = Math.max(0, rawTextState.depth - 1)
-    if (!SANITIZER_KEPT_TAGS.has(tag)) return
-    const idx = tagStack.lastIndexOf(tag)
-    if (idx >= 0) tagStack.splice(idx, 1)
+    if (!SANITIZER_KEPT_TAGS.has(tag) || tagStack.tags.length === 0) return
+    const idx = tagStack.positions.get(tag)?.pop()
+    if (idx !== undefined) {
+      // Closing a mismatched tag must not repeatedly shift its descendants.
+      tagStack.tags[idx] = ''
+      while (tagStack.tags[tagStack.tags.length - 1] === '') tagStack.tags.pop()
+    }
     return
   }
 
@@ -92,16 +101,28 @@ function updateTagStack(part: string, tagStack: string[], rawTextState: { depth:
   if (!SANITIZER_KEPT_TAGS.has(tag)) return
 
   const isSelfClosing = /\/\s*>$/.test(part) || VOID_HTML_TAG_RE.test(part)
-  if (!isSelfClosing) tagStack.push(tag)
+  if (!isSelfClosing) {
+    let positions = tagStack.positions.get(tag)
+    if (!positions) {
+      positions = []
+      tagStack.positions.set(tag, positions)
+    }
+    positions.push(tagStack.tags.length)
+    tagStack.tags.push(tag)
+  }
 }
 
-function shouldRenderInlineMarkdown(tagStack: string[]): boolean {
-  const currentTag = tagStack[tagStack.length - 1]
+function shouldRenderInlineMarkdown(tagStack: TagStack): boolean {
+  const currentTag = tagStack.tags[tagStack.tags.length - 1]
   return currentTag != null && !BLOCK_MARKDOWN_PARENT_TAGS.has(currentTag)
 }
 
-function isMarkdownExcludedSubtree(tagStack: string[]): boolean {
-  return tagStack.some((tag) => NO_MARKDOWN_SUBTREE_TAGS.has(tag))
+function isMarkdownExcludedSubtree(tagStack: TagStack): boolean {
+  if (tagStack.tags.length === 0) return false
+  for (const tag of NO_MARKDOWN_SUBTREE_TAGS) {
+    if (tagStack.positions.get(tag)?.length) return true
+  }
+  return false
 }
 
 function findLastBlankLine(text: string): { index: number } | null {
@@ -152,7 +173,7 @@ export function processMarkdownInHtmlIsland(
   const restoreEmbeddedStyles = (part: string): string => styleBlocks.size > 0 && part.includes('<!--ISLAND_STYLE_')
     ? part.replace(/<!--ISLAND_STYLE_\d+-->/g, restoreStyle)
     : part
-  const tagStack: string[] = []
+  const tagStack: TagStack = { tags: [], positions: new Map() }
   const rawTextState = { depth: 0 }
   const out: string[] = []
 
@@ -250,13 +271,13 @@ export function processMarkdownInHtmlIsland(
       }
       const nameMatch = part.match(/^<\/?([a-z][\w:-]*)\b/i)
       const name = nameMatch ? nameMatch[1].toLowerCase() : null
-      if (tagStack.length === 0 && !part.startsWith('</')) {
+      if (tagStack.tags.length === 0 && !part.startsWith('</')) {
         messageWrapRoot = part.includes('data-message-prose')
       }
       if (name && SANITIZER_KEPT_TAGS.has(name) && !INLINE_FLOW_TAGS.has(name)) {
         closeGroup()
         out.push(restoreEmbeddedStyles(part))
-        if (messageWrapRoot && tagStack.length > 0) rawHtml = true
+        if (messageWrapRoot && tagStack.tags.length > 0) rawHtml = true
       } else {
         if (
           name !== null

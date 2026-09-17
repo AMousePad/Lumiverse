@@ -180,3 +180,58 @@ describe('processMarkdownInHtmlIsland', () => {
     })).toBe('<!--ISLAND_STYLE_0--><style>.label{color:red}</style>')
   })
 })
+
+describe('open-tag tracking', () => {
+  test.each([
+    ['text at each nesting depth', '<div>x'.repeat(128) + '</div>'.repeat(128)],
+    ['closing tags with no matching opener', '<div>'.repeat(128) + '</span>'.repeat(128) + 'x'],
+    ['closing tags below surviving descendants', '<div><span>'.repeat(128) + '</div>'.repeat(128) + 'x'],
+  ])('bounds ancestor work for %s', (_name, html) => {
+    const originalSome = Array.prototype.some
+    const originalLastIndexOf = Array.prototype.lastIndexOf
+    const originalSplice = Array.prototype.splice
+    let visited = 0
+    let result: string
+    Array.prototype.some = function (this: unknown[], predicate, thisArg) {
+      return originalSome.call(this, (value, index, array) => {
+        visited++
+        return predicate.call(thisArg, value, index, array)
+      })
+    }
+    Array.prototype.lastIndexOf = function (this: unknown[], ...args: Parameters<typeof originalLastIndexOf>) {
+      const found = originalLastIndexOf.apply(this, args)
+      const start = args[1] === undefined ? this.length - 1 : args[1]
+      visited += found < 0 ? start + 1 : start - found + 1
+      return found
+    }
+    Array.prototype.splice = function (this: unknown[], ...args: Parameters<typeof originalSplice>) {
+      visited += Math.max(0, this.length - args[0] - (args[1] ?? this.length))
+      return originalSplice.apply(this, args)
+    } as typeof originalSplice
+    try {
+      result = processMarkdownInHtmlIsland(html, {
+        renderBlockText: (text) => text,
+        renderInlineText: (text) => text,
+      })
+    } finally {
+      Array.prototype.some = originalSome
+      Array.prototype.lastIndexOf = originalLastIndexOf
+      Array.prototype.splice = originalSplice
+    }
+    expect(result!).toBe(html)
+    expect(visited).toBeLessThanOrEqual(html.length * 2)
+  })
+
+  test.each([
+    ['<div><span></div>**a**</span>**b**', '<div><span></div><inline>**a**</inline></span><block>**b**</block>'],
+    ['<div><span><div><span></div>**a**</div>**b**</span>**c**</span>**d**', '<div><span><div><span></div><inline>**a**</inline></div><inline>**b**</inline></span><inline>**c**</inline></span><block>**d**</block>'],
+    ['<svg><div><svg></div>**a**</svg>**b**</svg>**c**', '<svg><div><svg></div>**a**</svg>**b**</svg><block>**c**</block>'],
+    ['<div></svg>**a**</div>', '<div></svg><block>**a**</block></div>'],
+    ['<svg/><div>**a**</svg>**b**</div>', '<svg/><div><block>**a**</block></svg><block>**b**</block></div>'],
+    ['<code/><div>**a**</pre>**b**</div>', '<code/><div>**a**</pre><block>**b**</block></div>'],
+    ['<pre><span></code>**a**</span>**b**</pre>**c**', '<pre><span></code><inline>**a**</inline></span><inline>**b**</inline></pre><block>**c**</block>'],
+    ['<div data-message-prose><span></div></span><div>**a**</div>', '<div data-message-prose><span></div></span><div><block>**a**</block></div>'],
+  ])('preserves permissive context for %s', (html, expected) => {
+    expect(render(html)).toBe(expected)
+  })
+})
