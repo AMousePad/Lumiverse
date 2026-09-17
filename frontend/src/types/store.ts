@@ -734,6 +734,11 @@ export interface LorebookEditorSettings {
 // ---- Settings Slice ----
 export type LongMessageCollapsePreset = 'compact' | 'comfortable' | 'tall' | 'custom'
 
+export interface EnterToSendSettings {
+  desktop: boolean
+  mobile: boolean
+}
+
 export interface SettingsSlice {
   settingsLoaded: boolean
   /** Full persisted settings loaded; startup settings intentionally set only `settingsLoaded`. */
@@ -758,7 +763,7 @@ export interface SettingsSlice {
   bubbleUseFullAvatar: boolean
   /** Bubble background opacity, 0–1. 1 = the theme's natural bubble fill (default). */
   bubbleOpacity: number
-  inputBarEnterToSend: boolean
+  inputBarEnterToSend: EnterToSendSettings
   saveDraftInput: boolean
   chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
   chatContentMaxWidth: number
@@ -831,7 +836,7 @@ export interface SettingsSlice {
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
-  setInputBarEnterToSend: (enabled: boolean) => void
+  setInputBarEnterToSend: (settings: EnterToSendSettings) => void
   setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K], source?: SettingsWriteSource) => void
   setTheme: (theme: ThemeConfig | null) => void
   setCharacterThemeOverlay: (overlay: CharacterThemeOverlay | null) => void

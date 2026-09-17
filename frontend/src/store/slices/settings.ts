@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand'
-import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource, ToastPosition } from '@/types/store'
+import type { AppStore, EnterToSendSettings, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource, ToastPosition } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
@@ -7,6 +7,7 @@ import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/l
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import { PRODUCTIVITY_DEFAULTS, migrateProductivitySetting } from '@/lib/uiProductivityDefaults'
+import { isMobileViewportOrDevice } from '@/lib/mobile'
 import { createSettingsLoadGenerationGuard } from './settings-load-generation'
 import {
   deriveReorderArgs,
@@ -191,8 +192,12 @@ let localSettingsRevision = 0
 const localSettingRevisions = new Map<string, number>()
 let persistenceScope: string | null = null
 
-/** Per-user, per-device preference; seeded once from the legacy synced row. */
+/** Per-user, per-device preferences; seeded once from the legacy scalar value. */
 export const DEVICE_ENTER_TO_SEND_STORAGE_KEY = 'lumiverse:device:input-bar-enter-to-send'
+export const DEFAULT_ENTER_TO_SEND_SETTINGS: Readonly<EnterToSendSettings> = Object.freeze({
+  desktop: true,
+  mobile: false,
+})
 const LEGACY_SETTINGS_KEY_RENAMES: Readonly<Record<string, string>> = Object.freeze({
   chatSheldDisplayMode: 'chatDisplayMode',
 })
@@ -237,18 +242,27 @@ function deviceEnterToSendStorageKey(): string {
   return bridgeStorageKey(DEVICE_ENTER_TO_SEND_STORAGE_KEY)
 }
 
-function readDeviceEnterToSend(): boolean | null {
+function parseEnterToSendSettings(value: unknown): EnterToSendSettings | null {
+  if (!isPlainObject(value)) return null
+  return {
+    desktop: typeof value.desktop === 'boolean' ? value.desktop : DEFAULT_ENTER_TO_SEND_SETTINGS.desktop,
+    mobile: typeof value.mobile === 'boolean' ? value.mobile : DEFAULT_ENTER_TO_SEND_SETTINGS.mobile,
+  }
+}
+
+function readDeviceEnterToSend(): EnterToSendSettings | boolean | null {
   try {
     const value = localStorage.getItem(deviceEnterToSendStorageKey())
     if (value === 'true') return true
     if (value === 'false') return false
+    if (value !== null) return parseEnterToSendSettings(JSON.parse(value))
   } catch {}
   return null
 }
 
-function persistDeviceEnterToSend(value: boolean): void {
+function persistDeviceEnterToSend(value: EnterToSendSettings): void {
   try {
-    localStorage.setItem(deviceEnterToSendStorageKey(), String(value))
+    localStorage.setItem(deviceEnterToSendStorageKey(), JSON.stringify(value))
   } catch {
     // The setting remains usable when browser storage is unavailable.
   }
@@ -672,7 +686,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   bubbleHideAvatarBg: false,
   bubbleUseFullAvatar: false,
   bubbleOpacity: 1,
-  inputBarEnterToSend: true,
+  inputBarEnterToSend: { ...DEFAULT_ENTER_TO_SEND_SETTINGS },
   saveDraftInput: false,
   chatWidthMode: 'full',
   chatContentMaxWidth: 900,
@@ -867,7 +881,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
 
   setSetting: (key, value, source: SettingsWriteSource = 'user') => {
     if (key === 'inputBarEnterToSend') {
-      get().setInputBarEnterToSend(value as boolean)
+      get().setInputBarEnterToSend(value as EnterToSendSettings)
       return
     }
     const previous = (get() as unknown as Record<string, unknown>)[key as string]
@@ -911,9 +925,10 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
   },
 
-  setInputBarEnterToSend: (enabled) => {
-    persistDeviceEnterToSend(enabled)
-    set({ inputBarEnterToSend: enabled })
+  setInputBarEnterToSend: (settings) => {
+    const normalized = parseEnterToSendSettings(settings) ?? { ...DEFAULT_ENTER_TO_SEND_SETTINGS }
+    persistDeviceEnterToSend(normalized)
+    set({ inputBarEnterToSend: normalized })
   },
 
   setTheme: (theme) => {
@@ -1217,18 +1232,23 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // This preference was historically synced with the account. Seed each
       // device once from that committed backend row, then keep later changes
       // local so phones and desktops can choose different send-key behavior.
-      const deviceEnterToSend = readDeviceEnterToSend()
-      if (deviceEnterToSend !== null) {
-        patch.inputBarEnterToSend = deviceEnterToSend
-      } else {
-        const backendEnterToSend = rows.find((row) => row.key === 'inputBarEnterToSend')?.value
-          ?? rows.find((row) => row.key === LEGACY_ENTER_TO_SEND_SETTING_KEY)?.value
-        const migratedEnterToSend = typeof backendEnterToSend === 'boolean'
+      const storedDeviceEnterToSend = readDeviceEnterToSend()
+      const backendEnterToSend = rows.find((row) => row.key === 'inputBarEnterToSend')?.value
+        ?? rows.find((row) => row.key === LEGACY_ENTER_TO_SEND_SETTING_KEY)?.value
+      const migratedBackendSettings = parseEnterToSendSettings(backendEnterToSend) ?? {
+        ...DEFAULT_ENTER_TO_SEND_SETTINGS,
+        desktop: typeof backendEnterToSend === 'boolean'
           ? backendEnterToSend
-          : defaults.inputBarEnterToSend
-        persistDeviceEnterToSend(migratedEnterToSend)
-        patch.inputBarEnterToSend = migratedEnterToSend
+          : DEFAULT_ENTER_TO_SEND_SETTINGS.desktop,
       }
+      const deviceEnterToSend = typeof storedDeviceEnterToSend === 'boolean'
+        ? {
+            ...migratedBackendSettings,
+            [isMobileViewportOrDevice() ? 'mobile' : 'desktop']: storedDeviceEnterToSend,
+          }
+        : storedDeviceEnterToSend ?? migratedBackendSettings
+      persistDeviceEnterToSend(deviceEnterToSend)
+      patch.inputBarEnterToSend = deviceEnterToSend
 
       // Recover any settings the previous page wrote to localStorage but may
       // not have persisted to the DB yet (keepalive flush races with this GET).

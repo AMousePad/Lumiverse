@@ -382,7 +382,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   )
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
-  const enterToSend = useStore((s) => s.inputBarEnterToSend)
+  const enterToSendSettings = useStore((s) => s.inputBarEnterToSend)
+  const enterToSend = isMobile ? enterToSendSettings.mobile : enterToSendSettings.desktop
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)

@@ -1183,9 +1183,15 @@ function ChatSettings() {
       <h3 id={sectionAnchorId('chat', 'input')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.inputTitle')}</h3>
 
       <Toggle.Checkbox
-        checked={enterToSend}
-        onChange={setInputBarEnterToSend}
-        label={t('chat.enterToSend')}
+        checked={enterToSend.desktop}
+        onChange={(desktop) => setInputBarEnterToSend({ ...enterToSend, desktop })}
+        label={t('chat.enterToSendDesktop')}
+      />
+
+      <Toggle.Checkbox
+        checked={enterToSend.mobile}
+        onChange={(mobile) => setInputBarEnterToSend({ ...enterToSend, mobile })}
+        label={t('chat.enterToSendMobile')}
       />
 
       <Toggle.Checkbox
