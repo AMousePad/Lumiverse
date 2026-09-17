@@ -11,6 +11,7 @@ import {
 import { recoverStaleGitIndexLock, resolveGitIndexLock } from "./git-index-lock";
 import { rebuildDesktopShell } from "./runner/git-ops";
 import { PROJECT_ROOT } from "./runner/lib/constants";
+import { installRustForWindows } from "./windows-rust-installer";
 
 function lockFailureMessage(status: "active" | "recent" | "changed", lockPath: string): string {
   if (status === "active") {
@@ -39,7 +40,26 @@ async function main(): Promise<void> {
     throw new Error(lockFailureMessage(initialLock.status, initialLock.lockPath));
   }
 
-  const report = await inspectDesktopToolchain();
+  const target = currentInstallPlatform();
+  let report = await inspectDesktopToolchain();
+  const cargoMissing = report.checks.some(
+    (check) => check.id === "cargo" && check.status === "missing",
+  );
+  if (target === "win32" && cargoMissing) {
+    console.log("Rust is required for Tauri but is not installed.");
+    console.log("Downloading the official Rustup installer and installing stable Rust...\n");
+    try {
+      const installed = await installRustForWindows();
+      console.log(`Rust installed. Added ${installed.cargoBin} to PATH for this build.\n`);
+    } catch (error) {
+      throw new Error(
+        `automatic Rust installation failed: ${error instanceof Error ? error.message : String(error)}. `
+        + "Run 'bun run desktop:doctor' for manual installation instructions.",
+      );
+    }
+    report = await inspectDesktopToolchain();
+  }
+
   if (!report.ready) {
     console.error("Missing desktop build prerequisites:\n");
     for (const check of report.checks.filter((candidate) => candidate.status === "missing")) {
@@ -51,7 +71,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  const target = currentInstallPlatform();
   console.log("Building the Tauri desktop app (the first build can take several minutes)...\n");
   const indexLockPath = resolveGitIndexLock(PROJECT_ROOT);
   const lockExistedBeforeBuild = indexLockPath ? await Bun.file(indexLockPath).exists() : false;

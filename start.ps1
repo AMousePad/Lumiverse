@@ -29,7 +29,8 @@
     Open the .env file in an editor ($env:VISUAL/$env:EDITOR if set, else Notepad)
 
 .PARAMETER InstallDesktop
-    Build and install the Tauri desktop app for the current user
+    Build and install the Tauri desktop app for the current user. Automatically
+    installs the minimal stable Rust toolchain when cargo is not present.
 
 .PARAMETER FrontendPath
     Path to frontend directory (default: ./frontend)

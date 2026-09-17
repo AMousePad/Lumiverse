@@ -136,6 +136,11 @@ native toolchain, builds the Tauri bundle, installs it for the current user,
 and creates the platform launcher plus a desktop shortcut when that folder is
 available. `--desktop` and `-Desktop` are shorter aliases.
 
+On Windows, this command also downloads the official architecture-matched
+`rustup-init.exe` and installs the minimal stable Rust toolchain automatically
+when `cargo` is missing. `bun run desktop:doctor` remains available when you
+only want to inspect prerequisites or follow the manual installation path.
+
 To build bundles without installing them:
 
 ```bash

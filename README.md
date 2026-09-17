@@ -253,7 +253,8 @@ default browser on request, and applies updates through the runner. See
 no prebuilt download; use `./start.sh --install-desktop` on macOS/Linux or
 `.\start.ps1 -InstallDesktop` on Windows to check prerequisites, build it, and
 set up its application launcher plus a desktop shortcut when that folder is
-available. The shorter
+available. On Windows the install also bootstraps the minimal stable Rust
+toolchain automatically when `cargo` is missing. The shorter
 `--desktop`/`-Desktop` aliases are also accepted. Run `bun run desktop:doctor`
 to check the build toolchain without installing anything.
 
