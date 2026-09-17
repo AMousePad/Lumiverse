@@ -6,22 +6,17 @@
  *   coalesce onto the same in-flight promise.
  * - The replacement pair is durably persisted (single committed UPDATE)
  *   before the new access token is released to any worker.
- * - A refresh whose outcome is UNKNOWN stops the installation. The old
- *   refresh token may already be spent server-side and replaying it revokes
- *   the whole instance, so we never retry it: credentials are removed and a
- *   relink is required.
- * - Any terminal 401 removes unusable credentials and emits
+ * - Only an explicit terminal 401 removes unusable credentials and emits
  *   ILLARIN_LINK_STATE_CHANGED so every background worker stands down.
- *
- * Rate limits are the one non-terminal failure: the request was rejected
- * before the server consumed the refresh token, so credentials survive and
- * the caller retries later honoring Retry-After.
+ * - Every non-401 failure leaves the stored link intact and propagates to the
+ *   caller. Background workers back off and retry instead of turning a
+ *   transient network/server/storage failure into a forced relink.
  */
 
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import * as svc from "../services/illarin-instance.service";
-import { IllarinRateLimitError, IllarinUnauthorizedError, refreshTokens } from "./api";
+import { IllarinUnauthorizedError, refreshTokens } from "./api";
 import type { IllarinRequestOptions } from "./api";
 
 /** Refresh this long before expiry to absorb clock skew. Access tokens last 15 minutes. */
@@ -29,7 +24,6 @@ const EXPIRY_SKEW_MS = 90_000;
 
 export type LinkStateReason =
   | "unauthorized"
-  | "refresh_outcome_unknown"
   | "unlinked";
 
 const inflightRefreshes = new Map<string, Promise<string | null>>();
@@ -54,7 +48,7 @@ export async function handleTerminalUnauthorized(userId: string, reason: LinkSta
  * Return a valid access token for authenticated Illarin calls, refreshing
  * first when the stored one is inside the skew window. Returns null when the
  * user is not linked or the installation was torn down during refresh.
- * Throws IllarinRateLimitError when the refresh itself is rate limited.
+ * Throws when a non-401 refresh attempt fails so the caller can back off.
  */
 export async function getValidAccessToken(userId: string, options?: IllarinRequestOptions): Promise<string | null> {
   const record = await svc.getIllarinInstance(userId);
@@ -112,17 +106,13 @@ async function doRefresh(userId: string, options?: IllarinRequestOptions, force 
     await svc.replaceTokens(userId, pair);
     return pair.accessToken;
   } catch (err) {
-    if (err instanceof IllarinRateLimitError) {
-      // Rejected before consumption — safe to retry later with Retry-After.
-      throw err;
-    }
     if (err instanceof IllarinUnauthorizedError) {
       await handleTerminalUnauthorized(userId, "unauthorized");
       return null;
     }
-    // Network failure or unexpected status: outcome unknown. The old token
-    // may be spent — stop instead of risking an instance-revoking replay.
-    await handleTerminalUnauthorized(userId, "refresh_outcome_unknown");
-    return null;
+    // A missing/invalid response is not proof that Illarin rejected the link.
+    // Keep the last durable pair and let the caller apply its normal backoff.
+    // This also preserves the row if local encryption/SQLite persistence fails.
+    throw err;
   }
 }

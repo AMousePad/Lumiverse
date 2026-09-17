@@ -41,7 +41,9 @@ The Illarin settings panel shows:
 - Your granted scopes
 - The declared application version
 
-Access credentials rotate automatically; nothing to maintain.
+Access credentials rotate automatically; nothing to maintain. Temporary network
+or Illarin service failures leave the saved link in place and retry later. Only
+an explicit credential rejection requires linking again.
 
 ---
 

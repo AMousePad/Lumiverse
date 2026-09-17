@@ -128,7 +128,7 @@ async function requestJson<T>(
     });
   } catch {
     // Network failure. For state-changing calls the outcome is unknown;
-    // callers decide policy (refresh: stop and relink; others: back off).
+    // callers preserve durable local state and apply their normal backoff.
     throw new IllarinApiError(0, path, `Illarin ${path} failed: network error`);
   }
 
