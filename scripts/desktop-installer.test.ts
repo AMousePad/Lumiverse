@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  desktopStopCommand,
   installDesktopBundle,
   linuxDesktopEntry,
   resolveLinuxDesktopDir,
@@ -56,21 +57,52 @@ describe("selectDesktopInstallArtifact", () => {
   });
 });
 
+describe("desktopStopCommand", () => {
+  test("uses an exact executable name and process-tree cleanup on Unix", () => {
+    for (const target of ["darwin", "linux"] as const) {
+      const command = desktopStopCommand(target);
+      expect(command.slice(0, 2)).toEqual(["/bin/sh", "-c"]);
+      expect(command[2]).toContain('pgrep -x "$app_name"');
+      expect(command[2]).toContain("kill -TERM $tree");
+      expect(command.at(-1)).toBe("lumiverse-tray");
+    }
+  });
+
+  test("uses taskkill tree termination for the Windows executable", () => {
+    const command = desktopStopCommand("win32");
+    expect(command[0]).toBe("powershell.exe");
+    expect(command.at(-1)).toContain("taskkill.exe /PID $process.Id /T /F");
+    expect(command.at(-1)).toContain("lumiverse-tray");
+  });
+});
+
 test("macOS install copies the app and refreshes its desktop symlink", async () => {
   const root = tempRoot();
   const home = join(root, "home");
+  const applications = join(root, "Applications");
   const artifact = join(root, "bundle", "Lumiverse Desktop.app");
   mkdirSync(join(artifact, "Contents", "MacOS"), { recursive: true });
   mkdirSync(join(home, "Desktop"), { recursive: true });
   writeFileSync(join(artifact, "Contents", "MacOS", "lumiverse-tray"), "binary");
   const staleTarget = join(home, "old.app");
   symlinkSync(staleTarget, join(home, "Desktop", "Lumiverse Desktop.app"));
+  const commands: string[][] = [];
 
-  const result = await installDesktopBundle(artifact, "darwin", { homeDir: home });
+  const result = await installDesktopBundle(artifact, "darwin", {
+    homeDir: home,
+    macApplicationsDir: applications,
+    runCommand: async (command) => {
+      commands.push(command);
+      return 0;
+    },
+  });
 
+  expect(result.installedPath).toBe(join(applications, "Lumiverse Desktop.app"));
   expect(readFileSync(join(result.installedPath, "Contents", "MacOS", "lumiverse-tray"), "utf8")).toBe("binary");
   expect(existsSync(artifact)).toBe(false);
   expect(result.shortcuts).toHaveLength(2);
+  expect(commands.some((command) => command.includes("-f") && command.includes(result.installedPath))).toBe(true);
+  expect(commands).toContainEqual(["/usr/bin/mdimport", result.installedPath]);
 });
 
 test("Linux install writes executable AppImage and application/desktop launchers", async () => {
@@ -80,7 +112,11 @@ test("Linux install writes executable AppImage and application/desktop launchers
   mkdirSync(join(home, "Desktop"), { recursive: true });
   writeFileSync(artifact, "appimage");
 
-  const result = await installDesktopBundle(artifact, "linux", { homeDir: home, env: {} });
+  const result = await installDesktopBundle(artifact, "linux", {
+    homeDir: home,
+    env: {},
+    runCommand: async () => 0,
+  });
   const launcher = join(home, ".local", "share", "applications", "chat.lumiverse.tray.desktop");
 
   expect(readFileSync(result.installedPath, "utf8")).toBe("appimage");
@@ -115,8 +151,26 @@ test("Windows runs the current-user installer and creates a desktop shortcut", a
     },
   });
 
-  expect(commands[0]).toEqual(["C:\\build\\Lumiverse Desktop-setup.exe", "/S"]);
-  expect(commands[1]?.[0]).toBe("powershell.exe");
-  expect(commands[1]?.at(-1)).toContain("Lumiverse Desktop.lnk");
+  expect(commands[0]?.[0]).toBe("powershell.exe");
+  expect(commands[0]?.at(-1)).toContain("taskkill.exe");
+  expect(commands[1]).toEqual(["C:\\build\\Lumiverse Desktop-setup.exe", "/S"]);
+  expect(commands[2]?.[0]).toBe("powershell.exe");
+  expect(commands[2]?.at(-1)).toContain("Lumiverse Desktop.lnk");
   expect(result.shortcuts).toHaveLength(2);
+});
+
+test("installation stops before replacing files when the running app cannot be killed", async () => {
+  const root = tempRoot();
+  const home = join(root, "home");
+  const artifact = join(root, "Lumiverse.AppImage");
+  writeFileSync(artifact, "appimage");
+
+  await expect(installDesktopBundle(artifact, "linux", {
+    homeDir: home,
+    env: {},
+    runCommand: async () => 9,
+  })).rejects.toThrow("Could not stop the running Lumiverse Desktop app");
+
+  expect(existsSync(artifact)).toBe(true);
+  expect(existsSync(join(home, ".local", "opt", "lumiverse-desktop"))).toBe(false);
 });

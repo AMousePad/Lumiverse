@@ -1,10 +1,10 @@
 /**
- * User-local installation helpers for the Tauri desktop bundle.
+ * Native installation helpers for the Tauri desktop bundle.
  *
  * The Tauri bundler creates a different kind of artifact on each platform.
- * This module turns the freshly built artifact into an installed app without
- * requiring administrator access, and makes it reachable from the platform's
- * normal launcher (plus the desktop when that folder exists).
+ * This module turns the freshly built artifact into an installed app and
+ * makes it reachable from the platform's normal launcher (plus the desktop
+ * when that folder exists).
  */
 
 import {
@@ -35,6 +35,8 @@ export interface DesktopInstallOptions {
   homeDir?: string;
   env?: Record<string, string | undefined>;
   runCommand?: (command: string[]) => Promise<number>;
+  /** Override used by tests; normal macOS installs belong in /Applications. */
+  macApplicationsDir?: string;
 }
 
 const ARTIFACT_CANDIDATES: Record<DesktopInstallPlatform, Array<{ dir: string; extension: string }>> = {
@@ -50,6 +52,82 @@ const ARTIFACT_CANDIDATES: Record<DesktopInstallPlatform, Array<{ dir: string; e
   linux: [{ dir: "appimage", extension: ".AppImage" }],
 };
 
+const UNIX_DESKTOP_STOP_SCRIPT = String.raw`
+app_name="$1"
+command -v pgrep >/dev/null 2>&1 || {
+  echo "Cannot stop Lumiverse Desktop because pgrep is unavailable" >&2
+  exit 127
+}
+
+roots="$(pgrep -x "$app_name" 2>/dev/null || true)"
+[ -n "$roots" ] || exit 0
+
+collect_tree() {
+  for child in $(pgrep -P "$1" 2>/dev/null || true); do
+    collect_tree "$child"
+  done
+  printf '%s\n' "$1"
+}
+
+tree=""
+for root in $roots; do
+  tree="$tree $(collect_tree "$root")"
+done
+
+# TERM gives the tray, runner and server a chance to clean up. KILL is only a
+# fallback for processes that remain after five seconds.
+kill -TERM $tree 2>/dev/null || true
+remaining="$tree"
+attempt=0
+while [ "$attempt" -lt 5 ]; do
+  next=""
+  for pid in $remaining; do
+    if kill -0 "$pid" 2>/dev/null; then next="$next $pid"; fi
+  done
+  remaining="$next"
+  [ -n "$remaining" ] || exit 0
+  sleep 1
+  attempt=$((attempt + 1))
+done
+
+kill -KILL $remaining 2>/dev/null || true
+sleep 1
+for pid in $remaining; do
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Lumiverse Desktop process $pid is still running" >&2
+    exit 1
+  fi
+done
+`;
+
+/** Build the narrowly scoped platform command used to stop an installed app. */
+export function desktopStopCommand(target: DesktopInstallPlatform): string[] {
+  if (target === "win32") {
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "$names = @('lumiverse-tray', 'Lumiverse Desktop')",
+      "$processes = @(Get-Process -Name $names -ErrorAction SilentlyContinue)",
+      "foreach ($process in $processes) {",
+      "  & taskkill.exe /PID $process.Id /T /F | Out-Null",
+      "  if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {",
+      "    throw \"Lumiverse Desktop process $($process.Id) could not be stopped\"",
+      "  }",
+      "}",
+    ].join("\n");
+    return [
+      "powershell.exe",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      script,
+    ];
+  }
+
+  return ["/bin/sh", "-c", UNIX_DESKTOP_STOP_SCRIPT, "lumiverse-desktop-stop", "lumiverse-tray"];
+}
+
 function newestArtifact(dir: string, extension: string): string | null {
   if (!existsSync(dir)) return null;
   const match = readdirSync(dir)
@@ -59,7 +137,7 @@ function newestArtifact(dir: string, extension: string): string | null {
   return match?.path ?? null;
 }
 
-/** Select the artifact that can be installed without administrator access. */
+/** Select the preferred platform-native artifact for installation. */
 export function selectDesktopInstallArtifact(
   bundleRoot: string,
   target: DesktopInstallPlatform,
@@ -89,15 +167,51 @@ function createDesktopSymlink(source: string, target: string): boolean {
   return true;
 }
 
-function installMacApp(artifact: string, homeDir: string): DesktopInstallResult {
-  const applicationsDir = join(homeDir, "Applications");
-  const installedPath = join(applicationsDir, "Lumiverse Desktop.app");
-  mkdirSync(applicationsDir, { recursive: true });
-
+function replaceMacApp(artifact: string, installedPath: string): void {
   // Replacing this exact app bundle is the update path for a previous install.
   // User data lives in Tauri's app-data directory, not inside the bundle.
   rmSync(installedPath, { recursive: true, force: true });
   cpSync(artifact, installedPath, { recursive: true, force: true });
+}
+
+function isPermissionError(error: unknown): boolean {
+  return error instanceof Error
+    && "code" in error
+    && (error.code === "EACCES" || error.code === "EPERM");
+}
+
+function elevatedMacInstallCommand(artifact: string, installedPath: string): string[] {
+  // Pass paths as AppleScript arguments so its `quoted form` handles spaces
+  // and shell-significant characters before the privileged command runs.
+  const script = [
+    "on run argv",
+    "  set sourcePath to item 1 of argv",
+    "  set targetPath to item 2 of argv",
+    "  set commandText to \"/bin/rm -rf \" & quoted form of targetPath & \" && /usr/bin/ditto \" & quoted form of sourcePath & \" \" & quoted form of targetPath",
+    "  do shell script commandText with administrator privileges",
+    "end run",
+  ].join("\n");
+  return ["/usr/bin/osascript", "-e", script, "--", artifact, installedPath];
+}
+
+async function installMacApp(
+  artifact: string,
+  homeDir: string,
+  applicationsDir: string,
+  runCommand: (command: string[]) => Promise<number>,
+): Promise<DesktopInstallResult> {
+  const installedPath = join(applicationsDir, "Lumiverse Desktop.app");
+  mkdirSync(applicationsDir, { recursive: true });
+
+  try {
+    replaceMacApp(artifact, installedPath);
+  } catch (error) {
+    if (!isPermissionError(error)) throw error;
+    const exitCode = await runCommand(elevatedMacInstallCommand(artifact, installedPath));
+    if (exitCode !== 0) {
+      throw new Error(`macOS application install exited with code ${exitCode}`);
+    }
+  }
 
   const shortcuts = [installedPath];
   const desktopDir = join(homeDir, "Desktop");
@@ -108,8 +222,21 @@ function installMacApp(artifact: string, homeDir: string): DesktopInstallResult 
 
   // Tauri leaves the bundle under target/release/bundle/macos. Spotlight
   // indexes that copy too, so consume the build artifact only after the
-  // user-local app and its optional shortcut have been staged successfully.
+  // installed app and its optional shortcut have been staged successfully.
   rmSync(artifact, { recursive: true, force: true });
+
+  // A raw filesystem copy does not always notify LaunchServices immediately.
+  // Register the final path and ask Spotlight to import its bundle metadata so
+  // it appears promptly in system application search surfaces.
+  const launchServices = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+  const registrationExitCode = await runCommand([launchServices, "-f", installedPath]);
+  if (registrationExitCode !== 0) {
+    console.warn(`Lumiverse Desktop was installed, but LaunchServices registration exited with code ${registrationExitCode}.`);
+  }
+  const spotlightExitCode = await runCommand(["/usr/bin/mdimport", installedPath]);
+  if (spotlightExitCode !== 0) {
+    console.warn(`Lumiverse Desktop was installed, but Spotlight import exited with code ${spotlightExitCode}.`);
+  }
   return { installedPath, shortcuts };
 }
 
@@ -208,6 +335,17 @@ async function defaultRunCommand(command: string[]): Promise<number> {
   return child.exited;
 }
 
+/** Stop the installed tray and its owned runner/server tree before replacement. */
+export async function stopInstalledDesktopApp(
+  target: DesktopInstallPlatform,
+  runCommand: (command: string[]) => Promise<number> = defaultRunCommand,
+): Promise<void> {
+  const exitCode = await runCommand(desktopStopCommand(target));
+  if (exitCode !== 0) {
+    throw new Error(`Could not stop the running Lumiverse Desktop app (exit ${exitCode})`);
+  }
+}
+
 async function installWindowsBundle(
   artifact: string,
   runCommand: (command: string[]) => Promise<number>,
@@ -259,13 +397,20 @@ export async function installDesktopBundle(
 ): Promise<DesktopInstallResult> {
   const homeDir = options.homeDir ?? homedir();
   const env = options.env ?? process.env;
+  const runCommand = options.runCommand ?? defaultRunCommand;
+  await stopInstalledDesktopApp(target, runCommand);
   switch (target) {
     case "darwin":
-      return installMacApp(artifact, homeDir);
+      return installMacApp(
+        artifact,
+        homeDir,
+        options.macApplicationsDir ?? "/Applications",
+        runCommand,
+      );
     case "linux":
       return installLinuxAppImage(artifact, homeDir, env);
     case "win32":
-      return installWindowsBundle(artifact, options.runCommand ?? defaultRunCommand);
+      return installWindowsBundle(artifact, runCommand);
   }
 }
 

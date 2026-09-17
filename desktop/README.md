@@ -125,16 +125,26 @@ startup failures.
 
 ## Build
 
-For a normal user-local install from the repository root, use:
+For a normal scripted install from the repository root, use:
 
 ```bash
 ./start.sh --install-desktop
 ```
 
 On Windows, run `.\start.ps1 -InstallDesktop` instead. The launcher checks the
-native toolchain, builds the Tauri bundle, installs it for the current user,
-and creates the platform launcher plus a desktop shortcut when that folder is
-available. `--desktop` and `-Desktop` are shorter aliases.
+native toolchain, builds the Tauri bundle, installs it in the platform's normal
+application location, and creates the platform launcher plus a desktop
+shortcut when that folder is available. `--desktop` and `-Desktop` are shorter
+aliases.
+
+An existing Lumiverse Desktop process is stopped immediately before the new
+bundle is installed. The shutdown includes its runner/server process tree and
+the install aborts instead of overwriting files if that process cannot be
+stopped.
+
+On macOS, the app is installed in `/Applications` so Spotlight and the system
+Applications interface discover it normally. macOS may request administrator
+approval while staging the app there.
 
 On Windows, this command also downloads the official architecture-matched
 `rustup-init.exe` and installs the minimal stable Rust toolchain automatically
