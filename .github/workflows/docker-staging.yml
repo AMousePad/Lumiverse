@@ -20,6 +20,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: staging
+          # The native Tauri app is not part of the container build.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/desktop/
 
       - uses: docker/setup-qemu-action@v3
 

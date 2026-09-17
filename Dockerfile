@@ -6,6 +6,8 @@
 # floating `canary-slim` tag here: its lockfile behavior changed between
 # scheduled builds and made `--frozen-lockfile` fail nondeterministically.
 # Supports: linux/amd64, linux/arm64
+# Keep COPY sources explicit: desktop/ is a native Tauri app and must not enter
+# any image stage. Docker workflows also exclude it from their checkout.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
