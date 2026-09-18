@@ -383,8 +383,13 @@ export async function handleIPCMessage(msg: any, sink?: ResponseSink): Promise<v
         respond(id, true, { state });
         break;
       }
-      startServer(isDev);
-      respond(id, true, { state: getServerState() });
+      try {
+        startServer(isDev);
+        respond(id, true, { state: getServerState() });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        respond(id, false, undefined, message);
+      }
       break;
     }
 

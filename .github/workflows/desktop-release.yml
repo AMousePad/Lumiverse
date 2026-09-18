@@ -2,13 +2,21 @@ name: Desktop Release
 
 # Builds fresh installers from the staging→main merge commit and attaches them
 # to the matching desktop release on GitHub. Server-only merges skip it via the
-# path filter; the release job only runs for staging→main.
+# path filter; desktop and tray-runner changes use the same release pipeline.
 on:
   pull_request:
     types: [closed]
     branches: [main]
     paths:
       - "desktop/**"
+      - "scripts/runner.ts"
+      - "scripts/runner/**"
+      - "src/main.ts"
+      - "src/services/operator.service.ts"
+      - "src/services/runner-channel.ts"
+      - "src/services/runner-control-transport.ts"
+      - "src/services/runner-control-transport.test.ts"
+      - "src/types/operator.ts"
 
 permissions:
   contents: read
@@ -86,6 +94,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
+
+      - name: Test Windows tray runner transport
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: >-
+          bun test
+          src/services/runner-control-transport.test.ts
+          scripts/runner/server-manager.test.ts
 
       - uses: dtolnay/rust-toolchain@stable
         with:

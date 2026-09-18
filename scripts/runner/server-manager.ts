@@ -1,17 +1,22 @@
 import { existsSync } from "fs";
 import { join } from "path";
+import type { RunnerControlHost } from "../../src/services/runner-control-transport.js";
 import { PROJECT_ROOT, ENTRY, STOP_SIGTERM_GRACE_MS } from "./lib/constants.js";
+import { spawnSocketControlledProcess } from "./socket-controlled-process.js";
 
 export type ServerState = "starting" | "running" | "stopping" | "stopped" | "crashed";
 
 type IPCCallback = (message: any) => void;
 
 interface ServerInstance {
-  proc: ReturnType<typeof Bun.spawn>;
+  proc: ReturnType<typeof Bun.spawn> | null;
+  control: ServerControl | null;
   state: ServerState;
   startedAt: number;
   restartCount: number;
 }
+
+type ServerControl = Pick<RunnerControlHost, "close" | "send">;
 
 let instance: ServerInstance | null = null;
 let ipcCallback: IPCCallback | null = null;
@@ -34,6 +39,15 @@ export function setStateChangeHandler(cb: (state: ServerState) => void): void {
 function setState(state: ServerState): void {
   if (instance) instance.state = state;
   onStateChange?.(state);
+}
+
+function handleServerMessage(message: any): void {
+  if (message?.type === "ready") setState("running");
+  ipcCallback?.(message);
+}
+
+export function serverLaunchTransport(platform: string = process.platform): "socket" | "ipc" {
+  return platform === "win32" ? "socket" : "ipc";
 }
 
 /**
@@ -104,31 +118,64 @@ export function startServer(isDev: boolean): void {
 
   const restartCount = instance ? instance.restartCount : 0;
   const frontend = isDev ? "" : frontendDir() ?? "";
+  const childEnv = {
+    ...process.env,
+    FORCE_COLOR: "1",
+    LUMIVERSE_RUNNER_IPC: "1",
+    FRONTEND_DIR: frontend,
+    ...("BUN_RUNTIME_TRANSPILER_CACHE_PATH" in process.env
+      ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }
+      : { BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(PROJECT_ROOT, "data", ".bun-transpiler-cache") }),
+  };
 
-  const proc = Bun.spawn(args, {
-    cwd: PROJECT_ROOT,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: {
-      ...process.env,
-      FORCE_COLOR: "1",
-      LUMIVERSE_RUNNER_IPC: "1",
-      FRONTEND_DIR: frontend,
-      ...("BUN_RUNTIME_TRANSPILER_CACHE_PATH" in process.env
-        ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }
-        : { BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(PROJECT_ROOT, "data", ".bun-transpiler-cache") }),
-    },
-    ipc(message) {
-      // Handle IPC messages from the server child
-      if (message?.type === "ready") {
-        setState("running");
-      }
-      ipcCallback?.(message);
-    },
-  });
+  const launchTransport = serverLaunchTransport();
+  let proc: ReturnType<typeof Bun.spawn>;
+  let control: ServerControl;
+
+  try {
+    if (launchTransport === "socket") {
+      const launched = spawnSocketControlledProcess({
+        cmd: args,
+        cwd: PROJECT_ROOT,
+        env: childEnv,
+        onMessage: handleServerMessage,
+        onError(message) {
+          console.error(`[${ts()}] [runner] Backend control channel failed: ${message}`);
+        },
+        onDisconnect() {},
+      });
+      proc = launched.proc;
+      control = launched.control;
+    } else {
+      proc = Bun.spawn({
+        cmd: args,
+        cwd: PROJECT_ROOT,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: childEnv,
+        ipc: handleServerMessage,
+      });
+      control = {
+        send(message: unknown): boolean {
+          try {
+            proc.send(message);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        close() {},
+      };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    onStateChange?.("crashed");
+    throw new Error(`Failed to launch Lumiverse backend: ${message}`);
+  }
 
   instance = {
     proc,
+    control,
     state: "starting",
     startedAt: Date.now(),
     restartCount,
@@ -142,6 +189,7 @@ export function startServer(isDev: boolean): void {
 
   // Handle process exit
   proc.exited.then((code) => {
+    control.close();
     if (!instance || instance.proc !== proc) return;
 
     if (instance.state === "stopping") {
@@ -153,7 +201,7 @@ export function startServer(isDev: boolean): void {
       setState("stopped");
     }
 
-    instance = { ...instance!, proc: null as any, state: instance!.state };
+    instance = { ...instance, proc: null, control: null };
   });
 
   // Fallback: assume running after 3s if "ready" IPC not received
@@ -204,13 +252,8 @@ export async function restartServer(isDev: boolean): Promise<void> {
 
 /** Send an IPC message to the server child process. */
 export function sendToServer(message: any): boolean {
-  if (!instance?.proc) return false;
-  try {
-    instance.proc.send(message);
-    return true;
-  } catch {
-    return false;
-  }
+  if (!instance?.proc || !instance.control) return false;
+  return instance.control.send(message);
 }
 
 export function getServerState(): ServerState {

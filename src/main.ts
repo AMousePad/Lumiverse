@@ -15,6 +15,7 @@ import {
   startExtensionUpdateMonitor,
   stopExtensionUpdateMonitor,
 } from "./spindle/update-check.service";
+import { sendRunnerMessage } from "./services/runner-channel";
 
 // Validate data directory is accessible and writable before any file operations.
 // This catches permission issues early (common on Termux/Android) instead of
@@ -274,8 +275,8 @@ console.log(`Lumiverse Backend listening on ${server.hostname}:${server.port}`);
 startExtensionUpdateMonitor();
 
 // Notify runner (if present) that the server is ready
-if (process.env.LUMIVERSE_RUNNER_IPC === "1" && typeof process.send === "function") {
-  process.send({ type: "ready", payload: { port: env.port, pid: process.pid } });
+if (process.env.LUMIVERSE_RUNNER_IPC === "1") {
+  sendRunnerMessage({ type: "ready", payload: { port: env.port, pid: process.pid } });
 }
 
 // LanceDB compaction and index replacement can monopolize Bun's runtime even
