@@ -171,6 +171,15 @@ export default function DesktopFloatingWidgetHost() {
 
   return (
     <div
+      onPointerDownCapture={(event) => {
+        if (event.button === 0) {
+          // `accept_first_mouse` makes the initial press interactive on macOS,
+          // but Wry does not implement that option on Windows. Queue focus
+          // before a child starts its native drag/resize operation so the
+          // first press works on both platforms.
+          void nativeWindow.setFocus().catch(() => {})
+        }
+      }}
       style={{
         position: 'relative',
         width: '100vw',
