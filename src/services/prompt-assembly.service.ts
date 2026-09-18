@@ -2880,8 +2880,8 @@ export async function assemblePrompt(
   //   1. Extract slugs from every user message (pure regex, no I/O).
   //   2. Single sync batch lookup: which slugs map to valid docs in active scope.
   //   3. Strip resolved #tags from every user message.
-  //   4. Expensive content fetch + vector search runs ONCE, only for the LAST
-  //      user message's slugs (the only ones that contribute to the appendix).
+  //   4. Full document content is fetched ONCE, only for the LAST user
+  //      message's slugs (the only ones that contribute to the appendix).
   let databankMentionAppendix = "";
   {
     const charIds = databankCharIds;
@@ -2934,16 +2934,11 @@ export async function assemblePrompt(
             const lastValid = new Set<string>();
             for (const s of lastSlugs) if (validSlugs.has(s)) lastValid.add(s);
             if (lastValid.size > 0) {
-              const queryContext = messages
-                .slice(-6)
-                .map((m) => m.content)
-                .join(" ");
               const resolved = await databankSvc.resolveSlugContent(
                 ctx.userId,
                 ctx.chatId,
                 lastValid,
                 docs,
-                queryContext,
                 ctx.signal,
               );
               if (resolved.length > 0) {
