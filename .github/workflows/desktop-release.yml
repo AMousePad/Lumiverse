@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - "desktop/**"
+      - "scripts/smoke-test-appimage.sh"
       - "scripts/runner.ts"
       - "scripts/runner/**"
       - "src/main.ts"
@@ -116,7 +117,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf xdg-utils
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf xdg-utils \
+            dbus-x11 xauth xvfb
 
       - name: Install desktop dependencies
         working-directory: desktop
@@ -137,6 +139,12 @@ jobs:
           uploadUpdaterSignatures: false
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: desktop-[platform]-[arch]-[bundle]
+
+      - name: Smoke-test Linux AppImage startup
+        if: runner.os == 'Linux'
+        run: >-
+          bash scripts/smoke-test-appimage.sh
+          desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage
 
   release:
     name: Attach installers to desktop release
@@ -190,7 +198,7 @@ jobs:
                 owner, repo, tag_name: tag, name: process.env.RELEASE_TITLE,
                 target_commitish: process.env.DESKTOP_SHA,
                 draft: false, prerelease: version.includes('-'),
-                body: `Lumiverse Desktop ${version}, built from the staging→main merge (${process.env.DESKTOP_SHA}).\n\nInstallers are unsigned (macOS uses ad-hoc signing without notarization). Windows SmartScreen and macOS Gatekeeper may block installation or launch. The desktop client still requires Bun and a Lumiverse checkout; it does not bundle the server.`
+                body: `Lumiverse Desktop ${version}, built from the staging→main merge (${process.env.DESKTOP_SHA}).\n\nInstallers are unsigned (macOS uses ad-hoc signing without notarization). Windows SmartScreen and macOS Gatekeeper may block installation or launch. The desktop client still requires Bun and a Lumiverse checkout; it does not bundle the server.\n\nLinux AppImages are precompiled and do not require Cargo or a system WebKitGTK package. Choose the asset matching your CPU architecture and see the [Linux AppImage instructions](https://github.com/${owner}/${repo}/blob/${process.env.DESKTOP_SHA}/desktop/README.md#run-a-prebuilt-linux-appimage) for FUSE and Wayland troubleshooting.`
               }));
             }
             const existing = await github.paginate(github.rest.repos.listReleaseAssets, {

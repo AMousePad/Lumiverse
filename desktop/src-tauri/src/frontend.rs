@@ -12,6 +12,14 @@ use tauri::{
     WebviewWindowBuilder, WindowEvent,
 };
 
+/// Emit a native marker after the hidden webview has created its tray icon.
+/// Besides being useful in terminal diagnostics, CI uses this to distinguish
+/// a working tray from a startup-error dialog that merely remains open.
+#[tauri::command]
+pub fn desktop_startup_ready() {
+    eprintln!("[desktop-startup] tray ready");
+}
+
 #[cfg(target_os = "macos")]
 fn high_refresh_webview_configuration(
 ) -> Option<objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>> {

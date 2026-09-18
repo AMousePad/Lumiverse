@@ -15,7 +15,10 @@ Please also review the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Get the Repository
 
-Clone the repo from GitHub. Do **not** use the GitHub **Releases** tab or download a release archive there; those builds are outdated.
+Clone the repo from GitHub. Do **not** use a general-release source archive as
+the server checkout; those archives are not the supported update path. The
+separately tagged `desktop-v*` releases contain prebuilt desktop installers,
+but the desktop companion still needs this checkout to run the local server.
 
 ```bash
 git clone https://github.com/prolix-oc/Lumiverse.git
@@ -249,14 +252,16 @@ with Lumiverse's integrated browser as its primary interface and a macOS menu
 bar / Windows system tray / Linux StatusNotifier icon for controls. It starts
 and stops a local server, shows serving stats, opens the same address in your
 default browser on request, and applies updates through the runner. See
-[desktop/README.md](desktop/README.md) for development instructions. There is
-no prebuilt download; use `./start.sh --install-desktop` on macOS/Linux or
-`.\start.ps1 -InstallDesktop` on Windows to check prerequisites, build it, and
-set up its application launcher plus a desktop shortcut when that folder is
-available. On Windows the install also bootstraps the minimal stable Rust
-toolchain automatically when `cargo` is missing. The shorter
-`--desktop`/`-Desktop` aliases are also accepted. Run `bun run desktop:doctor`
-to check the build toolchain without installing anything.
+[desktop/README.md](desktop/README.md) for prebuilt Linux AppImage help and
+development instructions. Prebuilt installers are attached to `desktop-v*`
+releases. To build the companion from this checkout instead, use
+`./start.sh --install-desktop` on macOS/Linux or `.\start.ps1 -InstallDesktop`
+on Windows; this checks prerequisites, builds it, and sets up its application
+launcher plus a desktop shortcut when that folder is available. On Windows the
+install also bootstraps the minimal stable Rust toolchain automatically when
+`cargo` is missing. The shorter `--desktop`/`-Desktop` aliases are also
+accepted. Run `bun run desktop:doctor` to check the source-build toolchain
+without installing anything.
 
 ## Configuration
 

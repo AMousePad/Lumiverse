@@ -748,6 +748,7 @@ async function boot(): Promise<void> {
 
   await buildTray();
   await updateMenu();
+  await invoke("desktop_startup_ready");
 
   if (!repoDir && !customFrontendUrl) {
     await alert(
@@ -765,4 +766,25 @@ async function boot(): Promise<void> {
   setInterval(() => void tick(), POLL_INTERVAL_MS);
 }
 
-void boot();
+async function reportBootFailure(error: unknown): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error("Lumiverse Desktop failed before its tray was ready", error);
+
+  try {
+    await alert(
+      "Lumiverse Desktop failed to start",
+      `${message}\n\nLaunch the app from a terminal to capture additional diagnostics.`,
+      true,
+    );
+  } catch (alertError) {
+    console.error("Unable to show the desktop startup error", alertError);
+  } finally {
+    // A failed tray bootstrap otherwise leaves only the invisible host window
+    // running, making every later launch look like it did nothing.
+    await invoke("quit_app").catch((quitError) => {
+      console.error("Unable to exit after the desktop startup failure", quitError);
+    });
+  }
+}
+
+void boot().catch(reportBootFailure);

@@ -55,15 +55,59 @@ fallback. On other platforms, or when native material is unavailable, the theme
 keeps its regular translucent CSS surface. Browser and PWA rendering ignore this
 desktop-only setting.
 
-## Prerequisites
+## Run a prebuilt Linux AppImage
 
-Run `bun run desktop:doctor` from the repository root to check all of these at
-once. It reports what is missing and the exact command to install it.
+The release AppImage already contains the compiled Rust shell and its GTK 3 /
+WebKitGTK 4.1 libraries. Running it does **not** require Cargo, a Rust toolchain,
+or a system WebKitGTK package. Lumiverse Desktop still requires
+[Bun](https://bun.sh) ≥ 1.4.0 and a Lumiverse checkout because the desktop
+companion does not bundle the server.
+
+Download the artifact matching the machine (`amd64`/`x86_64` for most PCs or
+`aarch64` for ARM64), then run it from a terminal once so startup errors remain
+visible:
+
+```bash
+chmod +x Lumiverse*.AppImage
+./Lumiverse*.AppImage
+```
+
+The app starts as a tray application. KDE Plasma exposes its StatusNotifier
+item in the system tray; it does not open a normal taskbar window until the
+server is ready. Use `pgrep -af lumiverse-tray` to distinguish a hidden running
+process from an early startup failure.
+
+If the AppImage reports a FUSE error, either install Arch's `fuse2` package or
+use the AppImage runtime's extract-and-run fallback:
+
+```bash
+sudo pacman -S --needed fuse2
+APPIMAGE_EXTRACT_AND_RUN=1 ./Lumiverse*.AppImage
+```
+
+On Wayland, Lumiverse automatically selects the native GTK backend when no X11
+display is available. If KDE advertises an XWayland display but that path still
+fails, force native Wayland without relying on the `GDK_BACKEND` value that
+older Tauri AppImage launchers overwrite:
+
+```bash
+LUMIVERSE_GDK_BACKEND=wayland ./Lumiverse*.AppImage
+```
+
+WebKitGTK 6.0 is the GTK 4 API and does not replace WebKitGTK 4.1/GTK 3. Neither
+needs to be installed separately for the AppImage; source builds require the
+4.1 package shown below.
+
+## Source-build prerequisites
+
+Run `bun run desktop:doctor` from the repository root to check all build
+requirements at once. It reports what is missing and the exact command to
+install it.
 
 - [Bun](https://bun.sh) ≥ 1.4.0 (also required by the server itself)
 - [Rust](https://rustup.rs) stable (Tauri v2 builds the native shell)
 
-Platform-specific requirements:
+Platform-specific build requirements:
 
 - **macOS:** Xcode Command Line Tools.
 - **Windows:** WebView2 Runtime (preinstalled on Windows 11) and the MSVC
@@ -100,9 +144,9 @@ Platform-specific requirements:
   These are build dependencies; a machine running an unpackaged Linux binary
   also needs the matching AppIndicator runtime library.
 
-  KDE Plasma exposes StatusNotifier items natively. GNOME Shell does not show
-  them by default, so install and enable an AppIndicator/KStatusNotifier
-  extension (for example, **AppIndicator and KStatusNotifierItem Support**).
+  GNOME Shell does not show StatusNotifier items by default, so install and
+  enable an AppIndicator/KStatusNotifier extension (for example,
+  **AppIndicator and KStatusNotifierItem Support**).
 
 ## Develop
 

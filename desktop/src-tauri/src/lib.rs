@@ -4,6 +4,56 @@ mod runner;
 
 use tauri_plugin_autostart::MacosLauncher;
 
+#[cfg(any(target_os = "linux", test))]
+fn populated_os_value(value: Option<&std::ffi::OsStr>) -> Option<&std::ffi::OsStr> {
+    value.filter(|candidate| !candidate.is_empty())
+}
+
+/// Pick an explicit GTK backend only when Lumiverse has been asked to override
+/// Tauri's AppImage hook, or when X11 is genuinely unavailable. Tauri's legacy
+/// AppImage hook defaults to `GDK_BACKEND=x11`; that is the most compatible
+/// choice when XWayland exists, but it aborts GTK initialization on pure
+/// Wayland sessions.
+#[cfg(any(target_os = "linux", test))]
+fn select_linux_gdk_backend<'a>(
+    lumiverse_override: Option<&'a std::ffi::OsStr>,
+    wayland_display: Option<&std::ffi::OsStr>,
+    x11_display: Option<&std::ffi::OsStr>,
+) -> Option<&'a std::ffi::OsStr> {
+    if let Some(requested) = populated_os_value(lumiverse_override) {
+        return Some(requested);
+    }
+
+    if populated_os_value(wayland_display).is_some() && populated_os_value(x11_display).is_none() {
+        return Some(std::ffi::OsStr::new("wayland"));
+    }
+
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(test, allow(dead_code))]
+fn configure_linux_display_backend() {
+    let lumiverse_override = std::env::var_os("LUMIVERSE_GDK_BACKEND");
+    let wayland_display = std::env::var_os("WAYLAND_DISPLAY");
+    let x11_display = std::env::var_os("DISPLAY");
+
+    if let Some(backend) = select_linux_gdk_backend(
+        lumiverse_override.as_deref(),
+        wayland_display.as_deref(),
+        x11_display.as_deref(),
+    ) {
+        // This runs before Tauri constructs its GTK event loop. It deliberately
+        // repairs the value inherited from the AppImage launcher rather than
+        // changing the process environment after GTK has initialized.
+        std::env::set_var("GDK_BACKEND", backend);
+        eprintln!(
+            "[linux-display] using GDK_BACKEND={}",
+            backend.to_string_lossy()
+        );
+    }
+}
+
 /// `tauri dev` can launch a raw executable instead of a bundled `.app`, which
 /// has no Info.plist icon for the Dock to read. Set the same bundled icon on
 /// NSApplication directly so debug and packaged launches look identical.
@@ -155,6 +205,9 @@ fn handle_macos_menu_event<R: tauri::Runtime>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    configure_linux_display_backend();
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -178,6 +231,7 @@ pub fn run() {
             runner::discover_repo,
             runner::resolve_bun,
             runner::desktop_shell_sha,
+            frontend::desktop_startup_ready,
             runner::quit_app,
             runner::alert,
             runner::confirm,
@@ -240,4 +294,50 @@ pub fn run() {
                 runner::force_stop(app);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_linux_gdk_backend;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn linux_backend_override_takes_priority() {
+        assert_eq!(
+            select_linux_gdk_backend(
+                Some(OsStr::new("wayland")),
+                Some(OsStr::new("wayland-0")),
+                Some(OsStr::new(":0")),
+            ),
+            Some(OsStr::new("wayland")),
+        );
+    }
+
+    #[test]
+    fn pure_wayland_session_repairs_tauri_x11_default() {
+        assert_eq!(
+            select_linux_gdk_backend(None, Some(OsStr::new("wayland-0")), None,),
+            Some(OsStr::new("wayland")),
+        );
+    }
+
+    #[test]
+    fn xwayland_session_keeps_tauri_default() {
+        assert_eq!(
+            select_linux_gdk_backend(None, Some(OsStr::new("wayland-0")), Some(OsStr::new(":0")),),
+            None,
+        );
+    }
+
+    #[test]
+    fn empty_display_values_are_treated_as_unavailable() {
+        assert_eq!(
+            select_linux_gdk_backend(
+                Some(OsStr::new("")),
+                Some(OsStr::new("wayland-0")),
+                Some(OsStr::new("")),
+            ),
+            Some(OsStr::new("wayland")),
+        );
+    }
 }
