@@ -29,6 +29,10 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const formRef = useRef<HTMLFormElement>(null)
   const visibleError = error ?? authError
+  const oauthAuthorization = (() => {
+    const query = new URLSearchParams(window.location.search)
+    return query.has('client_id') && query.has('sig')
+  })()
 
   useEffect(() => {
     let cancelled = false
@@ -45,7 +49,10 @@ export default function LoginPage() {
 
     try {
       await login(username, password)
-      navigate('/')
+      // oauthProviderClient forwards the signed query and Better Auth resumes
+      // the native authorization automatically when the session is created.
+      // A local navigation here can race and overwrite its loopback redirect.
+      if (!oauthAuthorization) navigate('/')
     } catch (err: any) {
       setError(err.message || t('loginFailed'))
     } finally {
@@ -57,6 +64,14 @@ export default function LoginPage() {
     setError(null)
     setSsoLoading(provider.provider_id)
     try {
+      if (oauthAuthorization) {
+        // Keep the OAuth login in this system-browser window. Better Auth
+        // retains the signed outer authorization context and returns directly
+        // to the desktop loopback callback after the IdP signs the user in.
+        const { url } = await ssoProvidersApi.getLoginUrl(provider.provider_id, '/')
+        window.location.assign(url)
+        return
+      }
       const result = await startSsoPopup({ providerId: provider.provider_id, flow: 'login', returnTo: '/' })
       if (!result.ok) throw new Error(result.error || 'SSO authorization failed')
       await checkSession()
@@ -74,10 +89,10 @@ export default function LoginPage() {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && !oauthAuthorization) {
       navigate('/', { replace: true })
     }
-  }, [isAuthenticated, navigate])
+  }, [isAuthenticated, navigate, oauthAuthorization])
 
   useEffect(() => {
     if (!focused) return

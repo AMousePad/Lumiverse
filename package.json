@@ -1,11 +1,12 @@
 {
   "name": "lumiverse-backend",
-  "version": "1.2.2",
+  "version": "1.2.4",
   "packageManager": "bun@1.4.0",
   "engines": {
     "bun": ">=1.4.0"
   },
   "dependencies": {
+    "@better-auth/oauth-provider": "1.7.2",
     "@lancedb/lancedb": "0.37.1",
     "@lenml/tokenizer-claude": "^3.7.2",
     "@lenml/tokenizers": "^3.7.2",

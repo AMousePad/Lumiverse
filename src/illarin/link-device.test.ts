@@ -3,7 +3,7 @@ import { DeviceLinkSession, runDeviceLinkUntilTerminal } from "./link-device";
 import type { IllarinFetch } from "./api";
 import type { DeviceRequestResponse, TokenPair } from "./types";
 
-const BASE_URL = "https://illarin.xyz";
+const BASE_URL = "https://illarin.com";
 const TOKENS: TokenPair = {
   accessToken: "ia1.a",
   accessTokenExpiresAt: "2026-08-22T18:30:00Z",

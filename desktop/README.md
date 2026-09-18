@@ -21,19 +21,42 @@ the server down gracefully.
   "running (external)" when a server started from a terminal is detected
   on the configured port.
 - **Start Server / Stop Server**
-- **Open Lumiverse** — opens or closes the integrated Tauri browser. Its
-  submenu also reloads it or opens the current address in your default browser.
+- **Browser** — opens or closes the integrated Tauri browser. Its submenu also
+  reloads it or opens the current address in your default browser. Closing the
+  integrated browser also closes its active floating widgets.
+  For a remote instance, this submenu also provides sign-in and sign-out.
 - **Floating Widgets** — lists live extension widgets registered by Lumiverse
   (for example, SpotifyControls). Selecting one starts that extension in a
-  widget-only native window. The menu also retains the native POC,
-  including its click-through test.
+  widget-only native window.
 - **Serving Stats** — port, PID, uptime, branch, version.
 - **Check for Updates / Apply Update** — the runner's existing git-based
   update flow.
-- **Start Server at Launch** — start the server automatically when the
+- **Start Local Server at Launch** — start the local server automatically when the
   tray app opens (on by default).
 - **Launch at Login** — register the tray app as a login item.
 - **Set Lumiverse Folder…** — point the app at a different checkout.
+- **Instance Connection…** — use the local server or connect to a remote
+  Lumiverse origin.
+
+## Remote instances
+
+Choose **Instance Connection…**, enter the remote Lumiverse origin, and sign in
+in the system browser. Remote origins require HTTPS; plain HTTP is accepted only
+for loopback development. Add the public HTTPS origin under **Settings →
+Operator → Trusted Hostnames**, then restart the server so it can advertise that
+origin as its OAuth issuer. `AUTH_BASE_URL` remains available as an optional
+single-origin override, but it is not required. Desktop uses authorization-code PKCE and stores only
+the refresh credential in the operating system credential store. Access tokens
+remain in native memory and are never exposed to the remote WebView.
+
+When TLS terminates at a reverse proxy, preserve `Host`. If the proxy replaces
+it, send `X-Forwarded-Host` and `X-Forwarded-Proto` and list the proxy IP or
+CIDR in `TRUSTED_PROXIES`. Lumiverse ignores those identity-sensitive headers
+from unlisted peers.
+
+All signed-in accounts can see the instance identity and their own role. Serving
+status remains restricted to Lumiverse administrators and owners. Local server,
+checkout, and update controls are disabled while a remote instance is selected.
 
 ## Translucent frontend themes
 

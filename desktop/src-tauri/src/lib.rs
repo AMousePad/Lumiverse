@@ -1,5 +1,6 @@
 mod frontend;
 mod notifications;
+mod remote_instance;
 mod runner;
 
 use tauri_plugin_autostart::MacosLauncher;
@@ -219,9 +220,9 @@ pub fn run() {
         ))
         .manage(runner::RunnerState::default())
         .manage(frontend::FrontendState::default())
-        .manage(frontend::WidgetPocState::default())
         .manage(frontend::DesktopWidgetCatalogState::default())
         .manage(notifications::DesktopNotificationTransportState::default())
+        .manage(remote_instance::RemoteInstanceState::default())
         .invoke_handler(tauri::generate_handler![
             runner::runner_start,
             runner::runner_send,
@@ -232,12 +233,13 @@ pub fn run() {
             runner::resolve_bun,
             runner::desktop_shell_sha,
             frontend::desktop_startup_ready,
+            frontend::close_current_sso_popup,
             runner::quit_app,
             runner::alert,
             runner::confirm,
             runner::pick_folder,
             frontend::show_frontend,
-            frontend::hide_frontend,
+            frontend::close_frontend,
             frontend::reload_frontend,
             frontend::save_frontend_bounds,
             frontend::frontend_visible,
@@ -246,10 +248,6 @@ pub fn run() {
             frontend::configure_frontend_appearance,
             frontend::cache_frontend_startup_appearance,
             frontend::show_frontend_url_settings,
-            frontend::show_widget_poc,
-            frontend::hide_widget_poc,
-            frontend::set_widget_poc_click_through,
-            frontend::toggle_widget_poc_click_through,
             frontend::set_desktop_widget_catalog,
             frontend::sync_desktop_widget_size,
             frontend::resize_extension_widget,
@@ -261,6 +259,9 @@ pub fn run() {
             notifications::desktop_notification_transport_status,
             notifications::save_desktop_notification_enrollment,
             notifications::clear_desktop_notification_enrollment,
+            remote_instance::remote_instance_connect,
+            remote_instance::remote_instance_poll,
+            remote_instance::remote_instance_disconnect,
         ]);
 
     #[cfg(target_os = "macos")]

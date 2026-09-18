@@ -171,9 +171,35 @@ The finished app and installer files are placed under
 5. Choose **Start Server**. Lumiverse opens in the experimental integrated
    browser when the local server is ready.
 
-The **Start Server at Launch** option is enabled by default. Disable it if you
+The **Start Local Server at Launch** option is enabled by default. Disable it if you
 want the tray icon to open without starting Lumiverse. You can also enable
 **Launch at Login** from the tray menu.
+
+### Connect to a remote instance
+
+1. Choose **Instance Connection…** from the tray menu.
+2. Enter the remote Lumiverse URL and save it. Remote connections require HTTPS;
+   plain HTTP is accepted only for local loopback development.
+3. Choose **Browser → Sign In to Remote Instance…** and finish signing in
+   in your system browser.
+
+Add the server's public HTTPS origin (for example, `https://app.example.com`)
+under **Settings → Operator → Trusted Hostnames**, then restart Lumiverse.
+Desktop verifies the request-specific OAuth issuer against the instance you
+selected. `AUTH_BASE_URL` is an optional single-origin override, not a
+requirement.
+
+When TLS terminates at a reverse proxy, preserve `Host`. If the proxy replaces
+it, send `X-Forwarded-Host` and `X-Forwarded-Proto` and list the proxy IP or
+CIDR in `TRUSTED_PROXIES`. Lumiverse does not trust those headers from arbitrary
+peers.
+
+Desktop uses authorization-code PKCE. Its refresh credential is kept in the
+operating system credential store, while access tokens remain only in native
+memory and are not passed into the remote WebView. Every account can see the
+instance identity and its own role; serving status is shown only to administrators
+and owners. Local process and checkout controls are disabled until you switch the
+instance connection back to **Use Local Server**.
 
 ---
 
@@ -182,8 +208,9 @@ want the tray icon to open without starting Lumiverse. You can also enable
 The menu provides:
 
 - **Start Server / Stop Server** — controls the Lumiverse process owned by the tray app.
-- **Open Lumiverse** — opens or closes the integrated browser. Its submenu
-  can reload that browser or open the same address in your default browser.
+- **Browser** — opens or closes the integrated browser. Its submenu can reload
+  that browser or open the same address in your default browser. Closing the
+  integrated browser also closes its active floating widgets.
 - **Serving Stats** — shows the port, process ID, uptime, branch, and version.
 - **Check for Updates / Apply Update** — uses Lumiverse's normal Git-based update flow.
 

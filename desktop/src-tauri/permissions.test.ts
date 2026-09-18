@@ -9,10 +9,8 @@ import { join } from "path";
  * enforces the second, so a command can be registered, invoked, and silently
  * denied at runtime — the control simply does nothing.
  *
- * That has now happened twice: `hide_widget_poc` reached a window whose
- * capability excluded its origin, and `desktop_shell_sha` was registered but
- * never added to any permission. Both were invisible because the rejected
- * promise was discarded. These tests close the gap the compiler leaves.
+ * These tests close the gap left by Rust's command registration checks: a
+ * registered command without a matching permission is denied only at runtime.
  */
 
 const HERE = import.meta.dir;
@@ -28,7 +26,7 @@ function registeredCommands(): string[] {
   const lib = readSource("lib.rs");
   const block = lib.match(/generate_handler!\[([\s\S]*?)\]/);
   if (!block) throw new Error("generate_handler! block not found in lib.rs");
-  return [...block[1].matchAll(/(?:runner|frontend|notifications)::([a-z0-9_]+)/g)].map((m) => m[1]);
+  return [...block[1].matchAll(/(?:runner|frontend|notifications|remote_instance)::([a-z0-9_]+)/g)].map((m) => m[1]);
 }
 
 /** Every command name appearing in any `commands.allow` list. */
@@ -69,12 +67,11 @@ describe("tauri command registration", () => {
     expect(dangling).toEqual([]);
   });
 
-  test("the commands this bug was about are both covered", () => {
+  test("the stale-shell command remains covered", () => {
     const permitted = permittedCommands();
     // Regression pins: desktop_shell_sha was registered but unpermitted, which
     // silently disabled the stale-shell check entirely.
     expect(permitted.has("desktop_shell_sha")).toBe(true);
-    expect(permitted.has("hide_widget_poc")).toBe(true);
   });
 });
 
@@ -124,5 +121,16 @@ describe("capability origins", () => {
       }
     }
     expect(broken).toEqual([]);
+  });
+
+  test("remote instance credentials are callable only from local windows", () => {
+    const grants = capabilities().filter((capability) =>
+      ((capability.json.permissions as Array<string | { identifier?: string }>) ?? [])
+        .some((permission) => permission === "remote-instance-commands"
+          || (typeof permission === "object" && permission.identifier === "remote-instance-commands")),
+    );
+    expect(grants.length).toBeGreaterThan(0);
+    expect(grants.every((capability) => capability.json.remote === undefined)).toBe(true);
+    expect(grants.flatMap((capability) => capability.json.windows as string[])).not.toContain("frontend");
   });
 });

@@ -272,9 +272,10 @@ Configuration is managed through `.env` (see `.env.example` for all options). Se
 | `PORT` | No | `7860` | Server port |
 | `OWNER_USERNAME` | No | `admin` | Admin account display name |
 | `AUTH_SECRET` | No | *derived* | Session signing secret (auto-derived from identity file) |
+| `AUTH_BASE_URL` | No | *request origin* | Optional single-origin override for auth/OAuth. Normally the request must match **Settings → Operator → Trusted Hostnames**. |
 | `FRONTEND_DIR` | No | — | Path to built frontend dist for static serving |
 | `TRUSTED_ORIGINS` | No | `localhost` | Comma-separated CORS origins |
-| `TRUSTED_PROXIES` | No | *private ranges* | Reverse proxies allowed to supply client IPs via `X-Forwarded-For`/`Forwarded`/`X-Real-IP`, as IPs or CIDRs (e.g. `203.0.113.10,10.0.0.0/8`). When set, ONLY listed peers are trusted — required for proxies with public addresses; also closes LAN XFF spoofing. |
+| `TRUSTED_PROXIES` | No | — | Proxy IPs/CIDRs allowed to supply external host/protocol headers for dynamic auth origins and client-IP headers. Host/protocol forwarding requires this explicit list. |
 
 Owner password is stored hashed in `data/owner.credentials` (created by the setup wizard). To reset: `bun run reset-password`.
 

@@ -11,7 +11,7 @@ Illarin is an asset platform that links to your Lumiverse instance and delivers 
 ## Linking Your Instance
 
 1. Open **Settings > Illarin**
-2. Confirm the **Illarin URL** (default: `https://illarin.xyz`) and give your instance a name (e.g. "Home PC")
+2. Confirm the **Illarin URL** (default: `https://illarin.com`) and give your instance a name (e.g. "Home PC")
 3. Click **Link**
 
 How the link completes depends on where you're browsing from:

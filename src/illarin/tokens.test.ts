@@ -16,7 +16,7 @@ import type { TokenPair } from "./types";
 
 const USER_A = "user-a";
 const USER_B = "user-b";
-const BASE_URL = "https://illarin.xyz";
+const BASE_URL = "https://illarin.com";
 
 interface LinkEventMessage {
   payload: { linked: boolean; reason?: string };

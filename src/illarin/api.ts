@@ -32,7 +32,7 @@ import {
   type WithheldNotice,
 } from "./types";
 
-export const DEFAULT_ILLARIN_BASE_URL = "https://illarin.xyz";
+export const DEFAULT_ILLARIN_BASE_URL = "https://illarin.com";
 const DELIVERY_COLLECT_TIMEOUT_MS = 40_000;
 
 export class IllarinApiError extends Error {

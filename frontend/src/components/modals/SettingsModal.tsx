@@ -4169,7 +4169,7 @@ function IllarinSettings() {
   const { t } = useTranslation('settings')
   const user = useStore((s) => s.user)
   const defaultInstanceName = user?.name ? `${user.name}'s Lumiverse` : t('illarin.defaultInstance')
-  const [illarinUrl, setIllarinUrl] = useState('https://illarin.xyz')
+  const [illarinUrl, setIllarinUrl] = useState('https://illarin.com')
   const [instanceName, setInstanceName] = useState(defaultInstanceName)
   const [status, setStatus] = useState<{
     linked: boolean

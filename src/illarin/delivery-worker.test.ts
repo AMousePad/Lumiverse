@@ -13,7 +13,7 @@ const DELIVERY: IllarinDelivery = {
   label: "Character Card V3",
   queuedAt: "2026-08-24T20:00:00Z",
   leaseExpiresAt: "2026-08-24T20:15:00Z",
-  artifacts: [{ kind: "export", url: "https://illarin.xyz/api/v1/delivery/export" }],
+  artifacts: [{ kind: "export", url: "https://illarin.com/api/v1/delivery/export" }],
 };
 
 function dependencies(overrides: Partial<DeliveryCycleDependencies> = {}) {
@@ -28,7 +28,7 @@ function dependencies(overrides: Partial<DeliveryCycleDependencies> = {}) {
   const deps: DeliveryCycleDependencies = {
     getInstance: async () => ({
       userId: "user-1",
-      illarinUrl: "https://illarin.xyz",
+      illarinUrl: "https://illarin.com",
       instanceId: "instance-1",
       instanceName: "test",
       applicationName: "Lumiverse",

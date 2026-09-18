@@ -34,9 +34,9 @@ describe("Illarin delivery installer", () => {
       queuedAt: "2026-08-24T20:00:00Z",
       leaseExpiresAt: "2026-08-24T20:15:00Z",
       artifacts: [
-        { kind: "export", url: "https://illarin.xyz/export" },
-        { kind: "picture", url: "https://illarin.xyz/avatar", role: "avatar", isCover: true },
-        { kind: "picture", url: "https://illarin.xyz/expression", role: "expression", isCover: false },
+        { kind: "export", url: "https://illarin.com/export" },
+        { kind: "picture", url: "https://illarin.com/avatar", role: "avatar", isCover: true },
+        { kind: "picture", url: "https://illarin.com/expression", role: "expression", isCover: false },
       ],
     };
 
@@ -59,15 +59,15 @@ describe("Illarin delivery installer", () => {
       },
     };
     const delivery = presetDelivery([
-      { kind: "export", url: "https://illarin.xyz/export" },
-      { kind: "picture", url: "https://illarin.xyz/gallery", isCover: false },
-      { kind: "picture", url: "https://illarin.xyz/cover", isCover: true },
+      { kind: "export", url: "https://illarin.com/export" },
+      { kind: "picture", url: "https://illarin.com/gallery", isCover: false },
+      { kind: "picture", url: "https://illarin.com/cover", isCover: true },
     ]);
 
     const url = await persistIllarinPresetCover("user-1", delivery, dependencies);
 
     expect(url).toBe("/api/v1/images/local-cover-id");
-    expect(fetched).toEqual(["https://illarin.xyz/cover"]);
+    expect(fetched).toEqual(["https://illarin.com/cover"]);
     expect(uploaded[0]?.name).toBe("illarin-preset-cover.webp");
     expect(uploaded[0]?.type).toBe("image/webp");
     expect(uploaded[0]?.size).toBe(3);
@@ -84,7 +84,7 @@ describe("Illarin delivery installer", () => {
     };
 
     const url = await persistIllarinPresetCover("user-1", presetDelivery([
-      { kind: "picture", url: "https://illarin.xyz/gallery", isCover: false },
+      { kind: "picture", url: "https://illarin.com/gallery", isCover: false },
     ]), dependencies);
 
     expect(url).toBeNull();

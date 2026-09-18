@@ -82,7 +82,7 @@ describe("illarin api client", () => {
   });
 
   test("posts the exact browser authorization body to /api/v1/link/authorizations", async () => {
-    const illarin = mock(() => Response.json({ authorizationUrl: "https://illarin.xyz/link/abc", expiresAt: "2026-08-22T12:00:00Z" }));
+    const illarin = mock(() => Response.json({ authorizationUrl: "https://illarin.com/link/abc", expiresAt: "2026-08-22T12:00:00Z" }));
 
     const response = await createBrowserAuthorization(`${illarin.baseUrl}/`, {
       ...DECLARATION,
@@ -162,7 +162,7 @@ describe("illarin api client", () => {
     const illarin = mock(() => Response.json({
       deviceCode: "private-device-code",
       userCode: "ABCD-1234",
-      verificationUrl: "https://illarin.xyz/link",
+      verificationUrl: "https://illarin.com/link",
       expiresAt: "2026-08-22T12:10:00Z",
       interval: 5,
     }));

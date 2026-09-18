@@ -1,6 +1,6 @@
 {
   "name": "lumiverse-tray",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "license": "SEE LICENSE IN ../LICENSE.md",
   "type": "module",

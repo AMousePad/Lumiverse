@@ -39,12 +39,10 @@ export interface EnvConfig {
   trustedOriginsSet: Set<string>;
   trustAnyOrigin: boolean;
   /**
-   * Reverse proxies (IPs or CIDRs) whose forwarded-client headers
-   * (Forwarded / X-Forwarded-For / X-Real-IP) may be trusted, as a strict
-   * allowlist. Empty = legacy behavior (trust headers from any private-range
-   * peer). When set, ONLY listed peers are trusted — this is how you safely
-   * honor headers from a cloud proxy with a public address, and how you close
-   * the "any LAN device can spoof X-Forwarded-For" hole.
+   * Reverse proxies (IPs or CIDRs) trusted to supply forwarded client IPs and,
+   * for explicitly listed peers only, the external auth host/protocol. Empty
+   * retains the legacy private-peer fallback for client IPs but never enables
+   * forwarded host/protocol trust.
    */
   trustedProxies: string[];
   /** Suppress user custom CSS and component overrides without deleting them. */

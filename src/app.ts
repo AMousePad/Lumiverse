@@ -51,6 +51,7 @@ import { regexScriptsRoutes } from "./routes/regex-scripts.routes";
 import { expressionsRoutes } from "./routes/expressions.routes";
 import { pushRoutes } from "./routes/push.routes";
 import { desktopNotificationTransportRoutes } from "./routes/desktop-notifications.routes";
+import { desktopApiRoutes } from "./routes/desktop-api.routes";
 import { memoryCortexRoutes } from "./routes/memory-cortex.routes";
 import { operatorRoutes } from "./routes/operator.routes";
 import { openrouterRoutes } from "./routes/openrouter.routes";
@@ -77,7 +78,14 @@ import {
   isOriginAllowed,
 } from "./services/trusted-hosts.service";
 import { authLockoutService } from "./services/auth-lockout.service";
-import { getClientIp } from "./utils/client-ip";
+import {
+  getClientIp,
+  isConnectionFromExplicitTrustedProxy,
+} from "./utils/client-ip";
+import {
+  requestAtResolvedOrigin,
+  resolveDesktopRequestOrigin,
+} from "./auth/request-origin";
 import { listSsoLoginOptions } from "./services/sso-providers.service";
 import { userMediaServingHeaders } from "./utils/user-media-headers";
 import { getImageFilePathPublic } from "./services/images.service";
@@ -315,25 +323,20 @@ app.use("*", async (c, next) => {
 });
 
 // BetterAuth handler — BEFORE auth middleware
-// Rewrite the request URL to use the actual Host header so BetterAuth
-// constructs the correct redirect URLs and cookie domains when accessed via
-// a LAN IP instead of localhost. Respect X-Forwarded-Proto/Host from reverse
-// proxies (Cloudflare, nginx, HuggingFace Spaces) so BetterAuth generates
-// https:// callback URLs when served behind TLS termination.
+// Better Auth receives a URL rebuilt from an approved public origin. Forwarded
+// host/proto are considered only for an explicitly trusted socket peer, then
+// removed so downstream middleware cannot reinterpret attacker input.
 const betterAuthHandler: Handler = (c) => {
   if (c.req.path === "/api/auth/sign-up/email") {
     return c.json({ error: "Not found" }, 404);
   }
-  const host = c.req.header("x-forwarded-host") || c.req.header("host");
-  const proto = c.req.header("x-forwarded-proto") || "http";
   const url = new URL(c.req.url);
   const pathname = rewriteLegacySsoCallbackPath(url.pathname);
-  if (host || pathname !== url.pathname) {
-    const origin = host ? `${proto}://${host}` : url.origin;
-    const rewritten = new URL(pathname + url.search, origin);
-    return auth.handler(new Request(rewritten.toString(), c.req.raw));
-  }
-  return auth.handler(c.req.raw);
+  const origin = resolveDesktopRequestOrigin(
+    c.req.raw,
+    isConnectionFromExplicitTrustedProxy(c),
+  );
+  return auth.handler(requestAtResolvedOrigin(c.req.raw, origin, pathname + url.search));
 };
 app.get("/api/auth/*", betterAuthHandler);
 app.post("/api/auth/*", betterAuthHandler);
@@ -478,6 +481,9 @@ app.route("/api/integrations/stream-deck/v1", streamDeckIntegrationRoutes);
 // browser-session auth so a desktop rebuild or WebView cookie loss does not
 // silently unregister the native destination.
 app.route("/api/desktop-notifications/v1", desktopNotificationTransportRoutes);
+// OAuth-protected, read-only desktop API. It performs scope and live role
+// checks independently of the browser-session API below.
+app.route("/api/desktop/v1", desktopApiRoutes);
 
 app.get("/api/v1/sso-providers/login-options", (c) => {
   return c.json(listSsoLoginOptions());

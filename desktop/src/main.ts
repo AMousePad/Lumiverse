@@ -27,6 +27,11 @@ import {
   type UpdateState,
 } from "./runner-client";
 import { loadSettings, saveSetting, type TraySettings } from "./settings";
+import { type InstanceConnection, LOCAL_INSTANCE_CONNECTION } from "./instance-connection";
+import {
+  pendingRemoteSnapshot,
+  type RemoteInstanceSnapshot,
+} from "./remote-instance";
 import trayMacIcon from "./assets/tray-mac.png";
 import trayWinIcon from "./assets/tray-win.png";
 
@@ -61,8 +66,17 @@ let updateState: UpdateState = { available: false, commitsBehind: 0, latestMessa
 // carrying desktop changes leaves this process running superseded code.
 let desktopShellStale = false;
 let desktopShellNoticeShown = false;
-let customFrontendUrl: string | null = null;
+let instanceConnection: InstanceConnection = LOCAL_INSTANCE_CONNECTION;
+let remoteSnapshot: RemoteInstanceSnapshot | null = null;
 let openIntegratedBrowserWhenReady = false;
+
+function isRemoteMode(): boolean {
+  return instanceConnection.mode === "remote";
+}
+
+function remoteFrontendUrl(): string | null {
+  return instanceConnection.mode === "remote" ? instanceConnection.origin : null;
+}
 
 // ─── Menu items (created once, text/enabled updated in place) ───────────────
 
@@ -82,7 +96,9 @@ let loginItem: CheckMenuItem;
 let openIntegratedBrowserItem: MenuItem;
 let openDefaultBrowserItem: MenuItem;
 let reloadIntegratedBrowserItem: MenuItem;
-let floatingWidgetPocItem: Submenu;
+let remoteAuthItem: MenuItem;
+let remoteDisconnectItem: MenuItem;
+let floatingWidgetsItem: Submenu;
 
 interface DesktopWidgetCatalogEntry {
   id: string;
@@ -93,9 +109,36 @@ interface DesktopWidgetCatalogEntry {
   height: number;
 }
 
+interface DesktopWidgetPopoutState {
+  id: string;
+  poppedOut: boolean;
+}
+
 let desktopWidgetCatalog: DesktopWidgetCatalogEntry[] = [];
+const poppedOutWidgetIds = new Set<string>();
 
 function statusText(): string {
+  if (isRemoteMode()) {
+    const name = remoteSnapshot?.instance?.name ?? (
+      instanceConnection.mode === "remote"
+        ? instanceConnection.displayName ?? new URL(instanceConnection.origin).hostname
+        : "Remote instance"
+    );
+    switch (remoteSnapshot?.state) {
+      case "authorizing":
+        return `Signing in to ${name}…`;
+      case "connected":
+        return `${name} · connected`;
+      case "restricted":
+        return `${name} · status restricted`;
+      case "unreachable":
+        return `${name} · unreachable`;
+      case "reauth_required":
+        return `${name} · sign-in required`;
+      default:
+        return `${name} · sign-in required`;
+    }
+  }
   if (busyMessage) return busyMessage;
   // A dismissed dialog is easy to forget, and the symptom of a stale shell is
   // simply that the old behaviour persists. Keep the state visible in the
@@ -132,33 +175,44 @@ function formatUptime(startedAt: number | null): string {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
+function formatElapsed(elapsedMs: number | null | undefined): string {
+  if (elapsedMs == null || elapsedMs < 0) return "—";
+  const totalMinutes = Math.floor(elapsedMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
 async function updateFrontendMenuText(): Promise<void> {
   const running = serverState === "running" || externalRunning;
-  const frontendAvailable = running || customFrontendUrl !== null;
+  const frontendAvailable = running || isRemoteMode();
   const visible = await invoke<boolean>("frontend_visible").catch(() => false);
   const exists = await invoke<boolean>("frontend_exists").catch(() => false);
 
-  await frontendItem.setText(visible ? "Close Lumiverse" : "Open Lumiverse");
-
+  await openIntegratedBrowserItem.setText(visible ? "Close Integrated Browser" : "Open Integrated Browser");
   await openIntegratedBrowserItem.setEnabled(frontendAvailable);
   await openDefaultBrowserItem.setEnabled(frontendAvailable);
   await reloadIntegratedBrowserItem.setEnabled(frontendAvailable && exists);
 }
 
 function frontendUrl(): string {
-  // Match BetterAuth's default AUTH_BASE_URL host. OAuth cookies are host
+  // Keep the local browser and local auth callback on one host. Cookies are host
   // scoped, so mixing 127.0.0.1 here with a localhost callback loses the
   // newly-created SSO session when the provider returns.
-  return customFrontendUrl ?? `http://localhost:${port}`;
+  return remoteFrontendUrl() ?? `http://localhost:${port}`;
 }
 
 async function updateMenu(): Promise<void> {
   const running = serverState === "running";
   const transitioning = serverState === "starting" || serverState === "stopping" || busyMessage !== null;
+  const remote = isRemoteMode();
 
   await statusItem.setText(statusText());
 
-  if (externalRunning) {
+  if (remote) {
+    await startStopItem.setText("Remote Instance");
+    await startStopItem.setEnabled(false);
+  } else if (externalRunning) {
     await startStopItem.setText("Stop Server");
     await startStopItem.setEnabled(false);
   } else {
@@ -168,20 +222,32 @@ async function updateMenu(): Promise<void> {
 
   await updateFrontendMenuText();
 
-  await statsPortItem.setText(`Port: ${port}`);
-  await statsPidItem.setText(`PID: ${lastStatus?.pid ?? "—"}`);
-  await statsUptimeItem.setText(`Uptime: ${running ? formatUptime(lastStatus?.startedAt ?? null) : "—"}`);
-  await statsBranchItem.setText(`Branch: ${lastStatus?.branch ?? "—"}`);
-  await statsVersionItem.setText(`Version: ${lastStatus?.version ?? "—"}`);
+  await remoteAuthItem.setText(
+    remoteSnapshot?.state === "connected" || remoteSnapshot?.state === "restricted"
+      ? "Reconnect Remote Instance…"
+      : "Sign In to Remote Instance…",
+  );
+  await remoteAuthItem.setEnabled(remote && remoteSnapshot?.state !== "authorizing");
+  await remoteDisconnectItem.setEnabled(
+    remote && remoteSnapshot !== null && remoteSnapshot.state !== "disconnected" && remoteSnapshot.state !== "authorizing",
+  );
 
-  await checkUpdatesItem.setEnabled(!busyMessage && !externalRunning);
+  await statsPortItem.setText(`Port: ${remote ? (remoteSnapshot?.status?.port ?? "—") : port}`);
+  await statsPidItem.setText(`PID: ${remote ? (remoteSnapshot?.status?.pid ?? "—") : (lastStatus?.pid ?? "—")}`);
+  await statsUptimeItem.setText(`Uptime: ${remote
+    ? formatElapsed(remoteSnapshot?.status?.uptime)
+    : (running ? formatUptime(lastStatus?.startedAt ?? null) : "—")}`);
+  await statsBranchItem.setText(`Branch: ${remote ? (remoteSnapshot?.status?.branch ?? "—") : (lastStatus?.branch ?? "—")}`);
+  await statsVersionItem.setText(`Version: ${remote ? (remoteSnapshot?.status?.version ?? "—") : (lastStatus?.version ?? "—")}`);
+
+  await checkUpdatesItem.setEnabled(!remote && !busyMessage && !externalRunning);
   // The rebuild compiles from the configured checkout, so it needs one — but
   // unlike the update items it stays available when a server is running
   // externally, since it neither stops nor talks to that server.
   await rebuildDesktopItem.setEnabled(!busyMessage && repoDir !== null);
   if (updateState.available) {
     await applyUpdateItem.setText(`Apply Update (${updateState.commitsBehind} behind)`);
-    await applyUpdateItem.setEnabled(!busyMessage && !externalRunning);
+    await applyUpdateItem.setEnabled(!remote && !busyMessage && !externalRunning);
   } else {
     await applyUpdateItem.setText("Apply Update");
     await applyUpdateItem.setEnabled(false);
@@ -189,50 +255,35 @@ async function updateMenu(): Promise<void> {
 }
 
 async function updateFloatingWidgetMenu(): Promise<void> {
-  if (!floatingWidgetPocItem) return;
+  if (!floatingWidgetsItem) return;
 
-  const existingItems = await floatingWidgetPocItem.items();
+  const existingItems = await floatingWidgetsItem.items();
   for (const item of existingItems) {
-    await floatingWidgetPocItem.remove(item);
+    await floatingWidgetsItem.remove(item);
   }
 
   if (desktopWidgetCatalog.length === 0) {
-    await floatingWidgetPocItem.append(await MenuItem.new({
+    await floatingWidgetsItem.append(await MenuItem.new({
       text: "No registered extension widgets",
       enabled: false,
     }));
   } else {
     for (const widget of desktopWidgetCatalog) {
-      await floatingWidgetPocItem.append(await MenuItem.new({
-        text: `Pop Out ${widget.title}`,
+      const poppedOut = poppedOutWidgetIds.has(widget.id);
+      await floatingWidgetsItem.append(await MenuItem.new({
+        text: poppedOut ? `Return ${widget.title} to Page` : `Pop Out ${widget.title}`,
         action: action(async () => {
-          await invoke("show_extension_widget", { widgetId: widget.id });
-        }),
-      }));
-      await floatingWidgetPocItem.append(await MenuItem.new({
-        text: `Return ${widget.title} to Page`,
-        action: action(async () => {
-          // This command is invoked by the trusted tray rather than a remote
-          // frontend, so it does not need a child-window ownership check.
-          await invoke("return_extension_widget_from_tray", { widgetId: widget.id });
+          if (poppedOut) {
+            // This command is invoked by the trusted tray rather than a remote
+            // frontend, so it does not need a child-window ownership check.
+            await invoke("return_extension_widget_from_tray", { widgetId: widget.id });
+          } else {
+            await invoke("show_extension_widget", { widgetId: widget.id });
+          }
         }),
       }));
     }
   }
-
-  await floatingWidgetPocItem.append(await PredefinedMenuItem.new({ item: "Separator" }));
-  await floatingWidgetPocItem.append(await MenuItem.new({
-    text: "Show Native Widget POC",
-    action: action(async () => {
-      await invoke("show_widget_poc");
-    }),
-  }));
-  await floatingWidgetPocItem.append(await MenuItem.new({
-    text: "Toggle POC Click-Through",
-    action: action(async () => {
-      await invoke("toggle_widget_poc_click_through");
-    }),
-  }));
 }
 
 // ─── Runner orchestration ───────────────────────────────────────────────────
@@ -265,6 +316,7 @@ async function refreshStatus(): Promise<void> {
 }
 
 async function startServer(): Promise<void> {
+  if (isRemoteMode()) throw new Error("Switch to the local instance before starting its server.");
   await ensureRunner();
   // The runner acknowledges this request while the server is still starting.
   // Defer opening the native WebView until its `running` state notification.
@@ -275,12 +327,13 @@ async function startServer(): Promise<void> {
   await refreshStatus();
   if (openIntegratedBrowserWhenReady && lastStatus?.state === "running") {
     openIntegratedBrowserWhenReady = false;
-    await invoke("show_frontend", { port, customUrl: customFrontendUrl });
+    await invoke("show_frontend", { port, customUrl: remoteFrontendUrl() });
   }
   await updateMenu();
 }
 
 async function stopServer(): Promise<void> {
+  if (isRemoteMode()) throw new Error("Switch to the local instance before stopping its server.");
   openIntegratedBrowserWhenReady = false;
   serverState = "stopping";
   updateMenuInBackground();
@@ -295,6 +348,7 @@ async function stopServer(): Promise<void> {
 }
 
 async function checkForUpdates(interactive: boolean): Promise<void> {
+  if (isRemoteMode()) throw new Error("Switch to the local instance before checking its checkout for updates.");
   await ensureRunner();
   const result = await client.request<UpdateState>("check-updates", undefined, 90_000);
   updateState = result;
@@ -371,6 +425,7 @@ async function refreshDesktopShellState(): Promise<void> {
 }
 
 async function applyUpdate(): Promise<void> {
+  if (isRemoteMode()) throw new Error("Switch to the local instance before updating its checkout.");
   await ensureRunner();
   busyMessage = "Applying update…";
   await updateMenu();
@@ -465,6 +520,76 @@ async function detectExternalServer(): Promise<void> {
   }
 }
 
+async function persistRemoteIdentity(snapshot: RemoteInstanceSnapshot): Promise<void> {
+  if (instanceConnection.mode !== "remote" || !snapshot.instance) return;
+  if (
+    instanceConnection.instanceId === snapshot.instance.id
+    && instanceConnection.displayName === snapshot.instance.name
+  ) return;
+  instanceConnection = {
+    ...instanceConnection,
+    instanceId: snapshot.instance.id,
+    displayName: snapshot.instance.name,
+  };
+  settings.instanceConnection = instanceConnection;
+  await saveSetting("instanceConnection", instanceConnection);
+}
+
+async function pollRemoteInstance(): Promise<void> {
+  if (instanceConnection.mode !== "remote" || remoteSnapshot?.state === "authorizing") return;
+  const origin = instanceConnection.origin;
+  const snapshot = await invoke<RemoteInstanceSnapshot>("remote_instance_poll", {
+    origin,
+  });
+  if (instanceConnection.mode !== "remote" || instanceConnection.origin !== origin) return;
+  remoteSnapshot = snapshot;
+  await persistRemoteIdentity(snapshot);
+}
+
+async function connectRemoteInstance(): Promise<void> {
+  if (instanceConnection.mode !== "remote" || remoteSnapshot?.state === "authorizing") return;
+  const origin = instanceConnection.origin;
+  remoteSnapshot = pendingRemoteSnapshot(origin);
+  await updateMenu();
+  try {
+    const snapshot = await invoke<RemoteInstanceSnapshot>("remote_instance_connect", { origin });
+    if (instanceConnection.mode !== "remote" || instanceConnection.origin !== origin) {
+      // The selection changed while the system browser was open. Remove the
+      // just-created credential instead of attaching it to an abandoned URL.
+      await invoke("remote_instance_disconnect", { origin }).catch(() => {});
+      return;
+    }
+    remoteSnapshot = snapshot;
+    await persistRemoteIdentity(snapshot);
+    if (!snapshot.credentialPersisted) {
+      await alert(
+        "Lumiverse Desktop",
+        "The remote instance is connected for this session, but its refresh credential could not be saved in the operating system credential store. You will need to sign in again after restarting Desktop.",
+      );
+    }
+  } catch (error) {
+    if (instanceConnection.mode !== "remote" || instanceConnection.origin !== origin) return;
+    remoteSnapshot = {
+      ...pendingRemoteSnapshot(origin),
+      state: "reauth_required",
+      error: error instanceof Error ? error.message : String(error),
+    };
+    throw error;
+  } finally {
+    await updateMenu();
+  }
+}
+
+async function disconnectRemoteInstance(): Promise<void> {
+  if (instanceConnection.mode !== "remote") return;
+  await invoke("remote_instance_disconnect", { origin: instanceConnection.origin });
+  remoteSnapshot = {
+    ...pendingRemoteSnapshot(instanceConnection.origin),
+    state: "disconnected",
+  };
+  await updateMenu();
+}
+
 // ─── Action wrapper ─────────────────────────────────────────────────────────
 
 function updateMenuInBackground(): void {
@@ -499,9 +624,9 @@ async function buildTray(): Promise<void> {
     action: action(async () => {
       const visible = await invoke<boolean>("frontend_visible");
       if (visible) {
-        await invoke("hide_frontend");
+        await invoke("close_frontend");
       } else {
-        await invoke("show_frontend", { port, customUrl: customFrontendUrl });
+        await invoke("show_frontend", { port, customUrl: remoteFrontendUrl() });
       }
       await updateFrontendMenuText();
     }),
@@ -524,27 +649,39 @@ async function buildTray(): Promise<void> {
     }),
   });
 
+  remoteAuthItem = await MenuItem.new({
+    text: "Sign In to Remote Instance…",
+    enabled: false,
+    action: action(connectRemoteInstance),
+  });
+  remoteDisconnectItem = await MenuItem.new({
+    text: "Sign Out of Remote Instance",
+    enabled: false,
+    action: action(disconnectRemoteInstance),
+  });
+
   const setFrontendUrlItem = await MenuItem.new({
-    text: "Frontend URL…",
+    text: "Instance Connection…",
     action: action(async () => {
       await invoke("show_frontend_url_settings");
     }),
   });
 
-  floatingWidgetPocItem = await Submenu.new({
+  floatingWidgetsItem = await Submenu.new({
     text: "Floating Widgets",
     items: [],
   });
   await updateFloatingWidgetMenu();
 
   frontendItem = await Submenu.new({
-    text: "Open Lumiverse",
+    text: "Browser",
     items: [
       openIntegratedBrowserItem,
       reloadIntegratedBrowserItem,
       openDefaultBrowserItem,
+      remoteAuthItem,
+      remoteDisconnectItem,
       await PredefinedMenuItem.new({ item: "Separator" }),
-      floatingWidgetPocItem,
       setFrontendUrlItem,
     ],
   });
@@ -571,7 +708,7 @@ async function buildTray(): Promise<void> {
   });
 
   autoStartItem = await CheckMenuItem.new({
-    text: "Start Server at Launch",
+    text: "Start Local Server at Launch",
     checked: settings.autoStartServer,
     action: action(async () => {
       settings.autoStartServer = !settings.autoStartServer;
@@ -639,6 +776,7 @@ async function buildTray(): Promise<void> {
       await separator(),
       startStopItem,
       frontendItem,
+      floatingWidgetsItem,
       statsSubmenu,
       await separator(),
       checkUpdatesItem,
@@ -664,6 +802,7 @@ async function buildTray(): Promise<void> {
 }
 
 async function toggleServer(): Promise<void> {
+  if (isRemoteMode()) return;
   if (serverState === "running" || serverState === "starting") {
     await stopServer();
   } else {
@@ -674,6 +813,11 @@ async function toggleServer(): Promise<void> {
 // ─── Boot ───────────────────────────────────────────────────────────────────
 
 async function tick(): Promise<void> {
+  if (isRemoteMode()) {
+    await pollRemoteInstance();
+    await updateMenu();
+    return;
+  }
   if (await client.alive()) {
     await refreshStatus();
   } else {
@@ -684,18 +828,46 @@ async function tick(): Promise<void> {
 
 async function boot(): Promise<void> {
   settings = await loadSettings();
-  customFrontendUrl = settings.customFrontendUrl;
+  instanceConnection = settings.instanceConnection;
 
-  await listen<{ url: string | null }>("frontend-url-changed", async ({ payload }) => {
-    customFrontendUrl = payload.url;
-    settings.customFrontendUrl = payload.url;
-    await saveSetting("customFrontendUrl", payload.url);
+  await listen<{ connection: InstanceConnection }>("instance-connection-changed", async ({ payload }) => {
+    const previousOrigin = instanceConnection.mode === "remote" ? instanceConnection.origin : null;
+    instanceConnection = payload.connection;
+    remoteSnapshot = null;
+    settings.instanceConnection = payload.connection;
+    await saveSetting("instanceConnection", payload.connection);
+    if (previousOrigin && (payload.connection.mode !== "remote" || payload.connection.origin !== previousOrigin)) {
+      await invoke("remote_instance_disconnect", { origin: previousOrigin }).catch(() => {});
+    }
+    if (!isRemoteMode()) {
+      await refreshStatus();
+      await detectExternalServer();
+    } else {
+      void connectRemoteInstance().catch(async (error) => {
+        await alert("Lumiverse", error instanceof Error ? error.message : String(error), true);
+      });
+    }
     await updateMenu();
   });
   await listen<DesktopWidgetCatalogEntry[]>("desktop-widget-catalog", ({ payload }) => {
     desktopWidgetCatalog = Array.isArray(payload) ? payload : [];
+    const catalogIds = new Set(desktopWidgetCatalog.map((widget) => widget.id));
+    for (const widgetId of poppedOutWidgetIds) {
+      if (!catalogIds.has(widgetId)) poppedOutWidgetIds.delete(widgetId);
+    }
     void updateFloatingWidgetMenu().catch((error) => {
       console.warn("Unable to update floating-widget menu", error);
+    });
+  });
+  await listen<DesktopWidgetPopoutState>("desktop-widget-popout-state", ({ payload }) => {
+    if (!payload || typeof payload.id !== "string" || typeof payload.poppedOut !== "boolean") return;
+    if (payload.poppedOut) {
+      poppedOutWidgetIds.add(payload.id);
+    } else {
+      poppedOutWidgetIds.delete(payload.id);
+    }
+    void updateFloatingWidgetMenu().catch((error) => {
+      console.warn("Unable to update floating-widget state", error);
     });
   });
 
@@ -705,7 +877,7 @@ async function boot(): Promise<void> {
     if (state === "running" && openIntegratedBrowserWhenReady) {
       openIntegratedBrowserWhenReady = false;
       void refreshStatus()
-        .then(() => invoke("show_frontend", { port, customUrl: customFrontendUrl }))
+        .then(() => invoke("show_frontend", { port, customUrl: remoteFrontendUrl() }))
         .catch((err) => alert("Lumiverse", err instanceof Error ? err.message : String(err), true));
     } else if (state === "stopped" || state === "crashed") {
       openIntegratedBrowserWhenReady = false;
@@ -750,14 +922,18 @@ async function boot(): Promise<void> {
   await updateMenu();
   await invoke("desktop_startup_ready");
 
-  if (!repoDir && !customFrontendUrl) {
+  if (!repoDir && !isRemoteMode()) {
     await alert(
       "Lumiverse",
       "No Lumiverse folder is configured yet. Choose your Lumiverse checkout via “Set Lumiverse Folder…” in the tray menu.",
     );
   }
 
-  if (settings.autoStartServer && repoDir && bunPath) {
+  if (isRemoteMode()) {
+    void pollRemoteInstance().then(updateMenu).catch((error) => {
+      console.warn("Unable to restore remote instance authorization", error);
+    });
+  } else if (settings.autoStartServer && repoDir && bunPath) {
     action(startServer)();
   } else {
     void detectExternalServer().then(updateMenu);

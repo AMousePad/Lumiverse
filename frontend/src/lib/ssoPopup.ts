@@ -65,6 +65,11 @@ export function startSsoPopup({ providerId, flow, returnTo = '/' }: SsoPopupOpti
       if (settled) return
       settled = true
       cleanup()
+      // The desktop shell creates window.open targets as native WebviewWindows.
+      // Closing from the opener is the most reliable cross-platform lifecycle
+      // signal and also keeps the browser implementation symmetrical with the
+      // cancellation/error path below.
+      try { popup?.close() } catch {}
       resolve(result)
     }
 

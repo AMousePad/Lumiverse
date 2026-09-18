@@ -101,8 +101,8 @@ describe("illarin protocol conformance checklist", () => {
     const { fetch, urls } = recordingFetch(() => Response.json(pair("ia1.next", "ir1.next")));
     const options: IllarinRequestOptions = { fetchImpl: fetch };
 
-    await refreshTokens("https://illarin.xyz", "ir1.secret-refresh", options);
-    await updateInstanceDeclaration("https://illarin.xyz", "ia1.secret-access", {
+    await refreshTokens("https://illarin.com", "ir1.secret-refresh", options);
+    await updateInstanceDeclaration("https://illarin.com", "ia1.secret-access", {
       protocolVersion: 1,
       capabilities: [],
       acceptedTargets: [],

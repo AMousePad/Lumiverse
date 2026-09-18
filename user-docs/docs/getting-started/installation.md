@@ -281,7 +281,8 @@ If you'd rather throw away the cache entirely (slower, but belt-and-braces), pas
 | `TRUST_ANY_ORIGIN` | `true` | Accept requests from any origin |
 | `LUMIVERSE_SAFE_THEME` | `false` | Temporarily suppress custom CSS and component overrides for emergency recovery |
 | `TRUSTED_ORIGINS` | — | Comma-separated allowed origins (for production) |
-| `TRUSTED_PROXIES` | — | Reverse proxies trusted to supply client IPs (`X-Forwarded-For`/`Forwarded`/`X-Real-IP`), as IPs or CIDRs. Unset = trust only private-range peers; when set, only listed proxies are trusted (use this for cloud proxies with public addresses) |
+| `TRUSTED_PROXIES` | — | Proxy IPs/CIDRs allowed to supply external host/protocol headers for dynamic auth origins and client-IP headers. Host/protocol forwarding requires this explicit list. |
+| `AUTH_BASE_URL` | request origin | Optional single-origin auth/OAuth override; normally use Operator → Trusted Hostnames. |
 | `AUTH_SECRET` | auto-derived | Explicit auth signing secret; usually leave unset |
 | `ENCRYPTION_KEY` | auto-generated | Legacy/manual encryption key override; usually leave unset |
 | `SPINDLE_EPHEMERAL_GLOBAL_MAX_BYTES` | `524288000` | Total extension storage limit in bytes |
@@ -341,7 +342,7 @@ Lumiverse uses a `.env` file for runtime configuration (created by the setup wiz
 | `PORT` | `7860` | Server port |
 | `DATA_DIR` | `./data` | Override the data directory location |
 | `TRUSTED_ORIGINS` | — | CORS origins (comma-separated) |
-| `TRUSTED_PROXIES` | — | Reverse proxies trusted to supply client IPs (`X-Forwarded-For`/`Forwarded`/`X-Real-IP`), as IPs or CIDRs. Unset = trust only private-range peers; when set, only listed proxies are trusted (use this for cloud proxies with public addresses) |
+| `TRUSTED_PROXIES` | — | Proxy IPs/CIDRs allowed to supply external host/protocol headers for dynamic auth origins and client-IP headers. Host/protocol forwarding requires this explicit list. |
 | `TRUST_ANY_ORIGIN` | `false` | Accept requests from any origin |
 | `LUMIVERSE_SAFE_THEME` | `false` | Temporarily suppress custom CSS and component overrides for emergency recovery |
 | `FRONTEND_DIR` | — | Custom path to frontend dist folder |
@@ -350,6 +351,7 @@ Lumiverse uses a `.env` file for runtime configuration (created by the setup wiz
 | `SPINDLE_EPHEMERAL_EXTENSION_MAX_OVERRIDES` | — | Per-extension storage overrides as `extension.id:maxBytes,...` |
 | `SPINDLE_EPHEMERAL_RESERVATION_TTL_MS` | `600000` | Extension storage reservation TTL in milliseconds |
 | `AUTH_SECRET` | auto-derived | Explicit auth signing secret |
+| `AUTH_BASE_URL` | request origin | Optional single-origin auth/OAuth override; normally use Operator → Trusted Hostnames. |
 | `ENCRYPTION_KEY` | auto-generated | Legacy/manual encryption key override |
 
 API keys and account passwords are stored encrypted in the `data/` directory rather than in `.env`. Leave `AUTH_SECRET` and `ENCRYPTION_KEY` unset unless you are intentionally carrying forward an existing install.

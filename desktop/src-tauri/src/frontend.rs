@@ -104,7 +104,6 @@ fn enforce_frontend_content_corner_radius(window: &WebviewWindow) -> Result<(), 
 }
 
 const FRONTEND_LABEL: &str = "frontend";
-const WIDGET_POC_LABEL: &str = "widget-poc";
 const FRONTEND_TITLE: &str = "Lumiverse";
 const DEFAULT_WIDTH: u32 = 1200;
 const DEFAULT_HEIGHT: u32 = 800;
@@ -112,6 +111,23 @@ const FRONTEND_TITLEBAR_HEIGHT: u32 = 36;
 const RESTORE_MARGIN: i32 = 24;
 const FRONTEND_STARTUP_APPEARANCE_FILE: &str = "frontend_startup_appearance.json";
 static NEXT_FRONTEND_POPUP_ID: AtomicU64 = AtomicU64::new(1);
+
+fn is_frontend_popup_label(label: &str) -> bool {
+    label.strip_prefix("frontend-popup-").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+/// Destroy the invoking SSO popup without granting remote content generic
+/// access to other native windows. Browser `window.close()` is not a reliable
+/// lifecycle signal for Rust-created WebviewWindows on every platform.
+#[tauri::command]
+pub fn close_current_sso_popup(window: WebviewWindow) -> Result<(), String> {
+    if !is_frontend_popup_label(window.label()) {
+        return Err("Only a Lumiverse sign-in popup may invoke this command".into());
+    }
+    window.destroy().map_err(|error| error.to_string())
+}
 
 #[derive(Default)]
 pub struct FrontendState {
@@ -203,14 +219,6 @@ impl Default for FrontendStartupAppearance {
     }
 }
 
-/// State owned by the native host rather than the widget WebView. Once a
-/// window ignores cursor events it cannot receive the click that would turn
-/// them back on, so the tray restores input for this proof of concept.
-#[derive(Default)]
-pub struct WidgetPocState {
-    click_through: Mutex<bool>,
-}
-
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopWidgetDescriptor {
@@ -240,15 +248,14 @@ fn emit_widget_popout_state(
     widget_id: String,
     popped_out: bool,
 ) -> Result<(), String> {
-    app.emit_to(
-        "main",
-        "desktop-widget-popout-state",
-        DesktopWidgetPopoutState {
-            id: widget_id,
-            popped_out,
-        },
-    )
-    .map_err(|error| error.to_string())
+    let state = DesktopWidgetPopoutState {
+        id: widget_id,
+        popped_out,
+    };
+    app.emit_to("main", "desktop-widget-popout-state", state.clone())
+        .map_err(|error| error.to_string())?;
+    app.emit_to(FRONTEND_LABEL, "desktop-widget-popout-state", state)
+        .map_err(|error| error.to_string())
 }
 
 fn extension_widget_label(widget: &DesktopWidgetDescriptor) -> String {
@@ -711,10 +718,49 @@ pub fn show_frontend(
     Ok(())
 }
 
+/// Destroy the integrated browser and every extension widget hosted by it.
+/// The catalog belongs to the browser's live page, so discard it as part of
+/// the same operation; a newly opened browser will publish a fresh catalog.
 #[tauri::command]
-pub fn hide_frontend(app: AppHandle) -> Result<(), String> {
-    hide_frontend_window(&app);
-    Ok(())
+pub fn close_frontend(
+    app: AppHandle,
+    widget_state: State<'_, DesktopWidgetCatalogState>,
+) -> Result<(), String> {
+    let widgets = std::mem::take(&mut *widget_state.widgets.lock().unwrap());
+    let mut failures = Vec::new();
+
+    for widget in &widgets {
+        if let Some(window) = app.get_webview_window(&extension_widget_label(widget)) {
+            if let Err(error) = window.destroy() {
+                failures.push(format!("{}: {error}", widget.title));
+            }
+        }
+    }
+
+    if let Some(window) = app.get_webview_window(FRONTEND_LABEL) {
+        let state = app.state::<FrontendState>();
+        persist_bounds(&app, &state, &window);
+        let _ = set_frontend_task_switcher_visible(&app, &window, false);
+        if let Err(error) = window.destroy() {
+            failures.push(format!("integrated browser: {error}"));
+        }
+    }
+
+    app.emit_to(
+        "main",
+        "desktop-widget-catalog",
+        Vec::<DesktopWidgetDescriptor>::new(),
+    )
+    .map_err(|error| error.to_string())?;
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Unable to close every desktop window: {}",
+            failures.join(", ")
+        ))
+    }
 }
 
 /// Reload the current frontend URL, bringing a hidden frontend back first.
@@ -919,7 +965,7 @@ pub fn show_extension_widget(
         .ok_or("That floating widget is no longer registered")?;
     let frontend = app
         .get_webview_window(FRONTEND_LABEL)
-        .ok_or("Open Lumiverse before popping out an extension widget")?;
+        .ok_or("Open the integrated browser before popping out an extension widget")?;
     let mut url = frontend.url().map_err(|error| error.to_string())?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err("The current Lumiverse frontend cannot host extension widgets".into());
@@ -1047,97 +1093,6 @@ pub fn return_extension_widget_from_tray(
         return Ok(());
     }
     emit_widget_popout_state(&app, widget.id, false)
-}
-
-/// Create a small local WebView window that demonstrates the primitives an
-/// extension-provided floating widget will need. The actual extension bridge
-/// comes later; keeping this page app-local avoids giving a remote frontend
-/// permission to create arbitrary native windows.
-#[cfg_attr(windows, tauri::command(async))]
-#[cfg_attr(not(windows), tauri::command)]
-pub fn show_widget_poc(app: AppHandle, state: State<'_, WidgetPocState>) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(WIDGET_POC_LABEL) {
-        window
-            .set_ignore_cursor_events(false)
-            .map_err(|e| e.to_string())?;
-        *state.click_through.lock().unwrap() = false;
-        window.set_shadow(false).map_err(|e| e.to_string())?;
-        window.show().map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    let builder = WebviewWindowBuilder::new(
-        &app,
-        WIDGET_POC_LABEL,
-        WebviewUrl::App("widget.html".into()),
-    )
-    .title("Lumiverse widget")
-    .inner_size(330.0, 220.0)
-    .min_inner_size(250.0, 160.0)
-    .decorations(false)
-    .shadow(false)
-    .transparent(true)
-    .background_color(tauri::webview::Color(0, 0, 0, 0))
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .focused(false)
-    .focusable(false)
-    .resizable(true)
-    .visible(false);
-
-    let window = builder.build().map_err(|e| e.to_string())?;
-    let close_window = window.clone();
-    window.on_window_event(move |event| {
-        if let WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            let _ = close_window.hide();
-        }
-    });
-    window.show().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn hide_widget_poc(app: AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(WIDGET_POC_LABEL) {
-        window.hide().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn set_widget_poc_click_through(
-    app: AppHandle,
-    state: State<'_, WidgetPocState>,
-    enabled: bool,
-) -> Result<(), String> {
-    let window = app
-        .get_webview_window(WIDGET_POC_LABEL)
-        .ok_or("Floating widget POC is not open")?;
-    window
-        .set_ignore_cursor_events(enabled)
-        .map_err(|e| e.to_string())?;
-    *state.click_through.lock().unwrap() = enabled;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn toggle_widget_poc_click_through(
-    app: AppHandle,
-    state: State<'_, WidgetPocState>,
-) -> Result<(), String> {
-    let window = app
-        .get_webview_window(WIDGET_POC_LABEL)
-        .ok_or("Floating widget POC is not open")?;
-    let enabled = {
-        let click_through = state.click_through.lock().unwrap();
-        !*click_through
-    };
-    window
-        .set_ignore_cursor_events(enabled)
-        .map_err(|e| e.to_string())?;
-    *state.click_through.lock().unwrap() = enabled;
-    Ok(())
 }
 
 /// Apply the native material behind an opt-in translucent frontend theme.
@@ -1277,13 +1232,23 @@ pub fn cache_frontend_startup_appearance(
 
 #[cfg(test)]
 mod tests {
-    use super::supports_windows_system_backdrop;
+    use super::{is_frontend_popup_label, supports_windows_system_backdrop};
 
     #[test]
     fn selects_system_backdrops_at_window_vibrancy_cutoff() {
         assert!(!supports_windows_system_backdrop(22_522));
         assert!(supports_windows_system_backdrop(22_523));
         assert!(supports_windows_system_backdrop(26_200));
+    }
+
+    #[test]
+    fn recognizes_only_generated_frontend_popup_labels() {
+        assert!(is_frontend_popup_label("frontend-popup-1"));
+        assert!(is_frontend_popup_label("frontend-popup-2048"));
+        assert!(!is_frontend_popup_label("frontend"));
+        assert!(!is_frontend_popup_label("frontend-popup-"));
+        assert!(!is_frontend_popup_label("frontend-popup-settings"));
+        assert!(!is_frontend_popup_label("frontend-popup-1-other"));
     }
 }
 
@@ -1298,10 +1263,10 @@ pub fn show_frontend_url_settings(app: AppHandle) -> Result<(), String> {
     }
 
     let window = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("custom-url.html".into()))
-        .title("Frontend URL")
-        .inner_size(480.0, 260.0)
-        .min_inner_size(480.0, 260.0)
-        .max_inner_size(480.0, 260.0)
+        .title("Instance Connection")
+        .inner_size(560.0, 480.0)
+        .min_inner_size(560.0, 480.0)
+        .max_inner_size(560.0, 480.0)
         .resizable(false)
         .center()
         .build()
