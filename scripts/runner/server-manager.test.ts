@@ -2,8 +2,9 @@ import { expect, test } from "bun:test";
 import { join } from "path";
 
 import { PROJECT_ROOT } from "./lib/constants";
+import { launchServerProcess } from "./server-process-launcher";
+import { forwardServerOutput } from "./server-process-output";
 import { serverLaunchTransport } from "./server-manager";
-import { spawnSocketControlledProcess } from "./socket-controlled-process";
 
 test("the backend launcher avoids Bun IPC only on Windows", () => {
   expect(serverLaunchTransport("win32")).toBe("socket");
@@ -16,11 +17,13 @@ test("the socket-controlled spawn exchanges messages with a real backend process
   const pong = Promise.withResolvers<{ type: string; value: string }>();
   const disconnected = Promise.withResolvers<void>();
   const errors: string[] = [];
-  let launched: ReturnType<typeof spawnSocketControlledProcess> | null = null;
+  let launched: ReturnType<typeof launchServerProcess> | null = null;
   let exited = false;
 
   try {
-    launched = spawnSocketControlledProcess({
+    let forwardedChunks = 0;
+    launched = launchServerProcess({
+      transport: "socket",
       cmd: [
         process.execPath,
         join(PROJECT_ROOT, "scripts", "runner", "fixtures", "runner-control-child.ts"),
@@ -32,13 +35,21 @@ test("the socket-controlled spawn exchanges messages with a real backend process
         if (received.type === "ready") ready.resolve(received as { type: string; pid: number });
         if (received.type === "pong") pong.resolve(received as { type: string; value: string });
       },
-      onError(message) {
+      onControlError(message) {
         errors.push(message);
       },
-      onDisconnect() {
+      onControlDisconnect() {
         disconnected.resolve();
       },
+      writeOutput() {
+        forwardedChunks += 1;
+      },
     });
+
+    // Regression: the same launcher boundary used by startServer must resolve
+    // inherited output without calling getReader() on Bun's fd values.
+    await launched.outputDone;
+    expect(forwardedChunks).toBe(0);
 
     const readyMessage = await Promise.race([
       ready.promise,
@@ -71,3 +82,51 @@ test("the socket-controlled spawn exchanges messages with a real backend process
     }
   }
 }, 15_000);
+
+test("piped server output drains stdout and stderr through the declared writer", async () => {
+  const proc = Bun.spawn({
+    cmd: [
+      process.execPath,
+      "-e",
+      'process.stdout.write("out"); process.stderr.write("err");',
+    ],
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const received = { stdout: "", stderr: "" };
+  const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
+
+  await Promise.all([
+    forwardServerOutput(
+      { kind: "piped", stdout: proc.stdout, stderr: proc.stderr },
+      (chunk, stream) => {
+        received[stream] += decoders[stream].decode(chunk, { stream: true });
+      },
+    ),
+    proc.exited,
+  ]);
+
+  expect(received).toEqual({ stdout: "out", stderr: "err" });
+});
+
+test("piped server output keeps draining after its writer closes", async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(Uint8Array.of(1));
+      controller.enqueue(Uint8Array.of(2));
+      controller.close();
+    },
+  });
+  let writes = 0;
+
+  await forwardServerOutput(
+    { kind: "piped", stdout: stream, stderr: new ReadableStream({ start: (c) => c.close() }) },
+    () => {
+      writes += 1;
+      throw new Error("log destination closed");
+    },
+  );
+
+  expect(writes).toBe(1);
+});

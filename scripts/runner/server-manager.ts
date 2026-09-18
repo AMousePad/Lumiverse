@@ -1,22 +1,25 @@
 import { existsSync } from "fs";
 import { join } from "path";
-import type { RunnerControlHost } from "../../src/services/runner-control-transport.js";
 import { PROJECT_ROOT, ENTRY, STOP_SIGTERM_GRACE_MS } from "./lib/constants.js";
-import { spawnSocketControlledProcess } from "./socket-controlled-process.js";
+import {
+  launchServerProcess,
+  type ManagedServerProcess,
+  type ServerControl,
+  type ServerLaunchTransport,
+} from "./server-process-launcher.js";
+import type { ServerOutputStream } from "./server-process-output.js";
 
 export type ServerState = "starting" | "running" | "stopping" | "stopped" | "crashed";
 
 type IPCCallback = (message: any) => void;
 
 interface ServerInstance {
-  proc: ReturnType<typeof Bun.spawn> | null;
+  proc: ManagedServerProcess | null;
   control: ServerControl | null;
   state: ServerState;
   startedAt: number;
   restartCount: number;
 }
-
-type ServerControl = Pick<RunnerControlHost, "close" | "send">;
 
 let instance: ServerInstance | null = null;
 let ipcCallback: IPCCallback | null = null;
@@ -46,16 +49,23 @@ function handleServerMessage(message: any): void {
   ipcCallback?.(message);
 }
 
-export function serverLaunchTransport(platform: string = process.platform): "socket" | "ipc" {
+/**
+ * Bun 1.4.x supports IPC on Windows, but its child-exit delivery and
+ * disconnect lifecycle still have Windows-specific gaps. Keep the authenticated
+ * socket transport until upstream's Windows lifecycle tests reach parity and
+ * this repository's Windows runner test verifies that behavior end to end.
+ */
+export function serverLaunchTransport(platform: string = process.platform): ServerLaunchTransport {
   return platform === "win32" ? "socket" : "ipc";
 }
 
 /**
  * Where server stdout/stderr bytes go. Defaults to the runner's own
  * stdio (terminal mode); the headless bridge installs a sink that wraps
- * output in protocol frames so raw server bytes never reach stdout.
+ * output pipes in protocol frames so raw server bytes never reach stdout.
+ * Socket-controlled children declare inherited output and bypass this sink.
  */
-export type OutputSink = (chunk: Uint8Array, stream: "stdout" | "stderr") => void;
+export type OutputSink = (chunk: Uint8Array, stream: ServerOutputStream) => void;
 
 let outputSink: OutputSink | null = null;
 
@@ -63,23 +73,11 @@ export function setOutputSink(sink: OutputSink | null): void {
   outputSink = sink;
 }
 
-async function readStream(
-  stream: ReadableStream<Uint8Array>,
-  name: "stdout" | "stderr"
-): Promise<void> {
-  const reader = stream.getReader();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (outputSink) {
-        outputSink(value, name);
-      } else {
-        (name === "stdout" ? process.stdout : process.stderr).write(value);
-      }
-    }
-  } catch {
-    // Stream closed
+function writeServerOutput(chunk: Uint8Array, stream: ServerOutputStream): void {
+  if (outputSink) {
+    outputSink(chunk, stream);
+  } else {
+    (stream === "stdout" ? process.stdout : process.stderr).write(chunk);
   }
 }
 
@@ -129,44 +127,27 @@ export function startServer(isDev: boolean): void {
   };
 
   const launchTransport = serverLaunchTransport();
-  let proc: ReturnType<typeof Bun.spawn>;
+  let proc: ManagedServerProcess;
   let control: ServerControl;
 
   try {
-    if (launchTransport === "socket") {
-      const launched = spawnSocketControlledProcess({
-        cmd: args,
-        cwd: PROJECT_ROOT,
-        env: childEnv,
-        onMessage: handleServerMessage,
-        onError(message) {
-          console.error(`[${ts()}] [runner] Backend control channel failed: ${message}`);
-        },
-        onDisconnect() {},
-      });
-      proc = launched.proc;
-      control = launched.control;
-    } else {
-      proc = Bun.spawn({
-        cmd: args,
-        cwd: PROJECT_ROOT,
-        stdout: "pipe",
-        stderr: "pipe",
-        env: childEnv,
-        ipc: handleServerMessage,
-      });
-      control = {
-        send(message: unknown): boolean {
-          try {
-            proc.send(message);
-            return true;
-          } catch {
-            return false;
-          }
-        },
-        close() {},
-      };
-    }
+    const launched = launchServerProcess({
+      transport: launchTransport,
+      cmd: args,
+      cwd: PROJECT_ROOT,
+      env: childEnv,
+      onMessage: handleServerMessage,
+      onControlError(message) {
+        console.error(`[${ts()}] [runner] Backend control channel failed: ${message}`);
+      },
+      onControlDisconnect() {},
+      writeOutput: writeServerOutput,
+    });
+    proc = launched.proc;
+    control = launched.control;
+    // Output forwarding owns its own failure handling and lifetime. Retain no
+    // stream-shaped values in the process manager itself.
+    void launched.outputDone;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     onStateChange?.("crashed");
@@ -182,10 +163,6 @@ export function startServer(isDev: boolean): void {
   };
 
   onStateChange?.("starting");
-
-  // Pipe stdout/stderr to the terminal or the installed output sink
-  if (proc.stdout) readStream(proc.stdout, "stdout");
-  if (proc.stderr) readStream(proc.stderr, "stderr");
 
   // Handle process exit
   proc.exited.then((code) => {

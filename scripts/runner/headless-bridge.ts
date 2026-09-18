@@ -8,10 +8,11 @@
  *   stdin  — one JSON command per line, the same message shapes the
  *            Operator panel sends over child IPC ({type, id, payload}).
  *   stdout — protocol frames: 0x1E (record separator) + JSON + "\n".
- *            Server log output is carried inside {type:"log"} frames
- *            (JSON-escaped), never written raw — so a server log line
- *            can't spoof a frame by starting with 0x1E. Unframed lines
- *            can only originate from the runner's own code.
+ *            Piped server log output is carried inside {type:"log"} frames
+ *            (JSON-escaped), never written raw — so a server log line can't
+ *            spoof a frame by starting with 0x1E. A socket-controlled child
+ *            instead inherits stderr, which the native host captures on its
+ *            separate log-only channel.
  *
  * Commands are routed into the existing handleIPCMessage() dispatcher;
  * responses and progress events for stdin-originated requests come back
@@ -71,7 +72,8 @@ export function attachHeadlessBridge(options: HeadlessBridgeOptions): HeadlessBr
     process.stdout.write(encodeFrame(message));
   };
 
-  // Wrap server output in frames instead of passing raw bytes through.
+  // Wrap server-owned output pipes in frames instead of passing raw bytes
+  // through. Socket-controlled children already route output through stderr.
   // Streaming decoders keep multi-byte UTF-8 intact across chunk splits.
   const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
   setOutputSink((chunk, stream) => {

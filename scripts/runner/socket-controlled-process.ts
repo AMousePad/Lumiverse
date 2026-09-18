@@ -1,12 +1,5 @@
-import {
-  createRunnerControlHost,
-  type RunnerControlHost,
-} from "../../src/services/runner-control-transport.js";
-
-export interface SocketControlledProcess {
-  proc: ReturnType<typeof Bun.spawn>;
-  control: RunnerControlHost;
-}
+import { createRunnerControlHost } from "../../src/services/runner-control-transport.js";
+import type { ServerProcessOutput } from "./server-process-output.js";
 
 /**
  * Launch a backend without asking Bun to manage child IPC or output pipes.
@@ -22,7 +15,7 @@ export function spawnSocketControlledProcess(options: {
   onMessage(message: unknown): void;
   onError(message: string): void;
   onDisconnect(): void;
-}): SocketControlledProcess {
+}) {
   const control = createRunnerControlHost({
     onMessage: options.onMessage,
     onError: options.onError,
@@ -39,9 +32,15 @@ export function spawnSocketControlledProcess(options: {
       stderr: 2,
       windowsHide: true,
     });
-    return { proc, control };
+    // stdout/stderr are already owned and drained by the runner's fd 2. Keep
+    // that fact beside the process instead of asking downstream code to infer
+    // it from Bun's numeric proc.stdout/proc.stderr values.
+    const output = { kind: "inherited" } as const satisfies ServerProcessOutput;
+    return { proc, control, output };
   } catch (error) {
     control.close();
     throw error;
   }
 }
+
+export type SocketControlledProcess = ReturnType<typeof spawnSocketControlledProcess>;
