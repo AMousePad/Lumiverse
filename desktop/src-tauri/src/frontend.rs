@@ -689,11 +689,7 @@ pub fn show_frontend(
         match event {
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                let state = close_app.state::<FrontendState>();
-                persist_bounds(&close_app, &state, &close_window);
-                let _ = close_window.hide();
-                let _ = set_frontend_task_switcher_visible(&close_app, &close_window, false);
-                emit_frontend_presence(&close_app, &close_window);
+                hide_frontend_window(&close_app);
             }
             // Tauri exposes focus directly. Minimize/restore is represented by
             // a resize event on the desktop runtimes, so re-query all native
