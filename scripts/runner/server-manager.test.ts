@@ -130,3 +130,29 @@ test("piped server output keeps draining after its writer closes", async () => {
 
   expect(writes).toBe(1);
 });
+
+test("owned output pipes can be closed when descendants keep them alive", async () => {
+  let cancellations = 0;
+  const hangingStream = (): ReadableStream<Uint8Array> =>
+    new ReadableStream({
+      cancel() {
+        cancellations += 1;
+      },
+    });
+  const abort = new AbortController();
+  const outputDone = forwardServerOutput(
+    { kind: "piped", stdout: hangingStream(), stderr: hangingStream() },
+    () => {},
+    abort.signal,
+  );
+
+  abort.abort();
+  await Promise.race([
+    outputDone,
+    Bun.sleep(1_000).then(() => {
+      throw new Error("Output cancellation timed out");
+    }),
+  ]);
+
+  expect(cancellations).toBe(2);
+});

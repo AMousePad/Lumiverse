@@ -116,12 +116,14 @@ automatically — no path is baked into the binary). An installed copy
 outside a checkout starts unconfigured and prompts for the folder; use
 "Set Lumiverse Folder…" in the menu to change it at any time.
 
-Server output is written to `runner.log` in the platform app-log directory
-(macOS: `~/Library/Logs/chat.lumiverse.tray/`; Windows:
-`%LOCALAPPDATA%\\chat.lumiverse.tray\\logs\\runner.log`; Linux: the XDG
-state/log directory selected by Tauri). In a development build,
-`bun run tauri dev` also mirrors that output to its terminal, including server
-startup failures.
+Each backend start or restart gets a timestamped `server-*.log` in the platform
+app-log directory (macOS: `~/Library/Logs/chat.lumiverse.tray/`; Windows:
+`%LOCALAPPDATA%\\chat.lumiverse.tray\\logs\\`; Linux:
+`${XDG_DATA_HOME:-~/.local/share}/chat.lumiverse.tray/logs/`). Launcher output
+before the first server start is kept in a timestamped `launcher-*.log`. Each
+file is capped at 10 MiB and only the 12 newest launcher/server logs are
+retained. In a development build, `bun run tauri dev` also mirrors output to
+its terminal, including server startup failures.
 
 ## Build
 

@@ -15,6 +15,8 @@ export interface ServerProcessLaunch {
   control: ServerControl;
   /** Resolves once owned output pipes close; inherited output resolves immediately. */
   outputDone: Promise<void>;
+  /** Stop owned pipe readers so orphaned descendants cannot hold a restart open. */
+  closeOutput(): void;
 }
 
 /**
@@ -76,9 +78,13 @@ export function launchServerProcess(options: {
     };
   }
 
+  const outputAbort = new AbortController();
   return {
     proc,
     control,
-    outputDone: forwardServerOutput(output, options.writeOutput),
+    outputDone: forwardServerOutput(output, options.writeOutput, outputAbort.signal),
+    closeOutput(): void {
+      outputAbort.abort();
+    },
   };
 }

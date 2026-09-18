@@ -21,14 +21,23 @@ async function drainStream(
   stream: ReadableStream<Uint8Array>,
   name: ServerOutputStream,
   write: ServerOutputWriter,
+  signal?: AbortSignal,
 ): Promise<void> {
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   let writerAvailable = true;
+  const cancelReader = (): void => {
+    void reader?.cancel().catch(() => {});
+  };
   try {
     reader = stream.getReader();
+    signal?.addEventListener("abort", cancelReader, { once: true });
+    if (signal?.aborted) {
+      await reader.cancel();
+      return;
+    }
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done || signal?.aborted) break;
       if (writerAvailable) {
         try {
           write(value, name);
@@ -43,6 +52,7 @@ async function drainStream(
   } catch {
     // The process or its supervisor closed the stream.
   } finally {
+    signal?.removeEventListener("abort", cancelReader);
     try {
       reader?.releaseLock();
     } catch {
@@ -59,10 +69,11 @@ async function drainStream(
 export async function forwardServerOutput(
   output: ServerProcessOutput,
   write: ServerOutputWriter,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (output.kind === "inherited") return;
   await Promise.all([
-    drainStream(output.stdout, "stdout", write),
-    drainStream(output.stderr, "stderr", write),
+    drainStream(output.stdout, "stdout", write, signal),
+    drainStream(output.stderr, "stderr", write, signal),
   ]);
 }

@@ -10,12 +10,19 @@ import {
 import type { ServerOutputStream } from "./server-process-output.js";
 
 export type ServerState = "starting" | "running" | "stopping" | "stopped" | "crashed";
+export interface ServerLogSession {
+  id: string;
+  startedAt: string;
+}
+export const DESKTOP_LOG_TOKEN_ENV = "LUMIVERSE_DESKTOP_LOG_TOKEN";
+const OUTPUT_DRAIN_GRACE_MS = 1_000;
 
 type IPCCallback = (message: any) => void;
 
 interface ServerInstance {
   proc: ManagedServerProcess | null;
   control: ServerControl | null;
+  finalizeOutput: (() => Promise<void>) | null;
   state: ServerState;
   startedAt: number;
   restartCount: number;
@@ -24,6 +31,7 @@ interface ServerInstance {
 let instance: ServerInstance | null = null;
 let ipcCallback: IPCCallback | null = null;
 let onStateChange: ((state: ServerState) => void) | null = null;
+let onLogSessionStart: ((session: ServerLogSession) => void) | null = null;
 
 function ts(): string {
   return new Date().toLocaleTimeString("en-US", { hour12: false });
@@ -37,6 +45,13 @@ export function setIPCHandler(cb: IPCCallback): void {
 /** Register callback for server state changes. */
 export function setStateChangeHandler(cb: (state: ServerState) => void): void {
   onStateChange = cb;
+}
+
+/** Register a hook that opens a fresh desktop log before each backend spawn. */
+export function setLogSessionStartHandler(
+  cb: ((session: ServerLogSession) => void) | null,
+): void {
+  onLogSessionStart = cb;
 }
 
 function setState(state: ServerState): void {
@@ -81,6 +96,33 @@ function writeServerOutput(chunk: Uint8Array, stream: ServerOutputStream): void 
   }
 }
 
+function createOutputFinalizer(
+  outputDone: Promise<void>,
+  closeOutput: () => void,
+): () => Promise<void> {
+  let finalizing: Promise<void> | null = null;
+  return () => {
+    if (finalizing) return finalizing;
+    finalizing = new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        // A descendant may still own the pipe after the backend exits. Stop
+        // accepting that stale output before the next log session begins.
+        closeOutput();
+        finish();
+      }, OUTPUT_DRAIN_GRACE_MS);
+      outputDone.then(finish, finish);
+    });
+    return finalizing;
+  };
+}
+
 // smol (low-memory GC mode) defaults on to preserve historical behavior and
 // keep low-RAM / Termux installs healthy. Operators opt out with
 // LUMIVERSE_SMOL=false (or 0/off/no) in .env — a choice that survives updates,
@@ -116,8 +158,13 @@ export function startServer(isDev: boolean): void {
 
   const restartCount = instance ? instance.restartCount : 0;
   const frontend = isDev ? "" : frontendDir() ?? "";
+  const inheritedEnv = { ...process.env };
+  // The native host uses this secret to authenticate log-session markers on
+  // channels that may also contain raw backend output. Never pass it on to the
+  // backend child itself.
+  delete inheritedEnv[DESKTOP_LOG_TOKEN_ENV];
   const childEnv = {
-    ...process.env,
+    ...inheritedEnv,
     FORCE_COLOR: "1",
     LUMIVERSE_RUNNER_IPC: "1",
     FRONTEND_DIR: frontend,
@@ -129,6 +176,15 @@ export function startServer(isDev: boolean): void {
   const launchTransport = serverLaunchTransport();
   let proc: ManagedServerProcess;
   let control: ServerControl;
+  let finalizeOutput: () => Promise<void>;
+
+  // Emit this before Bun.spawn. The headless bridge mirrors the marker onto
+  // both output channels, preserving ordering when a launch transport inherits
+  // the runner's stderr instead of using owned output pipes.
+  onLogSessionStart?.({
+    id: crypto.randomUUID(),
+    startedAt: new Date().toISOString(),
+  });
 
   try {
     const launched = launchServerProcess({
@@ -145,9 +201,7 @@ export function startServer(isDev: boolean): void {
     });
     proc = launched.proc;
     control = launched.control;
-    // Output forwarding owns its own failure handling and lifetime. Retain no
-    // stream-shaped values in the process manager itself.
-    void launched.outputDone;
+    finalizeOutput = createOutputFinalizer(launched.outputDone, launched.closeOutput);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     onStateChange?.("crashed");
@@ -157,6 +211,7 @@ export function startServer(isDev: boolean): void {
   instance = {
     proc,
     control,
+    finalizeOutput,
     state: "starting",
     startedAt: Date.now(),
     restartCount,
@@ -165,8 +220,12 @@ export function startServer(isDev: boolean): void {
   onStateChange?.("starting");
 
   // Handle process exit
-  proc.exited.then((code) => {
+  proc.exited.then(async (code) => {
     control.close();
+    // A process can exit while its pipe readers still have buffered bytes.
+    // Finish those reads before declaring the lifecycle complete or allowing
+    // a restart to select its next timestamped log.
+    await finalizeOutput();
     if (!instance || instance.proc !== proc) return;
 
     if (instance.state === "stopping") {
@@ -178,7 +237,7 @@ export function startServer(isDev: boolean): void {
       setState("stopped");
     }
 
-    instance = { ...instance, proc: null, control: null };
+    instance = { ...instance, proc: null, control: null, finalizeOutput: null };
   });
 
   // Fallback: assume running after 3s if "ready" IPC not received
@@ -196,6 +255,7 @@ export async function stopServer(): Promise<void> {
   console.log(`[${ts()}] [runner] Stopping server...`);
 
   const proc = instance.proc;
+  const finalizeOutput = instance.finalizeOutput;
 
   // Graceful: SIGTERM triggers src/index.ts gracefulShutdown() (MCP,
   // extensions, DB close).
@@ -216,6 +276,7 @@ export async function stopServer(): Promise<void> {
   }, STOP_SIGTERM_GRACE_MS);
 
   await proc.exited;
+  await finalizeOutput?.();
   clearTimeout(forceKill);
 }
 

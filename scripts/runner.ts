@@ -17,7 +17,9 @@ import {
   stopServer,
   killServerSync,
   setIPCHandler,
+  setLogSessionStartHandler,
   setStateChangeHandler,
+  type ServerLogSession,
   type ServerState,
 } from "./runner/server-manager.js";
 import { handleIPCMessage, setDevMode, setLastUpdateState, getLastUpdateState } from "./runner/ipc-handler.js";
@@ -147,6 +149,10 @@ function setupKeyboard(): void {
 let shuttingDown = false;
 let openedAtStartup = false;
 let bridge: HeadlessBridge | null = null;
+
+setLogSessionStartHandler((session: ServerLogSession) => {
+  bridge?.startLogSession(session);
+});
 
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;

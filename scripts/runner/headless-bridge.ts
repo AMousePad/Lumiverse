@@ -22,9 +22,15 @@
  */
 
 import { handleIPCMessage } from "./ipc-handler.js";
-import { setOutputSink, type ServerState } from "./server-manager.js";
+import {
+  DESKTOP_LOG_TOKEN_ENV,
+  setOutputSink,
+  type ServerLogSession,
+  type ServerState,
+} from "./server-manager.js";
 
 export const FRAME_PREFIX = "\x1e";
+export const LOG_SESSION_FRAME_TYPE = "lumiverse-log-session-v1";
 
 /** Encode a protocol message as a stdout frame. */
 export function encodeFrame(message: unknown): string {
@@ -55,6 +61,8 @@ export function drainCommandBuffer(buffer: string): { commands: unknown[]; rest:
 }
 
 export interface HeadlessBridge {
+  /** Select a fresh timestamped native log before a backend is spawned. */
+  startLogSession(session: ServerLogSession): void;
   /** Push a server state change to the supervisor. */
   notifyState(state: ServerState): void;
 }
@@ -106,6 +114,21 @@ export function attachHeadlessBridge(options: HeadlessBridgeOptions): HeadlessBr
   process.stdin.resume();
 
   return {
+    startLogSession(session: ServerLogSession): void {
+      const frame = encodeFrame({
+        type: LOG_SESSION_FRAME_TYPE,
+        id: session.id,
+        payload: {
+          ...session,
+          token: process.env[DESKTOP_LOG_TOKEN_ENV] ?? "",
+        },
+      });
+      // Backend logs use stdout frames when piped, while inherited output uses
+      // stderr. Mark both channels before spawn so each reader observes the
+      // new session before any backend bytes on that channel.
+      process.stdout.write(frame);
+      process.stderr.write(frame);
+    },
     notifyState(state: ServerState): void {
       writeFrame({ type: "state", id: "state", payload: { state } });
     },
