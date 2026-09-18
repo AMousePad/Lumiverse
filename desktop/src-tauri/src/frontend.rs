@@ -1136,6 +1136,13 @@ pub fn toggle_widget_poc_click_through(
 /// The document provides the color/tint itself, while the native effect
 /// supplies the platform blur. This is shared by the launch snapshot and the
 /// live frontend command, so their first and steady-state frames agree.
+#[cfg(any(target_os = "windows", test))]
+fn supports_windows_system_backdrop(build: u32) -> bool {
+    // This is the same cutoff used by window-vibrancy 0.6 before it selects
+    // DWMWA_SYSTEMBACKDROP_TYPE instead of SetWindowCompositionAttribute.
+    build >= 22_523
+}
+
 fn apply_frontend_native_appearance(
     window: &WebviewWindow,
     blur: bool,
@@ -1184,15 +1191,24 @@ fn apply_frontend_native_appearance(
     {
         use tauri::window::{Effect, EffectsBuilder};
 
-        // DWM blur has no material/intensity selection.
+        // Windows system backdrops do not expose a blur-radius selection.
         let _ = (dark, blur_intensity);
         if blur {
-            // Mica is a wallpaper-tint material, not a blur effect, and the
-            // content beneath it remains visually crisp. The desktop theme's
-            // "Blur" switch promises an actual frosted surface, so use DWM
-            // blur here. The document still supplies the theme tint above it.
+            let windows_build = windows_version::OsVersion::current().build;
+            let effect = if supports_windows_system_backdrop(windows_build) {
+                // On current Windows 11, Acrylic maps to the supported
+                // DWMSBT_TRANSIENTWINDOW backdrop. The previous Blur effect
+                // uses the legacy ACCENT_ENABLE_BLURBEHIND path, which flickers
+                // badly while a window is dragged or resized on build 22621+.
+                Effect::Acrylic
+            } else {
+                // Older Windows releases do not have the system-backdrop API.
+                // Keep the existing frosted blur there; Acrylic would also use
+                // a legacy accent policy and performs worse on Windows 10.
+                Effect::Blur
+            };
             window
-                .set_effects(EffectsBuilder::new().effect(Effect::Blur).build())
+                .set_effects(EffectsBuilder::new().effect(effect).build())
                 .map_err(|error| error.to_string())?;
         } else {
             window
@@ -1249,6 +1265,18 @@ pub fn cache_frontend_startup_appearance(
         return Err("Invalid frontend startup appearance".into());
     }
     save_frontend_startup_appearance(&app, &appearance)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supports_windows_system_backdrop;
+
+    #[test]
+    fn selects_system_backdrops_at_window_vibrancy_cutoff() {
+        assert!(!supports_windows_system_backdrop(22_522));
+        assert!(supports_windows_system_backdrop(22_523));
+        assert!(supports_windows_system_backdrop(26_200));
+    }
 }
 
 /// Show the small native settings window used to configure a cloud frontend.

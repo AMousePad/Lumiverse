@@ -49,9 +49,11 @@ with an alpha color and optionally request the native material behind it:
 }
 ```
 
-`blur` uses macOS vibrancy and Windows DWM blur. On other platforms, or when
-native material is unavailable, the theme keeps its regular translucent CSS
-surface. Browser and PWA rendering ignore this desktop-only setting.
+`blur` uses macOS vibrancy and the supported Desktop Acrylic system backdrop on
+current Windows 11 builds. Older Windows releases retain the legacy DWM blur
+fallback. On other platforms, or when native material is unavailable, the theme
+keeps its regular translucent CSS surface. Browser and PWA rendering ignore this
+desktop-only setting.
 
 ## Prerequisites
 
