@@ -34,9 +34,10 @@
   /* Keep the native resize target unclaimed. The drag-region handler starts
      a window move on mouse-down, so covering even the top edge would steal
      its 1px resize hit area. */
-  /* The equal side insets reserve the caption controls on the right and an
-     invisible matching gutter on the left, keeping the title truly centered. */
-  inset: 4px 100px;
+  /* Let the drag surface fill the rest of the custom titlebar. The controls
+     are a higher-z-index sibling, so they remain clickable without creating
+     broad dead gutters around the centered title. */
+  inset: 1px 1px 0;
   display: flex;
   align-items: center;
   justify-content: center;

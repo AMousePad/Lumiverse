@@ -262,9 +262,9 @@ if (isIOS) {
   document.documentElement.setAttribute('data-ios', '')
 }
 
-// Mark the native dashboard WebView for desktop-specific behavior. Its macOS
-// title bar is native; the HTML title-bar component is only used by browser
-// PWAs running in window-controls-overlay mode.
+// Mark the native dashboard WebView for desktop-specific behavior. The Tauri
+// window is frameless on every desktop platform, so the HTML titlebar owns its
+// drag surface and window controls outside browser PWA display-mode queries.
 if ('__TAURI_INTERNALS__' in window) {
   document.documentElement.setAttribute('data-tauri-desktop', '')
   if (new URLSearchParams(window.location.search).has('desktopWidgetExtension')) {

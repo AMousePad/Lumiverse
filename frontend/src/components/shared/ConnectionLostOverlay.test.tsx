@@ -58,6 +58,16 @@ mock.module('motion/react', () => ({
 
 const { default: ConnectionLostOverlay } = await import('./ConnectionLostOverlay')
 
+function DesktopWindowHarness() {
+  return (
+    <>
+      <div data-component="DesktopPwaTitlebar">titlebar</div>
+      <div data-app-root="">application</div>
+      <ConnectionLostOverlay />
+    </>
+  )
+}
+
 let dom: JSDOM
 let root: Root
 let host: HTMLDivElement
@@ -107,13 +117,17 @@ afterEach(() => {
 })
 
 describe('ConnectionLostOverlay', () => {
-  test('stays latched through refocus recovery and blocks every other body surface', async () => {
-    await act(async () => { root.render(<ConnectionLostOverlay />) })
+  test('stays latched through refocus recovery while leaving desktop chrome interactive', async () => {
+    await act(async () => { root.render(<DesktopWindowHarness />) })
     await advance(5_000)
 
     const overlay = document.querySelector<HTMLElement>('[role="alertdialog"]')
+    const titlebar = document.querySelector<HTMLElement>('[data-component="DesktopPwaTitlebar"]')
+    const appRoot = document.querySelector<HTMLElement>('[data-app-root]')
     expect(overlay).not.toBeNull()
-    expect(host.hasAttribute('inert')).toBe(true)
+    expect(host.hasAttribute('inert')).toBe(false)
+    expect(titlebar?.hasAttribute('inert')).toBe(false)
+    expect(appRoot?.hasAttribute('inert')).toBe(true)
 
     const latePortal = document.createElement('div')
     document.body.append(latePortal)
@@ -133,12 +147,13 @@ describe('ConnectionLostOverlay', () => {
     await setConnectionState({ wsRoundTripVerified: true, wsResumeRecovering: false })
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
     expect(host.hasAttribute('inert')).toBe(false)
+    expect(appRoot?.hasAttribute('inert')).toBe(false)
     expect(latePortal.hasAttribute('inert')).toBe(false)
   })
 
   test('uses resume recovery only to delay the initial hard-stop', async () => {
     storeState.wsResumeRecovering = true
-    await act(async () => { root.render(<ConnectionLostOverlay />) })
+    await act(async () => { root.render(<DesktopWindowHarness />) })
     await advance(10_000)
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
 
@@ -147,5 +162,14 @@ describe('ConnectionLostOverlay', () => {
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
     await advance(1)
     expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
+  })
+
+  test('keeps desktop chrome interactive during an immediate update hard-stop', async () => {
+    storeState.wsUpdatePending = true
+    await act(async () => { root.render(<DesktopWindowHarness />) })
+
+    expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
+    expect(document.querySelector('[data-component="DesktopPwaTitlebar"]')?.hasAttribute('inert')).toBe(false)
+    expect(document.querySelector('[data-app-root]')?.hasAttribute('inert')).toBe(true)
   })
 })

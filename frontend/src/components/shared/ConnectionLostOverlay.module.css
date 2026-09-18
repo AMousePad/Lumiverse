@@ -20,6 +20,18 @@
   outline: none;
 }
 
+/* A desktop transport failure hard-stops application content, not the native-
+   style chrome. Keep the frameless window movable and its close/minimize
+   controls available while reconnecting or installing an update. */
+:global(html[data-tauri-desktop]) .backdrop {
+  top: var(--app-desktop-titlebar-height, 36px);
+  bottom: auto;
+  height: max(
+    0px,
+    calc(var(--app-scaled-viewport-height, 100vh) - var(--app-desktop-titlebar-height, 36px))
+  );
+}
+
 :global([data-glass]) .backdrop {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
   -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));

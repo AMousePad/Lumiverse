@@ -3,6 +3,8 @@ import { resolve } from 'node:path'
 
 const resetCss = await Bun.file(new URL('../../theme/reset.css', import.meta.url)).text()
 const titlebarCss = await Bun.file(new URL('./DesktopPwaTitlebar.module.css', import.meta.url)).text()
+const titlebarComponent = await Bun.file(new URL('./DesktopPwaTitlebar.tsx', import.meta.url)).text()
+const connectionOverlayCss = await Bun.file(new URL('./ConnectionLostOverlay.module.css', import.meta.url)).text()
 const drawerCss = await Bun.file(new URL('../panels/ViewportDrawer.module.css', import.meta.url)).text()
 const customCssDock = await Bun.file(new URL('../modals/CustomCSSDock.module.css', import.meta.url)).text()
 const spindleDock = await Bun.file(new URL('../spindle/SpindleDockPanel.module.css', import.meta.url)).text()
@@ -37,6 +39,25 @@ describe('desktop window chrome contract', () => {
       '--app-interactive-safe-top: max(\n      env(safe-area-inset-top, 0px),\n      var(--app-window-controls-overlay-top)',
     )
     expect(titlebarCss).toMatch(/height:\s*var\(--app-window-controls-overlay-top,\s*32px\)/)
+  })
+
+  test('gives live and startup chrome one drag owner with an almost full-width hit target', () => {
+    expect(titlebarComponent).toContain('getCurrentWindow().startDragging()')
+    expect(titlebarComponent).toContain('event.detail !== 1')
+    expect(titlebarComponent).not.toContain('data-tauri-drag-region')
+    expect(titlebarCss).toMatch(/inset:\s*1px 1px 0/)
+
+    expect(desktopFrontend).toContain('data-tauri-drag-region="deep"')
+    expect(desktopFrontend).toMatch(/\.lumiverse-startup-drag\{\{[^}]*pointer-events:auto/)
+  })
+
+  test('keeps desktop chrome outside the connection hard-stop', () => {
+    expect(connectionOverlayCss).toMatch(
+      /html\[data-tauri-desktop\][\s\S]*\.backdrop[\s\S]*top:\s*var\(--app-desktop-titlebar-height/,
+    )
+    expect(connectionOverlayCss).toMatch(
+      /height:\s*max\([\s\S]*--app-scaled-viewport-height[\s\S]*--app-desktop-titlebar-height/,
+    )
   })
 
   test('keeps host panels on the shared safe boundary without platform duplicates', () => {

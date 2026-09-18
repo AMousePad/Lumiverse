@@ -63,8 +63,11 @@ export default function ConnectionLostOverlay() {
     if (!overlay) return
 
     // The backdrop catches pointer input, while `inert` also blocks keyboard,
-    // focus, and any higher-z-index portal that was already mounted. Preserve
-    // pre-existing inert state so stacked modal cleanup remains correct.
+    // focus, and any higher-z-index portal that was already mounted. Keep the
+    // desktop titlebar's root interactive so a disconnected/updating window
+    // can still be moved or closed, and inert the app surface inside it
+    // instead. Preserve pre-existing inert state so stacked modal cleanup
+    // remains correct.
     const blockedSiblings = new Map<Element, string | null>()
     const blockSibling = (element: Element) => {
       if (element === overlay || blockedSiblings.has(element)) return
@@ -72,7 +75,14 @@ export default function ConnectionLostOverlay() {
       element.setAttribute('inert', '')
     }
     const blockBodySiblings = () => {
-      for (const element of document.body.children) blockSibling(element)
+      const titlebar = document.querySelector('[data-component="DesktopPwaTitlebar"]')
+      const appRoot = document.querySelector('[data-app-root]')
+      if (appRoot) blockSibling(appRoot)
+
+      for (const element of document.body.children) {
+        if (titlebar && element.contains(titlebar)) continue
+        blockSibling(element)
+      }
     }
 
     blockBodySiblings()
