@@ -278,5 +278,5 @@ export async function inspectDesktopToolchain(): Promise<DesktopToolchainReport>
 
 /** The command that builds the desktop app on the current platform. */
 export function desktopBuildCommand(): string {
-  return "cd desktop && bun install && bun run tauri build";
+  return "cd desktop && bun install && bun run tauri:finalized build";
 }

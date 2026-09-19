@@ -11,7 +11,9 @@ on:
       - "desktop/src-tauri/Cargo.toml"
       - "desktop/src-tauri/Cargo.lock"
       - "desktop/src-tauri/tauri.conf.json"
+      - "scripts/finalize-appimage.sh"
       - "scripts/smoke-test-appimage.sh"
+      - "scripts/tauri-finalized.ts"
       - "scripts/runner.ts"
       - "scripts/runner/**"
       - "src/main.ts"
@@ -123,7 +125,8 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         with:
           projectPath: desktop
-          tauriScript: bun run tauri
+          # Finalize Linux AppImages before tauri-action uploads the artifacts.
+          tauriScript: bun run tauri:finalized
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --ci -- --locked
           uploadUpdaterJson: false
           uploadUpdaterSignatures: false

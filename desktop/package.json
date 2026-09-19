@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:finalized": "bun ../scripts/tauri-finalized.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

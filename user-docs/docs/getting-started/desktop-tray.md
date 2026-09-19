@@ -130,7 +130,7 @@ From the root of your Lumiverse checkout, run:
 ```bash
 cd desktop
 bun install
-bun run tauri build
+bun run tauri:finalized build
 ```
 
 The finished app and installer files are placed under

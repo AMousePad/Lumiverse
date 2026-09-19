@@ -7,6 +7,7 @@ if [[ ! -d "$bundle_dir" ]]; then
   echo "AppImage bundle directory does not exist: $bundle_dir" >&2
   exit 1
 fi
+bundle_dir="$(cd "$bundle_dir" && pwd)"
 
 appimages=()
 while IFS= read -r -d '' candidate; do
@@ -28,6 +29,22 @@ chmod +x "$appimage"
 
 log_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 log_file="$log_root/lumiverse-appimage-smoke.log"
+inspection_dir="$(mktemp -d "$log_root/lumiverse-appimage-inspect.XXXXXX")"
+trap 'rm -rf "$inspection_dir"' EXIT
+
+(
+  cd "$inspection_dir"
+  "$appimage" --appimage-extract >/dev/null
+)
+bundled_wayland=()
+while IFS= read -r -d '' candidate; do
+  bundled_wayland+=("$candidate")
+done < <(find "$inspection_dir/squashfs-root" \( -type f -o -type l \) -name 'libwayland-client.so*' -print0)
+if [[ ${#bundled_wayland[@]} -gt 0 ]]; then
+  printf 'AppImage bundles libwayland-client and can conflict with the host Mesa/EGL stack:\n' >&2
+  printf '  %s\n' "${bundled_wayland[@]}" >&2
+  exit 1
+fi
 
 set +e
 timeout 15s dbus-run-session -- xvfb-run -a \

@@ -416,7 +416,7 @@ async function refreshDesktopShellState(): Promise<void> {
         "until it is rebuilt.\n\n" +
         "Rebuild it now? You can keep using Lumiverse while it compiles. " +
         "Or later, from the tray menu: Rebuild Desktop App…\n\n" +
-        `Manual equivalent: cd ${repoDir}/desktop && bun run tauri build`,
+        `Manual equivalent: cd ${repoDir}/desktop && bun run tauri:finalized build`,
       okLabel: "Rebuild now",
       cancelLabel: "Later",
     });

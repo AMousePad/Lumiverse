@@ -231,8 +231,13 @@ To build bundles without installing them:
 ```bash
 cd desktop
 bun install
-bun run tauri build
+bun run tauri:finalized build
 ```
+
+On Linux this removes the build runner's `libwayland-client` from the finished
+AppImage before it is published, so Mesa and EGL use the version supplied by
+the host display stack. The finalized image is extracted and checked before the
+build succeeds. Other bundle formats and platforms pass through unchanged.
 
 Bundles land in `desktop/src-tauri/target/release/bundle/` (`.app`/`.dmg`
 on macOS, `.msi`/`.exe` installers on Windows, and Linux packages such as

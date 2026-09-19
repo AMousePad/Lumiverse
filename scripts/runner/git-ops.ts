@@ -911,7 +911,7 @@ export const DESKTOP_BUILD_STEPS = [
     // The scripted workflow installs the native app artifact directly. Avoid
     // also building optional distributable media (notably macOS DMGs), whose
     // Finder/mount tooling can fail after the usable .app already succeeded.
-    command: ["bun", "run", "tauri", "build", ...desktopInstallBundleArgs()],
+    command: ["bun", "run", "tauri:finalized", "build", ...desktopInstallBundleArgs()],
   },
 ] as const satisfies ReadonlyArray<{ label: string; progress: string; command: readonly string[] | null }>;
 
