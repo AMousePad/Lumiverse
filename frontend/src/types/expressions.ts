@@ -1,5 +1,7 @@
 export interface ExpressionConfig {
   enabled: boolean
+  /** Local message-avatar preference; legacy characters default to false. */
+  useAsAvatar?: boolean
   defaultExpression: string
   mappings: Record<string, string> // label → image_id
 }

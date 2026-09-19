@@ -8,6 +8,7 @@ import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/types/ws-events'
 import { expressionsApi } from '@/api/expressions'
+import { resolveExpression } from '@/lib/expressionResolution'
 import { EXPRESSION_SIZE_PRESETS } from '@/types/expressions'
 import type { ExpressionConfig, ExpressionDisplaySize, ExpressionGroups } from '@/types/expressions'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
@@ -115,17 +116,9 @@ export default function ExpressionDisplay() {
     if (lastResolvedKey.current === configKey) return
     lastResolvedKey.current = configKey
 
-    const mappings = exprConfig.mappings
-    const defaultExpr = exprConfig.defaultExpression
-
-    if (defaultExpr && mappings?.[defaultExpr]) {
-      setActiveExpression(defaultExpr, mappings[defaultExpr], resolvedCharId)
-    } else {
-      // No default set — use the first available expression
-      const firstLabel = Object.keys(mappings)[0]
-      if (firstLabel && mappings[firstLabel]) {
-        setActiveExpression(firstLabel, mappings[firstLabel], resolvedCharId)
-      }
+    const fallback = resolveExpression(exprConfig)
+    if (fallback) {
+      setActiveExpression(fallback.label, fallback.imageId, resolvedCharId)
     }
   }, [activeChatId, hasExpressions, exprConfig, resolvedCharId, setActiveExpression])
 
@@ -206,18 +199,8 @@ export default function ExpressionDisplay() {
     : activeMultiCharacterGroups
 
   const getGroupCharImageUrl = useCallback((charId: string): string | null => {
-    const expr = groupExpressions[charId]
-    if (expr?.imageId) return expressionsApi.imageUrl(expr.imageId)
-    // Fall back to default expression from config
-    const config = groupConfigs.get(charId)
-    if (!config) return null
-    const defaultLabel = config.defaultExpression
-    if (defaultLabel && config.mappings[defaultLabel]) {
-      return expressionsApi.imageUrl(config.mappings[defaultLabel])
-    }
-    const firstLabel = Object.keys(config.mappings)[0]
-    if (firstLabel) return expressionsApi.imageUrl(config.mappings[firstLabel])
-    return null
+    const expression = resolveExpression(groupConfigs.get(charId), groupExpressions[charId])
+    return expression ? expressionsApi.imageUrl(expression.imageId) : null
   }, [groupExpressions, groupConfigs])
 
   const getGroupCharLabel = useCallback((charId: string): string | null => {
