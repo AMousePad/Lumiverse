@@ -152,6 +152,7 @@ export async function applyCharxModulesAndAssets(
       if (Object.keys(exprMappings).length > 0) {
         extensions.expressions = {
           enabled: lumiverseModules.expressions.enabled,
+          useAsAvatar: exprSvc.getExpressionConfig(userId, character.id)?.useAsAvatar ?? false,
           defaultExpression: lumiverseModules.expressions.defaultExpression,
           mappings: exprMappings,
         };

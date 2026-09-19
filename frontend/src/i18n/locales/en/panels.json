@@ -1387,6 +1387,8 @@
       "titleMulti": "Expression Sprites — Multi-Character",
       "titleMultiHelper": "This card contains expressions for {{count}} characters ({{total}} total). The active character is detected automatically from conversation context.",
       "enableDisplay": "Enable expression display",
+      "useAsAvatar": "Use expressions as chat avatars",
+      "useAsAvatarHint": "Replace this character's message avatar with the active expression sprite.",
       "detectionHeader": "Expression Detection",
       "detectionHintMulti": "After each message, the system identifies which character is speaking and selects their expression.",
       "detectionHintSingle": "How should the character's expression be chosen after each message?",
