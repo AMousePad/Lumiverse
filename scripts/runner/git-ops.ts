@@ -170,6 +170,38 @@ export function bunInstallCmd(
   return ["bun", "install"];
 }
 
+export function bunRuntimeCmd(
+  args: string[],
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  if (env.LUMIVERSE_IS_TERMUX === "true") {
+    const bunPath = env.LUMIVERSE_BUN_PATH || "bun";
+    const method = env.LUMIVERSE_BUN_METHOD;
+    if (method === "direct") return [bunPath, ...args];
+    if (method === "grun") return ["grun", bunPath, ...args];
+
+    const prefix = env.PREFIX || "/data/data/com.termux/files/usr";
+    return [
+      "proot", "--link2symlink", "-0",
+      `${prefix}/glibc/lib/ld-linux-aarch64.so.1`,
+      "--library-path", `${prefix}/glibc/lib`,
+      bunPath, ...args,
+    ];
+  }
+  return ["bun", ...args];
+}
+
+const BACKEND_DEPENDENCY_PROBE = [
+  "await import('better-auth');",
+  "await import('@better-auth/oauth-provider');",
+].join(" ");
+
+export function backendDependencyProbeCmd(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  return bunRuntimeCmd(["-e", BACKEND_DEPENDENCY_PROBE], env);
+}
+
 export function bunInstallTimeoutMs(
   env: Record<string, string | undefined> = process.env,
 ): number {
@@ -813,6 +845,65 @@ async function installDependenciesForDir(
   }
 }
 
+class BackendDependencyValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BackendDependencyValidationError";
+  }
+}
+
+async function verifyBackendDependencies(dir: string): Promise<void> {
+  try {
+    await runCommandOrThrow(backendDependencyProbeCmd(), {
+      cwd: dir,
+      timeoutMs: 60_000,
+      label: "backend dependency validation",
+    });
+  } catch (error) {
+    throw new BackendDependencyValidationError(errorMessage(error));
+  }
+}
+
+async function clearBunInstallCacheForRepair(dir: string): Promise<void> {
+  try {
+    await runCommandOrThrow(bunRuntimeCmd(["pm", "cache", "rm"]), {
+      cwd: dir,
+      timeoutMs: 60_000,
+      label: "Bun package cache clear",
+    });
+  } catch (error) {
+    log(`Could not clear Bun's package cache before dependency repair: ${errorMessage(error)}`);
+  }
+}
+
+async function repairBackendDependencies(installCmd: string[]): Promise<void> {
+  const nodeModules = join(PROJECT_ROOT, "node_modules");
+  const backupDir = join(
+    PROJECT_ROOT,
+    `${INSTALL_BACKUP_PREFIX}dependency-repair-${Date.now()}-${process.pid}`,
+  );
+
+  log("Backend dependency validation failed; clearing the package cache and reinstalling from a clean tree...");
+  try { rmSync(backupDir, { recursive: true, force: true }); } catch {}
+  if (existsSync(nodeModules)) renameSync(nodeModules, backupDir);
+
+  try {
+    await clearBunInstallCacheForRepair(PROJECT_ROOT);
+    await installDependenciesForDir(
+      PROJECT_ROOT,
+      "backend",
+      installCmd,
+      async () => verifyBackendDependencies(PROJECT_ROOT),
+    );
+    try { rmSync(backupDir, { recursive: true, force: true }); } catch {}
+    log("Backend dependency tree repaired.");
+  } catch (error) {
+    try { rmSync(nodeModules, { recursive: true, force: true }); } catch {}
+    if (existsSync(backupDir)) renameSync(backupDir, nodeModules);
+    throw error;
+  }
+}
+
 export async function ensureDependencies(frontendDir: string): Promise<void> {
   await ensureBackendDependencies();
   await ensureFrontendDependencies(frontendDir);
@@ -820,7 +911,18 @@ export async function ensureDependencies(frontendDir: string): Promise<void> {
 
 export async function ensureBackendDependencies(): Promise<void> {
   clearBunInstallCacheIfTermux();
-  await installDependenciesForDir(PROJECT_ROOT, "backend", bunInstallCmd());
+  const installCmd = bunInstallCmd();
+  try {
+    await installDependenciesForDir(
+      PROJECT_ROOT,
+      "backend",
+      installCmd,
+      async () => verifyBackendDependencies(PROJECT_ROOT),
+    );
+  } catch (error) {
+    if (!(error instanceof BackendDependencyValidationError)) throw error;
+    await repairBackendDependencies(installCmd);
+  }
 }
 
 export async function ensureFrontendDependencies(frontendDir: string): Promise<void> {

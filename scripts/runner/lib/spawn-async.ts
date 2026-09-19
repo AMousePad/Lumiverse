@@ -99,7 +99,10 @@ export async function spawnAsync(
   cmd: string[],
   opts: SpawnAsyncOptions = {}
 ): Promise<SpawnAsyncResult> {
-  const hasTimeout = typeof opts.timeoutMs === "number" && opts.timeoutMs > 0;
+  const timeoutMs = typeof opts.timeoutMs === "number" && opts.timeoutMs > 0
+    ? opts.timeoutMs
+    : null;
+  const startedAt = performance.now();
 
   const proc = Bun.spawn({
     cmd,
@@ -108,8 +111,16 @@ export async function spawnAsync(
     stdin: "ignore",
     stdout: opts.ignoreStdout ? "ignore" : "pipe",
     stderr: "pipe",
-    ...(hasTimeout ? { timeout: opts.timeoutMs } : {}),
+    ...(timeoutMs !== null ? { timeout: timeoutMs } : {}),
   });
+
+  // Bun's `killed` property means that the process has exited, not that its
+  // native timeout killed it. Treating that flag as timeout evidence turns
+  // every ordinary non-zero exit into a reported timeout. Bun's timeout does
+  // terminate by signal, so pair that signal with the monotonic elapsed time.
+  const didTimeOut = () => timeoutMs !== null
+    && proc.signalCode !== null
+    && performance.now() - startedAt >= timeoutMs;
 
   let stdout: StreamDrain | undefined;
   let stderr: StreamDrain | undefined;
@@ -130,7 +141,7 @@ export async function spawnAsync(
     );
     const exitCode = await proc.exited;
 
-    if (hasTimeout && proc.killed) {
+    if (didTimeOut()) {
       await Promise.all([stdout.cancel(), stderr.cancel()]);
       void Promise.allSettled([stdout.text, stderr.text]);
       return {
@@ -144,7 +155,7 @@ export async function spawnAsync(
     const [stdoutText, stderrText] = await Promise.all([stdout.text, stderr.text]);
     return { exitCode: exitCode ?? -1, stdout: stdoutText, stderr: stderrText, timedOut: false };
   } catch (err: any) {
-    const timedOut = hasTimeout && proc.killed;
+    const timedOut = didTimeOut();
     const stderrMessage =
       timedOut
         ? stderr?.snapshot() ?? ""

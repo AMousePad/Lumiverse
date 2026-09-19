@@ -4,8 +4,10 @@ import { join } from "path";
 import { tmpdir } from "os";
 import {
   FRONTEND_BUILD_STEPS,
+  backendDependencyProbeCmd,
   bunInstallCmd,
   bunInstallTimeoutMs,
+  bunRuntimeCmd,
   dependencyInstallStampIsStale,
   hardSyncRefusalMessage,
   inspectDependencyTree,
@@ -40,6 +42,18 @@ function installPackage(dir: string, packageName: string): void {
   const packageDir = join(dir, "node_modules", ...packageName.split("/"));
   mkdirSync(packageDir, { recursive: true });
   writeFileSync(join(packageDir, "package.json"), JSON.stringify({ name: packageName, version: "1.0.0" }));
+}
+
+function installEsmPackage(dir: string, packageName: string, source: string): void {
+  const packageDir = join(dir, "node_modules", ...packageName.split("/"));
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, "package.json"), JSON.stringify({
+    name: packageName,
+    version: "1.0.0",
+    type: "module",
+    exports: "./index.js",
+  }));
+  writeFileSync(join(packageDir, "index.js"), source);
 }
 
 afterEach(() => {
@@ -110,6 +124,52 @@ test("wraps native Termux installs in proot using the detected Bun launcher", ()
     "grun",
     "/data/data/com.termux/files/home/.bun/bin/bun",
   ]);
+});
+
+test("validates Better Auth with the same Termux runtime wrapper", () => {
+  const env = {
+    LUMIVERSE_IS_TERMUX: "true",
+    LUMIVERSE_BUN_METHOD: "grun",
+    LUMIVERSE_BUN_PATH: "/data/data/com.termux/files/home/.bun/bin/bun",
+  };
+
+  expect(bunRuntimeCmd(["--version"], env)).toEqual([
+    "grun",
+    env.LUMIVERSE_BUN_PATH,
+    "--version",
+  ]);
+
+  const probe = backendDependencyProbeCmd(env);
+  expect(probe.slice(0, 2)).toEqual(["grun", env.LUMIVERSE_BUN_PATH]);
+  expect(probe.at(-1)).toContain("await import('better-auth')");
+  expect(probe.at(-1)).toContain("await import('@better-auth/oauth-provider')");
+});
+
+test("Better Auth validation detects a missing exported core subpath", () => {
+  const dir = makeTempDir();
+  const coreDir = join(dir, "node_modules", "@better-auth", "core");
+  mkdirSync(coreDir, { recursive: true });
+  writeFileSync(join(coreDir, "package.json"), JSON.stringify({
+    name: "@better-auth/core",
+    version: "1.0.0",
+    type: "module",
+    exports: { "./context": "./context.js" },
+  }));
+  const contextPath = join(coreDir, "context.js");
+  writeFileSync(contextPath, "export const context = {};\n");
+  installEsmPackage(dir, "better-auth", "import '@better-auth/core/context';\n");
+  installEsmPackage(dir, "@better-auth/oauth-provider", "import '@better-auth/core/context';\n");
+
+  const runProbe = () => Bun.spawnSync({
+    cmd: backendDependencyProbeCmd({}),
+    cwd: dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  expect(runProbe().exitCode).toBe(0);
+  rmSync(contextPath);
+  expect(runProbe().exitCode).not.toBe(0);
 });
 
 test("uses a longer install timeout only on Termux-like runtimes", () => {

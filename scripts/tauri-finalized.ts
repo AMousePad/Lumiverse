@@ -25,11 +25,32 @@ export function appImageBundleDirectory(args: string[]): string {
   return join(targetRoot, "release", "bundle", "appimage");
 }
 
-async function run(command: string[], cwd: string): Promise<void> {
+export function tauriBuildEnvironment(
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  if (platform !== "linux" || args[0] !== "build" || !requestedAppImage(args)) {
+    return env;
+  }
+
+  return {
+    ...env,
+    // Tauri's linuxdeploy and output plugin are AppImages themselves. Run
+    // them without FUSE so source builds work on hosts without libfuse.so.2.
+    APPIMAGE_EXTRACT_AND_RUN: "1",
+    // linuxdeploy ships an old binutils strip that cannot read modern RELR
+    // sections used by Arch/CachyOS libraries. Distribution libraries are
+    // already stripped; skipping this optional pass is safe and portable.
+    NO_STRIP: "1",
+  };
+}
+
+async function run(command: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const child = Bun.spawn({
     cmd: command,
     cwd,
-    env: process.env,
+    env,
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
@@ -42,7 +63,11 @@ async function run(command: string[], cwd: string): Promise<void> {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  await run([process.execPath, "run", "tauri", ...args], DESKTOP_DIR);
+  await run(
+    [process.execPath, "run", "tauri", ...args],
+    DESKTOP_DIR,
+    tauriBuildEnvironment(args),
+  );
 
   if (process.platform !== "linux" || args[0] !== "build" || !requestedAppImage(args)) {
     return;

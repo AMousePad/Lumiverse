@@ -426,7 +426,8 @@ function Test-BackendDependencyLoad {
         # PowerShell 5 promotes redirected native stderr to error records. Keep
         # collecting it for the diagnostic, but judge success by the exit code.
         $ErrorActionPreference = "Continue"
-        $output = (& bun -e "await import('./src/services/databank/web-page-parser.ts'); await import('./src/utils/remote-image-page.ts')" 2>&1 | Out-String).Trim()
+        $probeScript = "await import('better-auth'); await import('@better-auth/oauth-provider'); await import('./src/services/databank/web-page-parser.ts'); await import('./src/utils/remote-image-page.ts')"
+        $output = (& bun -e $probeScript 2>&1 | Out-String).Trim()
         $exitCode = $LASTEXITCODE
     } finally {
         Pop-Location
@@ -448,7 +449,8 @@ function Install-Deps {
     if ($Name -eq "backend") {
         $probe = Test-BackendDependencyLoad $Dir
         if (-not $probe.Success) {
-            Write-Warn "Backend dependency validation failed; performing a clean copy-based reinstall..."
+            Write-Warn "Backend dependency validation failed; clearing the package cache and performing a clean copy-based reinstall..."
+            try { & bun pm cache rm 2>&1 | Out-Null } catch { }
             $nodeModules = Join-Path $Dir "node_modules"
             if (Test-Path $nodeModules) {
                 Remove-Item $nodeModules -Recurse -Force

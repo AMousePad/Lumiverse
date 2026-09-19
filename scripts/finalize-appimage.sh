@@ -62,7 +62,9 @@ if [[ ${#bundled_wayland[@]} -gt 0 ]]; then
     echo "Tauri's AppImage output plugin was not found at $output_plugin" >&2
     exit 1
   fi
-  chmod +x "$output_plugin"
+  if [[ ! -x "$output_plugin" ]]; then
+    chmod +x "$output_plugin"
+  fi
 
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lumiverse-appimage-finalize.XXXXXX")"
   trap 'rm -rf "$work_dir"' EXIT

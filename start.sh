@@ -771,6 +771,37 @@ repair_termux_frontend_native_deps() {
   ok "Termux frontend native bindings repaired"
 }
 
+run_bun_dependency_install() {
+  local dir="$1"
+
+  if [[ "$IS_TERMUX" == true ]]; then
+    # Android doesn't support hardlinks — use file copy backend instead.
+    # Clear Bun's install cache first — filesystem emulation can corrupt
+    # cached packages, causing random "Cannot find package" errors.
+    if [[ -d "$HOME/.bun/install/cache" ]]; then
+      rm -rf "$HOME/.bun/install/cache"
+    fi
+    # Always wrap bun install in proot on Termux — Android's seccomp filter
+    # blocks certain syscalls that bun install needs, causing "Bad system call"
+    # (SIGSYS) errors. _proot_bun handles both linker and syscall issues.
+    # --ignore-scripts avoids proot getcwd() failures in dependency lifecycle
+    # scripts; affected packages have pure-JS fallbacks.
+    (cd "$dir" && _proot_bun install --backend=copyfile --ignore-scripts)
+  elif [[ "$IS_PROOT" == true ]]; then
+    if [[ -d "$HOME/.bun/install/cache" ]]; then
+      rm -rf "$HOME/.bun/install/cache"
+    fi
+    (cd "$dir" && bun install --backend=copyfile --ignore-scripts)
+  else
+    (cd "$dir" && bun install)
+  fi
+}
+
+verify_backend_dependencies() {
+  local dir="$1"
+  (cd "$dir" && _bun -e "await import('better-auth'); await import('@better-auth/oauth-provider')")
+}
+
 install_deps() {
   local dir="$1"
   local name="$2"
@@ -788,36 +819,29 @@ install_deps() {
   info "Installing $name dependencies..."
 
   local install_status=0
-  if [[ "$IS_TERMUX" == true ]]; then
-    # Android doesn't support hardlinks — use file copy backend instead.
-    # Clear Bun's install cache first — filesystem emulation can corrupt
-    # cached packages, causing random "Cannot find package" errors.
-    if [[ -d "$HOME/.bun/install/cache" ]]; then
-      rm -rf "$HOME/.bun/install/cache"
-    fi
-    # Always wrap bun install in proot on Termux — Android's seccomp filter
-    # blocks certain syscalls that bun install needs, causing "Bad system call"
-    # (SIGSYS) errors. _proot_bun handles both linker and syscall issues.
-    # The Android arm64 native bindings (@rolldown/binding-android-arm64,
-    # lightningcss-android-arm64) are declared as optionalDependencies in
-    # frontend/package.json and resolve automatically here.
-    # --ignore-scripts: proot's path translation makes getcwd() fail when bun
-    # forks lifecycle scripts (ssh2, cpu-features), producing spurious
-    # CouldntReadCurrentDirectory errors. Both packages fall back to pure-JS.
-    (cd "$dir" && _proot_bun install --backend=copyfile --ignore-scripts) || install_status=$?
-  elif [[ "$IS_PROOT" == true ]]; then
-    # Inside proot-distro: proot already intercepts syscalls, just need copyfile backend
-    if [[ -d "$HOME/.bun/install/cache" ]]; then
-      rm -rf "$HOME/.bun/install/cache"
-    fi
-    (cd "$dir" && bun install --backend=copyfile --ignore-scripts) || install_status=$?
-  else
-    (cd "$dir" && bun install) || install_status=$?
-  fi
+  run_bun_dependency_install "$dir" || install_status=$?
 
   if [[ $install_status -ne 0 ]]; then
     err "$name install failed (exit $install_status) — node_modules will be cleaned on next launch"
     return $install_status
+  fi
+
+  if [[ "$name" == "backend" ]] && ! verify_backend_dependencies "$dir"; then
+    warn "Backend dependency validation failed; clearing the package cache and reinstalling from a clean tree..."
+    _bun pm cache rm >/dev/null 2>&1 || true
+    rm -rf "$dir/node_modules"
+
+    install_status=0
+    run_bun_dependency_install "$dir" || install_status=$?
+    if [[ $install_status -ne 0 ]]; then
+      err "$name clean reinstall failed (exit $install_status)"
+      return $install_status
+    fi
+    if ! verify_backend_dependencies "$dir"; then
+      err "Backend dependencies are still unreadable after a clean reinstall"
+      return 1
+    fi
+    ok "Backend dependency tree repaired"
   fi
 
   if [[ "$name" == "frontend" ]]; then
