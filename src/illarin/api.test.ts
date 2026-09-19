@@ -186,7 +186,7 @@ describe("illarin api client", () => {
       label: "Character Card V3",
       queuedAt: "2026-08-23T18:30:00Z",
       leaseExpiresAt: "2026-08-23T18:45:00Z",
-      artifacts: [{ kind: "export", url: "https://cdn.illarin.xyz/delivery/1" }],
+      artifacts: [{ kind: "export", url: "https://cdn.illarin.com/delivery/1" }],
     };
     const notice = { assetId: "asset-2", name: "Quiet Toolbox", withheldAt: "2026-09-14T06:00:00Z" };
     const illarin = mock(() => Response.json({ deliveries: [delivery], withheld: [notice] }));
@@ -333,10 +333,10 @@ describe("illarin api client", () => {
     expect(illarin.requests[0].url.includes("/api/v1/link/authorizations")).toBe(true);
 
     await expect(
-      createBrowserAuthorization("ftp://illarin.xyz", { ...DECLARATION, redirectUri: "", state: "", codeChallenge: "", codeChallengeMethod: "S256" }),
+      createBrowserAuthorization("ftp://illarin.com", { ...DECLARATION, redirectUri: "", state: "", codeChallenge: "", codeChallengeMethod: "S256" }),
     ).rejects.toThrow(/use https/);
     await expect(
-      createBrowserAuthorization("http://illarin.xyz", { ...DECLARATION, redirectUri: "", state: "", codeChallenge: "", codeChallengeMethod: "S256" }),
+      createBrowserAuthorization("http://illarin.com", { ...DECLARATION, redirectUri: "", state: "", codeChallenge: "", codeChallengeMethod: "S256" }),
     ).rejects.toThrow(/use https/);
   });
 

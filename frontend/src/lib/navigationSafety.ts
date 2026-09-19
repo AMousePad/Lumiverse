@@ -49,6 +49,11 @@ export function getSafeInAppNavigationUrl(rawUrl: unknown, fallback: string = '/
 }
 
 export function getSafeHttpsUrl(rawUrl: unknown): string | null {
+  const url = getSafeHttpOrHttpsUrl(rawUrl)
+  return url?.startsWith('https:') ? url : null
+}
+
+export function getSafeHttpOrHttpsUrl(rawUrl: unknown): string | null {
   if (typeof rawUrl !== 'string') return null
 
   const trimmed = rawUrl.trim()
@@ -56,7 +61,7 @@ export function getSafeHttpsUrl(rawUrl: unknown): string | null {
 
   try {
     const parsed = new URL(trimmed)
-    return parsed.protocol === 'https:' ? parsed.toString() : null
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : null
   } catch {
     return null
   }

@@ -46,6 +46,8 @@ import {
 import styles from './App.module.css'
 import { acknowledgePendingConnectionsDeepLink } from '@/lib/uiProductivityDefaults'
 import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-extension-availability'
+import { createDesktopDownloadFeedback, type DesktopDownloadEvent } from '@/lib/desktop-download-feedback'
+import { toast } from '@/lib/toast'
 
 const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
 
@@ -69,6 +71,32 @@ export default function App() {
   usePresetRegexActivation()
 
   useEffect(() => installNotificationAudioPrimer(), [])
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
+    const feedback = createDesktopDownloadFeedback(
+      {
+        title: t('toast.desktopDownloadTitle'),
+        started: (fileName) => t('toast.desktopDownloadStarted', { fileName }),
+        complete: (fileName) => t('toast.desktopDownloadComplete', { fileName }),
+        failed: (fileName) => t('toast.desktopDownloadFailed', { fileName }),
+      },
+      toast,
+    )
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    void listen<DesktopDownloadEvent>('desktop-download', ({ payload }) => feedback.handle(payload))
+      .then((stop) => {
+        if (disposed) stop()
+        else unlisten = stop
+      })
+      .catch((error) => console.warn('[desktop-download] Native feedback listener unavailable:', error))
+    return () => {
+      disposed = true
+      unlisten?.()
+      feedback.dispose()
+    }
+  }, [t])
 
   const isMobile = useIsMobile()
   const customCSSDockUnavailable = useIsMobile(CUSTOM_CSS_DOCK_BREAKPOINT)

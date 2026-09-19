@@ -100,7 +100,7 @@ describe('character source attribution', () => {
     'https://lumi.spot.evil.example/@archkr',
     'https://example.com/characters/card',
     'https://lumi.spot@evil.example/@archkr',
-    'https://someone:secret@illarin.xyz/a/card-id/card-name',
+    'https://someone:secret@illarin.com/a/card-id/card-name',
     'ftp://lumi.spot/@archkr',
     'javascript:alert(1)//card',
     'https://[invalid]/card',

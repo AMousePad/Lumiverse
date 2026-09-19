@@ -56,6 +56,10 @@
     "px": "{{count}}px"
   },
   "toast": {
+    "desktopDownloadTitle": "正在保存下载",
+    "desktopDownloadStarted": "正在保存 {{fileName}}…",
+    "desktopDownloadComplete": "已保存 {{fileName}}",
+    "desktopDownloadFailed": "无法保存 {{fileName}}",
     "operatorUpdateTitle": "有可用更新",
     "operatorUpdatesAvailable": "{{count}} 个更新可用{{suffix}}",
     "operatorUpdatesAvailable_plural": "{{count}} 个更新可用{{suffix}}",

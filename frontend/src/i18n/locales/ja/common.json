@@ -56,6 +56,10 @@
     "px": "{{count}}px"
   },
   "toast": {
+    "desktopDownloadTitle": "ダウンロードを保存中",
+    "desktopDownloadStarted": "{{fileName}} を保存しています…",
+    "desktopDownloadComplete": "{{fileName}} を保存しました",
+    "desktopDownloadFailed": "{{fileName}} を保存できませんでした",
     "operatorUpdateTitle": "更新可能",
     "operatorUpdatesAvailable": "{{count}} 更新可能{{suffix}}",
     "operatorUpdatesAvailable_plural": "{{count}} 更新可能{{suffix}}",

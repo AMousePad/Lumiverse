@@ -1,15 +1,17 @@
 //! Frontend window — a native WebView loading the local Lumiverse server.
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex,
     },
+    time::{Duration, Instant},
 };
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, State, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent,
+    ipc::Response, webview::DownloadEvent, AppHandle, Emitter, LogicalSize, Manager, State,
+    Webview, WebviewEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 
 /// Emit a native marker after the hidden webview has created its tray icon.
@@ -111,6 +113,140 @@ const FRONTEND_TITLEBAR_HEIGHT: u32 = 36;
 const RESTORE_MARGIN: i32 = 24;
 const FRONTEND_STARTUP_APPEARANCE_FILE: &str = "frontend_startup_appearance.json";
 static NEXT_FRONTEND_POPUP_ID: AtomicU64 = AtomicU64::new(1);
+const FRONTEND_DROP_AUTHORIZATION_TTL: Duration = Duration::from_secs(120);
+
+#[derive(Default)]
+pub struct FrontendDropState {
+    /// Native drag events are the authority for filesystem access. The remote
+    /// frontend may read only supported files the user just dragged into its
+    /// own WebView, and each authorization is consumed on first read.
+    paths: Mutex<HashMap<PathBuf, Instant>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDownloadEvent {
+    phase: &'static str,
+    id: String,
+    file_name: String,
+    success: Option<bool>,
+}
+
+fn supported_frontend_drop_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "json" | "png" | "charx" | "jpg" | "jpeg"
+            )
+        })
+}
+
+fn canonical_supported_drop_path(path: &std::path::Path) -> Option<PathBuf> {
+    if !supported_frontend_drop_path(path) {
+        return None;
+    }
+    let canonical = path.canonicalize().ok()?;
+    canonical.is_file().then_some(canonical)
+}
+
+/// Mirror Tauri's native drag lifecycle into a short-lived, one-use file-read
+/// grant. Tauri's drag event reaches this hook before its matching JavaScript
+/// event is delivered to the WebView.
+pub fn track_frontend_drop_event(webview: &Webview, event: &WebviewEvent) {
+    if webview.label() != FRONTEND_LABEL {
+        return;
+    }
+    let WebviewEvent::DragDrop(event) = event else {
+        return;
+    };
+    let state = webview.state::<FrontendDropState>();
+    let mut paths = state.paths.lock().unwrap();
+    let now = Instant::now();
+    paths
+        .retain(|_, granted_at| now.duration_since(*granted_at) <= FRONTEND_DROP_AUTHORIZATION_TTL);
+
+    match event {
+        tauri::DragDropEvent::Enter { paths: entered, .. }
+        | tauri::DragDropEvent::Drop { paths: entered, .. } => {
+            paths.clear();
+            paths.extend(
+                entered
+                    .iter()
+                    .filter_map(|path| canonical_supported_drop_path(path))
+                    .map(|path| (path, now)),
+            );
+        }
+        tauri::DragDropEvent::Leave => paths.clear(),
+        tauri::DragDropEvent::Over { .. } => {}
+        _ => {}
+    }
+}
+
+/// Read one file from the most recent native drop as a binary IPC response.
+/// The path must have been granted by `track_frontend_drop_event`, is limited
+/// to character-card formats, and is removed before any filesystem read.
+#[tauri::command]
+pub async fn read_frontend_drop_file(
+    window: WebviewWindow,
+    state: State<'_, FrontendDropState>,
+    path: PathBuf,
+) -> Result<Response, String> {
+    if window.label() != FRONTEND_LABEL {
+        return Err("Only the Lumiverse frontend can read dropped files".into());
+    }
+    let canonical = canonical_supported_drop_path(&path)
+        .ok_or_else(|| "Dropped file is missing or unsupported".to_string())?;
+    {
+        let mut authorized = state.paths.lock().unwrap();
+        let now = Instant::now();
+        authorized.retain(|_, granted_at| {
+            now.duration_since(*granted_at) <= FRONTEND_DROP_AUTHORIZATION_TTL
+        });
+        if authorized.remove(&canonical).is_none() {
+            return Err("Dropped file is no longer authorized".into());
+        }
+    }
+
+    let bytes = tauri::async_runtime::spawn_blocking(move || std::fs::read(canonical))
+        .await
+        .map_err(|error| format!("Could not schedule dropped-file read: {error}"))?
+        .map_err(|error| format!("Could not read dropped file: {error}"))?;
+    Ok(Response::new(bytes))
+}
+
+fn download_file_name(url: &tauri::Url, path: Option<&std::path::Path>) -> String {
+    path.and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .or_else(|| {
+            url.path_segments()
+                .and_then(|mut segments| segments.next_back())
+        })
+        .filter(|name| !name.is_empty())
+        .unwrap_or("download")
+        .to_string()
+}
+
+fn report_frontend_download(webview: Webview, event: DownloadEvent<'_>) -> bool {
+    let payload = match event {
+        DownloadEvent::Requested { url, destination } => DesktopDownloadEvent {
+            phase: "started",
+            id: url.to_string(),
+            file_name: download_file_name(&url, Some(destination)),
+            success: None,
+        },
+        DownloadEvent::Finished { url, path, success } => DesktopDownloadEvent {
+            phase: "finished",
+            id: url.to_string(),
+            file_name: download_file_name(&url, path.as_deref()),
+            success: Some(success),
+        },
+        _ => return true,
+    };
+    let _ = webview.emit("desktop-download", payload);
+    true
+}
 
 fn is_frontend_popup_label(label: &str) -> bool {
     label.strip_prefix("frontend-popup-").is_some_and(|suffix| {
@@ -608,6 +744,9 @@ pub fn show_frontend(
         // Install a lightweight titlebar/surface before the remote frontend's
         // bundle executes. It removes itself as soon as the app root mounts.
         .initialization_script(frontend_startup_shell_script(&startup_appearance))
+        // Embedded WebViews do not provide a browser download shelf. Publish
+        // the native lifecycle so the frontend can show immediate feedback.
+        .on_download(report_frontend_download)
         // Wry denies window.open by default. SSO relies on a user-initiated
         // about:blank popup so the provider does not replace the companion's
         // main frontend. Reuse the opener's WebView configuration/environment;
@@ -1273,7 +1412,12 @@ pub fn cache_frontend_startup_appearance(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_frontend_popup_label, supports_windows_system_backdrop};
+    use std::path::Path;
+
+    use super::{
+        download_file_name, is_frontend_popup_label, supported_frontend_drop_path,
+        supports_windows_system_backdrop,
+    };
 
     #[test]
     fn selects_system_backdrops_at_window_vibrancy_cutoff() {
@@ -1290,6 +1434,34 @@ mod tests {
         assert!(!is_frontend_popup_label("frontend-popup-"));
         assert!(!is_frontend_popup_label("frontend-popup-settings"));
         assert!(!is_frontend_popup_label("frontend-popup-1-other"));
+    }
+
+    #[test]
+    fn native_drop_scope_matches_the_character_import_formats() {
+        for path in [
+            "card.json",
+            "card.PNG",
+            "card.charx",
+            "card.jpg",
+            "card.JPEG",
+        ] {
+            assert!(supported_frontend_drop_path(Path::new(path)), "{path}");
+        }
+        for path in ["card.zip", "card.txt", "card"] {
+            assert!(!supported_frontend_drop_path(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
+    fn download_name_prefers_the_native_destination() {
+        let url = "http://localhost:3000/characters/123/export"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            download_file_name(&url, Some(Path::new("/tmp/Alice.charx"))),
+            "Alice.charx"
+        );
+        assert_eq!(download_file_name(&url, None), "export");
     }
 }
 

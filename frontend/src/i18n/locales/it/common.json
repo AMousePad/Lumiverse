@@ -57,6 +57,10 @@
     "px": "{{count}}px"
   },
   "toast": {
+    "desktopDownloadTitle": "Salvataggio download",
+    "desktopDownloadStarted": "Salvataggio di {{fileName}}…",
+    "desktopDownloadComplete": "{{fileName}} salvato",
+    "desktopDownloadFailed": "Impossibile salvare {{fileName}}",
     "operatorUpdateTitle": "Aggiornamento disponibile",
     "operatorUpdatesAvailable": "{{count}} aggiornamento disponibile{{suffix}}",
     "operatorUpdatesAvailable_plural": "{{count}} aggiornamenti disponibili{{suffix}}",

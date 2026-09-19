@@ -17,7 +17,7 @@ Illarin is an asset platform that links to your Lumiverse instance and delivers 
 How the link completes depends on where you're browsing from:
 
 - **Same machine** (you opened Lumiverse on `localhost`): Lumiverse opens the Illarin approval screen in a new browser tab. Approve it there, and linking finishes on its own.
-- **Another device** (phone, tablet, or another computer on your network): Lumiverse shows a **device code** instead. Open the verification URL shown in the panel, sign in, and type the code.
+- **Another device** (phone, tablet, or another computer on your network): Lumiverse opens Illarin's verification page and shows a **device code**. Sign in and type the code. If the page is blocked, use the verification link shown beside the code.
 
 !!! warning "Only trust codes you requested"
     Never enter a linking code you did not start yourself. The approval page must show the exact same code as your settings panel. If it doesn't, decline.

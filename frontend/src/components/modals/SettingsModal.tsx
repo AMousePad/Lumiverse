@@ -75,7 +75,11 @@ import pickerStyles from '@/components/shared/SidecarConnectionPicker.module.css
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { getVisibleSettingsTabs, sectionAnchorId, SETTINGS_TABS } from '@/lib/settings-tab-registry'
 import { activateExtensionSettingsTab } from '@/lib/spindle/settings-tab-bridge'
-import { getSafeHttpsUrl } from '@/lib/navigationSafety'
+import {
+  closeAuthorizationPopup,
+  navigateAuthorizationPopup,
+  reserveAuthorizationPopup,
+} from '@/lib/authorizationPopup'
 import type { SettingsTabState } from '@/store/slices/spindle-placement'
 import SettingsSearch from './SettingsSearch'
 import styles from './SettingsModal.module.css'
@@ -3978,6 +3982,7 @@ function LumiHubSettings() {
       setError(t('lumihub.errUrl'))
       return
     }
+    const authorizationTab = reserveAuthorizationPopup({ name: 'lumiverse_lumihub_link' })
     setError(null)
     setLinking(true)
     try {
@@ -3989,11 +3994,20 @@ function LumiHubSettings() {
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
+        closeAuthorizationPopup(authorizationTab)
         setError((body as any).error || t('lumihub.errLinkFailed'))
+        setLinking(false)
         return
       }
       const data = await res.json() as { authorize_url: string }
-      window.open(data.authorize_url, '_blank')
+      const navigation = navigateAuthorizationPopup(authorizationTab, data.authorize_url, { allowHttp: true })
+      if (navigation.status === 'invalid') {
+        closeAuthorizationPopup(authorizationTab)
+        setError(t('lumihub.errLinkFailed'))
+        setLinking(false)
+        return
+      }
+      if (navigation.status === 'blocked') window.location.assign(navigation.url)
       // Poll for status change
       const poll = setInterval(async () => {
         const checkRes = await fetch('/api/v1/lumihub/status', { credentials: 'include' })
@@ -4009,6 +4023,7 @@ function LumiHubSettings() {
       // Stop polling after 5 minutes
       setTimeout(() => { clearInterval(poll); setLinking(false) }, 5 * 60 * 1000)
     } catch (err: any) {
+      closeAuthorizationPopup(authorizationTab)
       setError(err.message || t('lumihub.errConnectFailed'))
       setLinking(false)
     }
@@ -4229,34 +4244,53 @@ function IllarinSettings() {
     fetchStatus()
   }
 
-  const startDeviceFlow = async () => {
-    const res = await fetch('/api/v1/illarin/link/device', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ illarin_url: illarinUrl.trim(), instance_name: instanceName.trim() || defaultInstanceName }),
-    })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      setError((body as any).error || t('illarin.errLinkFailed'))
+  const startDeviceFlow = async (authorizationTab: Window | null) => {
+    try {
+      const res = await fetch('/api/v1/illarin/link/device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ illarin_url: illarinUrl.trim(), instance_name: instanceName.trim() || defaultInstanceName }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        closeAuthorizationPopup(authorizationTab)
+        setError((body as any).error || t('illarin.errLinkFailed'))
+        setLinking(false)
+        return false
+      }
+      const data = await res.json() as { user_code: string; verification_url: string; expires_at: string }
+      const navigation = navigateAuthorizationPopup(authorizationTab, data.verification_url)
+      if (navigation.status === 'invalid') {
+        closeAuthorizationPopup(authorizationTab)
+        setError(t('illarin.errLinkFailed'))
+        setLinking(false)
+        return false
+      }
+      setDeviceCode({ user_code: data.user_code, verification_url: navigation.url })
+      // Poll respecting the server-enforced interval; give up at expiry.
+      pollRef.current.timer = setInterval(async () => {
+        try {
+          const check = await fetch('/api/v1/illarin/link/device/status', { credentials: 'include' })
+          if (!check.ok) return
+          const checkData = await check.json() as { status: string }
+          if (checkData.status === 'linked') finishLinking()
+          else if (checkData.status !== 'pending') {
+            setError(t('illarin.errLinkFailed'))
+            finishLinking()
+          }
+        } catch {
+          // A transient status failure should not cancel the device session.
+        }
+      }, 3000)
+      pollRef.current.timeout = setTimeout(finishLinking, 10 * 60 * 1000)
+      return true
+    } catch (err: any) {
+      closeAuthorizationPopup(authorizationTab)
+      setError(err.message || t('illarin.errConnectFailed'))
       setLinking(false)
       return false
     }
-    const data = await res.json() as { user_code: string; verification_url: string; expires_at: string }
-    setDeviceCode({ user_code: data.user_code, verification_url: data.verification_url })
-    // Poll respecting the server-enforced interval; give up at expiry.
-    pollRef.current.timer = setInterval(async () => {
-      const check = await fetch('/api/v1/illarin/link/device/status', { credentials: 'include' })
-      if (!check.ok) return
-      const checkData = await check.json() as { status: string }
-      if (checkData.status === 'linked') finishLinking()
-      else if (checkData.status !== 'pending') {
-        setError(t('illarin.errLinkFailed'))
-        finishLinking()
-      }
-    }, 3000)
-    pollRef.current.timeout = setTimeout(finishLinking, 10 * 60 * 1000)
-    return true
   }
 
   const handleLink = async () => {
@@ -4266,15 +4300,13 @@ function IllarinSettings() {
     }
 
     // Reserve the tab while this click still has browser user activation.
-    // Calling window.open only after the API request is blocked by mobile
-    // browsers, even though the request originated from this button click.
-    const authorizationTab = isLocalOrigin ? window.open('', '_blank') : null
-    if (authorizationTab) authorizationTab.opener = null
+    // The same window carries either local PKCE or remote device verification.
+    const authorizationTab = reserveAuthorizationPopup({ name: 'lumiverse_illarin_link' })
 
     setError(null)
     setLinking(true)
     if (!isLocalOrigin) {
-      await startDeviceFlow()
+      await startDeviceFlow(authorizationTab)
       return
     }
     try {
@@ -4286,24 +4318,23 @@ function IllarinSettings() {
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        authorizationTab?.close()
+        closeAuthorizationPopup(authorizationTab)
         setError((body as any).error || t('illarin.errLinkFailed'))
         setLinking(false)
         return
       }
       const data = await res.json() as { authorize_url?: string }
-      const authorizeUrl = getSafeHttpsUrl(data.authorize_url)
-      if (!authorizeUrl) {
-        authorizationTab?.close()
+      const navigation = navigateAuthorizationPopup(authorizationTab, data.authorize_url)
+      if (navigation.status === 'invalid') {
+        closeAuthorizationPopup(authorizationTab)
         setError(t('illarin.errLinkFailed'))
         setLinking(false)
         return
       }
 
-      // Prefer the tab reserved synchronously above. If popups are disabled,
-      // same-tab navigation still lets the user complete the loopback flow.
-      if (authorizationTab) authorizationTab.location.replace(authorizeUrl)
-      else window.location.assign(authorizeUrl)
+      // Same-tab navigation still completes local loopback authorization when
+      // a browser blocks the reserved popup.
+      if (navigation.status === 'blocked') window.location.assign(navigation.url)
 
       // Backend listens on loopback while the authorization page is open.
       pollRef.current.timer = setInterval(async () => {
@@ -4320,10 +4351,21 @@ function IllarinSettings() {
       }, 2000)
       pollRef.current.timeout = setTimeout(finishLinking, 5 * 60 * 1000)
     } catch (err: any) {
-      authorizationTab?.close()
+      closeAuthorizationPopup(authorizationTab)
       setError(err.message || t('illarin.errConnectFailed'))
       setLinking(false)
     }
+  }
+
+  const handleDeviceLink = () => {
+    if (!illarinUrl.trim()) {
+      setError(t('illarin.errUrl'))
+      return
+    }
+    const authorizationTab = reserveAuthorizationPopup({ name: 'lumiverse_illarin_device_link' })
+    setError(null)
+    setLinking(true)
+    void startDeviceFlow(authorizationTab)
   }
 
   const handleUnlink = async () => {
@@ -4418,6 +4460,15 @@ function IllarinSettings() {
               <span className={styles.lumihubDisclosureText}>
                 {t('illarin.deviceStep1', { url: deviceCode.verification_url })}
                 <br />
+                <a
+                  className={styles.illarinVerificationLink}
+                  href={deviceCode.verification_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {t('illarin.openVerification')}
+                </a>
+                <br />
                 {t('illarin.deviceStep2')}
               </span>
               <span className={styles.lumihubInput} style={{ fontSize: '1.4em', textAlign: 'center', letterSpacing: '0.2em' }}>
@@ -4439,8 +4490,8 @@ function IllarinSettings() {
             {linking ? t('illarin.linking') : t('illarin.link')}
           </Button>
 
-          {!isLocalOrigin && !deviceCode && (
-            <Button variant="ghost" size="sm" onClick={() => { setLinking(true); void startDeviceFlow() }}>
+          {isLocalOrigin && !deviceCode && (
+            <Button variant="ghost" size="sm" onClick={handleDeviceLink} disabled={linking}>
               {t('illarin.deviceFallback')}
             </Button>
           )}

@@ -58,6 +58,10 @@
     "px": "{{count}}px"
   },
   "toast": {
+    "desktopDownloadTitle": "Saving download",
+    "desktopDownloadStarted": "Saving {{fileName}}…",
+    "desktopDownloadComplete": "Saved {{fileName}}",
+    "desktopDownloadFailed": "Couldn't save {{fileName}}",
     "operatorUpdateTitle": "Update Available",
     "operatorUpdatesAvailable": "{{count}} update available{{suffix}}",
     "operatorUpdatesAvailable_plural": "{{count}} updates available{{suffix}}",

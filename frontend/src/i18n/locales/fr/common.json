@@ -56,6 +56,10 @@
     "px": "{{count}}px"
   },
   "toast": {
+    "desktopDownloadTitle": "Enregistrement du téléchargement",
+    "desktopDownloadStarted": "Enregistrement de {{fileName}}…",
+    "desktopDownloadComplete": "{{fileName}} enregistré",
+    "desktopDownloadFailed": "Impossible d’enregistrer {{fileName}}",
     "operatorUpdateTitle": "Mise à jour disponible",
     "operatorUpdatesAvailable": "{{count}} mise à jour disponible{{suffix}}",
     "operatorUpdatesAvailable_plural": "{{count}} mises à jour disponibles{{suffix}}",

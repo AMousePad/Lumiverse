@@ -1083,6 +1083,17 @@
   color: var(--lumiverse-text-muted);
 }
 
+.illarinVerificationLink {
+  color: var(--lumiverse-primary);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.illarinVerificationLink:hover {
+  color: var(--lumiverse-primary-hover, var(--lumiverse-primary));
+}
+
 .lumihubInput {
   padding: 8px 10px;
   border-radius: 8px;
