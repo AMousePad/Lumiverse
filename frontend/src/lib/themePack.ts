@@ -440,6 +440,8 @@ export function importThemePack(): Promise<ThemePackImportResult | null> {
         resolve(decodeThemePackArchive(bytes))
       } catch {
         resolve(importError('unsupported-legacy-file', 'Selected file is not a supported Lumiverse theme bundle.'))
+      } finally {
+        input.value = ''
       }
     }
     // If user cancels the file picker
