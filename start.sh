@@ -802,6 +802,24 @@ verify_backend_dependencies() {
   (cd "$dir" && _bun -e "await import('better-auth'); await import('@better-auth/oauth-provider')")
 }
 
+verify_frontend_dependencies() {
+  local dir="$1"
+  # Exercise the browser-facing import that reaches Better Auth's transitive
+  # core files. Direct-package checks do not catch a partially extracted core.
+  (cd "$dir" && _bun -e "await import('@better-auth/oauth-provider/client')")
+}
+
+verify_dependencies() {
+  local dir="$1"
+  local name="$2"
+
+  if [[ "$name" == "backend" ]]; then
+    verify_backend_dependencies "$dir"
+  elif [[ "$name" == "frontend" ]]; then
+    verify_frontend_dependencies "$dir"
+  fi
+}
+
 install_deps() {
   local dir="$1"
   local name="$2"
@@ -826,8 +844,8 @@ install_deps() {
     return $install_status
   fi
 
-  if [[ "$name" == "backend" ]] && ! verify_backend_dependencies "$dir"; then
-    warn "Backend dependency validation failed; clearing the package cache and reinstalling from a clean tree..."
+  if [[ "$name" == "backend" || "$name" == "frontend" ]] && ! verify_dependencies "$dir" "$name"; then
+    warn "$name dependency validation failed; clearing the package cache and reinstalling from a clean tree..."
     _bun pm cache rm >/dev/null 2>&1 || true
     rm -rf "$dir/node_modules"
 
@@ -837,11 +855,11 @@ install_deps() {
       err "$name clean reinstall failed (exit $install_status)"
       return $install_status
     fi
-    if ! verify_backend_dependencies "$dir"; then
-      err "Backend dependencies are still unreadable after a clean reinstall"
+    if ! verify_dependencies "$dir" "$name"; then
+      err "$name dependencies are still unreadable after a clean reinstall"
       return 1
     fi
-    ok "Backend dependency tree repaired"
+    ok "$name dependency tree repaired"
   fi
 
   if [[ "$name" == "frontend" ]]; then

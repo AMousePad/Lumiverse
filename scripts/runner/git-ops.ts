@@ -202,6 +202,14 @@ export function backendDependencyProbeCmd(
   return bunRuntimeCmd(["-e", BACKEND_DEPENDENCY_PROBE], env);
 }
 
+const FRONTEND_DEPENDENCY_PROBE = "await import('@better-auth/oauth-provider/client');";
+
+export function frontendDependencyProbeCmd(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  return bunRuntimeCmd(["-e", FRONTEND_DEPENDENCY_PROBE], env);
+}
+
 export function bunInstallTimeoutMs(
   env: Record<string, string | undefined> = process.env,
 ): number {
@@ -845,10 +853,15 @@ async function installDependenciesForDir(
   }
 }
 
-class BackendDependencyValidationError extends Error {
-  constructor(message: string) {
+type DependencyTreeLabel = "backend" | "frontend";
+
+class DependencyValidationError extends Error {
+  constructor(
+    readonly dependencyTree: DependencyTreeLabel,
+    message: string,
+  ) {
     super(message);
-    this.name = "BackendDependencyValidationError";
+    this.name = "DependencyValidationError";
   }
 }
 
@@ -860,7 +873,19 @@ async function verifyBackendDependencies(dir: string): Promise<void> {
       label: "backend dependency validation",
     });
   } catch (error) {
-    throw new BackendDependencyValidationError(errorMessage(error));
+    throw new DependencyValidationError("backend", errorMessage(error));
+  }
+}
+
+async function verifyFrontendDependencies(dir: string): Promise<void> {
+  try {
+    await runCommandOrThrow(frontendDependencyProbeCmd(), {
+      cwd: dir,
+      timeoutMs: 60_000,
+      label: "frontend dependency validation",
+    });
+  } catch (error) {
+    throw new DependencyValidationError("frontend", errorMessage(error));
   }
 }
 
@@ -876,31 +901,55 @@ async function clearBunInstallCacheForRepair(dir: string): Promise<void> {
   }
 }
 
-async function repairBackendDependencies(installCmd: string[]): Promise<void> {
-  const nodeModules = join(PROJECT_ROOT, "node_modules");
+async function repairDependencies(
+  dir: string,
+  label: DependencyTreeLabel,
+  installCmd: string[],
+  postInstall: () => Promise<void>,
+): Promise<void> {
+  const nodeModules = join(dir, "node_modules");
   const backupDir = join(
-    PROJECT_ROOT,
+    dir,
     `${INSTALL_BACKUP_PREFIX}dependency-repair-${Date.now()}-${process.pid}`,
   );
 
-  log("Backend dependency validation failed; clearing the package cache and reinstalling from a clean tree...");
+  log(`${label[0]?.toUpperCase() ?? ""}${label.slice(1)} dependency validation failed; clearing the package cache and reinstalling from a clean tree...`);
   try { rmSync(backupDir, { recursive: true, force: true }); } catch {}
   if (existsSync(nodeModules)) renameSync(nodeModules, backupDir);
 
   try {
-    await clearBunInstallCacheForRepair(PROJECT_ROOT);
+    await clearBunInstallCacheForRepair(dir);
     await installDependenciesForDir(
-      PROJECT_ROOT,
-      "backend",
+      dir,
+      label,
       installCmd,
-      async () => verifyBackendDependencies(PROJECT_ROOT),
+      postInstall,
     );
     try { rmSync(backupDir, { recursive: true, force: true }); } catch {}
-    log("Backend dependency tree repaired.");
+    log(`${label[0]?.toUpperCase() ?? ""}${label.slice(1)} dependency tree repaired.`);
   } catch (error) {
     try { rmSync(nodeModules, { recursive: true, force: true }); } catch {}
     if (existsSync(backupDir)) renameSync(backupDir, nodeModules);
     throw error;
+  }
+}
+
+async function finishFrontendDependencyInstall(frontendDir: string): Promise<void> {
+  await repairTermuxFrontendNativeDeps(frontendDir);
+  await verifyFrontendDependencies(frontendDir);
+}
+
+async function ensureFrontendDependencyTreeHealthy(frontendDir: string): Promise<void> {
+  try {
+    await verifyFrontendDependencies(frontendDir);
+  } catch (error) {
+    if (!(error instanceof DependencyValidationError) || error.dependencyTree !== "frontend") throw error;
+    await repairDependencies(
+      frontendDir,
+      "frontend",
+      bunInstallCmd(),
+      async () => finishFrontendDependencyInstall(frontendDir),
+    );
   }
 }
 
@@ -912,24 +961,30 @@ export async function ensureDependencies(frontendDir: string): Promise<void> {
 export async function ensureBackendDependencies(): Promise<void> {
   clearBunInstallCacheIfTermux();
   const installCmd = bunInstallCmd();
+  const postInstall = async (): Promise<void> => verifyBackendDependencies(PROJECT_ROOT);
   try {
     await installDependenciesForDir(
       PROJECT_ROOT,
       "backend",
       installCmd,
-      async () => verifyBackendDependencies(PROJECT_ROOT),
+      postInstall,
     );
   } catch (error) {
-    if (!(error instanceof BackendDependencyValidationError)) throw error;
-    await repairBackendDependencies(installCmd);
+    if (!(error instanceof DependencyValidationError) || error.dependencyTree !== "backend") throw error;
+    await repairDependencies(PROJECT_ROOT, "backend", installCmd, postInstall);
   }
 }
 
 export async function ensureFrontendDependencies(frontendDir: string): Promise<void> {
   clearBunInstallCacheIfTermux();
-  await installDependenciesForDir(frontendDir, "frontend", bunInstallCmd(), async () => {
-    await repairTermuxFrontendNativeDeps(frontendDir);
-  });
+  const installCmd = bunInstallCmd();
+  const postInstall = async (): Promise<void> => finishFrontendDependencyInstall(frontendDir);
+  try {
+    await installDependenciesForDir(frontendDir, "frontend", installCmd, postInstall);
+  } catch (error) {
+    if (!(error instanceof DependencyValidationError) || error.dependencyTree !== "frontend") throw error;
+    await repairDependencies(frontendDir, "frontend", installCmd, postInstall);
+  }
 }
 
 async function ensureChangedDependencies(
@@ -1142,6 +1197,7 @@ export async function rebuildFrontend(
   frontendDir: string,
   reportProgress?: ProgressReporter,
 ): Promise<void> {
+  await ensureFrontendDependencyTreeHealthy(frontendDir);
   log("Rebuilding frontend...");
   const deadline = Date.now() + TIMEOUT_BUN_BUILD_MS;
 

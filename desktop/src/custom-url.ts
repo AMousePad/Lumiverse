@@ -36,31 +36,53 @@ async function save(connection: InstanceConnection): Promise<void> {
   await getCurrentWindow().close();
 }
 
-const settings = await loadSettings();
-const currentMode = settings.instanceConnection.mode;
-const initialMode = currentMode;
-input.value = currentMode === "remote" ? settings.instanceConnection.origin : "";
-
-for (const option of modeInputs) {
-  option.checked = option.value === initialMode;
-  const container = option.closest<HTMLElement>("[data-connection-option]");
-  const badge = container?.querySelector<HTMLElement>(".current-badge");
-  if (badge) badge.hidden = option.value !== currentMode;
-}
-
-function updateMode(): void {
+function updateMode(focusRemote = true): void {
   const remote = selectedMode() === "remote";
+  for (const option of modeInputs) {
+    option.closest<HTMLElement>("[data-connection-option]")?.toggleAttribute("data-selected", option.checked);
+  }
   remoteSettings.toggleAttribute("data-disabled", !remote);
   input.disabled = !remote;
   input.required = remote;
   error.hidden = true;
-  if (remote) requestAnimationFrame(() => input.focus());
+  if (remote && focusRemote) requestAnimationFrame(() => input.focus());
 }
 
-for (const option of modeInputs) option.addEventListener("change", updateMode);
-updateMode();
+let modeChangedByUser = false;
+for (const option of modeInputs) {
+  option.addEventListener("click", () => {
+    modeChangedByUser = true;
+  });
+  option.addEventListener("change", () => {
+    modeChangedByUser = true;
+    updateMode();
+  });
+}
+updateMode(false);
 
-if (initialMode === "remote") input.focus();
+async function restoreSavedConnection(): Promise<void> {
+  try {
+    const settings = await loadSettings();
+    const currentMode = settings.instanceConnection.mode;
+    for (const option of modeInputs) {
+      const container = option.closest<HTMLElement>("[data-connection-option]");
+      const badge = container?.querySelector<HTMLElement>(".current-badge");
+      if (badge) badge.hidden = option.value !== currentMode;
+    }
+
+    // Do not overwrite a choice made while the store was still loading.
+    if (modeChangedByUser) return;
+    for (const option of modeInputs) option.checked = option.value === currentMode;
+    input.value = currentMode === "remote" ? settings.instanceConnection.origin : "";
+    updateMode(false);
+    if (currentMode === "remote") input.focus();
+  } catch (reason) {
+    console.error("Unable to load saved instance connection", reason);
+    showError("Saved connection settings could not be loaded. You can still choose and save a connection.");
+  }
+}
+
+void restoreSavedConnection();
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();

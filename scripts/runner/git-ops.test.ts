@@ -9,6 +9,7 @@ import {
   bunInstallTimeoutMs,
   bunRuntimeCmd,
   dependencyInstallStampIsStale,
+  frontendDependencyProbeCmd,
   hardSyncRefusalMessage,
   inspectDependencyTree,
   packageInstallInputsChanged,
@@ -126,7 +127,7 @@ test("wraps native Termux installs in proot using the detected Bun launcher", ()
   ]);
 });
 
-test("validates Better Auth with the same Termux runtime wrapper", () => {
+test("validates backend and frontend dependencies with the same Termux runtime wrapper", () => {
   const env = {
     LUMIVERSE_IS_TERMUX: "true",
     LUMIVERSE_BUN_METHOD: "grun",
@@ -143,6 +144,10 @@ test("validates Better Auth with the same Termux runtime wrapper", () => {
   expect(probe.slice(0, 2)).toEqual(["grun", env.LUMIVERSE_BUN_PATH]);
   expect(probe.at(-1)).toContain("await import('better-auth')");
   expect(probe.at(-1)).toContain("await import('@better-auth/oauth-provider')");
+
+  const frontendProbe = frontendDependencyProbeCmd(env);
+  expect(frontendProbe.slice(0, 2)).toEqual(["grun", env.LUMIVERSE_BUN_PATH]);
+  expect(frontendProbe.at(-1)).toContain("await import('@better-auth/oauth-provider/client')");
 });
 
 test("Better Auth validation detects a missing exported core subpath", () => {
@@ -169,6 +174,51 @@ test("Better Auth validation detects a missing exported core subpath", () => {
 
   expect(runProbe().exitCode).toBe(0);
   rmSync(contextPath);
+  expect(runProbe().exitCode).not.toBe(0);
+});
+
+test("frontend dependency validation detects a missing transitive Better Auth module", () => {
+  const dir = makeTempDir();
+  const coreDir = join(dir, "node_modules", "@better-auth", "core");
+  const coreUtilsDir = join(coreDir, "utils");
+  const coreContextDir = join(coreDir, "context");
+  mkdirSync(coreUtilsDir, { recursive: true });
+  mkdirSync(coreContextDir, { recursive: true });
+  writeFileSync(join(coreDir, "package.json"), JSON.stringify({
+    name: "@better-auth/core",
+    version: "1.0.0",
+    type: "module",
+    exports: { "./utils/json": "./utils/json.js" },
+  }));
+  writeFileSync(
+    join(coreUtilsDir, "json.js"),
+    "import '../context/global.js'; export const safeJSONParse = JSON.parse;\n",
+  );
+  const globalPath = join(coreContextDir, "global.js");
+  writeFileSync(globalPath, "export const context = {};\n");
+
+  const oauthDir = join(dir, "node_modules", "@better-auth", "oauth-provider");
+  mkdirSync(oauthDir, { recursive: true });
+  writeFileSync(join(oauthDir, "package.json"), JSON.stringify({
+    name: "@better-auth/oauth-provider",
+    version: "1.0.0",
+    type: "module",
+    exports: { "./client": "./client.js" },
+  }));
+  writeFileSync(
+    join(oauthDir, "client.js"),
+    "import { safeJSONParse } from '@better-auth/core/utils/json'; export { safeJSONParse };\n",
+  );
+
+  const runProbe = () => Bun.spawnSync({
+    cmd: frontendDependencyProbeCmd({}),
+    cwd: dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  expect(runProbe().exitCode).toBe(0);
+  rmSync(globalPath);
   expect(runProbe().exitCode).not.toBe(0);
 });
 

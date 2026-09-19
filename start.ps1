@@ -417,8 +417,19 @@ function Invoke-BunDependencyInstall {
     }
 }
 
-function Test-BackendDependencyLoad {
-    param([string]$Dir)
+function Test-DependencyLoad {
+    param([string]$Dir, [string]$Name)
+
+    if ($Name -eq "backend") {
+        $probeScript = "await import('better-auth'); await import('@better-auth/oauth-provider'); await import('./src/services/databank/web-page-parser.ts'); await import('./src/utils/remote-image-page.ts')"
+    } elseif ($Name -eq "frontend") {
+        # Exercise the browser-facing import that reaches Better Auth's
+        # transitive core files. A package.json-only check misses partial
+        # package extraction such as a missing dist/context/global.mjs.
+        $probeScript = "await import('@better-auth/oauth-provider/client')"
+    } else {
+        return [pscustomobject]@{ Success = $true; Output = "" }
+    }
 
     $previousErrorActionPreference = $ErrorActionPreference
     Push-Location $Dir
@@ -426,7 +437,6 @@ function Test-BackendDependencyLoad {
         # PowerShell 5 promotes redirected native stderr to error records. Keep
         # collecting it for the diagnostic, but judge success by the exit code.
         $ErrorActionPreference = "Continue"
-        $probeScript = "await import('better-auth'); await import('@better-auth/oauth-provider'); await import('./src/services/databank/web-page-parser.ts'); await import('./src/utils/remote-image-page.ts')"
         $output = (& bun -e $probeScript 2>&1 | Out-String).Trim()
         $exitCode = $LASTEXITCODE
     } finally {
@@ -446,10 +456,10 @@ function Install-Deps {
     Write-Info "Installing $Name dependencies..."
     Invoke-BunDependencyInstall $Dir
 
-    if ($Name -eq "backend") {
-        $probe = Test-BackendDependencyLoad $Dir
+    if ($Name -in @("backend", "frontend")) {
+        $probe = Test-DependencyLoad $Dir $Name
         if (-not $probe.Success) {
-            Write-Warn "Backend dependency validation failed; clearing the package cache and performing a clean copy-based reinstall..."
+            Write-Warn "$Name dependency validation failed; clearing the package cache and performing a clean copy-based reinstall..."
             try { & bun pm cache rm 2>&1 | Out-Null } catch { }
             $nodeModules = Join-Path $Dir "node_modules"
             if (Test-Path $nodeModules) {
@@ -457,14 +467,14 @@ function Install-Deps {
             }
 
             Invoke-BunDependencyInstall $Dir
-            $probe = Test-BackendDependencyLoad $Dir
+            $probe = Test-DependencyLoad $Dir $Name
             if (-not $probe.Success) {
-                Write-Err "Backend dependencies are still unreadable after a clean copy-based reinstall."
+                Write-Err "$Name dependencies are still unreadable after a clean copy-based reinstall."
                 if ($probe.Output) { Write-Err $probe.Output }
                 Write-Err "Check Windows Defender/antivirus quarantine history and filesystem sync software for blocked package files."
                 exit 1
             }
-            Write-Ok "Backend dependency tree repaired"
+            Write-Ok "$Name dependency tree repaired"
         }
     }
 

@@ -20,8 +20,8 @@
         <fieldset>
           <legend>Connect using</legend>
           <div class="connection-options">
-            <label class="connection-option" data-connection-option="local">
-              <input type="radio" name="connection-mode" value="local" checked />
+            <label class="connection-option" for="connection-mode-local" data-connection-option="local" data-selected>
+              <input id="connection-mode-local" type="radio" name="connection-mode" value="local" checked />
               <span class="option-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
               </span>
@@ -35,8 +35,8 @@
               <span class="radio-mark" aria-hidden="true"></span>
             </label>
 
-            <label class="connection-option" data-connection-option="remote">
-              <input type="radio" name="connection-mode" value="remote" />
+            <label class="connection-option" for="connection-mode-remote" data-connection-option="remote">
+              <input id="connection-mode-remote" type="radio" name="connection-mode" value="remote" />
               <span class="option-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .8-7.9A6 6 0 0 0 6.4 8.5 4.8 4.8 0 0 0 7 18Z"/></svg>
               </span>
