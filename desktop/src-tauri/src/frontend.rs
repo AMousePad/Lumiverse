@@ -675,6 +675,10 @@ pub fn show_frontend(
     window.set_shadow(false).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     enforce_frontend_content_corner_radius(&window)?;
+    // A newly-created hidden GTK window does not have a wl_surface yet. Apply
+    // the Wayland effect after `show` below; the other platforms can install
+    // their native material before the first visible frame.
+    #[cfg(not(target_os = "linux"))]
     apply_frontend_native_appearance(
         &window,
         startup_appearance.blur,
@@ -694,8 +698,29 @@ pub fn show_frontend(
             // Tauri exposes focus directly. Minimize/restore is represented by
             // a resize event on the desktop runtimes, so re-query all native
             // flags after either transition instead of guessing from web APIs.
-            WindowEvent::Focused(_) | WindowEvent::Resized(_) => {
+            WindowEvent::Focused(_) => {
                 emit_frontend_presence(&close_app, &close_window);
+            }
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                emit_frontend_presence(&close_app, &close_window);
+                #[cfg(target_os = "linux")]
+                if let Err(error) =
+                    crate::wayland_background_effect::refresh_background_effect(&close_window)
+                {
+                    eprintln!(
+                        "[desktop-appearance] failed to resize Wayland background effect: {error}"
+                    );
+                }
+            }
+            WindowEvent::Destroyed => {
+                #[cfg(target_os = "linux")]
+                if let Err(error) =
+                    crate::wayland_background_effect::clear_background_effects(&close_window)
+                {
+                    eprintln!(
+                        "[desktop-appearance] failed to clear Wayland background effect: {error}"
+                    );
+                }
             }
             _ => {}
         }
@@ -709,6 +734,13 @@ pub fn show_frontend(
     #[cfg(target_os = "macos")]
     app.show().map_err(|e| e.to_string())?;
     window.show().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    apply_frontend_native_appearance(
+        &window,
+        startup_appearance.blur,
+        startup_appearance.dark,
+        &startup_appearance.blur_intensity,
+    )?;
     window.set_focus().map_err(|e| e.to_string())?;
     emit_frontend_presence(&app, &window);
     Ok(())
@@ -737,6 +769,11 @@ pub fn close_frontend(
         let state = app.state::<FrontendState>();
         persist_bounds(&app, &state, &window);
         let _ = set_frontend_task_switcher_visible(&app, &window, false);
+        // Queue protocol-object cleanup before GTK destroys the wl_surface.
+        // The Destroyed handler remains as a defensive fallback for native
+        // destruction paths that do not pass through this command.
+        #[cfg(target_os = "linux")]
+        let _ = crate::wayland_background_effect::clear_background_effects(&window);
         if let Err(error) = window.destroy() {
             failures.push(format!("integrated browser: {error}"));
         }
@@ -1176,7 +1213,15 @@ fn apply_frontend_native_appearance(
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        // The protocol deliberately leaves the blur algorithm/intensity to the
+        // compositor. The page continues to provide Lumiverse's tint.
+        let _ = (dark, blur_intensity);
+        crate::wayland_background_effect::set_background_effect(window, blur)?;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (window, blur, dark, blur_intensity);
     }

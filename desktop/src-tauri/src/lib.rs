@@ -2,6 +2,8 @@ mod frontend;
 mod notifications;
 mod remote_instance;
 mod runner;
+#[cfg(target_os = "linux")]
+mod wayland_background_effect;
 
 use tauri_plugin_autostart::MacosLauncher;
 
