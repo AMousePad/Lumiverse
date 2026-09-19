@@ -922,9 +922,20 @@ start_backend() {
     echo ""
 
     if [[ "$AUTO_OPEN" == true ]]; then
-      local url="http://localhost:${PORT:-7860}"
-      info "Opening $url..."
-      (sleep 2; open_browser "$url") &
+      if [[ -n "${LUMIVERSE_TLS_CERT_FILE:-}${LUMIVERSE_TLS_CONFIG_FILE:-}" ]]; then
+        if [[ "${AUTH_BASE_URL:-}" == https://* ]]; then
+          local url="$AUTH_BASE_URL"
+          info "Opening $url..."
+          (sleep 2; open_browser "$url") &
+        else
+          warn "Direct TLS is enabled, but its SAN hostname cannot be inferred."
+          warn "Set AUTH_BASE_URL to the public HTTPS origin or open that origin manually."
+        fi
+      else
+        local url="http://localhost:${PORT:-7860}"
+        info "Opening $url..."
+        (sleep 2; open_browser "$url") &
+      fi
     fi
 
     # $smol_flag is intentionally unquoted: empty -> no arg, "--smol" -> one arg.

@@ -115,7 +115,7 @@ VOLUME /app/data
 
 # Health check — hit the root (serves frontend) to verify the server is alive
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD bun -e "fetch('http://localhost:' + (Bun.env.PORT || '7860')).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+  CMD bun run src/healthcheck.ts
 
 # Run as non-root
 USER bun

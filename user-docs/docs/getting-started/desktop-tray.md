@@ -189,7 +189,9 @@ Desktop verifies the request-specific OAuth issuer against the instance you
 selected. `AUTH_BASE_URL` is an optional single-origin override, not a
 requirement.
 
-When TLS terminates at a reverse proxy, preserve `Host`. If the proxy replaces
+When Lumiverse terminates TLS directly with `LUMIVERSE_TLS_CERT_FILE` or
+`LUMIVERSE_TLS_CONFIG_FILE`, forwarded headers are not needed. When TLS
+terminates at a reverse proxy, preserve `Host`. If the proxy replaces
 it, send `X-Forwarded-Host` and `X-Forwarded-Proto` and list the proxy IP or
 CIDR in `TRUSTED_PROXIES`. Lumiverse does not trust those headers from arbitrary
 peers.

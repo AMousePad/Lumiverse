@@ -49,7 +49,9 @@ single-origin override, but it is not required. Desktop uses authorization-code 
 the refresh credential in the operating system credential store. Access tokens
 remain in native memory and are never exposed to the remote WebView.
 
-When TLS terminates at a reverse proxy, preserve `Host`. If the proxy replaces
+When Lumiverse terminates TLS directly with `LUMIVERSE_TLS_CERT_FILE` or
+`LUMIVERSE_TLS_CONFIG_FILE`, forwarded headers are not needed. When TLS
+terminates at a reverse proxy, preserve `Host`. If the proxy replaces
 it, send `X-Forwarded-Host` and `X-Forwarded-Proto` and list the proxy IP or
 CIDR in `TRUSTED_PROXIES`. Lumiverse ignores those identity-sensitive headers
 from unlisted peers.

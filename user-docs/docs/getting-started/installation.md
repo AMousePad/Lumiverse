@@ -283,6 +283,10 @@ If you'd rather throw away the cache entirely (slower, but belt-and-braces), pas
 | `TRUSTED_ORIGINS` | — | Comma-separated allowed origins (for production) |
 | `TRUSTED_PROXIES` | — | Proxy IPs/CIDRs allowed to supply external host/protocol headers for dynamic auth origins and client-IP headers. Host/protocol forwarding requires this explicit list. |
 | `AUTH_BASE_URL` | request origin | Optional single-origin auth/OAuth override; normally use Operator → Trusted Hostnames. |
+| `LUMIVERSE_TLS_CERT_FILE` | — | PEM certificate/full-chain file for direct HTTPS; set together with `LUMIVERSE_TLS_KEY_FILE`. |
+| `LUMIVERSE_TLS_KEY_FILE` | — | PEM private key paired with `LUMIVERSE_TLS_CERT_FILE`. |
+| `LUMIVERSE_TLS_KEY_PASSPHRASE_FILE` | — | Optional file containing the encrypted private key's passphrase. |
+| `LUMIVERSE_TLS_CONFIG_FILE` | — | JSON certificate manifest for multi-certificate SNI. |
 | `AUTH_SECRET` | auto-derived | Explicit auth signing secret; usually leave unset |
 | `ENCRYPTION_KEY` | auto-generated | Legacy/manual encryption key override; usually leave unset |
 | `SPINDLE_EPHEMERAL_GLOBAL_MAX_BYTES` | `524288000` | Total extension storage limit in bytes |
@@ -352,9 +356,63 @@ Lumiverse uses a `.env` file for runtime configuration (created by the setup wiz
 | `SPINDLE_EPHEMERAL_RESERVATION_TTL_MS` | `600000` | Extension storage reservation TTL in milliseconds |
 | `AUTH_SECRET` | auto-derived | Explicit auth signing secret |
 | `AUTH_BASE_URL` | request origin | Optional single-origin auth/OAuth override; normally use Operator → Trusted Hostnames. |
+| `LUMIVERSE_TLS_CERT_FILE` | — | PEM certificate/full-chain file for direct HTTPS; set together with `LUMIVERSE_TLS_KEY_FILE`. |
+| `LUMIVERSE_TLS_KEY_FILE` | — | PEM private key paired with `LUMIVERSE_TLS_CERT_FILE`. |
+| `LUMIVERSE_TLS_KEY_PASSPHRASE_FILE` | — | Optional file containing the encrypted private key's passphrase. |
+| `LUMIVERSE_TLS_CONFIG_FILE` | — | JSON certificate manifest for multi-certificate SNI. |
 | `ENCRYPTION_KEY` | auto-generated | Legacy/manual encryption key override |
 
 API keys and account passwords are stored encrypted in the `data/` directory rather than in `.env`. Leave `AUTH_SECRET` and `ENCRYPTION_KEY` unset unless you are intentionally carrying forward an existing install.
+
+### Direct TLS and custom certificates
+
+Lumiverse can terminate TLS directly in Bun before requests reach Hono. A reverse proxy remains a good choice when it already manages ACME issuance and renewal, but it is no longer required when you have your own certificate.
+
+For one certificate, set a PEM full chain and matching private key:
+
+```dotenv
+PORT=7860
+LUMIVERSE_TLS_CERT_FILE=/etc/lumiverse/tls/fullchain.pem
+LUMIVERSE_TLS_KEY_FILE=/etc/lumiverse/tls/privkey.pem
+```
+
+The certificate can contain multiple DNS SANs; the same Hono application is served for all of them. Direct TLS makes this listener HTTPS-only, so use `https://` for clients and health probes. Add every public HTTPS origin under **Settings → Operator → Trusted Hostnames** and restart Lumiverse. `AUTH_BASE_URL` can still pin authentication to one origin when that is preferable. It also gives the launcher a safe SAN-covered URL for the `--auto-open` option and the runner's **O** shortcut; without it, open the desired HTTPS hostname manually.
+
+For distinct certificates on one port, set only `LUMIVERSE_TLS_CONFIG_FILE`. Its JSON manifest maps each certificate to the exact hostnames clients send through SNI:
+
+```json
+{
+  "certificates": [
+    {
+      "certFile": "./customer-a/fullchain.pem",
+      "keyFile": "./customer-a/privkey.pem",
+      "serverNames": ["chat.customer-a.example"]
+    },
+    {
+      "certFile": "./customer-b/fullchain.pem",
+      "keyFile": "./customer-b/privkey.pem",
+      "keyPassphraseFile": "./customer-b/passphrase",
+      "serverNames": ["chat.customer-b.example", "alt.customer-b.example"]
+    }
+  ]
+}
+```
+
+Certificate, key, and passphrase paths in a manifest are resolved relative to the manifest. Each `serverNames` value must be an exact DNS hostname covered by that certificate's SAN; wildcard SAN certificates still list the concrete SNI hostnames they should answer. A manifest containing one certificate may omit `serverNames`, making it the default certificate just like the simple environment-variable form.
+
+Lumiverse validates the PEM files, private-key match, SAN mappings, and duplicate SNI names before starting. Certificate changes require a Lumiverse restart because Bun does not hot-reload listener TLS settings. Keep private keys and passphrase files read-only to the account running Lumiverse.
+
+For Docker, bind-mount the certificate directory read-only and use container paths:
+
+```yaml
+services:
+  lumiverse:
+    environment:
+      - LUMIVERSE_TLS_CERT_FILE=/run/lumiverse-tls/fullchain.pem
+      - LUMIVERSE_TLS_KEY_FILE=/run/lumiverse-tls/privkey.pem
+    volumes:
+      - ./certs:/run/lumiverse-tls:ro
+```
 
 ---
 

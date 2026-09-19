@@ -273,6 +273,10 @@ Configuration is managed through `.env` (see `.env.example` for all options). Se
 | `OWNER_USERNAME` | No | `admin` | Admin account display name |
 | `AUTH_SECRET` | No | *derived* | Session signing secret (auto-derived from identity file) |
 | `AUTH_BASE_URL` | No | *request origin* | Optional single-origin override for auth/OAuth. Normally the request must match **Settings → Operator → Trusted Hostnames**. |
+| `LUMIVERSE_TLS_CERT_FILE` | No | — | PEM certificate/full-chain file for direct HTTPS. Set with `LUMIVERSE_TLS_KEY_FILE`; the certificate may cover multiple SANs. |
+| `LUMIVERSE_TLS_KEY_FILE` | No | — | PEM private-key file paired with `LUMIVERSE_TLS_CERT_FILE`. |
+| `LUMIVERSE_TLS_KEY_PASSPHRASE_FILE` | No | — | Optional file containing the encrypted private key's passphrase. |
+| `LUMIVERSE_TLS_CONFIG_FILE` | No | — | JSON certificate manifest for multi-certificate SNI. Cannot be combined with the direct certificate/key variables. |
 | `FRONTEND_DIR` | No | — | Path to built frontend dist for static serving |
 | `TRUSTED_ORIGINS` | No | `localhost` | Comma-separated CORS origins |
 | `TRUSTED_PROXIES` | No | — | Proxy IPs/CIDRs allowed to supply external host/protocol headers for dynamic auth origins and client-IP headers. Host/protocol forwarding requires this explicit list. |

@@ -20,8 +20,25 @@ await runMigrations(db);
 const { auth, allowCreation, CREATION_NONCE_HEADER } = await import("./index");
 await auth.$context;
 const { default: app } = await import("../app");
+const { setDesktopJwksLoopbackPort } = await import("../routes/desktop-api.routes");
+const jwksLoopbackServer = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  fetch(request) {
+    const url = new URL(request.url);
+    if (request.method !== "GET" || url.pathname !== "/api/auth/jwks") {
+      return new Response("Not Found", { status: 404 });
+    }
+    return app.fetch(new Request("http://127.0.0.1:7860/api/auth/jwks", {
+      headers: { host: "127.0.0.1:7860" },
+    }));
+  },
+});
+if (jwksLoopbackServer.port === undefined) throw new Error("Failed to allocate JWKS test port");
+setDesktopJwksLoopbackPort(jwksLoopbackServer.port);
 
 afterAll(() => {
+  jwksLoopbackServer.stop(true);
   closeDatabase();
   rmSync(dataDir, { recursive: true, force: true });
 });
@@ -163,6 +180,20 @@ describe("desktop OAuth provider integration", () => {
       iss: "http://localhost:7860/api/auth",
       aud: expect.arrayContaining(["urn:lumiverse:desktop-api"]),
       azp: "lumiverse-desktop",
+    });
+
+    const protectedResource = await app.request(new Request(
+      "http://localhost:7860/api/desktop/v1/me",
+      {
+        headers: {
+          authorization: `Bearer ${tokenBody.access_token}`,
+          host: "localhost:7860",
+        },
+      },
+    ));
+    expect(protectedResource.status).toBe(200);
+    expect(await protectedResource.json()).toMatchObject({
+      account: { username: "desktopowner", role: "user" },
     });
   });
 

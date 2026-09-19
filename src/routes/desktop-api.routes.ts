@@ -41,6 +41,15 @@ export function canReadDesktopStatus(role: string): boolean {
 }
 
 let verifierActions: ReturnType<typeof oauthProviderResourceClient>["getActions"] extends () => infer T ? T : never;
+let desktopJwksUrl = `http://127.0.0.1:${env.port}/api/auth/jwks`;
+
+/** Use an internal plaintext-only JWKS listener when the public listener is HTTPS-only. */
+export function setDesktopJwksLoopbackPort(port: number): void {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid desktop JWKS loopback port: ${port}`);
+  }
+  desktopJwksUrl = `http://127.0.0.1:${port}/api/auth/jwks`;
+}
 
 async function verifyDesktopToken(request: Request, issuer: string): Promise<JWTPayload> {
   if (!verifierActions) {
@@ -52,7 +61,7 @@ async function verifyDesktopToken(request: Request, issuer: string): Promise<JWT
     requiredScopes: [DESKTOP_STATUS_SCOPE],
     // Verify locally through the loopback server rather than depending on the
     // deployment's public DNS supporting hairpin requests.
-    jwksUrl: `http://127.0.0.1:${env.port}/api/auth/jwks`,
+    jwksUrl: desktopJwksUrl,
   });
 }
 
