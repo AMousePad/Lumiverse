@@ -89,6 +89,7 @@ import * as summarizePool from "./summarize-pool.service";
 import {
   getSummarizationPromptDefaults,
   buildSummarizationPrompt,
+  selectSummarizationMessages,
 } from "./summarization-prompts.service";
 import {
   detectExpression,
@@ -372,6 +373,8 @@ export interface SummarizeGenerateInput {
   chat_id: string;
   /** Number of recent messages to include in the prompt. */
   message_context: number;
+  /** Number of newest messages to exclude from the prompt. */
+  message_lag?: number;
   /** Previously stored summary text (may be empty). */
   existingSummary?: string;
   /** Active persona / user name. */
@@ -4486,10 +4489,15 @@ export async function summarizeGenerate(
   }
 
   try {
-    // Fetch messages from the database (last N by message_context)
+    // Fetch messages from the database. A trailing lag keeps the newest
+    // messages out of the summary until their swipes/edits have settled.
     const allMessages = chatsSvc.getMessages(userId, chatId);
     const visibleMessages = allMessages.filter((m) => m.extra?.hidden !== true);
-    const recentMessages = visibleMessages.slice(-input.message_context);
+    const recentMessages = selectSummarizationMessages(
+      visibleMessages,
+      input.message_context,
+      input.message_lag,
+    );
 
     if (recentMessages.length === 0) {
       throw new Error('No messages to summarize');

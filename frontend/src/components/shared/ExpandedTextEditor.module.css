@@ -614,6 +614,11 @@
   border-color: var(--lumiverse-primary);
 }
 
+.expandBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.25;
+}
+
 /* ── Mobile ── */
 
 @media (max-width: 600px) {

@@ -385,6 +385,8 @@
     "reasoning": "Reasoning",
     "reasoningAria": "Reasoning",
     "reasoningPlaceholder": "Reasoning content (optional)",
+    "expandReasoning": "Expand reasoning",
+    "collapseReasoning": "Collapse reasoning",
     "response": "Response",
     "contentAria": "Message content"
   },

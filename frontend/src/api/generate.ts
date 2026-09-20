@@ -60,6 +60,8 @@ export interface SummarizeRequest {
   chat_id: string
   /** Number of recent messages to include in the prompt. */
   message_context: number
+  /** Number of newest messages to exclude from the prompt. */
+  message_lag?: number
   /** Previously stored summary text (may be empty). */
   existingSummary?: string
   /** Active persona / user name. */
