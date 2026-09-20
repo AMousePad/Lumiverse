@@ -298,6 +298,9 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
+  | { type: 'register_interceptor'; registrationId: string; priority?: number; match?: InterceptorRegistrationMatchOptions['match']; required?: boolean }
+  | { type: 'intercept_result'; requestId: string; registrationId: string; messages: LlmMessageDTO[]; error: string }
   | WorkerToHost
   | { type: "register_frontend_runtime_capability"; capability: "message_tag_interceptor" }
   | { type: "unregister_frontend_runtime_capability"; capability: "message_tag_interceptor" }
@@ -308,7 +311,7 @@ type RuntimeWorkerToHost =
       input: Omit<AssembleRequest, "signal">;
       userId?: string;
     }
-  | { type: "register_context_handler"; priority?: number; timeoutMs?: number }
+  | { type: "register_context_handler"; priority?: number; timeoutMs?: number; required?: boolean }
   | {
       type: "chat_append_message";
       requestId: string;
@@ -603,6 +606,7 @@ type RuntimeWorkerToHost =
     };
 
 type RuntimeHostToWorker =
+  | { type: 'context_handler_abort'; requestId: string; reason: string }
   | HostToWorker
   | {
       type: "rpc_pool_request";
@@ -1073,7 +1077,8 @@ let interceptHandler:
   | InterceptorHandler
   | null = null;
 let interceptRegistrationId: string | null = null;
-let contextHandlerFn: ((context: unknown) => Promise<unknown>) | null = null;
+let contextHandlerFn: ((context: unknown, signal?: AbortSignal) => Promise<unknown>) | null = null;
+const contextAbortControllers = new Map<string, AbortController>();
 let messageContentProcessorFn:
   | ((ctx: unknown) => Promise<unknown>)
   | null = null;
@@ -1596,8 +1601,8 @@ const spindleApi: RuntimeSpindleAPI = {
 
   registerInterceptor(
     handler: InterceptorHandler,
-    priorityOrOptions?: number | InterceptorRegistrationOptions,
-    options?: InterceptorRegistrationMatchOptions,
+    priorityOrOptions?: number | (InterceptorRegistrationOptions & { required?: boolean }),
+    options?: InterceptorRegistrationMatchOptions & { required?: boolean },
   ): InterceptorDisposer {
     assertMutationAllowed("spindle.registerInterceptor()");
     const registrationId = crypto.randomUUID();
@@ -1607,9 +1612,10 @@ const spindleApi: RuntimeSpindleAPI = {
     const match = typeof priorityOrOptions === "number"
       ? options?.match
       : priorityOrOptions?.match;
+    const required = (typeof priorityOrOptions === 'number' ? options : priorityOrOptions)?.required === true;
     interceptHandler = handler;
     interceptRegistrationId = registrationId;
-    post({ type: "register_interceptor", registrationId, priority, ...(match ? { match } : {}) });
+    post({ type: "register_interceptor", registrationId, priority, required, ...(match ? { match } : {}) });
     return () => {
       if (interceptRegistrationId !== registrationId) return;
       interceptHandler = null;
@@ -3990,13 +3996,13 @@ const spindleApi: RuntimeSpindleAPI = {
   }),
 
   registerContextHandler(
-    handler: (context: unknown) => Promise<unknown>,
+    handler: (context: unknown, signal?: AbortSignal) => Promise<unknown>,
     priority?: number,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; required?: boolean },
   ): void {
     assertMutationAllowed("spindle.registerContextHandler()");
     contextHandlerFn = handler;
-    post({ type: "register_context_handler", priority, timeoutMs: opts?.timeoutMs });
+    post({ type: "register_context_handler", priority, timeoutMs: opts?.timeoutMs, required: opts?.required });
   },
 
   registerMessageContentProcessor(handler, priority?): void {
@@ -4502,7 +4508,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
           post({
             type: "log",
             level: "error",
-            message: `Interceptor error: ${err.message}`,
+            message: `Interceptor error: ${err instanceof Error ? err.message : String(err)}`,
           });
           // Return original messages on error
           post({
@@ -4510,6 +4516,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
             requestId: msg.requestId,
             registrationId: msg.registrationId,
             messages: msg.messages,
+            error: err instanceof Error ? err.message : String(err),
           });
         } finally {
           interceptorAbortControllers.delete(msg.requestId);
@@ -4566,10 +4573,16 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       break;
     }
 
+    case 'context_handler_abort': {
+      contextAbortControllers.get(msg.requestId)?.abort(new Error(msg.reason));
+      break;
+    }
     case "context_handler_request": {
       if (contextHandlerFn) {
+        const controller = new AbortController();
+        contextAbortControllers.set(msg.requestId, controller);
         try {
-          const result = await contextHandlerFn(msg.context);
+          const result = await contextHandlerFn(msg.context, controller.signal);
           post({
             type: "context_handler_result",
             requestId: msg.requestId,
@@ -4579,14 +4592,15 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
           post({
             type: "log",
             level: "error",
-            message: `Context handler error: ${err.message}`,
+            message: `Context handler error: ${err instanceof Error ? err.message : String(err)}`,
           });
           post({
             type: "context_handler_result",
             requestId: msg.requestId,
             context: msg.context,
+            error: err instanceof Error ? err.message : String(err),
           });
-        }
+        } finally { contextAbortControllers.delete(msg.requestId); }
       } else {
         post({
           type: "context_handler_result",

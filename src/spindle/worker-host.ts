@@ -292,6 +292,9 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
+  | { type: 'register_interceptor'; registrationId: string; priority?: number; match?: InterceptorMatchDTO; required?: boolean }
+  | { type: 'intercept_result'; requestId: string; registrationId: string; messages: LlmMessageDTO[]; error: string; parameters?: Record<string, unknown>; breakdown?: InterceptorBreakdownEntryDTO[] }
   | WorkerToHost
   | { type: "register_frontend_runtime_capability"; capability: string }
   | { type: "unregister_frontend_runtime_capability"; capability: string }
@@ -302,7 +305,7 @@ type RuntimeWorkerToHost =
       input: SpindleAssembleInput;
       userId?: string;
     }
-  | { type: "register_context_handler"; priority?: number; timeoutMs?: number }
+  | { type: "register_context_handler"; priority?: number; timeoutMs?: number; required?: boolean }
   | { type: "rpc_pool_sync"; endpoint: string; value: unknown; policy?: SharedRpcEndpointPolicy }
   | { type: "rpc_pool_register_handler"; endpoint: string; policy?: SharedRpcEndpointPolicy }
   | { type: "rpc_pool_unregister"; endpoint: string }
@@ -588,6 +591,7 @@ type RuntimeWorkerToHost =
   | ProviderWorkerToHost;
 
 type RuntimeHostToWorker =
+  | { type: 'context_handler_abort'; requestId: string; reason: string }
   | HostToWorker
   | {
       type: "rpc_pool_request";
@@ -1216,6 +1220,8 @@ export class WorkerHost {
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
           "frontend-runtime-capabilities-v1": 1,
+          "required-context-handlers-v1": 1,
+          "required-interceptors-v1": 1,
           "mcp-servers-v1": 1,
         }),
         extensionInstallationId: this.extensionId,
@@ -1697,7 +1703,7 @@ export class WorkerHost {
         this.handleUpdateMacroValue(msg.name, msg.value);
         break;
       case "register_interceptor":
-        this.handleRegisterInterceptor(msg.registrationId, msg.priority, msg.match);
+        this.handleRegisterInterceptor(msg.registrationId, msg.priority, msg.match, 'required' in msg && msg.required === true);
         break;
       case "unregister_interceptor":
         this.handleUnregisterInterceptor(msg.registrationId);
@@ -1705,6 +1711,10 @@ export class WorkerHost {
       case "intercept_result": {
         if (msg.registrationId !== this.interceptorRegistrationId) {
           console.warn(`[Spindle:${this.manifest.identifier}] Ignoring interceptor result for an inactive registration`);
+          break;
+        }
+        if ('error' in msg && typeof msg.error === 'string') {
+          this.rejectRequest(msg.requestId, new Error(msg.error));
           break;
         }
         // Strip parameters if the extension lacks the generation_parameters permission
@@ -1835,10 +1845,12 @@ export class WorkerHost {
         this.handleCorsRequest(msg.requestId, msg.url, msg.options);
         break;
       case "register_context_handler":
-        this.handleRegisterContextHandler(msg.priority, (msg as { timeoutMs?: number }).timeoutMs);
+        this.handleRegisterContextHandler(msg.priority, (msg as { timeoutMs?: number }).timeoutMs, 'required' in msg && msg.required === true);
         break;
       case "context_handler_result":
-        this.resolveRequest(msg.requestId, msg.context);
+        if ('error' in msg && typeof msg.error === 'string') {
+          this.rejectRequest(msg.requestId, new Error(msg.error));
+        } else this.resolveRequest(msg.requestId, msg.context);
         break;
       case "register_message_content_processor":
         this.handleRegisterMessageContentProcessor(msg.priority);
@@ -2831,6 +2843,7 @@ export class WorkerHost {
     registrationId: string,
     priority?: number,
     match?: InterceptorMatchDTO,
+    required = false,
   ): void {
     if (!this.hasPermission("interceptor")) {
       console.warn(
@@ -2863,9 +2876,10 @@ export class WorkerHost {
       priority: priority ?? 100,
       match,
       resolveTimeoutMs,
-      handler: async (messages, context) => {
+      required,
+      handler: async (messages, context, signal) => {
+        signal?.throwIfAborted();
         const requestId = crypto.randomUUID();
-        const timeoutMs = resolveTimeoutMs();
 
         // Expose assembly-source membership explicitly on the DTO so extensions
         // can distinguish real chat turns and standalone World Info blocks
@@ -2893,38 +2907,27 @@ export class WorkerHost {
             this.extensionId,
           ) as unknown as Omit<InterceptorContextDTO, "signal">;
         this.activeInterceptorContexts.set(registrationId, interceptorContext);
-        this.postToWorker({
-          type: "intercept_request",
-          requestId,
-          registrationId,
-          messages: messagesWithSourceFlags,
-          context: interceptorContext,
-        });
-
+        const abort = () => {
+          const error = signal?.reason ?? new Error('Interceptor cancelled');
+          this.rejectRequest(requestId, error);
+          this.postToWorker({ type: 'intercept_abort', requestId, registrationId, reason: error instanceof Error ? error.message : String(error) });
+        };
         return new Promise<InterceptorResult>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            setTimeout(() => {
-              if (!this.pendingRequests.has(requestId)) return;
-              this.pendingRequests.delete(requestId);
-              reject(
-                new Error(
-                  `Interceptor timeout from ${this.manifest.identifier} (${Math.round(timeoutMs / 1000)}s)`
-                )
-              );
-            }, 0);
-          }, timeoutMs);
-
           this.pendingRequests.set(requestId, {
-            resolve: (val) => {
-              clearTimeout(timeout);
-              resolve(val as InterceptorResult);
-            },
-            reject: (err) => {
-              clearTimeout(timeout);
-              reject(err);
-            },
+            resolve: (val) => resolve(val as InterceptorResult),
+            reject,
+          });
+          signal?.addEventListener('abort', abort, { once: true });
+          if (signal?.aborted) { abort(); return; }
+          this.postToWorker({
+            type: "intercept_request",
+            requestId,
+            registrationId,
+            messages: messagesWithSourceFlags,
+            context: interceptorContext,
           });
         }).finally(() => {
+          signal?.removeEventListener('abort', abort);
           if (this.activeInterceptorContexts.get(registrationId) === interceptorContext) {
             this.activeInterceptorContexts.delete(registrationId);
           }
@@ -4254,7 +4257,7 @@ export class WorkerHost {
 
   // ─── Context handler ─────────────────────────────────────────────────
 
-  private handleRegisterContextHandler(priority?: number, timeoutMs?: number): void {
+  private handleRegisterContextHandler(priority?: number, timeoutMs?: number, required = false): void {
     if (
       !this.hasPermission("context_handler")
     ) {
@@ -4280,35 +4283,31 @@ export class WorkerHost {
       userId: this.getScopedUserId(),
       priority: priority ?? 100,
       timeoutMs: budgetMs,
-      handler: async (context) => {
+      required,
+      handler: async (context, signal) => {
         const requestId = crypto.randomUUID();
-
-        this.postToWorker({
-          type: "context_handler_request",
-          requestId,
-          context,
-        });
-
+        signal?.throwIfAborted();
         return new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => {
+          const abort = () => {
+            const error = signal?.reason ?? new Error('Context handler cancelled');
+            const pending = this.pendingRequests.get(requestId);
             this.pendingRequests.delete(requestId);
-            reject(
-              new Error(
-                `Context handler timeout from ${this.manifest.identifier}`
-              )
-            );
-          }, budgetMs);
-
+            pending?.reject(error);
+            this.postToWorker({ type: 'context_handler_abort', requestId, reason: error instanceof Error ? error.message : String(error) });
+          };
+          signal?.addEventListener('abort', abort, { once: true });
           this.pendingRequests.set(requestId, {
             resolve: (val) => {
-              clearTimeout(timeout);
+              signal?.removeEventListener('abort', abort);
               resolve(val);
             },
             reject: (err) => {
-              clearTimeout(timeout);
+              signal?.removeEventListener('abort', abort);
               reject(err);
             },
           });
+          if (signal?.aborted) { abort(); return; }
+          this.postToWorker({ type: 'context_handler_request', requestId, context });
         });
       },
     });

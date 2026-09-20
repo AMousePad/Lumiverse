@@ -22,6 +22,7 @@ export interface InterceptorResult {
 }
 
 export interface Interceptor {
+  required?: boolean;
   extensionId: string;
   extensionName?: string;
   userId?: string | null;
@@ -38,7 +39,8 @@ export interface Interceptor {
   resolveTimeoutMs?: () => number;
   handler: (
     messages: LlmMessageDTO[],
-    context: unknown
+    context: unknown,
+    signal?: AbortSignal,
   ) => Promise<InterceptorResult>;
 }
 
@@ -139,24 +141,28 @@ class InterceptorPipeline {
       });
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let abortHandler: (() => void) | undefined;
+      const controller = new AbortController();
       try {
         restoreSourceMessageMetadata(result, sourceMessageMetadata);
         const output = await Promise.race([
-          interceptor.handler(result, context),
+          interceptor.handler(result, context, controller.signal),
           new Promise<never>((_, reject) => {
             timeout = setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    `Interceptor from ${interceptor.extensionId} timed out (${Math.round(timeoutMs / 1000)}s)`
-                  )
-                ),
+              () => {
+                const error = new Error(`Interceptor from ${interceptor.extensionId} timed out (${Math.round(timeoutMs / 1000)}s)`);
+                controller.abort(error);
+                reject(error);
+              },
               timeoutMs,
             );
             if (signal) {
-              abortHandler = () =>
-                reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+              abortHandler = () => {
+                const error = signal.reason ?? new DOMException("Aborted", "AbortError");
+                controller.abort(error);
+                reject(error);
+              };
               signal.addEventListener("abort", abortHandler, { once: true });
+              if (signal.aborted) abortHandler();
             }
           }),
         ]);
@@ -200,6 +206,7 @@ class InterceptorPipeline {
           `[Spindle] Interceptor error from ${interceptor.extensionId}:`,
           err
         );
+        if (interceptor.required) throw err;
         // Continue with previous result on error
       } finally {
         if (timeout) clearTimeout(timeout);
