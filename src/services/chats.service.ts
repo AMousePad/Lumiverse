@@ -2511,8 +2511,8 @@ export function claimAssociativeRegexAction(
   };
 }
 
-export function createMessage(chatId: string, input: CreateMessageInput, userId: string): Message {
-  const id = crypto.randomUUID();
+export function createMessage(chatId: string, input: CreateMessageInput, userId: string, messageId?: string): Message {
+  const id = messageId ?? crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
   const maxIndex = getDb()

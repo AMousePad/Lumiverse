@@ -252,6 +252,8 @@ export interface ProviderRegistryChangedPayload {
 }
 
 export interface EventMessage {
+  runtimeMutationId?: string;
+  stateRevision?: import('../spindle/runtime-state-revision').RuntimeStateRevision;
   event: EventType;
   payload: any;
   timestamp: number;

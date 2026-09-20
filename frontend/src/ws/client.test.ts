@@ -115,6 +115,20 @@ function makeClient() {
 }
 
 describe('WebSocketClient push presence', () => {
+  test('forwards host revisions and mutation identifiers without changing event payloads', () => {
+    const client = new WebSocketClient('ws://localhost:3000/api/ws');
+    const seen: unknown[] = [];
+    client.on('MESSAGE_EDITED', (payload, metadata) => seen.push({ payload, metadata }));
+    try {
+      client.connect();
+      const socket = MockWebSocket.instances.at(-1)!;
+      socket.open();
+      const payload = { chatId: 'chat', message: { id: 'message', content: 'edited' } };
+      const metadata = { stateRevision: { epoch: 'host', sequence: 2 }, runtimeMutationId: 'mutation' };
+      socket.receive({ event: 'MESSAGE_EDITED', payload, ...metadata });
+      expect(seen).toEqual([{ payload, metadata }]);
+    } finally { client.disconnect(); }
+  });
   test('reports current presence and stream focus after opening and after authentication', () => {
     const client = new WebSocketClient('ws://localhost:3000/api/ws')
     try {

@@ -6,7 +6,8 @@ import {
   type DesktopPresence,
 } from '@/lib/desktop-presence'
 
-type EventHandler = (payload: any) => void
+export interface EventMetadata { stateRevision?: { epoch: string; sequence: number }; runtimeMutationId?: string }
+type EventHandler = (payload: any, metadata?: EventMetadata) => void
 
 /** Internal client-only event names — not part of the backend protocol. */
 export const WS_OPEN = '__ws_open'
@@ -164,7 +165,7 @@ export class WebSocketClient {
         ) {
           console.debug('[WS] ←', eventName, data.payload)
         }
-        this.emit(eventName, data.payload)
+        this.emit(eventName, data.payload, { stateRevision: data.stateRevision, runtimeMutationId: data.runtimeMutationId })
       } catch {
         // ignore malformed messages
       }
@@ -259,10 +260,10 @@ export class WebSocketClient {
     this.emit(event, payload)
   }
 
-  private emit(event: string, payload: any) {
+  private emit(event: string, payload: any, metadata?: EventMetadata) {
     this.handlers.get(event)?.forEach(handler => {
       try {
-        handler(payload)
+        handler(payload, metadata)
       } catch (err) {
         console.error(`[WS] Error in handler for ${event}:`, err)
       }

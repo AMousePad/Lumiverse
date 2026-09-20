@@ -293,6 +293,8 @@ type BackendProcessRuntimeToHost =
 
 type RuntimeWorkerToHost =
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
+  | { type: 'runtime_state_read'; requestId: string; chatId: string; characterId: string; userId?: string }
+  | { type: 'runtime_state_write'; requestId: string; chatId: string; command: import('./runtime-state').RuntimeStateCommand; userId?: string; mutationId?: string }
   | { type: 'register_interceptor'; registrationId: string; priority?: number; match?: InterceptorMatchDTO; required?: boolean }
   | { type: 'intercept_result'; requestId: string; registrationId: string; messages: LlmMessageDTO[]; error: string; parameters?: Record<string, unknown>; breakdown?: InterceptorBreakdownEntryDTO[] }
   | WorkerToHost
@@ -1220,6 +1222,7 @@ export class WorkerHost {
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
           "frontend-runtime-capabilities-v1": 1,
+          "runtime-state-v1": 1,
           "required-context-handlers-v1": 1,
           "required-interceptors-v1": 1,
           "mcp-servers-v1": 1,

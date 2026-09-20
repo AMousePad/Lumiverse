@@ -299,6 +299,8 @@ type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
+  | { type: 'runtime_state_read'; requestId: string; chatId: string; characterId: string; userId?: string }
+  | { type: 'runtime_state_write'; requestId: string; chatId: string; command: import('./runtime-state').RuntimeStateCommand; userId?: string; mutationId?: string }
   | { type: 'register_interceptor'; registrationId: string; priority?: number; match?: InterceptorRegistrationMatchOptions['match']; required?: boolean }
   | { type: 'intercept_result'; requestId: string; registrationId: string; messages: LlmMessageDTO[]; error: string }
   | WorkerToHost
@@ -706,7 +708,11 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books" | "runtimeState"> & {
+  runtimeState: {
+    read(chatId: string, characterId: string, userId?: string): Promise<unknown>;
+    write(chatId: string, command: import('./runtime-state').RuntimeStateCommand, userId?: string, mutationId?: string): Promise<unknown>;
+  };
   frontendCapabilities: {
     declare(capability: "message_tag_interceptor"): () => void;
   };
@@ -1502,6 +1508,13 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
 const spindleApi: RuntimeSpindleAPI = {
+  runtimeState: {
+    read(chatId, characterId, userId) { return request({ type: 'runtime_state_read', requestId: crypto.randomUUID(), chatId, characterId, userId }); },
+    write(chatId, command, userId, mutationId) {
+      assertMutationAllowed('spindle.runtimeState.write()');
+      return request({ type: 'runtime_state_write', requestId: crypto.randomUUID(), chatId, command, userId, mutationId });
+    },
+  },
   get host(): SpindleHostDescriptorV1 {
     if (!hostDescriptor) throw new Error("Spindle host descriptor is not initialized");
     return hostDescriptor;
