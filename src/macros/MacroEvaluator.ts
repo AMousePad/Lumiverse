@@ -23,7 +23,7 @@ const ASYNC_UNWIND_INTERVAL = 64;
 export interface EvaluateOptions {
   phase?: MacroInterceptorPhase;
   sourceHint?: string;
-  sourceOwner?: "host";
+  sourceOwner?: "host" | { extensionIdentifier: string };
   /** Safety budget for one evaluate() call. This is a work cap, not a nesting cap. */
   maxMacroResolutions?: number;
   /** Keep literal-brace shielding for a later macro pass in prompt assembly. */
@@ -63,6 +63,19 @@ export async function evaluate(
       diagnostics: [],
       touchedVars: EMPTY_TOUCHED_VARS,
       cacheable: true,
+    };
+  }
+
+  if (typeof options?.sourceOwner === "object") {
+    const owned = await macroInterceptorChain.runOwned({
+      template: input, env: snapshotEnvForInterceptor(env), commit: env.commit !== false,
+      phase: options.phase ?? "other", sourceHint: options.sourceHint,
+      sourceOwner: options.sourceOwner,
+      userId: typeof env.extra?.userId === "string" ? env.extra.userId : undefined,
+    });
+    if (owned) return {
+      text: owned.text, diagnostics: [], touchedVars: new Set(owned.touchedVars),
+      cacheable: !owned.volatile && !owned.opaque,
     };
   }
 

@@ -16,6 +16,7 @@ test('worker hooks preserve thrown values and propagate cancellation across the 
       }
       throw context.failure;
     }
+    spindle.registerMacroInterceptor(async (ctx) => ({ text: ctx.template, touchedVars: [ctx.sourceOwner.extensionIdentifier] }), 42, { handlesOwnedSources: true });
     spindle.registerContextHandler(handle, 100, { required: true });
     spindle.registerInterceptor((_messages, context) => handle(context, context.signal), { required: true });
     spindle.onFrontendMessage((payload, userId, frontendSessionId) => {
@@ -54,6 +55,10 @@ test('worker hooks preserve thrown values and propagate cancellation across the 
   try {
     worker.send({ type: 'init', manifest: { identifier: 'hook-test', entry_backend: pathToFileURL(entry).href }, storagePath: directory });
     await waitFor(message => message.message === '__worker_ready__');
+    expect(received.find(message => message.type === 'register_macro_interceptor')).toMatchObject({ priority: 42, handlesOwnedSources: true });
+    worker.send({ type: 'macro_interceptor_request', requestId: 'owned-macro', ctx: { template: '{{setvar::x::1}}', sourceOwner: { extensionIdentifier: 'hook-test' } } });
+    expect((await waitFor(message => message.type === 'macro_interceptor_result' && message.requestId === 'owned-macro')).result)
+      .toEqual({ text: '{{setvar::x::1}}', touchedVars: ['hook-test'] });
     const registration = received.find(message => message.type === 'register_interceptor');
     expect(registration.required).toBe(true);
     expect(received.find(message => message.type === 'register_context_handler').required).toBe(true);

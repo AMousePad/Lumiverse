@@ -490,7 +490,7 @@ type RuntimeWorkerToHost =
       requestId: string;
       result: unknown;
     }
-  | { type: "register_macro_interceptor"; priority?: number }
+  | { type: "register_macro_interceptor"; priority?: number; handlesOwnedSources?: boolean }
   | {
       type: "macro_interceptor_result";
       requestId: string;
@@ -1867,7 +1867,7 @@ export class WorkerHost {
         this.resolveRequest(msg.requestId, msg.result);
         break;
       case "register_macro_interceptor":
-        this.handleRegisterMacroInterceptor(msg.priority);
+        this.handleRegisterMacroInterceptor(msg.priority, (msg as { handlesOwnedSources?: boolean }).handlesOwnedSources);
         break;
       case "macro_interceptor_result":
         this.resolveRequest(msg.requestId, msg.result);
@@ -4386,7 +4386,7 @@ export class WorkerHost {
     });
   }
 
-  private handleRegisterMacroInterceptor(priority?: number): void {
+  private handleRegisterMacroInterceptor(priority?: number, handlesOwnedSources?: boolean): void {
     if (!this.hasPermission("macro_interceptor")) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] macro_interceptor permission not granted for registerMacroInterceptor`
@@ -4402,6 +4402,8 @@ export class WorkerHost {
     this.macroInterceptorUnregister?.();
     this.macroInterceptorUnregister = macroInterceptorChain.register({
       extensionId: this.extensionId,
+      extensionIdentifier: this.manifest.identifier,
+      handlesOwnedSources: handlesOwnedSources === true,
       userId: this.getScopedUserId(),
       priority: priority ?? 100,
       handler: async (ctx: MacroInterceptorCtx) => {

@@ -480,7 +480,7 @@ type RuntimeWorkerToHost =
       requestId: string;
       result: unknown;
     }
-  | { type: "register_macro_interceptor"; priority?: number }
+  | { type: "register_macro_interceptor"; priority?: number; handlesOwnedSources?: boolean }
   | {
       type: "macro_interceptor_result";
       requestId: string;
@@ -797,6 +797,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"
       commit: boolean;
       phase: "prompt" | "display" | "response" | "other";
       sourceHint?: string;
+      sourceOwner?: { extensionIdentifier: string };
       userId?: string;
     }) => Promise<
       | string
@@ -807,7 +808,8 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"
         }
       | void
     >,
-    priority?: number
+    priority?: number,
+    opts?: { handlesOwnedSources?: boolean }
   ): void;
   registerWorldInfoInterceptor(
     handler: (ctx: {
@@ -4026,10 +4028,10 @@ const spindleApi: RuntimeSpindleAPI = {
     post({ type: "register_message_content_processor", priority });
   },
 
-  registerMacroInterceptor(handler, priority?): void {
+  registerMacroInterceptor(handler, priority?, opts?: { handlesOwnedSources?: boolean }): void {
     assertMutationAllowed("spindle.registerMacroInterceptor()");
     macroInterceptorFn = handler as (ctx: unknown) => Promise<unknown>;
-    post({ type: "register_macro_interceptor", priority });
+    post({ type: "register_macro_interceptor", priority, handlesOwnedSources: opts?.handlesOwnedSources });
   },
 
   registerWorldInfoInterceptor(handler, priority?): void {
