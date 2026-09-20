@@ -234,7 +234,7 @@ describe('MessageEditArea edit-and-send', () => {
     expect(onEditAndSend).not.toHaveBeenCalled()
   })
 
-  test('keeps reasoning collapsed by default and places message content first', async () => {
+  test('keeps reasoning collapsed by default and places it above message content', async () => {
     const host = await render({
       editContent: 'Visible response',
       editReasoning: 'Hidden thought process',
@@ -248,6 +248,7 @@ describe('MessageEditArea edit-and-send', () => {
     const content = host.querySelector('textarea[name="message-edit-content"]') as HTMLTextAreaElement | null
     expect(content).not.toBeNull()
     expect(content?.value).toBe('Visible response')
+    expect(toggle.compareDocumentPosition(content!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
     await act(async () => {
       toggle.click()
@@ -256,9 +257,9 @@ describe('MessageEditArea edit-and-send', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
     const textareas = [...host.querySelectorAll('textarea')]
     expect(textareas.map((textarea) => textarea.getAttribute('name'))).toEqual([
-      'message-edit-content',
       'message-edit-reasoning',
+      'message-edit-content',
     ])
-    expect((textareas[1] as HTMLTextAreaElement).value).toBe('Hidden thought process')
+    expect((textareas[0] as HTMLTextAreaElement).value).toBe('Hidden thought process')
   })
 })

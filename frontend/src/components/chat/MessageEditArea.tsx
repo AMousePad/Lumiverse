@@ -217,33 +217,6 @@ function MessageEditAreaNative({
 
   return (
     <div className={styles.editArea}>
-      <div className={hasReasoning ? styles.contentSection : undefined}>
-        {hasReasoning && (
-          <div className={styles.sectionLabel}>
-            <span>{t('messageEdit.response')}</span>
-          </div>
-        )}
-        <div className={styles.textareaWrapper}>
-          <textarea
-            ref={contentRef}
-            name="message-edit-content"
-            aria-label={t('messageEdit.contentAria')}
-            className={styles.editTextarea}
-            value={editContent}
-            onChange={handleContentChange}
-            onFocus={handleContentFocus}
-          />
-          <button
-            type="button"
-            className={styles.expandBtn}
-            onClick={expandContent}
-            title={ts('expandEditor')}
-            aria-label={ts('expandEditor')}
-          >
-            <Maximize2 size={13} />
-          </button>
-        </div>
-      </div>
       {hasReasoning && (
         <div className={styles.reasoningSection}>
           <button
@@ -289,6 +262,33 @@ function MessageEditAreaNative({
           )}
         </div>
       )}
+      <div className={hasReasoning ? styles.contentSection : undefined}>
+        {hasReasoning && (
+          <div className={styles.sectionLabel}>
+            <span>{t('messageEdit.response')}</span>
+          </div>
+        )}
+        <div className={styles.textareaWrapper}>
+          <textarea
+            ref={contentRef}
+            name="message-edit-content"
+            aria-label={t('messageEdit.contentAria')}
+            className={styles.editTextarea}
+            value={editContent}
+            onChange={handleContentChange}
+            onFocus={handleContentFocus}
+          />
+          <button
+            type="button"
+            className={styles.expandBtn}
+            onClick={expandContent}
+            title={ts('expandEditor')}
+            aria-label={ts('expandEditor')}
+          >
+            <Maximize2 size={13} />
+          </button>
+        </div>
+      </div>
       <div
         className={styles.editActions}
         data-edit-and-send-side={editAndSendSide}
