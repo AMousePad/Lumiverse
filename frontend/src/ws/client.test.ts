@@ -223,6 +223,77 @@ describe('WebSocketClient push presence', () => {
     }
   })
 
+  test('trusts active native presence when WebView2 page visibility is stale', () => {
+    const client = makeClient()
+    try {
+      const socket = client.ws as MockWebSocket
+      socket.sent = []
+      client.focusedChatId = 'chat-1'
+      client.lifecyclePaused = true
+      documentMock.visibilityState = 'hidden'
+
+      client.applyDesktopPresence({
+        state: 'foreground',
+        visible: true,
+        minimized: false,
+        focused: true,
+        active: true,
+      })
+
+      expect(client.lifecyclePaused).toBe(false)
+      expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual({
+        type: 'visibility',
+        visible: true,
+        source: 'tauri',
+        state: 'foreground',
+        windowVisible: true,
+        minimized: false,
+        focused: true,
+      })
+      expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual({
+        type: 'stream_focus',
+        chatId: 'chat-1',
+      })
+    } finally {
+      client.disconnect()
+      documentMock.visibilityState = 'visible'
+    }
+  })
+
+  test('trusts hidden native presence when WebView2 still reports visible', () => {
+    const client = makeClient()
+    try {
+      const socket = client.ws as MockWebSocket
+      socket.sent = []
+      client.focusedChatId = 'chat-1'
+
+      client.applyDesktopPresence({
+        state: 'hidden',
+        visible: false,
+        minimized: false,
+        focused: false,
+        active: false,
+      })
+
+      expect(client.lifecyclePaused).toBe(true)
+      expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual({
+        type: 'visibility',
+        visible: false,
+        source: 'tauri',
+        state: 'hidden',
+        windowVisible: false,
+        minimized: false,
+        focused: false,
+      })
+      expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual({
+        type: 'stream_focus',
+        chatId: null,
+      })
+    } finally {
+      client.disconnect()
+    }
+  })
+
   test('restores foreground presence after repeated PWA suspension and reconnection', () => {
     jest.useFakeTimers()
     const client = new WebSocketClient('ws://localhost:3000/api/ws')

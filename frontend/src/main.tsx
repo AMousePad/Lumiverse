@@ -253,6 +253,8 @@ const isStandalone =
 
 if (/^Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) {
   document.documentElement.setAttribute('data-platform', 'macos')
+} else if (/^Linux/.test(navigator.platform)) {
+  document.documentElement.setAttribute('data-platform', 'linux')
 }
 
 // iPadOS can identify itself as macOS, so use both the iOS user-agent and

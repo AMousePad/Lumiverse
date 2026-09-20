@@ -502,8 +502,7 @@ export class WebSocketClient {
     let desktopPresenceStopped = false
     void subscribeDesktopPresence((presence) => {
       if (desktopPresenceStopped) return
-      this.desktopPresence = presence
-      this.sendVisibility()
+      this.applyDesktopPresence(presence)
     }).then((unlisten) => {
       if (desktopPresenceStopped) unlisten()
       else desktopPresenceUnlisten = unlisten
@@ -599,14 +598,35 @@ export class WebSocketClient {
     this.send({ type: 'stream_focus', chatId })
   }
 
+  /**
+   * Tauri's native window state is authoritative for its embedded WebView.
+   * WebView2 can leave Page Visibility stale around native hide/show and focus
+   * transitions; treating that stale value as an additional requirement makes
+   * an actually foreground window unsubscribe from live stream tokens. The
+   * generation-pool watchdog then becomes the only update path, which presents
+   * the stream as multi-second chunks.
+   */
+  private applyDesktopPresence(presence: DesktopPresence) {
+    this.desktopPresence = presence
+    if (this.isDocumentVisible()) {
+      if (this.lifecyclePaused) this.resumeFromBackground()
+      else this.sendVisibility()
+      return
+    }
+    this.pauseForBackground()
+    this.sendVisibility()
+  }
+
   private isDocumentVisible() {
+    const desktopPresence = this.desktopPresence ?? getDesktopPresence()
+    if (desktopPresence) return desktopPresence.visible && !desktopPresence.minimized
     return document.visibilityState === 'visible'
   }
 
   private isDocumentFocused() {
-    if (!this.isDocumentVisible()) return false
     const desktopPresence = this.desktopPresence ?? getDesktopPresence()
-    return desktopPresence ? desktopPresence.active : document.hasFocus()
+    if (desktopPresence) return desktopPresence.active
+    return this.isDocumentVisible() && document.hasFocus()
   }
 
   private pauseForBackground() {

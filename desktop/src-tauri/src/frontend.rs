@@ -115,6 +115,24 @@ const FRONTEND_STARTUP_APPEARANCE_FILE: &str = "frontend_startup_appearance.json
 static NEXT_FRONTEND_POPUP_ID: AtomicU64 = AtomicU64::new(1);
 const FRONTEND_DROP_AUTHORIZATION_TTL: Duration = Duration::from_secs(120);
 
+// WebView2 explicitly supports this switch for applications whose foreground
+// work must not be coalesced into background-timer batches. Supplying browser
+// arguments replaces Wry's defaults, so retain its UI/SmartScreen feature
+// exclusions alongside the streaming fix. Every WebView in this process uses
+// the same value because WebView2 requires matching environment options for a
+// shared user-data directory.
+#[cfg(target_os = "windows")]
+const WINDOWS_WEBVIEW_BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling";
+
+fn configure_webview_runtime<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
+    builder: WebviewWindowBuilder<'a, R, M>,
+) -> WebviewWindowBuilder<'a, R, M> {
+    #[cfg(target_os = "windows")]
+    let builder = builder.additional_browser_args(WINDOWS_WEBVIEW_BROWSER_ARGS);
+    builder
+}
+
 #[derive(Default)]
 pub struct FrontendDropState {
     /// Native drag events are the authority for filesystem access. The remote
@@ -759,14 +777,17 @@ pub fn show_frontend(
 
             let popup_id = NEXT_FRONTEND_POPUP_ID.fetch_add(1, Ordering::Relaxed);
             let label = format!("frontend-popup-{popup_id}");
-            let popup =
-                WebviewWindowBuilder::new(&popup_app, &label, WebviewUrl::External(popup_url))
-                    .title("Lumiverse Sign-In")
-                    .window_features(features)
-                    .on_document_title_changed(|window, title| {
-                        let _ = window.set_title(&title);
-                    })
-                    .build();
+            let popup = configure_webview_runtime(WebviewWindowBuilder::new(
+                &popup_app,
+                &label,
+                WebviewUrl::External(popup_url),
+            ))
+            .title("Lumiverse Sign-In")
+            .window_features(features)
+            .on_document_title_changed(|window, title| {
+                let _ = window.set_title(&title);
+            })
+            .build();
 
             match popup {
                 Ok(window) => tauri::webview::NewWindowResponse::Create { window },
@@ -777,6 +798,7 @@ pub fn show_frontend(
             }
         })
         .visible(false);
+    builder = configure_webview_runtime(builder);
 
     // Quality mode opts into the high-refresh WebView configuration where
     // macOS supports it. Balanced and efficiency retain WebKit's stock policy.
@@ -1174,35 +1196,39 @@ pub fn show_extension_widget(
             .map_err(|error| error.to_string())?;
         window.show().map_err(|error| error.to_string())?;
     } else {
-        let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
-            .title(&widget.title)
-            .inner_size(
-                f64::from(widget.width),
-                f64::from(
-                    widget
-                        .height
-                        .saturating_add(if widget.chromeless { 0 } else { 30 }),
-                ),
-            )
-            .min_inner_size(160.0, if widget.chromeless { 100.0 } else { 130.0 })
-            .decorations(false)
-            // Widgets already draw their own visual edge. A native shadow
-            // becomes a conspicuous border around transparent content.
-            .shadow(false)
-            .transparent(true)
-            .background_color(tauri::webview::Color(0, 0, 0, 0))
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .focused(false)
-            // Keep creation non-activating while still delivering the user's
-            // first deliberate click to the WebView's controls/drag regions.
-            .accept_first_mouse(true)
-            // Do not take focus when it opens, but accept focus from a click
-            // so the operating system does not redirect that activation to
-            // the minimized main frontend window.
-            .focusable(true)
-            .resizable(true)
-            .visible(false);
+        let builder = configure_webview_runtime(WebviewWindowBuilder::new(
+            &app,
+            &label,
+            WebviewUrl::External(url),
+        ))
+        .title(&widget.title)
+        .inner_size(
+            f64::from(widget.width),
+            f64::from(
+                widget
+                    .height
+                    .saturating_add(if widget.chromeless { 0 } else { 30 }),
+            ),
+        )
+        .min_inner_size(160.0, if widget.chromeless { 100.0 } else { 130.0 })
+        .decorations(false)
+        // Widgets already draw their own visual edge. A native shadow
+        // becomes a conspicuous border around transparent content.
+        .shadow(false)
+        .transparent(true)
+        .background_color(tauri::webview::Color(0, 0, 0, 0))
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        // Keep creation non-activating while still delivering the user's
+        // first deliberate click to the WebView's controls/drag regions.
+        .accept_first_mouse(true)
+        // Do not take focus when it opens, but accept focus from a click
+        // so the operating system does not redirect that activation to
+        // the minimized main frontend window.
+        .focusable(true)
+        .resizable(true)
+        .visible(false);
         let window = builder.build().map_err(|error| error.to_string())?;
         window
             .set_shadow(false)
@@ -1475,14 +1501,18 @@ pub fn show_frontend_url_settings(app: AppHandle) -> Result<(), String> {
         return window.set_focus().map_err(|e| e.to_string());
     }
 
-    let window = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("custom-url.html".into()))
-        .title("Instance Connection")
-        .inner_size(560.0, 480.0)
-        .min_inner_size(560.0, 480.0)
-        .max_inner_size(560.0, 480.0)
-        .resizable(false)
-        .center()
-        .build()
-        .map_err(|e| e.to_string())?;
+    let window = configure_webview_runtime(WebviewWindowBuilder::new(
+        &app,
+        LABEL,
+        WebviewUrl::App("custom-url.html".into()),
+    ))
+    .title("Instance Connection")
+    .inner_size(560.0, 480.0)
+    .min_inner_size(560.0, 480.0)
+    .max_inner_size(560.0, 480.0)
+    .resizable(false)
+    .center()
+    .build()
+    .map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())
 }

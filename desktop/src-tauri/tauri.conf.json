@@ -24,6 +24,7 @@
         "transparent": true,
         "shadow": false,
         "focus": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling",
         "skipTaskbar": true,
         "alwaysOnBottom": true
       }

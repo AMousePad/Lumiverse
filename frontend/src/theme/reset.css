@@ -268,6 +268,19 @@ body > * {
   zoom: var(--lumiverse-ui-scale, 1);
 }
 
+/* WebKitGTK's CSS zoom either is unavailable (on older distro runtimes) or
+   lays out fixed descendants incorrectly below 100%. In both cases the app
+   shell grows to its scale-compensated height without actually shrinking,
+   which puts bottom-pinned controls such as the chat composer off-screen.
+   Tauri's Linux WebView gets the equivalent individual transform instead.
+   Use the `scale` longhand so component-owned `transform` animations on body
+   portals continue to compose normally. */
+html[data-tauri-desktop][data-platform='linux'] body > * {
+  zoom: 1;
+  scale: var(--lumiverse-ui-scale, 1);
+  transform-origin: top left;
+}
+
 #root {
   width: calc(100% / var(--lumiverse-ui-scale, 1));
   height: calc(100% / var(--lumiverse-ui-scale, 1));
