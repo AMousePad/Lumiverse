@@ -93,6 +93,8 @@ Records stay in server memory and are cleared when tracking is disabled or the s
 
 ### App feels slow
 
+- In the desktop app, set **Rendering** to **Efficiency** in the Theme panel. This disables both the native window blur and in-page glass blur.
+- On Wayland, try disabling **Blur background** under **Use translucent desktop background**. Blur intensity is chosen by the compositor, so selecting a lower intensity in Lumiverse does not reduce the Linux rendering cost.
 - Disable **glass effects** in the Theme panel (backdrop-filter can be GPU-intensive)
 - Reduce the number of messages loaded per page
 - Close unused panels

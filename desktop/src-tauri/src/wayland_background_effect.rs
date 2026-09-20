@@ -7,7 +7,11 @@
 
 use gtk::prelude::*;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use tauri::WebviewWindow;
 use wayland_client::{
     backend::{Backend, ObjectId},
@@ -26,6 +30,11 @@ use wayland_protocols::ext::background_effect::v1::client::{
 };
 
 const CORNER_RADIUS: i32 = 12;
+
+// Tauri can emit several resize and scale-factor events before GTK services
+// its main-thread queue. Only the newest allocated size matters because the
+// blur region is double-buffered with the next wl_surface commit.
+static REFRESH_QUEUED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 struct WaylandEffectState {
@@ -105,6 +114,7 @@ struct WaylandEffectContext {
     compositor: WlCompositor,
     manager: Option<ExtBackgroundEffectManagerV1>,
     effects: HashMap<ObjectId, ExtBackgroundEffectSurfaceV1>,
+    effect_sizes: HashMap<ObjectId, (i32, i32)>,
 }
 
 impl WaylandEffectContext {
@@ -141,6 +151,7 @@ impl WaylandEffectContext {
             compositor,
             manager,
             effects: HashMap::new(),
+            effect_sizes: HashMap::new(),
         })
     }
 
@@ -166,7 +177,7 @@ impl WaylandEffectContext {
         width: i32,
         height: i32,
         enabled: bool,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         self.refresh_events()?;
         let surface = self.surface_proxy(surface_pointer)?;
         // ObjectId includes the object's generation, unlike either its raw
@@ -175,33 +186,47 @@ impl WaylandEffectContext {
 
         if !enabled {
             if let Some(effect) = self.effects.remove(&surface_key) {
+                self.effect_sizes.remove(&surface_key);
                 effect.destroy();
                 self.connection.flush().map_err(|error| {
                     format!("could not flush background-effect removal: {error}")
                 })?;
+                return Ok(true);
             }
-            return Ok(());
+            self.effect_sizes.remove(&surface_key);
+            return Ok(false);
         }
 
         let Some(manager) = self.manager.as_ref() else {
-            return Ok(());
+            return Ok(false);
         };
         if !self.state.can_blur {
-            return Ok(());
+            return Ok(false);
+        }
+
+        let size = normalized_surface_size(width, height);
+        if !effect_region_needs_update(
+            self.effects.contains_key(&surface_key),
+            self.effect_sizes.get(&surface_key).copied(),
+            size,
+        ) {
+            return Ok(false);
         }
 
         let queue = self.event_queue.handle();
         let effect = self
             .effects
-            .entry(surface_key)
+            .entry(surface_key.clone())
             .or_insert_with(|| manager.get_background_effect(&surface, &queue, ()));
         let region = self.compositor.create_region(&queue, ());
-        add_rounded_region(&region, width, height);
+        add_rounded_region(&region, size.0, size.1);
         effect.set_blur_region(Some(&region));
         region.destroy();
         self.connection
             .flush()
-            .map_err(|error| format!("could not flush background-effect update: {error}"))
+            .map_err(|error| format!("could not flush background-effect update: {error}"))?;
+        self.effect_sizes.insert(surface_key, size);
+        Ok(true)
     }
 
     fn refresh(
@@ -214,17 +239,30 @@ impl WaylandEffectContext {
         if !self.effects.contains_key(&surface_key) {
             return Ok(());
         }
-        self.set(surface_pointer, width, height, true)
+        self.set(surface_pointer, width, height, true).map(|_| ())
     }
 
     fn clear(&mut self) -> Result<(), String> {
         for (_, effect) in self.effects.drain() {
             effect.destroy();
         }
+        self.effect_sizes.clear();
         self.connection
             .flush()
             .map_err(|error| format!("could not flush background-effect cleanup: {error}"))
     }
+}
+
+fn normalized_surface_size(width: i32, height: i32) -> (i32, i32) {
+    (width.max(1), height.max(1))
+}
+
+fn effect_region_needs_update(
+    effect_exists: bool,
+    cached_size: Option<(i32, i32)>,
+    requested_size: (i32, i32),
+) -> bool {
+    !effect_exists || cached_size != Some(requested_size)
 }
 
 thread_local! {
@@ -232,26 +270,54 @@ thread_local! {
 }
 
 fn add_rounded_region(region: &WlRegion, width: i32, height: i32) {
+    for (x, y, width, height) in rounded_region_rectangles(width, height) {
+        region.add(x, y, width, height);
+    }
+}
+
+fn rounded_region_rectangles(width: i32, height: i32) -> Vec<(i32, i32, i32, i32)> {
     let width = width.max(1);
     let height = height.max(1);
     let radius = CORNER_RADIUS.min(width / 2).min(height / 2);
     if radius <= 1 {
-        region.add(0, 0, width, height);
-        return;
+        return vec![(0, 0, width, height)];
     }
 
-    // wl_region has rectangles rather than paths. One strip per corner row
-    // closely follows the same 12px rounded rectangle used by the web shell,
-    // preventing the compositor blur from filling its transparent corners.
-    region.add(0, radius, width, height - radius * 2);
-    for y in 0..radius {
+    // wl_region has rectangles rather than paths. Horizontal corner bands
+    // closely follow the same 12px rounded rectangle used by the web shell.
+    // Merge adjacent rows with the same inset to preserve the exact rasterized
+    // shape with fewer protocol requests.
+    let inset_at = |y: i32| {
         let distance = radius as f64 - y as f64 - 0.5;
-        let inset =
-            (radius as f64 - ((radius * radius) as f64 - distance * distance).sqrt()).ceil() as i32;
-        let row_width = (width - inset * 2).max(1);
-        region.add(inset, y, row_width, 1);
-        region.add(inset, height - y - 1, row_width, 1);
+        (radius as f64 - ((radius * radius) as f64 - distance * distance).sqrt()).ceil() as i32
+    };
+
+    let mut rectangles = Vec::with_capacity((radius as usize) * 2 + 1);
+    let middle_height = height - radius * 2;
+    if middle_height > 0 {
+        rectangles.push((0, radius, width, middle_height));
     }
+
+    let mut band_start = 0;
+    let mut band_inset = inset_at(0);
+    for y in 1..=radius {
+        let next_inset = (y < radius).then(|| inset_at(y));
+        if next_inset == Some(band_inset) {
+            continue;
+        }
+
+        let band_height = y - band_start;
+        let row_width = (width - band_inset * 2).max(1);
+        rectangles.push((band_inset, band_start, row_width, band_height));
+        rectangles.push((band_inset, height - y, row_width, band_height));
+
+        if let Some(inset) = next_inset {
+            band_start = y;
+            band_inset = inset;
+        }
+    }
+
+    rectangles
 }
 
 fn wayland_handles(
@@ -286,10 +352,10 @@ pub fn set_background_effect(window: &WebviewWindow, enabled: bool) -> Result<()
                     return Ok(());
                 };
                 let (width, height) = surface_size(&effect_window)?;
-                WAYLAND_EFFECT_CONTEXT.with(|slot| -> Result<(), String> {
+                let changed = WAYLAND_EFFECT_CONTEXT.with(|slot| -> Result<bool, String> {
                     let mut slot = slot.borrow_mut();
                     if !enabled && slot.is_none() {
-                        return Ok(());
+                        return Ok(false);
                     }
                     let replace = slot
                         .as_ref()
@@ -312,8 +378,12 @@ pub fn set_background_effect(window: &WebviewWindow, enabled: bool) -> Result<()
 
                 // The effect is double-buffered wl_surface state. Ask GTK to
                 // paint instead of committing its surface behind its back.
-                if let Ok(gtk_window) = effect_window.gtk_window() {
-                    gtk_window.queue_draw();
+                // Avoid a redraw when Linux ignores an appearance-only option
+                // such as blur intensity and the effective region is unchanged.
+                if changed {
+                    if let Ok(gtk_window) = effect_window.gtk_window() {
+                        gtk_window.queue_draw();
+                    }
                 }
                 Ok::<(), String>(())
             })();
@@ -325,27 +395,34 @@ pub fn set_background_effect(window: &WebviewWindow, enabled: bool) -> Result<()
 }
 
 pub fn refresh_background_effect(window: &WebviewWindow) -> Result<(), String> {
+    if REFRESH_QUEUED.swap(true, Ordering::AcqRel) {
+        return Ok(());
+    }
+
     let effect_window = window.clone();
-    window
-        .run_on_main_thread(move || {
-            let result = (|| {
-                let Some((_display, surface)) = wayland_handles(&effect_window)? else {
-                    return Ok(());
-                };
-                let (width, height) = surface_size(&effect_window)?;
-                WAYLAND_EFFECT_CONTEXT.with(|slot| {
-                    let mut slot = slot.borrow_mut();
-                    if let Some(context) = slot.as_mut() {
-                        context.refresh(surface, width, height)?;
-                    }
-                    Ok::<(), String>(())
-                })
-            })();
-            if let Err(error) = result {
-                eprintln!("[desktop-appearance] Wayland background-effect resize failed: {error}");
-            }
-        })
-        .map_err(|error| error.to_string())
+    let scheduled = window.run_on_main_thread(move || {
+        let result = (|| {
+            let Some((_display, surface)) = wayland_handles(&effect_window)? else {
+                return Ok(());
+            };
+            let (width, height) = surface_size(&effect_window)?;
+            WAYLAND_EFFECT_CONTEXT.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                if let Some(context) = slot.as_mut() {
+                    context.refresh(surface, width, height)?;
+                }
+                Ok::<(), String>(())
+            })
+        })();
+        REFRESH_QUEUED.store(false, Ordering::Release);
+        if let Err(error) = result {
+            eprintln!("[desktop-appearance] Wayland background-effect resize failed: {error}");
+        }
+    });
+    if scheduled.is_err() {
+        REFRESH_QUEUED.store(false, Ordering::Release);
+    }
+    scheduled.map_err(|error| error.to_string())
 }
 
 pub fn clear_background_effects(window: &WebviewWindow) -> Result<(), String> {
@@ -362,4 +439,77 @@ pub fn clear_background_effects(window: &WebviewWindow) -> Result<(), String> {
             });
         })
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        effect_region_needs_update, normalized_surface_size, rounded_region_rectangles,
+        CORNER_RADIUS,
+    };
+
+    #[test]
+    fn normalizes_empty_surface_sizes_before_caching_them() {
+        assert_eq!(normalized_surface_size(0, 0), (1, 1));
+        assert_eq!(normalized_surface_size(-10, 720), (1, 720));
+        assert_eq!(normalized_surface_size(1280, -10), (1280, 1));
+        assert_eq!(normalized_surface_size(1280, 720), (1280, 720));
+    }
+
+    #[test]
+    fn updates_only_new_or_resized_effect_regions() {
+        assert!(effect_region_needs_update(false, None, (1280, 720)));
+        assert!(effect_region_needs_update(
+            false,
+            Some((1280, 720)),
+            (1280, 720)
+        ));
+        assert!(effect_region_needs_update(
+            true,
+            Some((1280, 720)),
+            (1920, 1080)
+        ));
+        assert!(!effect_region_needs_update(
+            true,
+            Some((1280, 720)),
+            (1280, 720)
+        ));
+    }
+
+    #[test]
+    fn rounded_region_merges_equal_corner_rows_without_changing_coverage() {
+        let width = 1280;
+        let height = 720;
+        let rectangles = rounded_region_rectangles(width, height);
+
+        assert!(rectangles.len() < (CORNER_RADIUS as usize) * 2 + 1);
+        assert!(rectangles
+            .iter()
+            .all(|&(_, _, rect_width, rect_height)| rect_width > 0 && rect_height > 0));
+
+        for y in 0..height {
+            let row_rectangles: Vec<_> = rectangles
+                .iter()
+                .filter(|&&(_, top, _, rect_height)| y >= top && y < top + rect_height)
+                .collect();
+            assert_eq!(row_rectangles.len(), 1, "row {y}");
+
+            let expected_inset = if y < CORNER_RADIUS {
+                rounded_inset(y)
+            } else if y >= height - CORNER_RADIUS {
+                rounded_inset(height - y - 1)
+            } else {
+                0
+            };
+            assert_eq!(row_rectangles[0].0, expected_inset, "row {y}");
+            assert_eq!(row_rectangles[0].2, width - expected_inset * 2, "row {y}");
+        }
+    }
+
+    fn rounded_inset(y: i32) -> i32 {
+        let distance = CORNER_RADIUS as f64 - y as f64 - 0.5;
+        (CORNER_RADIUS as f64
+            - ((CORNER_RADIUS * CORNER_RADIUS) as f64 - distance * distance).sqrt())
+        .ceil() as i32
+    }
 }
