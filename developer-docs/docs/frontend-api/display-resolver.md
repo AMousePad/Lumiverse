@@ -49,7 +49,7 @@ const myResolver: SpindleDisplayResolver = {
 |---|---|
 | `resolveBody` | Transform a full message body (macro expansion, format passes) |
 | `resolveTemplates` | Pre-resolve a batch of named templates, such as regex find/replace strings |
-| `applyScripts` | Run the chat's display regex scripts over the content |
+| `applyScripts` | Apply display regex scripts and finalize body processing |
 | `ready(chatId)` | Return whether your resolver can handle this chat right now |
 
 Return `null` from any resolve method to let the host resolve that one with its own path (only for chats you do not own; for owned chats a `null` return shows raw, never a backend fallback).
@@ -72,7 +72,7 @@ Each resolve method receives a `context`:
 | `depth` | `number` | Message depth |
 | `dynamicMacros` | `Record<string, string>?` | Per-call macro values supplied by the host |
 
-The method-specific arguments alongside `context` are: `content` for `resolveBody`, `templates` (a `Record<key, string>`) for `resolveTemplates`, and `content` plus `scripts` for `applyScripts`.
+The method-specific arguments alongside `context` are: `content` for `resolveBody`, `templates` (a `Record<key, string>`) for `resolveTemplates`, and `content`, `scripts`, plus optional `processingState` for `applyScripts`.
 
 ### Result
 
@@ -81,6 +81,7 @@ The method-specific arguments alongside `context` are: `content` for `resolveBod
 | Field | Type | Description |
 |---|---|---|
 | `content` | `string` | The resolved output |
+| `processingState` | `string?` | Opaque state returned by `resolveBody` and passed to `applyScripts` with that content, including cache hits. Frontend only; never sent to the backend |
 | `touchedVars` | `string[]?` | Variables this result depends on, as `scope:name` (e.g. `chat:mood`, `global:lang`) |
 | `cacheable` | `boolean?` | Set `false` to never cache this result. Defaults to cacheable |
 
@@ -89,6 +90,8 @@ The method-specific arguments alongside `context` are: `content` for `resolveBod
 ## Regex waits for your resolver
 
 For chats you own, the host does not run display regex scripts against content your `resolveBody` has not processed yet: the regex pass waits until your result settles, then runs on it.
+
+Set `finalizeWithoutScripts: true` on your resolver to receive `applyScripts` calls with `scripts: []` when no display scripts are active. This opt-in lets your resolver finalize the body; omitted or false preserves the existing no-script bypass. Script results are reused only when `processingState` also matches; an empty string and an omitted state are distinct.
 
 Returning `null` (or throwing) from `resolveBody` shows the raw content for that render without caching it as resolved, so later renders retry.
 
