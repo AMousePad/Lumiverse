@@ -73,6 +73,7 @@ import {
   type LandingPageSortField,
 } from '@/lib/landingPageSnapshot'
 import { preloadChatNavigationSnapshot } from '@/lib/chatNavigationSnapshot'
+import { isMacTauriWebView, isTauriDesktop } from '@/lib/desktopWebView'
 
 function getRecentChatDisplayName(item: GroupedRecentChat, t: TFunction<'landing'>): string {
   return item.is_group
@@ -253,14 +254,23 @@ interface RecentChatAvatarProps {
 function RecentChatAvatar({ item, variant, eager = false }: RecentChatAvatarProps) {
   const characters = useStore((s) => s.characters)
   const isGroup = item.is_group && item.group_character_ids && item.group_character_ids.length > 0
+  const tauriDesktop = isTauriDesktop()
+  const macTauriWebView = isMacTauriWebView()
   // The landing list is already virtualized, so Tauri only mounts a bounded
-  // set of rows. WKWebView can defer native lazy-image loads for a noticeable
+  // set of rows. Desktop WebViews can defer native lazy-image loads for a noticeable
   // period when a previously unmounted row returns to view; request those
   // bounded images eagerly without changing the memory-sensitive PWA path.
-  const imageLoading = eager || (typeof document !== 'undefined'
-    && document.documentElement.hasAttribute('data-tauri-desktop'))
-    ? 'eager'
-    : 'lazy'
+  const imageLoading = eager || tauriDesktop ? 'eager' : 'lazy'
+  // Recent chats are virtualized, so only a bounded set of rows is mounted.
+  // Synchronous decode is safe here and prevents WKWebView from exposing an
+  // image before its compositor surface is ready.
+  const imageDecoding = macTauriWebView
+    ? 'sync'
+    : tauriDesktop
+      ? 'async'
+      : eager
+        ? 'sync'
+        : 'async'
 
   const liveCharacter = item.character_id
     ? characters.find((entry) => entry.id === item.character_id) ?? null
@@ -303,7 +313,7 @@ function RecentChatAvatar({ item, variant, eager = false }: RecentChatAvatarProp
                 <LazyImage
                   src={url}
                   alt=""
-                  decoding={eager ? 'sync' : 'async'}
+                  decoding={imageDecoding}
                   loading={imageLoading}
                   fallback={
                     <div className={styles.mosaicFallback}>
@@ -330,7 +340,7 @@ function RecentChatAvatar({ item, variant, eager = false }: RecentChatAvatarProp
             src={imagesApi.largeUrl(layer.image_id)}
             alt={index === perspectiveLayers.length - 1 ? item.character_name : ''}
             loading={imageLoading}
-            decoding={eager ? 'sync' : 'async'}
+            decoding={imageDecoding}
             draggable={false}
             style={{
               ...getPerspectiveLayerStyle(index, perspectiveLayers.length, layer.intensity),
@@ -348,7 +358,7 @@ function RecentChatAvatar({ item, variant, eager = false }: RecentChatAvatarProp
       <LazyImage
         src={avatarUrl}
         alt={item.character_name}
-        decoding={eager ? 'sync' : 'async'}
+        decoding={imageDecoding}
         loading={imageLoading}
         fallback={
           <div className={fallbackClassName}>

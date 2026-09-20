@@ -306,7 +306,7 @@ mock.module('@/components/shared/SortControl', () => ({
   ),
 }))
 mock.module('@/components/shared/LazyImage', () => ({
-  default: ({ src, alt, fallback, loading }: { src: string; alt: string; fallback?: ReactNode; loading?: 'eager' | 'lazy' }) => src ? <img src={src} alt={alt} loading={loading} /> : fallback ?? null,
+  default: ({ src, alt, fallback, loading, decoding }: { src: string; alt: string; fallback?: ReactNode; loading?: 'eager' | 'lazy'; decoding?: 'sync' | 'async' | 'auto' }) => src ? <img src={src} alt={alt} loading={loading} decoding={decoding} /> : fallback ?? null,
 }))
 mock.module('@/components/shared/FormComponents', () => ({
   Button: ({ children, onClick, disabled, title, className }: { children?: ReactNode; onClick?: () => void; disabled?: boolean; title?: string; className?: string }) => (
@@ -547,6 +547,8 @@ afterEach(async () => {
     for (const { root } of roots) root.unmount()
   })
   document.body.replaceChildren()
+  document.documentElement.removeAttribute('data-tauri-desktop')
+  document.documentElement.removeAttribute('data-platform')
   domWindow.localStorage.clear()
   clearLandingPageSnapshot()
   TestObserverInstances.splice(0)
@@ -710,6 +712,40 @@ describe('LandingPage character library', () => {
     expect(listRecentGrouped).toHaveBeenCalledTimes(2)
 
     await settleDeferred(refresh, page([recentChat('character-1', 'Ava')]))
+  })
+
+  test('keeps the inverse return animation and bounded synchronous images in macOS Tauri', async () => {
+    document.documentElement.setAttribute('data-tauri-desktop', '')
+    document.documentElement.setAttribute('data-platform', 'macos')
+    storeState = createStoreState(false)
+    const ava = recentChat('character-1', 'Ava')
+    writeLandingPageSnapshot({
+      userId: 'test-user-id',
+      items: [ava],
+      total: 1,
+      scrollTop: 0,
+      requestedTab: 'chats',
+      searchQuery: '',
+      sortField: 'recent',
+      sortDirection: 'desc',
+      pageSize: 12,
+      galleryWidth: 'compact',
+      mainWidth: 960,
+      chatViewportHeight: 700,
+      viewportWidth: domWindow.innerWidth,
+      viewportHeight: domWindow.innerHeight,
+      imageUrls: ['/avatar.png'],
+    })
+    listRecentGrouped.mockResolvedValue(page([ava]))
+
+    const host = await mountLanding()
+    const landing = host.querySelector('[data-entry-mode="chat-return"]')
+
+    expect(landing?.classList.contains('routeEntering')).toBe(true)
+    expect(landing?.getAttribute('data-motion-initial')).toBe('{"opacity":0,"y":10,"scale":0.985}')
+    expect(landing?.getAttribute('data-motion-animate')).toBe('{"opacity":1,"y":0,"scale":1}')
+    expect(host.querySelector('img[alt="Ava"]')?.getAttribute('loading')).toBe('eager')
+    expect(host.querySelector('img[alt="Ava"]')?.getAttribute('decoding')).toBe('sync')
   })
 
   test('reconciles a restored chat card with character edits before the refresh resolves', async () => {
@@ -928,6 +964,34 @@ describe('LandingPage character library', () => {
     expect(host.querySelector('[data-entry-mode="cold-return"]')?.getAttribute('data-motion-initial')).toBe('{"opacity":0}')
     expect(host.querySelector('[data-entry-mode="cold-return"]')?.getAttribute('data-motion-animate')).toBe('{"opacity":1}')
     expect(host.querySelector('.cardEntry')).not.toBeNull()
+  })
+
+  test('uses the normal fade and bounded synchronous images for a cold macOS Tauri return', async () => {
+    document.documentElement.setAttribute('data-tauri-desktop', '')
+    document.documentElement.setAttribute('data-platform', 'macos')
+    storeState = createStoreState(false)
+    listRecentGrouped.mockResolvedValue(page([recentChat('character-1', 'Ava')]))
+    markLandingPageChatReturn()
+
+    const host = await mountLanding()
+    await flush()
+
+    expect(host.querySelector('[data-entry-mode="cold-return"]')?.getAttribute('data-motion-initial')).toBe('{"opacity":0}')
+    expect(host.querySelector('img[alt="Ava"]')?.getAttribute('loading')).toBe('eager')
+    expect(host.querySelector('img[alt="Ava"]')?.getAttribute('decoding')).toBe('sync')
+  })
+
+  test('eagerly requests bounded rows but keeps decoding asynchronous in non-macOS Tauri', async () => {
+    document.documentElement.setAttribute('data-tauri-desktop', '')
+    document.documentElement.setAttribute('data-platform', 'linux')
+    storeState = createStoreState(false)
+    listRecentGrouped.mockResolvedValue(page([recentChat('character-1', 'Ava')]))
+
+    const host = await mountLanding()
+    await flush()
+
+    expect(host.querySelector('img[alt="Ava"]')?.getAttribute('loading')).toBe('eager')
+    expect(host.querySelector('img[alt="Ava"]')?.getAttribute('decoding')).toBe('async')
   })
 
   test('keeps the recent-chat gallery compact by default and can expand it', async () => {
