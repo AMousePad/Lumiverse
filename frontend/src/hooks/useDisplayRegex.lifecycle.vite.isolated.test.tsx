@@ -41,7 +41,7 @@ Object.assign(globalThis, {
 })
 
 const pendingResults = new Map<string, (outcome: PipelineOutcome) => void>()
-const applyDisplayRegexTiered = mock((content: string) => new Promise<PipelineOutcome>((resolve) => {
+const applyDisplayRegexTiered = mock((content: string, ..._args: unknown[]) => new Promise<PipelineOutcome>((resolve) => {
   pendingResults.set(content, resolve)
 }))
 const trackInitialDisplayResolve = mock(<T,>(promise: Promise<T>) => promise)
@@ -250,6 +250,46 @@ afterAll(() => {
 })
 
 describe('useDisplayRegex resolver lifecycle', () => {
+  test.each(['empty', 'disabled', 'depth-filtered'])('owned chats finish display processing with %s scripts', async variant => {
+    const originalScripts = storeState.regexScripts
+    storeState.regexScripts = variant === 'empty' ? [] : originalScripts.map(script => ({
+      ...script, disabled: variant === 'disabled', max_depth: variant === 'depth-filtered' ? 0 : null,
+    }))
+    const { host, root } = await createHarness()
+    const props = { content: 'owned final stage', depth: 1, isStreaming: false }
+    try {
+      await render(root, props)
+      expect(applyDisplayRegexTiered.mock.calls[0]?.[1]).toEqual([])
+      expect(host.querySelector('output')?.dataset.pending).toBe('true')
+      await settle(props.content, '<img src="/asset">')
+      expect(readRendered(host)).toBe('<img src="/asset">')
+      expect(host.querySelector('output')?.dataset.pending).toBe('false')
+      await act(async () => { root.render(null) })
+      await act(async () => { root.render(createElement(Harness, props)) })
+      expect(readRendered(host)).toBe('<img src="/asset">')
+      expect(applyDisplayRegexTiered).toHaveBeenCalledTimes(1)
+    } finally {
+      storeState.regexScripts = originalScripts
+      await destroyHarness(host, root)
+    }
+  })
+
+  test('unowned chats with no scripts keep the preprocessing result', async () => {
+    const originalScripts = storeState.regexScripts
+    storeState.regexScripts = []
+    isDisplayChatOwnedMock.mockImplementation(() => false)
+    const { host, root } = await createHarness()
+    try {
+      await renderWhilePreprocessPending(root, { content: 'native text', isStreaming: false })
+      expect(readRendered(host)).toBe('native text')
+      expect(host.querySelector('output')?.dataset.pending).toBe('false')
+      expect(applyDisplayRegexTiered).not.toHaveBeenCalled()
+    } finally {
+      storeState.regexScripts = originalScripts
+      await destroyHarness(host, root)
+    }
+  })
+
   test('a cold virtual row stays provisional through preprocessing and HTML replacement', async () => {
     const { host, root } = await createHarness()
     const identity = { chatId: 'chat-virtual', messageId: 'message-virtual' }
@@ -406,9 +446,13 @@ describe('useDisplayRegex resolver lifecycle', () => {
       expect(host.querySelector('output')?.dataset.pending).toBe('false')
 
       await releasePreprocess(props.content)
+      await waitForPending(props.content)
+      expect(readRendered(host)).toBe('<div>Depth-limited island</div>')
+      expect(applyDisplayRegexTiered.mock.calls.at(-1)?.[1]).toEqual([])
+      await settle(props.content, props.content)
       expect(readRendered(host)).toBe(props.content)
       expect(host.querySelector('output')?.dataset.pending).toBe('false')
-      expect(applyDisplayRegexTiered).toHaveBeenCalledTimes(1)
+      expect(applyDisplayRegexTiered).toHaveBeenCalledTimes(2)
     } finally {
       storeState.regexScripts = originalScripts
       await destroyHarness(host, root)

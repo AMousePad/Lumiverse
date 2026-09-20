@@ -869,7 +869,7 @@ export function useDisplayRegexState(
     activePersonaId, isUser, depth, macroCtx, messageIndex, resolvedTemplateKey,
     dynamicMacros, previousContent, displayOwned, displayScripts])
   const version = `${contextKey}|${cvSnapshot}`
-  const contentCacheKey = displayScripts.length === 0 || passthrough || regexGated
+  const contentCacheKey = passthrough || regexGated
     ? null : JSON.stringify([contextKey, content])
   const schedule = useDisplayTask(version, content, isStreaming)
   const cachedResolvedContent = contentCacheKey ? displayRegexContentCache.get(contentCacheKey)?.value : undefined
@@ -943,7 +943,7 @@ export function useDisplayRegexState(
     seenState.current = resolvedContentState
     if (resolvedContentState?.version === version) carry.current = resolvedContentState
   }
-  const live = passthrough || (displayScripts.length === 0 && preprocessSettled) ? content : cachedResolvedContent
+  const live = passthrough ? content : cachedResolvedContent
     ?? (resolvedContentState?.key === contentCacheKey && resolvedContentState.version === version
       ? resolvedContentState.value : undefined)
   const pending = !preprocessSettled || (
