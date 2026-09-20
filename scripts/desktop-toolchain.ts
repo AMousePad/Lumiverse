@@ -173,51 +173,70 @@ async function checkMacosPrerequisites(): Promise<ToolchainCheck[]> {
 }
 
 async function checkLinuxPrerequisites(): Promise<ToolchainCheck[]> {
-  const remedy = [
+  const nativeRemedy = [
     "Install the GTK/WebKitGTK and AppIndicator development packages.",
     "The exact package names for Debian, Fedora and Arch are listed in",
     "desktop/README.md under Prerequisites.",
   ];
+  const checks: ToolchainCheck[] = [];
 
   const pkgConfig = await probe(["pkg-config", "--version"]);
   if (!pkgConfig.ok) {
     // Without pkg-config there is no reliable way to ask about the libraries,
     // and guessing package state from the filesystem is worse than admitting
     // the check could not run.
-    return [
-      {
-        id: "webkitgtk",
-        label: "WebKitGTK / AppIndicator",
-        status: "unverified",
-        detail: "pkg-config is not installed, so the libraries could not be checked",
-        remedy,
-      },
-    ];
+    checks.push({
+      id: "webkitgtk",
+      label: "WebKitGTK / AppIndicator",
+      status: "unverified",
+      detail: "pkg-config is not installed, so the libraries could not be checked",
+      remedy: nativeRemedy,
+    });
+  } else {
+    for (const [id, label, packages] of [
+      ["webkitgtk", "WebKitGTK 4.1", ["webkit2gtk-4.1"]],
+      // Either implementation satisfies the build. desktop/README.md installs
+      // the Ayatana package on Debian and libappindicator-gtk3 on Fedora and
+      // Arch, and the two register different pkg-config names.
+      ["appindicator", "AppIndicator", ["ayatana-appindicator3-0.1", "appindicator3-0.1"]],
+    ] as const) {
+      let found: string | null = null;
+      for (const pkg of packages) {
+        if ((await probe(["pkg-config", "--exists", pkg])).ok) {
+          found = pkg;
+          break;
+        }
+      }
+      checks.push({
+        id,
+        label,
+        status: found ? "ok" : "missing",
+        detail: found ? `${found} found` : `${packages.join(" / ")} not found`,
+        remedy: found ? [] : nativeRemedy,
+      });
+    }
   }
 
-  const checks: ToolchainCheck[] = [];
-  for (const [id, label, packages] of [
-    ["webkitgtk", "WebKitGTK 4.1", ["webkit2gtk-4.1"]],
-    // Either implementation satisfies the build. desktop/README.md installs
-    // the Ayatana package on Debian and libappindicator-gtk3 on Fedora and
-    // Arch, and the two register different pkg-config names.
-    ["appindicator", "AppIndicator", ["ayatana-appindicator3-0.1", "appindicator3-0.1"]],
-  ] as const) {
-    let found: string | null = null;
-    for (const pkg of packages) {
-      if ((await probe(["pkg-config", "--exists", pkg])).ok) {
-        found = pkg;
-        break;
-      }
-    }
-    checks.push({
-      id,
-      label,
-      status: found ? "ok" : "missing",
-      detail: found ? `${found} found` : `${packages.join(" / ")} not found`,
-      remedy: found ? [] : remedy,
-    });
+  const requiredAudioElements = ["appsrc", "autoaudiosink", "mpg123audiodec", "pulsesink"];
+  const missingAudioElements: string[] = [];
+  for (const element of requiredAudioElements) {
+    if (!(await probe(["gst-inspect-1.0", element])).ok) missingAudioElements.push(element);
   }
+  checks.push({
+    id: "gstreamer-audio",
+    label: "GStreamer audio plugins",
+    status: missingAudioElements.length === 0 ? "ok" : "missing",
+    detail: missingAudioElements.length === 0
+      ? "AppImage audio factories found"
+      : `missing ${missingAudioElements.join(", ")}`,
+    remedy: missingAudioElements.length === 0
+      ? []
+      : [
+          "Install GStreamer tools plus the base and good plugin sets.",
+          "The platform-specific commands are listed in desktop/README.md",
+          "under Prerequisites.",
+        ],
+  });
   return checks;
 }
 

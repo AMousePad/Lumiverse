@@ -82,9 +82,10 @@ desktop-only setting.
 
 ## Run a prebuilt Linux AppImage
 
-The release AppImage already contains the compiled Rust shell and its GTK 3 /
-WebKitGTK 4.1 libraries. Running it does **not** require Cargo, a Rust toolchain,
-or a system WebKitGTK package. Lumiverse Desktop still requires
+The release AppImage already contains the compiled Rust shell, its GTK 3 /
+WebKitGTK 4.1 libraries, and the GStreamer plugins used for browser audio.
+Running it does **not** require Cargo, a Rust toolchain, a system WebKitGTK
+package, or system GStreamer plugins. Lumiverse Desktop still requires
 [Bun](https://bun.sh) ≥ 1.4.0 and a Lumiverse checkout because the desktop
 companion does not bundle the server.
 
@@ -146,7 +147,8 @@ Platform-specific build requirements:
   ```bash
   sudo apt install build-essential curl wget file libssl-dev \
     libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-    librsvg2-dev libxdo-dev
+    librsvg2-dev libxdo-dev gstreamer1.0-tools \
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good
   ```
 
   Fedora:
@@ -154,20 +156,24 @@ Platform-specific build requirements:
   ```bash
   sudo dnf install gcc gcc-c++ make curl wget file openssl-devel \
     webkit2gtk4.1-devel libappindicator-gtk3-devel \
-    librsvg2-devel libxdo-devel
+    librsvg2-devel libxdo-devel gstreamer1 \
+    gstreamer1-plugins-base gstreamer1-plugins-good
   ```
 
   Arch Linux:
 
   ```bash
   sudo pacman -S --needed base-devel curl wget file openssl \
-    webkit2gtk-4.1 libappindicator-gtk3 librsvg libxdo
+    webkit2gtk-4.1 libappindicator-gtk3 librsvg libxdo \
+    gstreamer gst-plugins-base gst-plugins-good
   ```
 
   Package names vary by distribution. `libayatana-appindicator3-dev` may be
   substituted with the distribution's `libappindicator` development package.
-  These are build dependencies; a machine running an unpackaged Linux binary
-  also needs the matching AppIndicator runtime library.
+  The GStreamer plugin sets are copied into AppImage builds so WebKit's audio
+  support does not depend on host plugins hidden by the AppImage launcher.
+  The other packages are build dependencies; a machine running an unpackaged
+  Linux binary also needs the matching AppIndicator runtime library.
 
   GNOME Shell does not show StatusNotifier items by default, so install and
   enable an AppIndicator/KStatusNotifier extension (for example,
@@ -234,10 +240,11 @@ bun install
 bun run tauri:finalized build
 ```
 
-On Linux this removes the build runner's `libwayland-client` from the finished
-AppImage before it is published, so Mesa and EGL use the version supplied by
-the host display stack. The finalized image is extracted and checked before the
-build succeeds. Other bundle formats and platforms pass through unchanged.
+On Linux, Tauri bundles the GStreamer media framework needed by WebKit audio.
+The finalizer verifies the audio plugins and their AppRun search paths, removes
+the build runner's `libwayland-client` so Mesa and EGL use the host display
+stack, then extracts and checks the finished image before the build succeeds.
+Other bundle formats and platforms pass through unchanged.
 
 Bundles land in `desktop/src-tauri/target/release/bundle/` (`.app`/`.dmg`
 on macOS, `.msi`/`.exe` installers on Windows, and Linux packages such as

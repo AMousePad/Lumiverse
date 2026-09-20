@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # linuxdeploy follows the app's ELF dependencies and copies the build host's
 # libwayland-client into the AppImage. Host Mesa/EGL drivers then load against
 # that older copy and abort WebKit before the tray JavaScript can start. Keep
@@ -33,6 +35,12 @@ fi
 appimage="${appimages[0]}"
 appdir="${appdirs[0]}"
 chmod +x "$appimage"
+
+# Tauri's GTK AppRun hook points GStreamer exclusively at the AppImage. An
+# empty or partial plugin directory therefore hides working host plugins and
+# can make WebKit's renderer abort on the first audio graph. Refuse to publish
+# an image unless Tauri's media-framework plugin staged the complete baseline.
+bash "$script_dir/verify-appimage-gstreamer.sh" "$appdir"
 
 assert_no_bundled_wayland_client() {
   local root="$1"
@@ -112,5 +120,6 @@ fi
   "$appimage" --appimage-extract >/dev/null
 )
 assert_no_bundled_wayland_client "$verification_dir/squashfs-root"
+bash "$script_dir/verify-appimage-gstreamer.sh" "$verification_dir/squashfs-root"
 
-echo "Finalized $(basename "$appimage"): host libwayland-client will be used at runtime."
+echo "Finalized $(basename "$appimage"): host libwayland-client and bundled GStreamer media support verified."

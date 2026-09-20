@@ -14,6 +14,7 @@ on:
       - "scripts/finalize-appimage.sh"
       - "scripts/smoke-test-appimage.sh"
       - "scripts/tauri-finalized.ts"
+      - "scripts/verify-appimage-gstreamer.sh"
       - "scripts/runner.ts"
       - "scripts/runner/**"
       - "src/main.ts"
@@ -110,7 +111,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf xdg-utils \
-            dbus-x11 xauth xvfb
+            dbus-x11 xauth xvfb gstreamer1.0-tools gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good
 
       - name: Install desktop dependencies
         working-directory: desktop

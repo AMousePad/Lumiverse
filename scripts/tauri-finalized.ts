@@ -1,9 +1,32 @@
 #!/usr/bin/env bun
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 const PROJECT_ROOT = join(import.meta.dir, "..");
 const DESKTOP_DIR = join(PROJECT_ROOT, "desktop");
+
+type GStreamerDirectoryVariable = "pluginsdir" | "pluginscannerdir";
+type GStreamerDirectoryResolver = (variable: GStreamerDirectoryVariable) => string | undefined;
+
+function resolveGStreamerDirectory(
+  variable: GStreamerDirectoryVariable,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  try {
+    const result = Bun.spawnSync({
+      cmd: ["pkg-config", `--variable=${variable}`, "gstreamer-1.0"],
+      env,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    if (result.exitCode !== 0) return undefined;
+    const directory = new TextDecoder().decode(result.stdout).trim();
+    return directory && existsSync(directory) ? directory : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function requestedAppImage(args: string[]): boolean {
   const equalsForm = args.find((arg) => arg.startsWith("--bundles="));
@@ -29,10 +52,15 @@ export function tauriBuildEnvironment(
   args: string[],
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
+  resolveGStreamer: GStreamerDirectoryResolver = (variable) =>
+    resolveGStreamerDirectory(variable, env),
 ): NodeJS.ProcessEnv {
   if (platform !== "linux" || args[0] !== "build" || !requestedAppImage(args)) {
     return env;
   }
+
+  const pluginsDir = env.GSTREAMER_PLUGINS_DIR || resolveGStreamer("pluginsdir");
+  const helpersDir = env.GSTREAMER_HELPERS_DIR || resolveGStreamer("pluginscannerdir");
 
   return {
     ...env,
@@ -43,6 +71,11 @@ export function tauriBuildEnvironment(
     // sections used by Arch/CachyOS libraries. Distribution libraries are
     // already stripped; skipping this optional pass is safe and portable.
     NO_STRIP: "1",
+    // Tauri's GStreamer linuxdeploy plugin guesses Ubuntu's multiarch paths.
+    // pkg-config makes the same finalized build work on Fedora and Arch and
+    // ensures its AppRun hook points at the scanner copied into the image.
+    ...(pluginsDir ? { GSTREAMER_PLUGINS_DIR: pluginsDir } : {}),
+    ...(helpersDir ? { GSTREAMER_HELPERS_DIR: helpersDir } : {}),
   };
 }
 

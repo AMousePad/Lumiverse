@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 bundle_dir="${1:?usage: smoke-test-appimage.sh <bundle-directory>}"
 if [[ ! -d "$bundle_dir" ]]; then
   echo "AppImage bundle directory does not exist: $bundle_dir" >&2
@@ -45,6 +47,7 @@ if [[ ${#bundled_wayland[@]} -gt 0 ]]; then
   printf '  %s\n' "${bundled_wayland[@]}" >&2
   exit 1
 fi
+bash "$script_dir/verify-appimage-gstreamer.sh" "$inspection_dir/squashfs-root"
 
 set +e
 timeout 15s dbus-run-session -- xvfb-run -a \
