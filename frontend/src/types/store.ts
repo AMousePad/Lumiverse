@@ -216,6 +216,7 @@ export interface ResolvedPersonaBinding {
 
 export interface PersonasSlice {
   personas: Persona[]
+  personasLoaded: boolean
   activePersonaId: string | null
   /** Persona ids ordered by most recent activation, independent of edit timestamps. */
   recentPersonaIds: string[]

@@ -646,6 +646,7 @@ export default function ChatView() {
     if (!chatId) return
 
     let cancelled = false
+    let stopPersonaResolution = () => {}
 
     const loadChat = async () => {
       // Multiplayer peers don't own this chat — the host's instance can't be
@@ -804,69 +805,82 @@ export default function ChatView() {
         // character/tag auto-bindings, then the default persona. Temporary
         // chats are persona-less — leave the global persona alone.
         if (chat.metadata?.temporary !== true) {
-          const {
-            characterPersonaBindings,
-            personaTagBindings,
-            personas: allPersonas,
-            setActivePersona,
-            activePersonaId,
-            setActiveChatMetadata,
-          } = useStore.getState()
-          const resolvedPersona = resolveChatPersonaSelection({
-            metadata: chat.metadata,
-            characterId: chat.character_id,
-            characterTags: openedCharacter?.tags ?? [],
-            personas: allPersonas,
-            characterPersonaBindings,
-            personaTagBindings,
-          })
-          const resolvedChatPersona = resolvedPersona.personaId
-            ? allPersonas.find((p) => p.id === resolvedPersona.personaId) ?? null
-            : null
-
-          if (resolvedPersona.persistedPersonaStale) {
-            const nextMetadata = setPersistedChatPersonaId(chat.metadata, null)
-            chat.metadata = nextMetadata ?? {}
-            if (!cancelled) {
-              setActiveChatMetadata(nextMetadata)
+          const resolvePersona = () => {
+            const state = useStore.getState()
+            if (cancelled || state.activeChatId !== chatId) {
+              stopPersonaResolution()
+              return
             }
-            chatsApi.patchMetadata(chatId, { [CHAT_PERSONA_METADATA_KEY]: null }).catch(() => {})
-          }
+            if (!state.personasLoaded || !state.fullSettingsLoaded) return
+            stopPersonaResolution()
+            chat.metadata = state.activeChatMetadata ?? {}
+            if (chat.metadata.temporary === true) return
+            const {
+              characterPersonaBindings,
+              personaTagBindings,
+              personas: allPersonas,
+              setActivePersona,
+              activePersonaId,
+              setActiveChatMetadata,
+            } = useStore.getState()
+            const resolvedPersona = resolveChatPersonaSelection({
+              metadata: chat.metadata,
+              characterId: chat.character_id,
+              characterTags: openedCharacter?.tags ?? [],
+              personas: allPersonas,
+              characterPersonaBindings,
+              personaTagBindings,
+            })
+            const resolvedChatPersona = resolvedPersona.personaId
+              ? allPersonas.find((p) => p.id === resolvedPersona.personaId) ?? null
+              : null
 
-          if (!cancelled && activePersonaId !== resolvedPersona.personaId) {
-            setActivePersona(resolvedPersona.personaId)
-            if (resolvedChatPersona && resolvedPersona.source !== 'default') {
-              toast.info(t('chatView.switchedPersona', { name: personaToastName(resolvedChatPersona) }))
+            if (resolvedPersona.persistedPersonaStale) {
+              const nextMetadata = setPersistedChatPersonaId(chat.metadata, null)
+              chat.metadata = nextMetadata ?? {}
+              if (!cancelled) {
+                setActiveChatMetadata(nextMetadata)
+              }
+              chatsApi.patchMetadata(chatId, { [CHAT_PERSONA_METADATA_KEY]: null }).catch(() => {})
             }
-          }
 
-          if (
-            (resolvedPersona.source === 'character' || resolvedPersona.source === 'tag') &&
-            resolvedChatPersona &&
-            resolvedPersona.addonStates &&
-            Object.keys(resolvedPersona.addonStates).length > 0 &&
-            !cancelled
-          ) {
-            // Apply the binding's add-on snapshot so the bound selections take
-            // effect and are visible in this chat. Seed only when the chat has
-            // no per-chat states for the persona yet, so a fresh chat picks up
-            // the binding while later in-chat tweaks are never clobbered.
+            if (!cancelled && activePersonaId !== resolvedPersona.personaId) {
+              setActivePersona(resolvedPersona.personaId)
+              if (resolvedChatPersona && resolvedPersona.source !== 'default') {
+                toast.info(t('chatView.switchedPersona', { name: personaToastName(resolvedChatPersona) }))
+              }
+            }
+
             if (
+              (resolvedPersona.source === 'character' || resolvedPersona.source === 'tag') &&
+              resolvedChatPersona &&
               resolvedPersona.addonStates &&
-              Object.keys(resolvedPersona.addonStates).length > 0
+              Object.keys(resolvedPersona.addonStates).length > 0 &&
+              !cancelled
             ) {
-              const existing = (chat.metadata?.persona_addon_states ?? {}) as Record<string, Record<string, boolean>>
-              if (!existing[resolvedChatPersona.id]) {
-                const nextStates = { ...existing, [resolvedChatPersona.id]: { ...resolvedPersona.addonStates } }
-                // Fold into chat.metadata and re-publish the snapshot (the
-                // canonical publish already happened alongside setMessages);
-                // persist for future opens.
-                chat.metadata = { ...(chat.metadata ?? {}), persona_addon_states: nextStates }
-                useStore.getState().setActiveChatMetadata(chat.metadata)
-                chatsApi.patchMetadata(chatId, { persona_addon_states: nextStates }).catch(() => {})
+              // Apply the binding's add-on snapshot so the bound selections take
+              // effect and are visible in this chat. Seed only when the chat has
+              // no per-chat states for the persona yet, so a fresh chat picks up
+              // the binding while later in-chat tweaks are never clobbered.
+              if (
+                resolvedPersona.addonStates &&
+                Object.keys(resolvedPersona.addonStates).length > 0
+              ) {
+                const existing = (chat.metadata?.persona_addon_states ?? {}) as Record<string, Record<string, boolean>>
+                if (!existing[resolvedChatPersona.id]) {
+                  const nextStates = { ...existing, [resolvedChatPersona.id]: { ...resolvedPersona.addonStates } }
+                  // Fold into chat.metadata and re-publish the snapshot (the
+                  // canonical publish already happened alongside setMessages);
+                  // persist for future opens.
+                  chat.metadata = { ...(chat.metadata ?? {}), persona_addon_states: nextStates }
+                  useStore.getState().setActiveChatMetadata(chat.metadata)
+                  chatsApi.patchMetadata(chatId, { persona_addon_states: nextStates }).catch(() => {})
+                }
               }
             }
           }
+          stopPersonaResolution = useStore.subscribe(resolvePersona)
+          resolvePersona()
         }
 
         // Auto-apply loadout if a binding exists for this chat/character
@@ -930,6 +944,7 @@ export default function ChatView() {
 
     return () => {
       cancelled = true
+      stopPersonaResolution()
     }
   }, [chatId, setActiveChat, setMessages, t])
 

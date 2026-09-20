@@ -211,7 +211,9 @@ export function applyBootstrap(
   if (!errors['imageGen.providers']) store.setImageGenProviders(payload.imageGen.providers)
 
   if (!errors['packs']) store.setPacks(payload.packs.data)
-  if (!errors['personas']) store.setPersonas(payload.personas.data)
+  if (!errors['personas'] && payload.personas.data.length >= payload.personas.total) {
+    store.setPersonas(payload.personas.data)
+  }
   if (!errors['regexScripts']) store.setRegexScripts(payload.regexScripts.data)
 
   // Landing page preload — no fallback needed: when absent, the landing page
