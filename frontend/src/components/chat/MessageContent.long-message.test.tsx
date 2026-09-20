@@ -178,20 +178,40 @@ describe('MessageContent inline HTML rendering', () => {
     await render(inlineScene(count))
 
     expect(host.querySelectorAll('[data-lumiverse-html-island]')).toHaveLength(0)
+    expect(host.querySelectorAll('[data-lumiverse-inline-html-card]')).toHaveLength(count >= 3 ? 1 : 0)
     expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(count)
     expect(host.querySelector('.scene > img')).not.toBeNull()
   })
 
+  test('restores spacing around a mid-message inline card without isolating it', async () => {
+    await render(`Before\n\n${inlineScene(3)}\n\nAfter`)
+
+    const shell = host.querySelector<HTMLElement>('[data-lumiverse-inline-html-card]')
+    expect(shell?.firstElementChild).toBe(host.querySelector('.scene'))
+    expect(shell?.shadowRoot).toBeNull()
+    expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(3)
+    expect(host.textContent).toContain('Before')
+    expect(host.textContent).toContain('After')
+  })
+
   test('keeps document selectors working across style-count changes while streaming', async () => {
     await render(inlineScene(2), true)
+    const image = host.querySelector('.scene > img')
+    const prose = host.querySelector('.scene')?.parentElement
 
     for (const count of [3, 8, 1]) {
       await render(inlineScene(count), true)
       expect(host.querySelectorAll('[data-lumiverse-html-island]')).toHaveLength(0)
+      expect(host.querySelectorAll('[data-lumiverse-inline-html-card]')).toHaveLength(count >= 3 ? 1 : 0)
       expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(count)
+      expect(host.querySelector('.scene')?.parentElement).toBe(prose)
+      expect(prose?.hasAttribute('data-lumiverse-inline-html-card')).toBe(count >= 3)
+      expect(host.querySelector('.scene > img') === image).toBe(true)
     }
     await render(inlineScene(1))
     expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(1)
+    expect(host.querySelectorAll('[data-lumiverse-inline-html-card]')).toHaveLength(0)
+    expect(host.querySelector('.scene > img') === image).toBe(true)
   })
 
   test.each([
