@@ -4014,10 +4014,12 @@ async function runGeneration(
         // ── Generation metrics (tokenCount, TTFT, TPS) ───────────────────
         const finalPoolEntry = pool.getPoolEntry(generationId);
         let calculatedResponseTokenCount: number | undefined;
-        // Calculate visible response tokens separately for TPS. Provider usage
-        // below remains authoritative for the message's total completion count,
-        // but may include hidden OpenAI/Claude/Gemini reasoning tokens.
-        if (fullContent.length > 0) {
+        const providerTokenCounts = resolveGenerationTokenCounts(
+          streamUsage?.completion_tokens,
+        );
+        // Provider completion usage is authoritative. Only pay the cost of
+        // tokenizing the finalized message when the provider omitted it.
+        if (providerTokenCounts.messageTokenCount == null && fullContent.length > 0) {
           try {
             calculatedResponseTokenCount =
               (await tokenizerSvc.countForModel(model, fullContent)) ??

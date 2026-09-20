@@ -172,7 +172,7 @@ test("generation meta token count falls back to visible response tokenization", 
     tokenizerSpy.mockRestore();
   }
 });
-test("generation meta token count prefers final provider usage", async () => {
+test("generation meta token count uses provider usage without local tokenization", async () => {
   const tokenizerSpy = spyOn(tokenizer, "countForModel").mockResolvedValue(4);
   try {
     const { generationId } = await run("openai", [
@@ -189,7 +189,7 @@ test("generation meta token count prefers final provider usage", async () => {
     }
 
     const metricsEvent = metricsReady.find((event) => event.generationId === generationId);
-    expect(tokenizerSpy).toHaveBeenCalledWith("test-model", "Visible answer.");
+    expect(tokenizerSpy).not.toHaveBeenCalled();
     expect(metricsEvent?.tokenCount).toBe(128);
   } finally {
     tokenizerSpy.mockRestore();

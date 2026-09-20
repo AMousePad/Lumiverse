@@ -4,14 +4,21 @@ import {
   resolveGenerationTokenCounts,
 } from "./metrics";
 
-test("message token count prefers final provider usage over calculated response tokens", () => {
+test("message token count prefers provider usage over local tokenization", () => {
   expect(resolveGenerationTokenCounts(128, 40)).toEqual({
     messageTokenCount: 128,
-    responseTokenCount: 40,
+    responseTokenCount: 128,
   });
 });
 
-test("message token count falls back to calculated response tokens without valid usage", () => {
+test("provider usage supplies token counts without local tokenization", () => {
+  expect(resolveGenerationTokenCounts(128)).toEqual({
+    messageTokenCount: 128,
+    responseTokenCount: 128,
+  });
+});
+
+test("message token count ignores invalid provider usage", () => {
   expect(resolveGenerationTokenCounts(undefined, 40)).toEqual({
     messageTokenCount: 40,
     responseTokenCount: 40,

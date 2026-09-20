@@ -14,16 +14,15 @@ export interface GenerationTimingMetrics {
 }
 
 export interface GenerationTokenCounts {
-  /** Authoritative total generated-token count for message metadata. */
+  /** Authoritative generated-token count for message metadata. */
   messageTokenCount?: number;
-  /** Visible response-token count used for response-only throughput. */
+  /** Generated-token count used for response throughput. */
   responseTokenCount?: number;
 }
 
 /**
- * Provider completion usage is authoritative for the message total. Keep the
- * separately calculated visible-response count for TPS because provider totals
- * may include hidden reasoning tokens.
+ * Prefer the provider's final completion usage. Locally calculated message
+ * tokens are a fallback for providers that do not return usable metadata.
  */
 export function resolveGenerationTokenCounts(
   providerCompletionTokenCount: unknown,
@@ -36,16 +35,17 @@ export function resolveGenerationTokenCounts(
       ? Math.floor(providerCompletionTokenCount)
       : undefined;
 
+  const resolvedCount = normalizedProviderCount ?? calculatedResponseTokenCount;
   return {
-    messageTokenCount: normalizedProviderCount ?? calculatedResponseTokenCount,
-    responseTokenCount: calculatedResponseTokenCount,
+    messageTokenCount: resolvedCount,
+    responseTokenCount: resolvedCount,
   };
 }
 
 /**
- * Calculate timings for the visible response. TTFT retains its historical
- * meaning (the first provider token, including reasoning), while TPS starts at
- * the first response-content token and uses only the visible response count.
+ * Calculate response timings. TTFT retains its historical meaning (the first
+ * provider token, including reasoning), while TPS starts at the first
+ * response-content token and uses the resolved provider-or-local token count.
  */
 export function calculateGenerationTimingMetrics(
   source: GenerationTimingSource,
