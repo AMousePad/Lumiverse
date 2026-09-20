@@ -18,6 +18,9 @@ test('worker hooks preserve thrown values and propagate cancellation across the 
     }
     spindle.registerContextHandler(handle, 100, { required: true });
     spindle.registerInterceptor((_messages, context) => handle(context, context.signal), { required: true });
+    spindle.onFrontendMessage((payload, userId, frontendSessionId) => {
+      spindle.sendToFrontend(payload, userId, { frontendSessionId });
+    });
   `);
   const received: any[] = [];
   const listeners = new Set<() => void>();
@@ -54,6 +57,10 @@ test('worker hooks preserve thrown values and propagate cancellation across the 
     const registration = received.find(message => message.type === 'register_interceptor');
     expect(registration.required).toBe(true);
     expect(received.find(message => message.type === 'register_context_handler').required).toBe(true);
+    worker.send({ type: 'frontend_message', userId: 'owner', frontendSessionId: '0123456789abcdef0123456789abcdef', payload: { echo: true } });
+    expect(await waitFor(message => message.type === 'frontend_message' && message.payload.echo)).toMatchObject({
+      userId: 'owner', frontendSessionId: '0123456789abcdef0123456789abcdef', payload: { echo: true },
+    });
     for (const kind of ['context_handler', 'intercept']) {
       for (const failure of [null, undefined, '', 'failure', false, 0]) {
         const requestId = crypto.randomUUID();

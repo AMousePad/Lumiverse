@@ -236,7 +236,7 @@ export function useDesktopWidgetRuntime(
       await store.getState().loadSettings()
       if (disposed) return
       setPhase('connecting')
-      wsClient.connect()
+      wsClient.connect({ executionOwner: false })
     })().catch((error) => {
       if (disposed) return
       console.error('[desktop-widget] startup failed:', error)

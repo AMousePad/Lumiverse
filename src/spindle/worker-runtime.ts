@@ -299,6 +299,7 @@ type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
+  | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
   | { type: 'runtime_state_read'; requestId: string; chatId: string; characterId: string; userId?: string }
   | { type: 'runtime_state_write'; requestId: string; chatId: string; command: import('./runtime-state').RuntimeStateCommand; userId?: string; mutationId?: string }
   | { type: 'register_interceptor'; registrationId: string; priority?: number; match?: InterceptorRegistrationMatchOptions['match']; required?: boolean }
@@ -609,6 +610,7 @@ type RuntimeWorkerToHost =
 
 type RuntimeHostToWorker =
   | { type: 'context_handler_abort'; requestId: string; reason: string }
+  | { type: 'frontend_message'; payload: unknown; userId: string; frontendSessionId?: string }
   | HostToWorker
   | {
       type: "rpc_pool_request";
@@ -1097,7 +1099,7 @@ let worldInfoInterceptorFn:
 let oauthCallbackHandler:
   | ((params: Record<string, string>) => Promise<{ html?: string } | void>)
   | null = null;
-const frontendMessageHandlers = new Set<(payload: unknown, userId: string) => void>();
+const frontendMessageHandlers = new Set<(payload: unknown, userId: string, frontendSessionId?: string) => void>();
 const frontendRuntimeCapabilityRefCounts = new Map<"message_tag_interceptor", number>();
 const commandInvokedHandlers = new Set<(commandId: string, context: any) => void | Promise<void>>();
 const permissionDeniedHandlers = new Set<(detail: PermissionDeniedDetail) => void>();
@@ -4036,11 +4038,11 @@ const spindleApi: RuntimeSpindleAPI = {
     post({ type: "register_world_info_interceptor", priority });
   },
 
-  sendToFrontend(payload: unknown, userId?: string): void {
-    post({ type: "frontend_message", payload, userId });
+  sendToFrontend(payload: unknown, userId?: string, options?: { frontendSessionId?: string }): void {
+    post({ type: "frontend_message", payload, userId, frontendSessionId: options?.frontendSessionId });
   },
 
-  onFrontendMessage(handler: (payload: unknown, userId: string) => void): () => void {
+  onFrontendMessage(handler: (payload: unknown, userId: string, frontendSessionId?: string) => void): () => void {
     frontendMessageHandlers.add(handler);
     return () => {
       frontendMessageHandlers.delete(handler);
@@ -4882,7 +4884,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
 
       for (const handler of frontendMessageHandlers) {
         try {
-          handler(msg.payload, msg.userId)
+          handler(msg.payload, msg.userId, 'frontendSessionId' in msg ? msg.frontendSessionId : undefined)
         } catch (err: any) {
           post({
             type: "log",

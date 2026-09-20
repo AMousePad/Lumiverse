@@ -1,6 +1,7 @@
 export enum EventType {
   // Connection
   CONNECTED = "CONNECTED",
+  FRONTEND_SESSION_CLOSED = 'FRONTEND_SESSION_CLOSED',
 
   // Chat lifecycle
   CHAT_CREATED = "CHAT_CREATED",

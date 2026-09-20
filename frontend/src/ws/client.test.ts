@@ -42,7 +42,7 @@ class MockWebSocket {
   sent: string[] = []
   closeCalls = 0
 
-  constructor(_url: string) {
+  constructor(readonly url: string) {
     MockWebSocket.instances.push(this)
   }
 
@@ -115,6 +115,31 @@ function makeClient() {
 }
 
 describe('WebSocketClient push presence', () => {
+  test('widget connections stay ineligible for execution ownership after reconnect', () => {
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    try {
+      client.connect({ executionOwner: false })
+      expect(new URL(MockWebSocket.instances.at(-1)!.url).searchParams.get('frontend_runtime')).toBe('widget')
+      client.disconnect()
+      client.connect()
+      expect(new URL(MockWebSocket.instances.at(-1)!.url).searchParams.get('frontend_runtime')).toBe('widget')
+    } finally { client.disconnect() }
+  })
+
+  test('reconnections retain the document identifier and existing URL parameters', async () => {
+    const { frontendSessionId } = await import('@/lib/frontend-session')
+    const client = new WebSocketClient('ws://localhost:3000/api/ws?ticket=test')
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        client.connect()
+        const url = new URL(MockWebSocket.instances.at(-1)!.url)
+        expect(url.searchParams.get('frontend_session')).toBe(frontendSessionId)
+        expect(url.searchParams.get('ticket')).toBe('test')
+        client.disconnect()
+      }
+    } finally { client.disconnect() }
+  })
+
   test('forwards host revisions and mutation identifiers without changing event payloads', () => {
     const client = new WebSocketClient('ws://localhost:3000/api/ws');
     const seen: unknown[] = [];

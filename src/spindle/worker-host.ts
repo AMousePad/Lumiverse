@@ -28,6 +28,7 @@ import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
 import { eventBus } from "../ws/bus";
+import { sendToFrontendSession } from './frontend-session';
 import { EventType } from "../ws/events";
 import { registry as macroRegistry } from "../macros";
 import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
@@ -293,6 +294,7 @@ type BackendProcessRuntimeToHost =
 
 type RuntimeWorkerToHost =
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
+  | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
   | { type: 'runtime_state_read'; requestId: string; chatId: string; characterId: string; userId?: string }
   | { type: 'runtime_state_write'; requestId: string; chatId: string; command: import('./runtime-state').RuntimeStateCommand; userId?: string; mutationId?: string }
   | { type: 'register_interceptor'; registrationId: string; priority?: number; match?: InterceptorMatchDTO; required?: boolean }
@@ -594,6 +596,7 @@ type RuntimeWorkerToHost =
 
 type RuntimeHostToWorker =
   | { type: 'context_handler_abort'; requestId: string; reason: string }
+  | { type: 'frontend_message'; payload: unknown; userId: string; frontendSessionId?: string }
   | HostToWorker
   | {
       type: "rpc_pool_request";
@@ -1222,6 +1225,8 @@ export class WorkerHost {
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
           "frontend-runtime-capabilities-v1": 1,
+          "frontend-session-origin-v1": 1,
+          "frontend-session-routing-v1": 1,
           "runtime-state-v1": 1,
           "required-context-handlers-v1": 1,
           "required-interceptors-v1": 1,
@@ -1416,8 +1421,8 @@ export class WorkerHost {
     }
   }
 
-  sendFrontendMessage(payload: unknown, userId: string): void {
-    this.postToWorker({ type: "frontend_message", payload, userId });
+  sendFrontendMessage(payload: unknown, userId: string, frontendSessionId?: string): void {
+    this.postToWorker({ type: "frontend_message", payload, userId, frontendSessionId });
   }
 
   private sendFrontendProcessEvent(
@@ -1899,6 +1904,16 @@ export class WorkerHost {
             : typeof msg.userId === "string" && msg.userId.length > 0
               ? msg.userId
               : undefined;
+        const frontendSessionId = 'frontendSessionId' in msg ? msg.frontendSessionId : undefined;
+        if (frontendSessionId) {
+          const delivered = targetUserId && sendToFrontendSession(targetUserId, frontendSessionId, {
+            event: EventType.SPINDLE_FRONTEND_MSG, timestamp: Date.now(),
+            payload: { extensionId: this.extensionId, identifier: this.manifest.identifier, data: msg.payload },
+          });
+          if (!delivered && targetUserId) this.postToWorker({ type: 'event', event: EventType.FRONTEND_SESSION_CLOSED,
+            userId: targetUserId, payload: { frontendSessionId } });
+          break;
+        }
         eventBus.emit(
           EventType.SPINDLE_FRONTEND_MSG,
           {
