@@ -370,7 +370,7 @@ function useDisplayPreprocessedState(
   }
 
   useEffect(() => {
-    if (!key || !chatId || !opts?.messageId || appendSafe) return
+    if (!key || !chatId || !messageId || appendSafe) return
     return schedule(() => {
       const existing = displayPreprocessCache.get(key)
       if (existing?.value !== undefined) return Promise.resolve({
@@ -379,7 +379,7 @@ function useDisplayPreprocessedState(
       if (existing?.promise) return existing.promise
       let assigned: Promise<DisplayPreprocessOutcome>
       const promise = fetchDisplayPreprocess(chatId, {
-        messageId: opts.messageId,
+        messageId,
         role: opts.role,
         rawContent: content,
         ...(typeof opts.depth === 'number' ? { depth: opts.depth } : {}),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 /** One active pass and only the newest pending pass; no timer or token backlog. */
 export class DisplayTaskQueue {
@@ -47,12 +47,13 @@ export function useDisplayTask(version: string, source: string, isStreaming: boo
   )
   latest.current = { version, source, isStreaming, epoch }
 
-  const queueRef = useMemo(() => ({ current: new DisplayTaskQueue() }), [version, epoch])
+  const queueRef = useRef(new DisplayTaskQueue())
   useEffect(() => {
     // Effect replay in StrictMode needs a fresh queue after cleanup.
-    queueRef.current = new DisplayTaskQueue()
-    return () => queueRef.current.dispose()
-  }, [queueRef])
+    const queue = new DisplayTaskQueue()
+    queueRef.current = queue
+    return () => queue.dispose()
+  }, [epoch])
 
   return useCallback(<T,>(run: () => Promise<T>, commit: (value: T) => void) => {
     const request = latest.current
