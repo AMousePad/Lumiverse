@@ -1461,6 +1461,16 @@
     padding: 14px 14px calc(14px + max(env(safe-area-inset-bottom, 0px), var(--app-keyboard-inset-bottom, 0px)));
     scroll-padding-bottom: calc(14px + max(env(safe-area-inset-bottom, 0px), var(--app-keyboard-inset-bottom, 0px)));
   }
+
+  /* Chromium/Android PWAs use interactive-widget=resizes-content, so the
+     editor viewport already ends above the software keyboard. Reserving the
+     keyboard inset again here creates a second keyboard-sized gap and makes
+     the focused field jump too far upward. Keep only the edge-to-edge safe
+     area clearance in this mode; iOS still needs the generic rule above. */
+  :global(html[data-pwa][data-resizes-content]) .tabContent {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    scroll-padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 .chubExpressionsBtn {
