@@ -51,6 +51,19 @@ describe('desktop window chrome contract', () => {
     expect(desktopFrontend).toMatch(/\.lumiverse-startup-drag\{\{[^}]*pointer-events:auto/)
   })
 
+  test('rounds the complete Tauri titlebar against the app surface', () => {
+    const cssRadius = resetCss.match(/--desktop-window-corner-radius:\s*(\d+)px/)?.[1]
+    const nativeRadius = desktopFrontend.match(/const FRONTEND_CORNER_RADIUS:\s*u32\s*=\s*(\d+);/)?.[1]
+
+    expect(cssRadius).toBeDefined()
+    expect(nativeRadius).toBe(cssRadius)
+    expect(titlebarCss).toMatch(
+      /html\[data-tauri-desktop\][\s\S]*?\.titlebar\s*\{[\s\S]*?border-radius:\s*var\(--desktop-window-corner-radius\)/,
+    )
+    expect(titlebarCss).not.toMatch(/border-(?:top|bottom)-(?:left|right)-radius/)
+    expect(desktopFrontend).toContain(`border-radius:{corner_radius}px;overflow:hidden`)
+  })
+
   test('keeps desktop chrome outside the connection hard-stop', () => {
     expect(connectionOverlayCss).toMatch(
       /html\[data-tauri-desktop\][\s\S]*\.backdrop[\s\S]*top:\s*var\(--app-desktop-titlebar-height/,
