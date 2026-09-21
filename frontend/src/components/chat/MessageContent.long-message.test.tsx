@@ -2,6 +2,8 @@
 
 import { afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
+let registerDisplayResolver: typeof import('@/lib/spindle/display-resolver-registry').registerDisplayResolver
+let unregisterDisplayResolver: typeof import('@/lib/spindle/display-resolver-registry').unregisterDisplayResolver
 import type { Root, createRoot as CreateRoot } from 'react-dom/client'
 import type { default as MessageContentType } from './MessageContent'
 import {
@@ -135,6 +137,7 @@ async function flushLayout() {
 }
 
 beforeAll(async () => {
+  ;({ registerDisplayResolver, unregisterDisplayResolver } = await import('@/lib/spindle/display-resolver-registry'))
   ;({ createRoot } = await import('react-dom/client'))
   ;({ default: MessageContent } = await import('./MessageContent'))
   ;({ useStore } = await import('@/store'))
@@ -164,6 +167,29 @@ afterEach(async () => {
 })
 
 describe('MessageContent inline HTML rendering', () => {
+  test('formatting exemption follows the registered owner and is removed on disposal', async () => {
+    const resolver = { skipFormattingHealing: true, ready: () => true,
+      resolveBody: async () => null, resolveTemplates: async () => null, applyScripts: async () => null }
+    useStore.setState({ activeChatId: 'format-chat', activeChatDisplayOwner: 'format-owner' })
+    let dispose: (() => void) | undefined
+    try {
+      await act(async () => { root?.render(<MessageContent content='Before * padded * after' isUser={false} userName="User" chatId="format-chat" disableInterceptors />) })
+      expect(host.querySelector('em')).not.toBeNull()
+      await act(async () => { dispose = registerDisplayResolver('format-owner', resolver) })
+      expect(host.querySelector('em')).toBeNull()
+      expect(host.textContent).toContain('* padded *')
+      await act(async () => { useStore.setState({ activeChatDisplayOwner: 'other-owner' }) })
+      expect(host.querySelector('em')).not.toBeNull()
+      await act(async () => { useStore.setState({ activeChatDisplayOwner: 'format-owner' }) })
+      expect(host.querySelector('em')).toBeNull()
+      await act(async () => { dispose?.() })
+      expect(host.querySelector('em')).not.toBeNull()
+    } finally {
+      unregisterDisplayResolver('format-owner')
+      useStore.setState({ activeChatId: null, activeChatDisplayOwner: null })
+    }
+  })
+
   function inlineScene(count: number) {
     return `<div class="scene">${Array.from({ length: count }, (_, i) => `<span style="top:${i}px">Actor ${i}</span>`).join('')}<img src="https://images.example/scene.png"></div>`
   }
@@ -173,6 +199,13 @@ describe('MessageContent inline HTML rendering', () => {
       root?.render(<MessageContent content={content} isUser={false} userName="User" isStreaming={isStreaming} disableInterceptors />)
     })
   }
+
+  test('keeps adjacent buttons with trailing class whitespace as HTML', async () => {
+    await render('<div class="grid"><div class="btn " risu-btn="one">One</div><div class="btn active" risu-btn="two">Two</div></div>')
+    expect(host.querySelectorAll('.btn')).toHaveLength(2)
+    expect(host.querySelector('[risu-btn="one"]')?.textContent).toBe('One')
+    expect(host.textContent).not.toContain('<div')
+  })
 
   test.each([0, 1, 2, 3, 4, 8])('keeps %i inline styles reachable by document selectors', async (count) => {
     await render(inlineScene(count))

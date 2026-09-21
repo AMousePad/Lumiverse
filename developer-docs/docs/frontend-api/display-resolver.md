@@ -129,3 +129,9 @@ The update is transient and frontend only. It is ignored when `chatId` is not
 the active chat.
 
 The hook is frontend only and requires no permission.
+
+## Preserve authored formatting
+
+Set `skipFormattingHealing: true` on the registered resolver to disable automatic quote, emphasis-whitespace, and font-tag repairs in message bodies for the active chat owned by your extension. This option defaults to `false`; other chats keep normal formatting healing. Registration, disposal, and ownership changes update displayed messages immediately. Set the option at registration time, rather than mutating it afterward.
+
+This does not disable Markdown rendering, HTML sanitization, or change prompt processing or reasoning blocks.

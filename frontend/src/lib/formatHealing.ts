@@ -1,5 +1,6 @@
 const FENCED_CODE_RE = /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g
 const INLINE_CODE_RE = /(`+)([\s\S]*?)\1/g
+const HTML_TAG_RE = /<!--[\s\S]*?(?:-->|$)|<\/?[a-zA-Z][a-zA-Z0-9:-]*(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/g
 const FONT_QUOTE_EDGE_RE = /(<font\b[^>]*>)(["“”«»])([\s\S]*?)(<\/font>)(["“”«»])/gi
 const COLOR_SPAN_QUOTE_EDGE_RE = /(<span\b[^>]*\bstyle\s*=\s*["'][^"']*\bcolor\s*:[^"']*["'][^>]*>)(["“”«»])([\s\S]*?)(<\/span>)(["“”«»])/gi
 const FONT_TAG_RE = /<\/?font\b[^>]*>/gi
@@ -167,16 +168,27 @@ function trimEdgeWhitespaceInQuotes(text: string): string {
   return result
 }
 
-function healUnshieldedSegment(text: string): string {
-  let healed = repairUnterminatedFontColorQuotes(text)
-  healed = closeUnterminatedFontTags(healed)
-  healed = repairQuotedColorTagBoundaries(healed)
+function healProseWhitespace(text: string): string {
+  let healed = text
   for (let i = 0; i < 2; i++) {
     const next = trimEdgeWhitespaceInQuotes(trimEdgeWhitespaceInEmphasis(trimEdgeWhitespaceInEmphasis(healed, '*'), '_'))
     if (next === healed) break
     healed = next
   }
   return healed
+}
+
+function healUnshieldedSegment(text: string): string {
+  let healed = repairUnterminatedFontColorQuotes(text)
+  healed = closeUnterminatedFontTags(healed)
+  healed = repairQuotedColorTagBoundaries(healed)
+  // Attribute quotes are not dialogue; matching across tags can delete separators.
+  let output = '', cursor = 0
+  for (const match of healed.matchAll(HTML_TAG_RE)) {
+    output += healProseWhitespace(healed.slice(cursor, match.index)) + match[0]
+    cursor = match.index! + match[0].length
+  }
+  return output + healProseWhitespace(healed.slice(cursor))
 }
 
 /**

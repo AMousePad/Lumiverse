@@ -21,3 +21,12 @@ describe('healFormattingArtifacts', () => {
     )
   })
 })
+
+test('preserves adjacent HTML buttons with an empty conditional class', () => {
+  const html = '<div class="grid"><div class="btn " data-action="one">One</div><div class="btn active" data-action="two">Two</div></div>';
+  expect(healFormattingArtifacts(html)).toBe(html);
+});
+test('heals prose without changing HTML attribute values or comments', () => {
+  const html = '<div title="a > b" data-label="* padded *"><!-- " padded " -->* padded * and " padded "</div>';
+  expect(healFormattingArtifacts(html)).toBe('<div title="a > b" data-label="* padded *"><!-- " padded " -->*padded* and "padded"</div>');
+});
