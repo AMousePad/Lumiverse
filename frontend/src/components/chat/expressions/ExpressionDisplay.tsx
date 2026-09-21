@@ -9,6 +9,7 @@ import { wsClient } from '@/ws/client'
 import { EventType } from '@/types/ws-events'
 import { expressionsApi } from '@/api/expressions'
 import { resolveExpression } from '@/lib/expressionResolution'
+import { hasDisplayableExpressions } from '@/lib/chatExpressionAvailability'
 import { EXPRESSION_SIZE_PRESETS } from '@/types/expressions'
 import type { ExpressionConfig, ExpressionDisplaySize, ExpressionGroups } from '@/types/expressions'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
@@ -98,7 +99,7 @@ export default function ExpressionDisplay() {
     }
   }, [activeCharacterId, expressionCharacterId, setActiveExpression])
 
-  const hasExpressions = !!exprConfig?.enabled && Object.keys(exprConfig.mappings || {}).length > 0
+  const hasExpressions = hasDisplayableExpressions(exprConfig)
 
   // Resolve default expression when config loads or character/chat changes
   useEffect(() => {
@@ -148,7 +149,7 @@ export default function ExpressionDisplay() {
       groupCharacterIds.map(async (id) => {
         try {
           const config = await expressionsApi.get(id)
-          if (config?.enabled && Object.keys(config.mappings || {}).length > 0) {
+          if (hasDisplayableExpressions(config)) {
             return [id, config] as const
           }
         } catch { /* character may not have expressions */ }

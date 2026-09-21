@@ -5,6 +5,8 @@ import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Comp
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { sendRoomAction } from '@/ws/relayClient'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/types/ws-events'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { presetsApi } from '@/api/presets'
 import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profiles'
@@ -98,6 +100,10 @@ import InputAreaCustomizeModal, {
 import { ComposerActionBarLive } from './InputAreaComposerBar'
 import { isCoreOwnedComposerActionId, isExtensionComposerActionId } from './composerActionOwnership'
 import { isGuideActive, isGuideAutoEnabled } from '@/lib/guided-generations'
+import {
+  chatHasDisplayableExpressions,
+  getChatExpressionCharacterIds,
+} from '@/lib/chatExpressionAvailability'
 
 interface InputAreaProps {
   chatId: string
@@ -459,14 +465,32 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     mutedCharacterIds,
   ])
 
-  // Track whether the active character has expressions configured
+  // Track whether the solo character or any group member has expressions configured.
   const [hasExpressions, setHasExpressions] = useState(false)
+  const expressionCharacterIds = useMemo(
+    () => getChatExpressionCharacterIds(activeCharacterId, isGroupChat, groupCharacterIds),
+    [activeCharacterId, groupCharacterIds, isGroupChat],
+  )
   useEffect(() => {
-    if (!activeCharacterId) { setHasExpressions(false); return }
-    expressionsApi.get(activeCharacterId)
-      .then((cfg) => setHasExpressions(!!cfg?.enabled && Object.keys(cfg.mappings || {}).length > 0))
-      .catch(() => setHasExpressions(false))
-  }, [activeCharacterId])
+    let cancelled = false
+
+    const refresh = async () => {
+      const available = await chatHasDisplayableExpressions(expressionCharacterIds, expressionsApi.get)
+      if (!cancelled) setHasExpressions(available)
+    }
+
+    setHasExpressions(false)
+    void refresh()
+
+    const unsubscribe = wsClient.on(EventType.CHARACTER_EDITED, (payload: { id: string }) => {
+      if (expressionCharacterIds.includes(payload.id)) void refresh()
+    })
+
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [expressionCharacterIds])
 
   // Track alternate fields for the active character or group members.
   type AltFieldVariant = { id: string; label: string; content: string }
