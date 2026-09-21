@@ -9,6 +9,7 @@ import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
 import { healFormattingArtifacts } from '@/lib/formatHealing'
+import { shouldSkipFormattingHealing, subscribeDisplayFormatting } from '@/lib/spindle/display-resolver-registry'
 import { normalizeLegacyFontTags } from '@/lib/legacyFontTags'
 import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -304,9 +305,9 @@ function escapeIsolatedOrderedListItems(text: string): string {
   }).join('\n')
 }
 
-function formatContent(raw: string): string {
+function formatContent(raw: string, skipFormattingHealing = false): string {
   if (!raw) return ''
-  const healed = healFormattingArtifacts(raw)
+  const healed = skipFormattingHealing ? raw : healFormattingArtifacts(raw)
   const normalized = normalizeQuotes(healed)
   const listSafe = escapeIsolatedOrderedListItems(normalized)
   let html = marked.parse(listSafe, { async: false }) as string
@@ -1222,17 +1223,17 @@ function balanceStreamingDetails(raw: string): string {
   return raw + suffix
 }
 
-function formatContentPieces(raw: string, isStreaming: boolean): ContentPiece[] {
+function formatContentPieces(raw: string, isStreaming: boolean, skipFormattingHealing = false): ContentPiece[] {
   if (!raw) return []
 
   const { content: rawWithoutEmbeds, embeds } = extractTrustedYouTubeEmbeds(raw)
   const { content, islands } = extractHtmlIslands(rawWithoutEmbeds, isStreaming)
 
   if (islands.length === 0 && embeds.length === 0) {
-    return [{ type: 'markup', content: sanitizeRichHtml(formatContent(rawWithoutEmbeds)) }]
+    return [{ type: 'markup', content: sanitizeRichHtml(formatContent(rawWithoutEmbeds, skipFormattingHealing)) }]
   }
 
-  const html = formatContent(content)
+  const html = formatContent(content, skipFormattingHealing)
   const pieces: ContentPiece[] = []
   let lastIdx = 0
 
@@ -1680,6 +1681,8 @@ export default function MessageContent({
   findQuery = '',
 }: MessageContentProps) {
   const { t } = useTranslation('chat')
+  const getFormattingSnapshot = useCallback(() => shouldSkipFormattingHealing(chatId), [chatId])
+  const skipFormattingHealing = useSyncExternalStore(subscribeDisplayFormatting, getFormattingSnapshot, getFormattingSnapshot)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const regexScripts = useStore((s) => s.regexScripts)
   const actionUsage = useStore((s) => {
@@ -2252,7 +2255,7 @@ export default function MessageContent({
           }
           // Otherwise skip — OOC content is hidden until rendered in the grouped box
         } else {
-          const pieces = formatContentPieces(block.content, isStreaming)
+          const pieces = formatContentPieces(block.content, isStreaming, skipFormattingHealing)
           for (let p = 0; p < pieces.length; p++) {
             const piece = pieces[p]
             elements.push(
@@ -2275,7 +2278,7 @@ export default function MessageContent({
           )
           oocIndex++
         } else {
-          const pieces = formatContentPieces(block.content, isStreaming)
+          const pieces = formatContentPieces(block.content, isStreaming, skipFormattingHealing)
           for (let p = 0; p < pieces.length; p++) {
             const piece = pieces[p]
             elements.push(
@@ -2291,7 +2294,7 @@ export default function MessageContent({
     }
 
     return elements
-  }, [blocks, oocEnabled, lumiaOOCStyle, isStreaming])
+  }, [blocks, oocEnabled, lumiaOOCStyle, isStreaming, skipFormattingHealing])
 
   useLayoutEffect(() => {
     measureLongMessageOverflow()
