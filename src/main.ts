@@ -290,7 +290,10 @@ const server = Bun.serve({
   hostname: "::",
   fetch: app.fetch,
   websocket,
-  ...(tlsConfig ? { tls: tlsConfig.options } : {}),
+  // Bun 1.4.1+ negotiates HTTP/2 and HTTP/1.1 on the same TLS listener.
+  // Keeping HTTP/1.1 enabled preserves WebSocket upgrades, which HTTP/2 does
+  // not support in Bun yet.
+  ...(tlsConfig ? { tls: tlsConfig.options, http2: true } : {}),
   // Sized for the user-data import endpoint (full-account archives). Other
   // upload routes self-cap at the service layer (character imports stay at
   // MAX_CHARX_SIZE ≈ 1000 MB, image/avatar uploads at a few MB, etc.), so

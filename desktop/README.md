@@ -86,7 +86,7 @@ The release AppImage already contains the compiled Rust shell, its GTK 3 /
 WebKitGTK 4.1 libraries, and the GStreamer plugins used for browser audio.
 Running it does **not** require Cargo, a Rust toolchain, a system WebKitGTK
 package, or system GStreamer plugins. Lumiverse Desktop still requires
-[Bun](https://bun.sh) ≥ 1.4.0 and a Lumiverse checkout because the desktop
+[Bun](https://bun.sh) ≥ 1.4.2 and a Lumiverse checkout because the desktop
 companion does not bundle the server.
 
 Download the artifact matching the machine (`amd64`/`x86_64` for most PCs or
@@ -130,7 +130,7 @@ Run `bun run desktop:doctor` from the repository root to check all build
 requirements at once. It reports what is missing and the exact command to
 install it.
 
-- [Bun](https://bun.sh) ≥ 1.4.0 (also required by the server itself)
+- [Bun](https://bun.sh) ≥ 1.4.2 (also required by the server itself)
 - [Rust](https://rustup.rs) stable (Tauri v2 builds the native shell)
 
 Platform-specific build requirements:

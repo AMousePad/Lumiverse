@@ -1,6 +1,6 @@
 /** Automatic rustup bootstrap used by the explicit Windows desktop install. */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { retryWindowsRename } from "./windows-fs-retry";
@@ -77,12 +77,14 @@ export async function installRustForWindows(
     if (!response.ok) {
       throw new Error(`Rustup download failed with HTTP ${response.status}`);
     }
-    const installer = new Uint8Array(await response.arrayBuffer());
+    // Bun 1.4.1+ streams Response bodies in Bun.write instead of buffering the
+    // whole rustup executable in the JavaScript heap.
+    const bytesWritten = await Bun.write(installerPath, response);
+    const signature = await Bun.file(installerPath).slice(0, 2).bytes();
     // Avoid executing an HTML error page or proxy response as a program.
-    if (installer.length < 2 || installer[0] !== 0x4d || installer[1] !== 0x5a) {
+    if (bytesWritten < 2 || signature[0] !== 0x4d || signature[1] !== 0x5a) {
       throw new Error("Rustup download was not a valid Windows executable");
     }
-    writeFileSync(installerPath, installer);
 
     const exitCode = await runCommand([
       installerPath,

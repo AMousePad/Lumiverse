@@ -118,7 +118,7 @@ afterEach(() => {
 });
 
 describe("automatic maintenance outbox sweep", () => {
-  test("tick re-dispatches a claimed row reset to pending by reconciliation", async () => {
+  test("tick terminalizes an expired claim that may already have reached the provider", async () => {
     const starts: string[] = [];
     const active = new Set<string>();
     setEditAndSendStartGeneration(async (input) => {
@@ -147,16 +147,22 @@ describe("automatic maintenance outbox sweep", () => {
       10,
     );
 
-    // Reconcile resets the expired claim to pending with an elapsed
-    // next_attempt_at; the same tick's dispatch sweep must claim and
-    // dispatch it - no restart required.
-    expect(await waitFor(() => row("stale-claim")?.status === "running")).toBe(true);
-    expect(starts).toContain("gen-stale");
-    expect(row("stale-claim")?.dispatched_at).toBeNumber();
-    expect(row("stale-claim")?.lease_owner).toBeString();
+    // Claims increment attempt_count before invoking the provider. Replaying an
+    // expired claim could duplicate a generation whose acknowledgement was
+    // lost, so the scheduler must converge it terminally instead.
+    expect(await waitFor(() => row("stale-claim")?.status === "failed")).toBe(true);
+    expect(starts).toEqual([]);
+    expect(row("stale-claim")).toMatchObject({
+      terminal_reason: "max_attempts",
+      last_error_code: "max_attempts",
+      next_attempt_at: null,
+      lease_owner: null,
+      lease_expires_at: null,
+    });
+    expect(row("stale-claim")?.completed_at).toBeNumber();
   });
 
-  test("tick dispatches pending rows once their reconcile backoff elapses", async () => {
+  test("tick dispatches a never-attempted pending row once its backoff elapses", async () => {
     const starts: string[] = [];
     const active = new Set<string>();
     setEditAndSendStartGeneration(async (input) => {
@@ -171,9 +177,9 @@ describe("automatic maintenance outbox sweep", () => {
       request_id: "req-orphan",
       generation_id: "gen-orphan",
       branch_chat_id: "branch-orphan",
-      status: "running",
-      attempt_count: 2,
-      dispatched_at: Date.now() - 2_000,
+      status: "pending",
+      attempt_count: 0,
+      next_attempt_at: Date.now() + 60_000,
     });
 
     startAutomaticDatabaseMaintenance(
@@ -185,10 +191,10 @@ describe("automatic maintenance outbox sweep", () => {
       10,
     );
 
-    // First tick: durable verification finds no persisted output and resets
-    // the orphan to pending with future backoff.
-    expect(await waitFor(() => row("orphan-run")?.status === "pending")).toBe(true);
-    expect(row("orphan-run")?.last_error_code).toBe("output_not_verified");
+    // A future backoff keeps a never-attempted row pending.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(row("orphan-run")?.status).toBe("pending");
+    expect(starts).toEqual([]);
     expect(row("orphan-run")?.next_attempt_at).toBeGreaterThan(Date.now());
 
     // Simulate backoff expiry; the very next tick's sweep must pick it up.

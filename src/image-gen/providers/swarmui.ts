@@ -3,7 +3,7 @@ import type { ImageProviderCapabilities, ImageParameterSchemaMap } from "../para
 import type { ImageGenRequest, ImageGenResponse } from "../types"
 import { applyRawOverride } from "../types"
 import { parseProviderErrorBody, ProviderRequestError, readBoundedText, throwProviderResponseError } from "../../utils/provider-errors"
-import { closeWebSocketGracefully, openWebSocket } from "./ws-helpers"
+import { closeWebSocketGracefully, createWebSocketReceiveBackpressure, openWebSocket } from "./ws-helpers"
 import { executeComfyWorkflow, executeComfyWorkflowStream } from "./comfy-runner"
 
 const PARAMETERS: ImageParameterSchemaMap = {
@@ -883,11 +883,14 @@ export class SwarmUIImageProvider implements ImageProvider {
     | { type: "error"; error: ProviderRequestError }
   > {
     const queue: Array<any> = []
+    const receiveBackpressure = createWebSocketReceiveBackpressure(ws)
     let resolve: (() => void) | null = null
     let done = false
 
     const enqueue = (event: any) => {
+      if (done) return
       queue.push(event)
+      receiveBackpressure.enqueued(queue.length)
       if (resolve) {
         resolve()
         resolve = null
@@ -952,19 +955,25 @@ export class SwarmUIImageProvider implements ImageProvider {
       }
     })
 
-    while (!done) {
-      if (queue.length === 0) {
-        await new Promise<void>((r) => {
-          resolve = r
-        })
-      }
-      while (queue.length > 0) {
-        const event = queue.shift()!
-        yield event
-        if (event.type === "complete" || event.type === "error") {
-          return
+    try {
+      while (!done) {
+        if (queue.length === 0) {
+          await new Promise<void>((r) => {
+            resolve = r
+          })
+        }
+        while (queue.length > 0) {
+          const event = queue.shift()!
+          receiveBackpressure.dequeued(queue.length)
+          yield event
+          if (event.type === "complete" || event.type === "error") {
+            return
+          }
         }
       }
+    } finally {
+      done = true
+      receiveBackpressure.release()
     }
   }
 }

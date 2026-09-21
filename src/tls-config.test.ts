@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createPrivateKey } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:http2";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadTlsConfig } from "./tls-config";
@@ -73,12 +74,41 @@ function writeManifest(directory: string, manifest: unknown): string {
 }
 
 function startTlsServer(options: Bun.TLSOptions | Bun.TLSOptions[]): Bun.Server<undefined> {
+  // bun-types 1.4.2 has not exposed the runtime's new `http2` option yet, so
+  // keep it in a spread just like the production server configuration.
+  const tlsTransport = { tls: options, http2: true };
   return Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    tls: options,
+    ...tlsTransport,
     fetch: () => new Response("secure"),
   });
+}
+
+async function getOverHttp2(
+  port: number,
+  serverName: string,
+  ca: string,
+): Promise<{ status: number; body: string }> {
+  const client = connect(`https://127.0.0.1:${port}`, { ca, servername: serverName });
+  try {
+    return await new Promise((resolve, reject) => {
+      let status = 0;
+      let body = "";
+      const request = client.request({ ":path": "/" });
+      request.setEncoding("utf8");
+      request.on("response", (headers) => {
+        status = Number(headers[":status"] ?? 0);
+      });
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => resolve({ status, body }));
+      request.on("error", reject);
+      client.on("error", reject);
+      request.end();
+    });
+  } finally {
+    client.close();
+  }
 }
 
 describe("loadTlsConfig", () => {
@@ -105,7 +135,7 @@ describe("loadTlsConfig", () => {
     expect(options.key).toBeInstanceOf(Buffer);
   });
 
-  test("serves a SAN certificate through Bun's HTTPS listener", async () => {
+  test("serves a SAN certificate through Bun's HTTP/2 TLS listener", async () => {
     const directory = fixtureDirectory();
     const result = loadTlsConfig({
       LUMIVERSE_TLS_CERT_FILE: "one.crt",
@@ -113,11 +143,10 @@ describe("loadTlsConfig", () => {
     }, directory)!;
     const server = startTlsServer(result.options);
     try {
-      const response = await fetch(`https://127.0.0.1:${server.port}/`, {
-        tls: { ca: ONE_CERT, serverName: "alt.example.test" },
+      expect(await getOverHttp2(server.port!, "alt.example.test", ONE_CERT)).toEqual({
+        status: 200,
+        body: "secure",
       });
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("secure");
     } finally {
       server.stop(true);
     }

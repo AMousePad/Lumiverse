@@ -31,7 +31,7 @@ Start Lumiverse normally once before setting up the tray. This lets the normal
 launcher install Bun, install backend dependencies, and run the first-time
 setup wizard.
 
-The tray app uses the same Bun version as Lumiverse: Bun 1.4.0 or later.
+The tray app uses the same Bun version as Lumiverse: Bun 1.4.2 or later.
 Pre-built installers contain the desktop companion, **not** the Lumiverse
 server or Bun. You still need your local Lumiverse checkout.
 

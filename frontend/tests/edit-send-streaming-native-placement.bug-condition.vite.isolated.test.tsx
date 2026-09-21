@@ -577,8 +577,10 @@ test('Property 1 native-placement matrix: Suite-disabled persisted left resolves
   const source = await Bun.file(resolve(FRONTEND_ROOT, 'src/components/chat/ChatView.tsx')).text()
   const suiteEnabled = false
   const persistedSide = 'left'
-  const hasSuiteGuard = /suiteExtensionEnabled\s*&&\s*quickToolbarSettings\?\.nativeDockActionSide\s*===\s*['"]left['"]/.test(source)
-    || /suiteExtensionEnabled\s*&&\s*configuredNativeDockActionSide\s*===\s*['"]left['"]/.test(source)
+  // ChatView now removes the Suite-only data attribute entirely when the
+  // extension is unavailable. The core toolbar's CSS default is right-aligned,
+  // so model the effective side rather than expecting the old `&&` guard.
+  const hasSuiteGuard = /const nativeDockActionSide = suiteExtensionEnabled[\s\S]*?: undefined/.test(source)
   const resolvedNativeActionSide = hasSuiteGuard
     ? (suiteEnabled && persistedSide === 'left' ? 'left' : 'right')
     : persistedSide

@@ -711,7 +711,7 @@ describe("dispatcher — credential failures are terminal", () => {
     });
   });
 
-  test("a generic error still takes the unchanged backoff path", async () => {
+  test("a generic error is terminal so an uncertain provider dispatch is never replayed", async () => {
     const rowId = insertOutbox({ id: "row-generic", generation_id: "gen-generic" });
     dispatcher.setEditAndSendStartGeneration(async () => { throw new Error("provider_down"); });
 
@@ -724,14 +724,14 @@ describe("dispatcher — credential failures are terminal", () => {
       lastErrorCode: row?.last_error_code,
       nextAttemptAtSet: (row?.next_attempt_at ?? null) != null,
       dispatchedAt: row?.dispatched_at ?? null,
-      completedAt: row?.completed_at ?? null,
+      completedAtSet: row?.completed_at != null,
     }).toEqual({
-      status: "pending",
-      terminalReason: null,
+      status: "failed",
+      terminalReason: "dispatch_failed",
       lastErrorCode: "provider_down",
-      nextAttemptAtSet: true,
+      nextAttemptAtSet: false,
       dispatchedAt: null,
-      completedAt: null,
+      completedAtSet: true,
     });
     expect(dispatcher.getGenerationOutboxById(rowId)?.attempt_count).toBe(1);
   });
