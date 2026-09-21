@@ -114,6 +114,11 @@ const RESTORE_MARGIN: i32 = 24;
 const FRONTEND_STARTUP_APPEARANCE_FILE: &str = "frontend_startup_appearance.json";
 static NEXT_FRONTEND_POPUP_ID: AtomicU64 = AtomicU64::new(1);
 const FRONTEND_DROP_AUTHORIZATION_TTL: Duration = Duration::from_secs(120);
+const CHROMELESS_WIDGET_MIN_SIZE: u32 = 24;
+const CHROMED_WIDGET_MIN_WIDTH: u32 = 160;
+const CHROMED_WIDGET_MIN_HEIGHT: u32 = 100;
+const WIDGET_MAX_WIDTH: u32 = 1200;
+const WIDGET_MAX_HEIGHT: u32 = 900;
 
 // WebView2 explicitly supports this switch for applications whose foreground
 // work must not be coalesced into background-timer batches. Supplying browser
@@ -433,8 +438,17 @@ fn valid_widget_descriptor(widget: &DesktopWidgetDescriptor) -> bool {
         && !widget.title.is_empty()
         && widget.title.len() <= 120
         && widget.index <= 3
-        && (160..=1200).contains(&widget.width)
-        && (100..=900).contains(&widget.height)
+        && valid_widget_size(widget.chromeless, widget.width, widget.height)
+}
+
+fn valid_widget_size(chromeless: bool, width: u32, height: u32) -> bool {
+    let (min_width, min_height) = if chromeless {
+        (CHROMELESS_WIDGET_MIN_SIZE, CHROMELESS_WIDGET_MIN_SIZE)
+    } else {
+        (CHROMED_WIDGET_MIN_WIDTH, CHROMED_WIDGET_MIN_HEIGHT)
+    };
+    (min_width..=WIDGET_MAX_WIDTH).contains(&width)
+        && (min_height..=WIDGET_MAX_HEIGHT).contains(&height)
 }
 
 fn bounds_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
@@ -1074,9 +1088,6 @@ pub fn sync_desktop_widget_size(
     width: u32,
     height: u32,
 ) -> Result<(), String> {
-    if !(160..=1200).contains(&width) || !(100..=900).contains(&height) {
-        return Err("Invalid floating-widget size".into());
-    }
     let updated = {
         let mut widgets = state.widgets.lock().unwrap();
         let widget = widgets
@@ -1085,6 +1096,9 @@ pub fn sync_desktop_widget_size(
             .ok_or("That floating widget is no longer registered")?;
         if window.label() != extension_widget_label(widget) {
             return Err("A widget window may only resize itself".into());
+        }
+        if !valid_widget_size(widget.chromeless, width, height) {
+            return Err("Invalid floating-widget size".into());
         }
         widget.width = width;
         widget.height = height;
@@ -1105,15 +1119,15 @@ pub fn resize_extension_widget(
     width: u32,
     height: u32,
 ) -> Result<(), String> {
-    if !(160..=1200).contains(&width) || !(100..=900).contains(&height) {
-        return Err("Invalid floating-widget size".into());
-    }
     let widget = {
         let mut widgets = state.widgets.lock().unwrap();
         let widget = widgets
             .iter_mut()
             .find(|entry| entry.id == widget_id)
             .ok_or("That floating widget is no longer registered")?;
+        if !valid_widget_size(widget.chromeless, width, height) {
+            return Err("Invalid floating-widget size".into());
+        }
         widget.width = width;
         widget.height = height;
         widget.clone()
@@ -1210,7 +1224,18 @@ pub fn show_extension_widget(
                     .saturating_add(if widget.chromeless { 0 } else { 30 }),
             ),
         )
-        .min_inner_size(160.0, if widget.chromeless { 100.0 } else { 130.0 })
+        .min_inner_size(
+            if widget.chromeless {
+                f64::from(CHROMELESS_WIDGET_MIN_SIZE)
+            } else {
+                f64::from(CHROMED_WIDGET_MIN_WIDTH)
+            },
+            if widget.chromeless {
+                f64::from(CHROMELESS_WIDGET_MIN_SIZE)
+            } else {
+                f64::from(CHROMED_WIDGET_MIN_HEIGHT + 30)
+            },
+        )
         .decorations(false)
         // Widgets already draw their own visual edge. A native shadow
         // becomes a conspicuous border around transparent content.
@@ -1442,7 +1467,7 @@ mod tests {
 
     use super::{
         download_file_name, is_frontend_popup_label, supported_frontend_drop_path,
-        supports_windows_system_backdrop,
+        supports_windows_system_backdrop, valid_widget_size,
     };
 
     #[test]
@@ -1488,6 +1513,14 @@ mod tests {
             "Alice.charx"
         );
         assert_eq!(download_file_name(&url, None), "export");
+    }
+
+    #[test]
+    fn chromeless_widgets_can_contract_to_their_visible_surface() {
+        assert!(valid_widget_size(true, 48, 48));
+        assert!(!valid_widget_size(false, 48, 48));
+        assert!(valid_widget_size(false, 160, 100));
+        assert!(!valid_widget_size(true, 23, 48));
     }
 }
 

@@ -1,44 +1,32 @@
-import { StrictMode, useEffect } from 'react'
+import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { initI18n } from '@/i18n'
-import { useStore } from '@/store'
-import { useWebSocket } from '@/ws/useWebSocket'
+import { useDesktopWidgetRuntime } from '@/ws/useDesktopWidgetRuntime'
 import { useThemeApplicator } from '@/hooks/useThemeApplicator'
 import { useCustomCSSApplicator } from '@/hooks/useCustomCSSApplicator'
 import { initializeSafeThemeMode } from '@/lib/safeThemeMode'
 import { installDisplayPerformanceTelemetry, markDisplayInteractive, markDisplayMilestone } from '@/lib/displayPerformance'
 import DesktopFloatingWidgetHost from '@/components/spindle/DesktopFloatingWidgetHost'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
+import { desktopFloatingWidgetTarget } from '@/lib/desktop-floating-widget'
 import './theme/variables.css'
 import './theme/reset.css'
 import './theme/global.css'
 
 installDisplayPerformanceTelemetry('desktop-widget')
 
-function DesktopWidgetAuthGate({ children }: { children: React.ReactNode }) {
-  const isAuthenticated = useStore((state) => state.isAuthenticated)
-  const isAuthLoading = useStore((state) => state.isAuthLoading)
-  const checkSession = useStore((state) => state.checkSession)
-
-  useEffect(() => {
-    void checkSession()
-  }, [checkSession])
-
-  useEffect(() => {
-    if (!isAuthLoading && !isAuthenticated) {
-      void getCurrentWindow().close().catch(() => {})
-    }
-  }, [isAuthenticated, isAuthLoading])
-
-  return isAuthenticated ? <>{children}</> : null
-}
-
 function DesktopWidgetRuntime() {
-  useWebSocket()
+  const phase = useDesktopWidgetRuntime(desktopFloatingWidgetTarget)
   useThemeApplicator()
   useCustomCSSApplicator()
-  return <DesktopFloatingWidgetHost />
+  if (!desktopFloatingWidgetTarget) return null
+
+  const extensionAvailable = phase === 'ready'
+    ? true
+    : phase === 'unavailable'
+      ? false
+      : null
+  return <DesktopFloatingWidgetHost extensionAvailable={extensionAvailable} />
 }
 
 document.documentElement.setAttribute('data-tauri-desktop', '')
@@ -49,9 +37,7 @@ void Promise.all([initI18n(), initializeSafeThemeMode()]).then(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <ErrorBoundary label="Desktop widget">
-        <DesktopWidgetAuthGate>
-          <DesktopWidgetRuntime />
-        </DesktopWidgetAuthGate>
+        <DesktopWidgetRuntime />
       </ErrorBoundary>
     </StrictMode>,
   )

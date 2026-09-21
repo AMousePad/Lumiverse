@@ -35,6 +35,9 @@ import {
 import { deriveEffectiveScope } from "./provider-registry";
 
 export type InstallScope = "operator" | "user";
+type WidgetFrontendManifest = SpindleManifest & {
+  entry_frontend_widget?: string;
+};
 export interface ExtensionUpdateCandidate {
   id: string;
   identifier: string;
@@ -1142,12 +1145,16 @@ function formatCommandFailure(
 
 export async function buildExtension(identifier: string): Promise<void> {
   const repo = repoDir(identifier);
-  const manifest = await readManifest(identifier);
+  const manifest = await readManifest(identifier) as WidgetFrontendManifest;
 
   const backendEntry = manifest.entry_backend || "dist/backend.js";
   const frontendEntry = manifest.entry_frontend || "dist/frontend.js";
+  const widgetFrontendEntry = manifest.entry_frontend_widget;
   const backendOut = resolveWithin(repo, backendEntry, "entry_backend");
   const frontendOut = resolveWithin(repo, frontendEntry, "entry_frontend");
+  const widgetFrontendOut = widgetFrontendEntry
+    ? resolveWithin(repo, widgetFrontendEntry, "entry_frontend_widget")
+    : null;
 
   // Always install dependencies first if package.json exists
   const pkgJson = join(repo, "package.json");
@@ -1184,8 +1191,13 @@ export async function buildExtension(identifier: string): Promise<void> {
   // Determine what needs building
   const backendSrc = join(srcDir, "backend.ts");
   const frontendSrc = join(srcDir, "frontend.ts");
+  const widgetFrontendSrc = join(srcDir, "widget.ts");
   const needsBackendBuild = existsSync(backendSrc) && !existsSync(backendOut);
   const needsFrontendBuild = existsSync(frontendSrc) && !existsSync(frontendOut);
+  const needsWidgetFrontendBuild = !!widgetFrontendEntry
+    && !!widgetFrontendOut
+    && existsSync(widgetFrontendSrc)
+    && !existsSync(widgetFrontendOut);
 
   // Build backend entry if source exists
   if (needsBackendBuild) {
@@ -1212,6 +1224,29 @@ export async function buildExtension(identifier: string): Promise<void> {
     );
     if (proc.exitCode !== 0) {
       throw new Error(`Frontend build failed: ${formatCommandFailure(proc, "bun build")}`);
+    }
+  }
+
+  // Widget entries are deliberately separate so desktop pop-outs can avoid
+  // evaluating an extension's settings panels, drawer tabs, and other page UI.
+  if (needsWidgetFrontendBuild) {
+    const proc = await runSpindleBunSubprocess(
+      bunCmd(
+        "build",
+        "src/widget.ts",
+        "--outfile",
+        widgetFrontendEntry!,
+        "--target",
+        "browser",
+        "--minify",
+      ),
+      {
+        cwd: repo,
+        context: `widget frontend build for ${identifier}`,
+      }
+    );
+    if (proc.exitCode !== 0) {
+      throw new Error(`Widget frontend build failed: ${formatCommandFailure(proc, "bun build")}`);
     }
   }
 
@@ -1912,12 +1947,39 @@ async function getFrontendBundlePathFromManifest(
   return (await Bun.file(bundlePath).exists()) ? bundlePath : null;
 }
 
+async function getWidgetFrontendBundlePathFromManifest(
+  identifier: string,
+  manifest: SpindleManifest,
+): Promise<string | null> {
+  const entry = (manifest as WidgetFrontendManifest).entry_frontend_widget;
+  if (!entry) return null;
+  const repo = repoDir(identifier);
+  const bundlePath = resolveWithin(repo, entry, "entry_frontend_widget");
+  return (await Bun.file(bundlePath).exists()) ? bundlePath : null;
+}
+
 export async function getFrontendBundlePath(identifier: string): Promise<string | null> {
   return getFrontendBundlePathFromManifest(identifier, await readManifest(identifier));
 }
 
 export async function getFrontendBundleCacheKey(identifier: string): Promise<string | null> {
   const bundlePath = await getFrontendBundlePath(identifier);
+  if (!bundlePath) return null;
+
+  try {
+    const stat = statSync(bundlePath);
+    return `${stat.size}-${Math.floor(stat.mtimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
+export async function getWidgetFrontendBundlePath(identifier: string): Promise<string | null> {
+  return getWidgetFrontendBundlePathFromManifest(identifier, await readManifest(identifier));
+}
+
+export async function getWidgetFrontendBundleCacheKey(identifier: string): Promise<string | null> {
+  const bundlePath = await getWidgetFrontendBundlePath(identifier);
   if (!bundlePath) return null;
 
   try {

@@ -3,6 +3,7 @@ import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
 import { useStore } from '@/store'
 import {
   desktopFloatingWidgetTarget,
+  desktopWidgetMinSize,
   returnDesktopFloatingWidgetToPage,
   syncDesktopFloatingWidgetSize,
 } from '@/lib/desktop-floating-widget'
@@ -20,13 +21,22 @@ const resizeHandles = [
 ] as const
 const HEADER_HEIGHT = 30
 
-export default function DesktopFloatingWidgetHost() {
+interface DesktopFloatingWidgetHostProps {
+  /** null means the target-only runtime is still authenticating/loading. */
+  extensionAvailable?: boolean | null
+}
+
+export default function DesktopFloatingWidgetHost({
+  extensionAvailable,
+}: DesktopFloatingWidgetHostProps = {}) {
   const target = desktopFloatingWidgetTarget!
   const nativeWindow = getCurrentWindow()
   const widgets = useStore((state) => state.floatWidgets)
   const extensions = useStore((state) => state.extensions)
   const updateFloatWidget = useStore((state) => state.updateFloatWidget)
-  const extensionEnabled = hasEnabledFrontendExtensionId(extensions, target.extensionId)
+  const extensionEnabled = extensionAvailable === undefined
+    ? hasEnabledFrontendExtensionId(extensions, target.extensionId)
+    : extensionAvailable !== false
   const widget = extensionEnabled
     ? widgets.filter((entry) => entry.extensionId === target.extensionId && entry.visible)[target.index]
     : undefined
@@ -45,8 +55,10 @@ export default function DesktopFloatingWidgetHost() {
   }, [widget])
 
   useEffect(() => {
-    if (!extensionEnabled) void nativeWindow.close().catch(() => {})
-  }, [extensionEnabled, nativeWindow])
+    const knownUnavailable = extensionAvailable === false
+      || (extensionAvailable === undefined && !extensionEnabled)
+    if (knownUnavailable) void nativeWindow.close().catch(() => {})
+  }, [extensionAvailable, extensionEnabled, nativeWindow])
 
   useEffect(() => {
     const host = hostRef.current
@@ -145,8 +157,9 @@ export default function DesktopFloatingWidgetHost() {
         !Number.isInteger(detail.height)
       ) return
 
-      const width = Math.max(160, Math.min(1200, detail.width))
-      const height = Math.max(100, Math.min(900, detail.height))
+      const minSize = desktopWidgetMinSize(isChromeless)
+      const width = Math.max(minSize.width, Math.min(1200, detail.width))
+      const height = Math.max(minSize.height, Math.min(900, detail.height))
       const nativeSize = { width, height: height + hostChromeHeight }
       requestedNativeSize.current = nativeSize
       console.info('[desktop-widget] pop-out received size request', {
@@ -165,7 +178,7 @@ export default function DesktopFloatingWidgetHost() {
 
     window.addEventListener('spindle:float-size-request', handleSizeRequest)
     return () => window.removeEventListener('spindle:float-size-request', handleSizeRequest)
-  }, [hostChromeHeight, nativeWindow, widgetId])
+  }, [hostChromeHeight, isChromeless, nativeWindow, widgetId])
 
   if (!extensionEnabled) return null
 

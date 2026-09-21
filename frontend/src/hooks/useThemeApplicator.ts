@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useStore } from '@/store'
 import { generateThemeVariables } from '@/theme/engine'
 import { DEFAULT_THEME, PRESETS } from '@/theme/presets'
-import { toOpaqueRgb, toOpaqueRgbChannels } from '@/theme/themeColor'
+import { toOpaqueRgb, toOpaqueRgbChannels, withPreservedAlpha } from '@/theme/themeColor'
 import type { CharacterThemeOverlay, ResolvedMode, ThemeConfig } from '@/types/theme'
 
 const THEME_TRANSITION_MS = 280
@@ -213,11 +213,32 @@ function syncThemeColorMeta(vars: Record<string, string>) {
   meta.content = color
 }
 
-function cacheDesktopStartupAppearance(config: ThemeConfig, mode: ResolvedMode, vars: Record<string, string>) {
+function resolveDesktopSurfaceColor(
+  config: ThemeConfig,
+  vars: Record<string, string>,
+  hasPaletteOverride: boolean,
+): string {
+  const configuredBackground = config.desktopBackground?.color
+  if (!configuredBackground) return vars['--lumiverse-bg-deep'] || '#0a0812'
+
+  // A palette supplies a complete, mode-aware background family. Preserve the
+  // user's configured translucency while replacing only the tint color.
+  if (hasPaletteOverride && vars['--lumiverse-bg-deep']) {
+    return withPreservedAlpha(vars['--lumiverse-bg-deep'], configuredBackground) ?? configuredBackground
+  }
+  return configuredBackground
+}
+
+function cacheDesktopStartupAppearance(
+  config: ThemeConfig,
+  mode: ResolvedMode,
+  vars: Record<string, string>,
+  hasPaletteOverride: boolean,
+) {
   if (!('__TAURI_INTERNALS__' in window) || new URLSearchParams(window.location.search).has('desktopWidgetExtension')) return
 
   const efficiencyMode = config.renderingMode === 'efficiency'
-  const configuredBackground = config.desktopBackground?.color || vars['--lumiverse-bg-deep'] || '#0a0812'
+  const configuredBackground = resolveDesktopSurfaceColor(config, vars, hasPaletteOverride)
   const background = efficiencyMode ? (toOpaqueRgb(configuredBackground) ?? configuredBackground) : configuredBackground
   const nativeColor = toOpaqueRgbChannels(background) ?? [10, 8, 18]
   const snapshot = {
@@ -241,7 +262,12 @@ function cacheDesktopStartupAppearance(config: ThemeConfig, mode: ResolvedMode, 
   })
 }
 
-function syncDesktopBackground(config: ThemeConfig, mode: ResolvedMode, vars: Record<string, string>) {
+function syncDesktopBackground(
+  config: ThemeConfig,
+  mode: ResolvedMode,
+  vars: Record<string, string>,
+  hasPaletteOverride: boolean,
+) {
   const root = document.documentElement
   const background = config.desktopBackground
   const efficiencyMode = config.renderingMode === 'efficiency'
@@ -257,13 +283,16 @@ function syncDesktopBackground(config: ThemeConfig, mode: ResolvedMode, vars: Re
     return
   }
 
-  cacheDesktopStartupAppearance(config, mode, vars)
+  cacheDesktopStartupAppearance(config, mode, vars, hasPaletteOverride)
 
-  if (background?.color) {
+  const desktopSurfaceColor = background?.color
+    ? resolveDesktopSurfaceColor(config, vars, hasPaletteOverride)
+    : null
+  if (desktopSurfaceColor) {
     root.setAttribute('data-desktop-background', '')
     root.style.setProperty(
       '--lumiverse-desktop-background',
-      efficiencyMode ? (toOpaqueRgb(background.color) ?? background.color) : background.color,
+      efficiencyMode ? (toOpaqueRgb(desktopSurfaceColor) ?? desktopSurfaceColor) : desktopSurfaceColor,
     )
   } else {
     root.removeAttribute('data-desktop-background')
@@ -370,7 +399,7 @@ function buildResolvedThemeVars(
   extensionThemeOverrides: ReturnType<typeof useStore.getState>['extensionThemeOverrides'],
   mutedExtensionThemes: ReturnType<typeof useStore.getState>['mutedExtensionThemes'],
   modeOverride?: ResolvedMode,
-): { config: ThemeConfig; mode: ResolvedMode; vars: Record<string, string>; hasOverrides: boolean } {
+): { config: ThemeConfig; mode: ResolvedMode; vars: Record<string, string>; hasOverrides: boolean; hasPaletteOverride: boolean } {
   const config = theme ?? DEFAULT_THEME
   const mode = modeOverride ?? resolveMode(config)
 
@@ -381,6 +410,7 @@ function buildResolvedThemeVars(
     (o) => !mutedExtensionThemes[o.extensionId]
   )
   const hasOverrides = activeOverrides.length > 0
+  const hasPaletteOverride = activeOverrides.some((override) => !!override.paletteAccent)
 
   // Check if any extension provides a full theme-sized override (e.g. via
   // applyPalette). Even then, still layer it on top of the user's resolved
@@ -423,6 +453,7 @@ function buildResolvedThemeVars(
         ...fullThemeVars,
       },
       hasOverrides: true,
+      hasPaletteOverride,
     }
   }
 
@@ -445,7 +476,7 @@ function buildResolvedThemeVars(
     }
   }
 
-  return { config: effectiveConfig, mode, vars, hasOverrides }
+  return { config: effectiveConfig, mode, vars, hasOverrides, hasPaletteOverride }
 }
 
 export function useThemeApplicator() {
@@ -471,7 +502,7 @@ export function useThemeApplicator() {
     const motionMq = window.matchMedia('(prefers-reduced-motion: reduce)')
 
     const applyResolvedTheme = (modeOverride?: ResolvedMode) => {
-      const { config, mode, vars, hasOverrides } = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, modeOverride)
+      const { config, mode, vars, hasOverrides, hasPaletteOverride } = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, modeOverride)
       const nextKeys = Object.keys(vars)
 
       for (const key of prevKeysRef.current) {
@@ -546,7 +577,7 @@ export function useThemeApplicator() {
       hadOverridesRef.current = hasOverrides
       broadcastThemeToParent(mode, vars)
       syncThemeColorMeta(vars)
-      syncDesktopBackground(config, mode, vars)
+      syncDesktopBackground(config, mode, vars, hasPaletteOverride)
 
       if (!root.hasAttribute('data-pwa')) {
         const us = parseFloat(vars['--lumiverse-ui-scale'] ?? '1') || 1

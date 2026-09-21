@@ -30,7 +30,12 @@ export interface DesktopFloatingWidgetPopoutState {
 /** Native pop-out bounds the desktop host accepts and enforces. The Rust side
  * owns the same numbers in desktop/src-tauri/src/frontend.rs. */
 export const DESKTOP_WIDGET_MIN_SIZE = { width: 160, height: 100 } as const
+export const DESKTOP_WIDGET_CHROMELESS_MIN_SIZE = { width: 24, height: 24 } as const
 export const DESKTOP_WIDGET_MAX_SIZE = { width: 1200, height: 900 } as const
+
+export function desktopWidgetMinSize(chromeless: boolean): { width: number; height: number } {
+  return chromeless ? DESKTOP_WIDGET_CHROMELESS_MIN_SIZE : DESKTOP_WIDGET_MIN_SIZE
+}
 
 function readTarget(): DesktopFloatingWidgetTarget | null {
   if (!('__TAURI_INTERNALS__' in window)) return null
@@ -41,6 +46,8 @@ function readTarget(): DesktopFloatingWidgetTarget | null {
   const title = params.get('desktopWidgetTitle')
   const width = Number(params.get('desktopWidgetWidth'))
   const height = Number(params.get('desktopWidgetHeight'))
+  const chromeless = params.get('desktopWidgetChromeless') === '1'
+  const minSize = desktopWidgetMinSize(chromeless)
   if (
     !extensionId ||
     extensionId.length > 200 ||
@@ -48,10 +55,10 @@ function readTarget(): DesktopFloatingWidgetTarget | null {
     index < 0 ||
     index > 3 ||
     !Number.isInteger(width) ||
-    width < DESKTOP_WIDGET_MIN_SIZE.width ||
+    width < minSize.width ||
     width > DESKTOP_WIDGET_MAX_SIZE.width ||
     !Number.isInteger(height) ||
-    height < DESKTOP_WIDGET_MIN_SIZE.height ||
+    height < minSize.height ||
     height > DESKTOP_WIDGET_MAX_SIZE.height
   ) {
     return null
@@ -60,7 +67,7 @@ function readTarget(): DesktopFloatingWidgetTarget | null {
     extensionId,
     index,
     title: title?.slice(0, 120) || 'Extension widget',
-    chromeless: params.get('desktopWidgetChromeless') === '1',
+    chromeless,
     width,
     height,
   }
@@ -89,14 +96,16 @@ export function buildDesktopFloatingWidgetCatalog(
       const index = positions.get(widget.extensionId) ?? 0
       positions.set(widget.extensionId, index + 1)
       const extensionName = extensionNames.get(widget.extensionId) ?? widget.extensionId
+      const chromeless = widget.chromeless === true
+      const minSize = desktopWidgetMinSize(chromeless)
       return {
         id: widget.id,
         extensionId: widget.extensionId,
         index,
         title: `${extensionName} · Widget ${index + 1}`,
-        width: Math.max(DESKTOP_WIDGET_MIN_SIZE.width, Math.min(DESKTOP_WIDGET_MAX_SIZE.width, Math.round(widget.width))),
-        height: Math.max(DESKTOP_WIDGET_MIN_SIZE.height, Math.min(DESKTOP_WIDGET_MAX_SIZE.height, Math.round(widget.height))),
-        chromeless: widget.chromeless === true,
+        width: Math.max(minSize.width, Math.min(DESKTOP_WIDGET_MAX_SIZE.width, Math.round(widget.width))),
+        height: Math.max(minSize.height, Math.min(DESKTOP_WIDGET_MAX_SIZE.height, Math.round(widget.height))),
+        chromeless,
       }
     })
 }
@@ -117,12 +126,18 @@ export function syncDesktopFloatingWidgetSize(widgetId: string, width: number, h
   return invoke('sync_desktop_widget_size', { widgetId, width, height })
 }
 
-export function resizeDesktopFloatingWidget(widgetId: string, width: number, height: number): Promise<void> {
+export function resizeDesktopFloatingWidget(
+  widgetId: string,
+  width: number,
+  height: number,
+  chromeless: boolean,
+): Promise<void> {
   if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return Promise.resolve()
+  const minSize = desktopWidgetMinSize(chromeless)
   return invoke('resize_extension_widget', {
     widgetId,
-    width: Math.max(DESKTOP_WIDGET_MIN_SIZE.width, Math.min(DESKTOP_WIDGET_MAX_SIZE.width, Math.round(width))),
-    height: Math.max(DESKTOP_WIDGET_MIN_SIZE.height, Math.min(DESKTOP_WIDGET_MAX_SIZE.height, Math.round(height))),
+    width: Math.max(minSize.width, Math.min(DESKTOP_WIDGET_MAX_SIZE.width, Math.round(width))),
+    height: Math.max(minSize.height, Math.min(DESKTOP_WIDGET_MAX_SIZE.height, Math.round(height))),
   })
 }
 

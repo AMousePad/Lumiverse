@@ -178,7 +178,13 @@ export default function App() {
         !Number.isInteger(detail.height)
       ) return
       console.info('[desktop-widget] primary frontend received size request', detail)
-      void resizeDesktopFloatingWidget(detail.widgetId, detail.width, detail.height)
+      const widget = useStore.getState().floatWidgets.find((entry) => entry.id === detail.widgetId)
+      void resizeDesktopFloatingWidget(
+        detail.widgetId,
+        detail.width,
+        detail.height,
+        widget?.chromeless === true,
+      )
         .then(() => console.info('[desktop-widget] primary frontend forwarded size request', detail))
         .catch((error) => console.warn('[desktop-widget] primary frontend failed to forward size request', detail, error))
     }

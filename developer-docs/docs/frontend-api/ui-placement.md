@@ -347,6 +347,78 @@ host owns the window bounds but the extension still uses the same standard
 `setSize` call. Browser and PWA clients simply retain their existing CSS and
 placement behavior.
 
+Native pop-outs clamp requested content bounds to `24×24`–`1200×900` logical
+pixels for chromeless widgets. Widgets using the default native title chrome
+have a minimum content size of `160×100`. The title bar is added outside the
+requested content height.
+
+### Lightweight desktop widget entry
+
+Each native pop-out has its own WebView. An extension can keep that WebView
+small by declaring a dedicated widget entry that leaves out drawer tabs,
+page-level mounts, decorators, and other UI that the pop-out cannot display:
+
+```json
+{
+  "entry_frontend": "dist/frontend.js",
+  "entry_frontend_widget": "dist/widget.js"
+}
+```
+
+The widget module exports `setupWidget` instead of `setup`:
+
+```ts
+import type {
+  SpindleFrontendContext,
+  SpindleFrontendWidgetTarget,
+} from 'lumiverse-spindle-types'
+import { mountPlayerWidget } from './player-widget'
+
+export function setupWidget(
+  ctx: SpindleFrontendContext,
+  target: SpindleFrontendWidgetTarget,
+) {
+  // Reuse the widget implementation without starting the extension's
+  // page-only UI. Keep widgets in the same registration order as setup().
+  return mountPlayerWidget(ctx, {
+    initialWidth: target.width,
+    initialHeight: target.height,
+    chromeless: target.chromeless,
+  })
+}
+```
+
+`SpindleFrontendWidgetTarget` describes the pop-out requested by the host:
+
+| Field | Description |
+|---|---|
+| `index` | Zero-based position among the extension's visible floating widgets |
+| `title` | Host-provided native window title |
+| `width` | Initial widget content width in logical pixels |
+| `height` | Initial widget content height in logical pixels |
+| `chromeless` | Whether the widget requested a window without title chrome |
+
+The widget entry receives the normal `SpindleFrontendContext`, including event
+and backend RPC APIs, and may return the same sync or async cleanup function as
+`setup`. Continue to create the surface with `ctx.ui.createFloatWidget`; its
+root becomes the native window's interactive and draggable content.
+
+If an extension creates multiple floating widgets, `setupWidget` must register
+them in the same visible order as the main `setup` path so `target.index`
+resolves to the correct widget. It can use the target to avoid expensive work
+for unrelated widgets, provided that registration order remains stable.
+
+`entry_frontend_widget` is an opt-in optimization. Without it, Lumiverse loads
+`entry_frontend` and calls `setup(ctx)` in the pop-out, preserving compatibility
+with existing extensions. Once the field is declared, the referenced bundle
+must exist and export `setupWidget`; Lumiverse does not silently fall back when
+an explicitly configured widget bundle is invalid.
+
+For the best memory and startup results, extract the shared widget renderer
+into its own module and import it from both entries. Avoid importing the main
+frontend entry from `widget.ts`, because doing so can pull page-only code and
+module-level side effects back into the supposedly lightweight bundle.
+
 ### Restoring a desktop pop-out
 
 Returning a widget to the page remounts its page-level root. Extensions with
