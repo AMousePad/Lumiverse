@@ -1,3 +1,4 @@
+import { activeTab } from '@/lib/active-tab'
 import { EventType } from './events'
 import { BASE_URL } from '@/api/client'
 import {
@@ -100,6 +101,7 @@ export class WebSocketClient {
   }
 
   connect() {
+    if (activeTab.signal.aborted) return
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return
 
     this.shouldReconnect = true
@@ -729,6 +731,7 @@ export class WebSocketClient {
   }
 
   send(data: any): void {
+    if (activeTab.signal.aborted) return
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data))
     }
@@ -745,3 +748,4 @@ export class WebSocketClient {
 }
 
 export const wsClient = new WebSocketClient()
+activeTab.signal.addEventListener('abort', () => wsClient.disconnect(), { once: true })
