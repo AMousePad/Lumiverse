@@ -3,6 +3,7 @@ import type { AppStore, EnterToSendSettings, SettingsSlice, StartupSettings, The
 import { settingsApi } from '@/api/settings'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
+import { activeTab } from '@/lib/active-tab'
 import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/lib/loom/preset-selection-coordinator'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
@@ -338,6 +339,7 @@ function hasNewerLocalSetting(key: string, revisionAtLoadStart: number): boolean
 }
 
 export function persistKey(key: string, value: any, source: SettingsWriteSource = 'unknown') {
+  if (activeTab.signal.aborted) return
   const revision = ++localSettingsRevision
   localSettingRevisions.set(key, revision)
   dirtyKeys.set(key, value)
@@ -419,6 +421,7 @@ function readPendingImageGenerationPatch(): Partial<AppStore['imageGeneration']>
 export function persistPendingImageGenerationPatch(
   patch: Partial<AppStore['imageGeneration']>,
 ): void {
+  if (activeTab.signal.aborted) return
   const pending = readPendingImageGenerationPatch() ?? {}
   Object.assign(pending, patch)
   try {
@@ -427,10 +430,12 @@ export function persistPendingImageGenerationPatch(
 }
 
 function clearPendingImageGenerationPatch(): void {
+  if (activeTab.signal.aborted) return
   try { localStorage.removeItem(bridgeStorageKey(PENDING_IMAGE_GENERATION_PATCH_KEY)) } catch {}
 }
 
 function mergePendingSettings(batch: Record<string, unknown>): boolean {
+  if (activeTab.signal.aborted) return false
   const pending = readPendingSettings() ?? {}
   Object.assign(pending, batch)
   try {
@@ -459,6 +464,7 @@ export function hasPendingSetting(key: string): boolean {
 }
 
 export function updatePendingSetting(key: string, value: unknown): void {
+  if (activeTab.signal.aborted) return
   const pending = readPendingSettings()
   if (!pending || !Object.prototype.hasOwnProperty.call(pending, key)) return
   pending[key] = value
@@ -468,6 +474,7 @@ export function updatePendingSetting(key: string, value: unknown): void {
 }
 
 export function clearPendingSettings(persisted: Record<string, unknown>): void {
+  if (activeTab.signal.aborted) return
   const pending = readPendingSettings()
   if (!pending) return
 
@@ -531,6 +538,7 @@ function migrateStoredSettingValue(key: string, value: any): any {
 
 /** Immediately flush any pending settings (e.g. on page unload). */
 export function flushSettings() {
+  if (activeTab.signal.aborted) return
   if (flushTimer !== null) {
     clearTimeout(flushTimer)
     flushTimer = null

@@ -640,3 +640,26 @@ describe('WebSocketClient Spindle console logging', () => {
     }
   })
 })
+
+test('takeover closes the primary socket and cannot reconnect on foreground recovery', async () => {
+  const { activeTab } = await import('@/lib/active-tab')
+  const { wsClient } = await import('./client')
+  Object.assign(windowMock, { localStorage, document: documentMock })
+  const release = activeTab.claim('socket-account')
+  try {
+    wsClient.connect()
+    const socket = MockWebSocket.instances.at(-1)!
+    socket.open()
+    localStorage.setItem('lumiverse:active-tab:socket-account', 'replacement')
+    windowMock.dispatchEvent(new Event('focus'))
+    expect(activeTab.signal.aborted).toBe(true)
+    expect(socket.closeCalls).toBe(1)
+    const count = MockWebSocket.instances.length
+    wsClient.connect()
+    documentMock.dispatchEvent(new Event('visibilitychange'))
+    expect(MockWebSocket.instances).toHaveLength(count)
+    const sent = socket.sent.length
+    wsClient.send({ type: 'stale-write' })
+    expect(socket.sent).toHaveLength(sent)
+  } finally { release(); wsClient.disconnect() }
+})

@@ -8,6 +8,13 @@ import { startSsoPopup } from '@/lib/ssoPopup'
 import styles from './LoginPage.module.css'
 import clsx from 'clsx'
 
+const LOGIN_FOCUS_RESIZED_VIEWPORT_SETTLE_DELAY = 160
+
+function usesBrowserResizedKeyboardViewport(): boolean {
+  const root = document.documentElement
+  return root.hasAttribute('data-pwa') && root.hasAttribute('data-resizes-content')
+}
+
 export default function LoginPage() {
   const { t } = useTranslation('auth')
   const { t: tc } = useTranslation('common')
@@ -102,6 +109,28 @@ export default function LoginPage() {
         block: 'nearest',
       })
     }
+
+    // Chromium/Android PWAs already resize the layout viewport above the
+    // software keyboard. Debounce that resize to one settled fallback instead
+    // of scrolling during the animation and again at every legacy timer.
+    if (usesBrowserResizedKeyboardViewport()) {
+      let resizedViewportTimer = 0
+      const scheduleSettledReveal = () => {
+        clearTimeout(resizedViewportTimer)
+        resizedViewportTimer = window.setTimeout(
+          scrollFocusedInput,
+          LOGIN_FOCUS_RESIZED_VIEWPORT_SETTLE_DELAY,
+        )
+      }
+
+      scheduleSettledReveal()
+      window.visualViewport?.addEventListener('resize', scheduleSettledReveal)
+      return () => {
+        clearTimeout(resizedViewportTimer)
+        window.visualViewport?.removeEventListener('resize', scheduleSettledReveal)
+      }
+    }
+
     const timers = [100, 350, 650].map((delay) => setTimeout(scrollFocusedInput, delay))
     window.visualViewport?.addEventListener('resize', scrollFocusedInput)
 

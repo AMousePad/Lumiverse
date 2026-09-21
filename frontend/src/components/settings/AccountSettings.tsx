@@ -4,6 +4,7 @@ import { KeyRound } from 'lucide-react'
 import { useStore } from '@/store'
 import { Button } from '@/components/shared/FormComponents'
 import RequestHistory from './RequestHistory'
+import SingleTabSetting from './SingleTabSetting'
 import styles from './UserManagement.module.css'
 
 export default function AccountSettings() {
@@ -115,6 +116,7 @@ export default function AccountSettings() {
           </form>
         )}
       </section>
+      {user && <SingleTabSetting key={`tabs:${user.id}`} userId={user.id} />}
       {user && <RequestHistory key={user.id} />}
     </div>
   )

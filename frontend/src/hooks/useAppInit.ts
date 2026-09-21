@@ -13,6 +13,7 @@ import { setSettingsPersistenceScope } from '@/store/slices/settings'
 import { setPresetSaveCoordinatorScope } from '@/lib/loom/preset-save-coordinator'
 import { listAllConnections } from '@/api/listAllConnections'
 import { useTokenizerWarmup } from './useTokenizerWarmup'
+import { activeTab } from '@/lib/active-tab'
 
 let appInitGeneration = 0
 
@@ -56,7 +57,7 @@ export function useAppInit() {
     initializedUserId.current = userId
     const generation = ++appInitGeneration
     const isCurrent = () => (
-      appInitGeneration === generation
+      !activeTab.signal.aborted && appInitGeneration === generation
       && useStore.getState().isAuthenticated
       && useStore.getState().user?.id === userId
     )
@@ -211,7 +212,9 @@ export function applyBootstrap(
   if (!errors['imageGen.providers']) store.setImageGenProviders(payload.imageGen.providers)
 
   if (!errors['packs']) store.setPacks(payload.packs.data)
-  if (!errors['personas']) store.setPersonas(payload.personas.data)
+  if (!errors['personas'] && payload.personas.data.length >= payload.personas.total) {
+    store.setPersonas(payload.personas.data)
+  }
   if (!errors['regexScripts']) store.setRegexScripts(payload.regexScripts.data)
 
   // Landing page preload — no fallback needed: when absent, the landing page
