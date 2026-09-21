@@ -13,7 +13,17 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
   // event in sidecar-council mode) doesn't restart a zombie streaming state.
   // We track a small set rather than a single ID because during rapid
   // stop→regenerate cycles, multiple generations may end in quick succession.
-  const endedGenerationIds = new Set<string>()
+  const endedGenerationIds = new Map<string, boolean>()
+  // A newer generation can start and finish before an older refresh resolves.
+  let generationEpoch = 0
+
+  function rememberGenerationEnded(id: string, completed: boolean) {
+    endedGenerationIds.set(id, completed)
+    if (endedGenerationIds.size > 20) {
+      const first = endedGenerationIds.keys().next().value
+      if (first) endedGenerationIds.delete(first)
+    }
+  }
 
   // ── Throttled streaming buffers ──────────────────────────────────────
   // Tokens accumulate here at full WS throughput (no React re-renders).
@@ -152,6 +162,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     setLandingRecentChats: (result) => set({ landingRecentChats: result }),
 
     setActiveChat: (chatId, characterId = null, hydration) => {
+      generationEpoch++
       // A throttled token flush can still be queued when ChatView unmounts.
       // Cancel it and clear the closure-owned buffers before resetting the
       // public state; otherwise that timer can fire on the landing page and
@@ -304,6 +315,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       }),
 
     beginStreaming: (regeneratingMessageId, generationType) => {
+      generationEpoch++
       cancelStreamFlush()
       rawStreamContent = ''
       rawStreamReasoning = ''
@@ -370,6 +382,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         return
       }
 
+      generationEpoch++
       cancelStreamFlush()
       rawStreamContent = ''
       rawStreamReasoning = ''
@@ -524,26 +537,28 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       return 'appended'
     },
 
-    endStreaming: () => {
+    endStreaming: (message) => {
       const id = get().activeGenerationId
-      if (id) endedGenerationIds.add(id)
-      // Cap the set size to prevent unbounded growth
-      if (endedGenerationIds.size > 20) {
-        const first = endedGenerationIds.values().next().value
-        if (first) endedGenerationIds.delete(first)
-      }
+      if (id && !endedGenerationIds.has(id)) rememberGenerationEnded(id, true)
       cancelStreamFlush()
       rawStreamContent = ''
       rawStreamReasoning = ''
       reasoningStartedAt = 0
       // Preserve the generation type before clearing — auto-summarization
       // needs to know what kind of generation just finished.
-      set({ isStreaming: false, streamingNavigationPaused: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingSwipeId: null, lastCompletedGenerationType: get().streamingGenerationType, streamingGenerationType: null })
+      set((state) => ({
+        ...(message ? { messages: state.messages.map((current) => current.id === message.id
+          ? preserveNewerMessageRevisions([current], [message])[0] : current) } : {}),
+        isStreaming: false, streamingNavigationPaused: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingSwipeId: null,
+        lastCompletedGenerationType: !state.isStreaming || (id && endedGenerationIds.get(id) === false)
+          ? state.lastCompletedGenerationType : state.streamingGenerationType,
+        streamingGenerationType: null,
+      }))
     },
 
     stopStreaming: () => {
       const id = get().activeGenerationId
-      if (id) endedGenerationIds.add(id)
+      if (id) rememberGenerationEnded(id, false)
       cancelStreamFlush()
       rawStreamContent = ''
       rawStreamReasoning = ''
@@ -574,7 +589,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
 
     setStreamingError: (error) => {
       const id = get().activeGenerationId
-      if (id) endedGenerationIds.add(id)
+      if (id) rememberGenerationEnded(id, false)
       cancelStreamFlush()
       rawStreamContent = ''
       rawStreamReasoning = ''
@@ -603,13 +618,12 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       })
     },
 
-    markGenerationEnded: (generationId) => {
-      endedGenerationIds.add(generationId)
-      if (endedGenerationIds.size > 20) {
-        const first = endedGenerationIds.values().next().value
-        if (first) endedGenerationIds.delete(first)
-      }
+    markGenerationEnded: (generationId, completed = true) => {
+      rememberGenerationEnded(generationId, completed)
+      if (get().isStreaming && !get().activeGenerationId) set({ activeGenerationId: generationId })
     },
+    hasGenerationEnded: (generationId) => endedGenerationIds.has(generationId),
+    getGenerationEpoch: () => generationEpoch,
 
     setImpersonateDraftContent: (content) => set({ impersonateDraftContent: content }),
 

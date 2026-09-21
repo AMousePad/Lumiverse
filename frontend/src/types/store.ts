@@ -98,13 +98,15 @@ export interface ChatSlice {
   setUnseenSwipe: (messageId: string, swipeId: number) => void
   /** Clear the unseen-swipe flag for a message (e.g. once the user views it). */
   clearUnseenSwipe: (messageId: string) => void
-  endStreaming: () => void
+  endStreaming: (message?: Message) => void
   stopStreaming: () => void
   setStreamingError: (error: string | null) => void
   /** Set the regenerating message ID independently (e.g. when council sidecar stages a message after streaming started) */
   setRegeneratingMessageId: (messageId: string | null) => void
   /** Mark a generation ID as ended (prevents zombie resurrection from late HTTP responses) */
-  markGenerationEnded: (generationId: string) => void
+  markGenerationEnded: (generationId: string, completed?: boolean) => void
+  hasGenerationEnded: (generationId: string) => boolean
+  getGenerationEpoch: () => number
   /** Set impersonate draft content (from completed impersonate-draft generation) */
   setImpersonateDraftContent: (content: string | null) => void
 
