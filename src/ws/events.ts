@@ -1,6 +1,7 @@
 export enum EventType {
   // Connection
   CONNECTED = "CONNECTED",
+  FRONTEND_SESSION_CLOSED = 'FRONTEND_SESSION_CLOSED',
 
   // Chat lifecycle
   CHAT_CREATED = "CHAT_CREATED",
@@ -252,6 +253,8 @@ export interface ProviderRegistryChangedPayload {
 }
 
 export interface EventMessage {
+  runtimeMutationId?: string;
+  stateRevision?: import('../spindle/runtime-state-revision').RuntimeStateRevision;
   event: EventType;
   payload: any;
   timestamp: number;

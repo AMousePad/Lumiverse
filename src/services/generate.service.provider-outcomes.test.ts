@@ -1,22 +1,34 @@
+import { registerFrontendSession } from "../spindle/frontend-session";
 import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import { contextHandlerChain } from '../spindle/context-handler';
+import { interceptorPipeline } from '../spindle/interceptor-pipeline';
 import * as chats from "./chats.service";
 import * as connections from "./connections.service";
 import * as secrets from "./secrets.service";
 import * as pool from "./generation-pool.service";
 import * as presets from "./presets.service";
 import * as tokenizer from "./tokenizer.service";
-import { startGeneration, stopAllGenerations, stopGenerationSweep } from "./generate.service";
+import { dryRunGeneration, startGeneration, stopAllGenerations, stopGenerationSweep } from "./generate.service";
 
 const userId = "provider-outcomes-test";
 const ended: any[] = [];
 const metricsReady: any[] = [];
+const origins: Array<{ chatId: string; phase: string; session: unknown }> = [];
 let fetchSpy: ReturnType<typeof spyOn> | undefined;
 let secretSpy: ReturnType<typeof spyOn>;
 let eventSpy: ReturnType<typeof spyOn>;
+let removeFrontend: () => void;
 beforeAll(async () => {
+  removeFrontend = registerFrontendSession(userId, "0123456789abcdef0123456789abcdef", { send() {}, close() {}, closed() {} });
+  contextHandlerChain.register({ extensionId: 'origin-test', priority: 100, handler: async (context: any) => {
+    origins.push({ chatId: context.chatId, phase: 'context', session: context.frontendSessionId }); return context;
+  } });
+  interceptorPipeline.register({ extensionId: 'origin-test', priority: 100, handler: async (messages, context: any) => {
+    origins.push({ chatId: context.chatId, phase: 'interceptor', session: context.frontendSessionId }); return { messages };
+  } });
   closeDatabase();
   initDatabase(":memory:");
   getDb().run("PRAGMA foreign_keys = OFF");
@@ -29,6 +41,8 @@ beforeAll(async () => {
 });
 afterEach(async () => { await Bun.sleep(5); fetchSpy?.mockRestore(); });
 afterAll(() => {
+  removeFrontend();
+  contextHandlerChain.unregisterByExtension('origin-test'); interceptorPipeline.unregisterByExtension('origin-test');
   stopAllGenerations(); stopGenerationSweep(); pool.stopPoolSweep(); pool.clearAllPoolEntries();
   secretSpy.mockRestore(); eventSpy.mockRestore(); closeDatabase();
 });
@@ -62,6 +76,11 @@ async function run(provider: string, body: object[], options: { responses?: bool
   while (!ended.some(e => e.generationId === result.generationId) && Date.now() < deadline) await Bun.sleep(5);
   const event = ended.find(e => e.generationId === result.generationId);
   expect(event).toBeDefined();
+  expect(event.frontendSessionId).toBe('0123456789abcdef0123456789abcdef');
+  expect(origins.filter(value => value.chatId === chat.id)).toEqual([
+    { chatId: chat.id, phase: 'context', session: '0123456789abcdef0123456789abcdef' },
+    { chatId: chat.id, phase: 'interceptor', session: '0123456789abcdef0123456789abcdef' },
+  ]);
   return { event, generationId: result.generationId, preset };
 }
 const chatThought = { choices: [{ delta: { reasoning_content: "A thought." } }] };
@@ -206,3 +225,37 @@ for (const fixture of [
     expect(chats.getMessage(userId, event.messageId)?.content).toBe("Hello.");
   });
 }
+
+test.each(["backend", "http"])("%s prompt previews select the active frontend without caller routing", async (mode) => {
+  const connection = await connections.createConnection(userId, { name: "Preview", provider: "openai", model: "test-model", api_url: "https://example.test" });
+  const chat = chats.createChat(userId, { character_id: null, name: "Preview", metadata: { no_preset: true } });
+  chats.createMessage(chat.id, { is_user: true, name: "User", content: "Hello." }, userId);
+  const preset = presets.createPreset(userId, { name: "Preview", provider: "openai", prompt_order: [] });
+  const input = { userId, chat_id: chat.id, connection_id: connection.id, preset_id: preset.id };
+  if (mode === "backend") await dryRunGeneration(input);
+  else {
+    const { Hono } = await import("hono");
+    const { generateRoutes } = await import("../routes/generate.routes");
+    const app = new Hono();
+    app.use("*", async (c, next) => { c.set("userId", userId); await next(); });
+    app.route("/generate", generateRoutes);
+    const response = await app.request("/generate/dry-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    expect(response.status).toBe(200);
+  }
+  expect(origins.filter(value => value.chatId === chat.id)).toEqual([
+    { chatId: chat.id, phase: "context", session: "0123456789abcdef0123456789abcdef" },
+    { chatId: chat.id, phase: "interceptor", session: "0123456789abcdef0123456789abcdef" },
+  ]);
+});
+
+
+test("takeover and context replacement cannot retarget a generation already started", async () => {
+  let removeReplacement: (() => void) | undefined;
+  const removeHandler = contextHandlerChain.register({ extensionId: "takeover", priority: 200, handler: async (ctx: any) => {
+    removeReplacement = registerFrontendSession(userId, "f".repeat(32), { send() {}, close() {}, closed() {} });
+    return { ...ctx, frontendSessionId: "f".repeat(32) };
+  } });
+  try {
+    await run("openai", [{ choices: [{ delta: { content: "Answer" }, finish_reason: "stop" }] }]);
+  } finally { removeHandler(); removeReplacement?.(); }
+});

@@ -1,3 +1,4 @@
+import { getActiveFrontendSession } from "../spindle/frontend-session";
 import { describeGenerationStop } from "../llm/generation-stop";
 import type { LlmProvider } from "../llm/provider";
 import { eventBus } from "../ws/bus";
@@ -211,6 +212,7 @@ export type {
 } from "./generation/direct-generation";
 
 interface GenerateInput {
+  frontendSessionId?: string;
   userId: string;
   chat_id: string;
   connection_id?: string;
@@ -267,6 +269,7 @@ const readEditAndSendAlwaysUseActiveConnection = (userId: string): boolean =>
 
 /** Lifecycle context passed from startGeneration → runGeneration */
 interface GenerationLifecycle {
+  frontendSessionId?: string;
   onProviderRequest?: ProviderRequestObserver;
   /** User-authored messages that immediately preceded this generation. */
   sourceUserMessageIds?: string[];
@@ -1016,6 +1019,7 @@ function isReusableCouncilCache(
  * interceptors, apply post-processing, and merge parameters.
  */
 async function runPromptPipeline(opts: {
+  frontendSessionId?: string;
   userId: string;
   chatId: string;
   connectionId?: string;
@@ -1057,6 +1061,7 @@ async function runPromptPipeline(opts: {
 
   // Build spindle context
   let spindleContext: SpindleContext = {
+    frontendSessionId: opts.frontendSessionId,
     chatId: opts.chatId,
     connectionId: opts.connectionId,
     personaId: opts.personaId,
@@ -1070,7 +1075,7 @@ async function runPromptPipeline(opts: {
       opts.userId,
       opts.signal,
     )) as SpindleContext | undefined;
-    if (handled) spindleContext = handled;
+    if (handled) spindleContext = { ...handled, frontendSessionId: opts.frontendSessionId };
     if (spindleContext.cancelGeneration === true) {
       throw new GenerationCancelledByExtensionError();
     }
@@ -1483,6 +1488,7 @@ export async function startGeneration(
   input: GenerateInput,
   options?: StartGenerationOptions,
 ): Promise<{ generationId: string; status: string }> {
+  input = { ...input, frontendSessionId: getActiveFrontendSession(input.userId) };
   const requestedGenerationId =
     typeof input.generationId === "string" ? input.generationId.trim() : "";
   const generationId = resolveStartGenerationId(input);
@@ -1790,6 +1796,7 @@ export async function startGeneration(
     );
 
     const lifecycle: GenerationLifecycle = {
+      frontendSessionId: input.frontendSessionId,
       onProviderRequest: createRequestObserver(input.userId, options?.requestOrigin ?? {
         kind: "chat", name: "Chat", operation: options?.origin ?? genType,
       }, { chatId: input.chat_id, generationId, connectionId: connection.id }, [apiKey]),
@@ -1903,6 +1910,7 @@ export async function startGeneration(
 
     // Register pool entry for recovery — at this point we have all the metadata
     pool.createPoolEntry({
+      frontendSessionId: input.frontendSessionId,
       generationId,
       userId: input.userId,
       chatId: input.chat_id,
@@ -1930,6 +1938,7 @@ export async function startGeneration(
         characterId: targetCharId,
         characterName,
         generationType: lifecycle.generationType,
+        frontendSessionId: lifecycle.frontendSessionId,
       },
       input.userId,
     );
@@ -2576,6 +2585,7 @@ export async function startGeneration(
         // a GENERATION_STOPPED event so the frontend clears its streaming state.
         const pipeline = await raceWithSignal(
           runPromptPipeline({
+            frontendSessionId: input.frontendSessionId,
             userId: input.userId,
             chatId: input.chat_id,
             connectionId: input.connection_id,
@@ -2828,6 +2838,7 @@ export async function startGeneration(
             chatId: input.chat_id,
             ...failure,
             generationType: lifecycle.generationType,
+            frontendSessionId: lifecycle.frontendSessionId,
           },
           input.userId,
         );
@@ -2876,6 +2887,7 @@ export async function startGeneration(
 export async function dryRunGeneration(
   input: GenerateInput,
 ): Promise<DryRunResult> {
+  input = { ...input, frontendSessionId: getActiveFrontendSession(input.userId) };
   const genType = input.generation_type || "normal";
   const sourceMessages = chatsSvc.getMessages(input.userId, input.chat_id);
   const sourceMessagesById = new Map(
@@ -2954,6 +2966,7 @@ export async function dryRunGeneration(
     : undefined;
 
   const pipeline = await runPromptPipeline({
+    frontendSessionId: input.frontendSessionId,
     userId: input.userId,
     chatId: input.chat_id,
     connectionId: input.connection_id,
@@ -4002,6 +4015,7 @@ async function runGeneration(
           usage: streamUsage,
           ...stopMetadata(),
           generationType: lifecycle.generationType,
+          frontendSessionId: lifecycle.frontendSessionId,
           impersonateDraft: lifecycle.impersonateDraft || undefined,
         },
         userId,
@@ -4248,6 +4262,7 @@ async function runGeneration(
           ...stopMetadata(),
           usage: streamUsage,
           generationType: lifecycle.generationType,
+          frontendSessionId: lifecycle.frontendSessionId,
         },
         userId,
       );

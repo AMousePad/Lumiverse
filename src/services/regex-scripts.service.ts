@@ -1686,6 +1686,9 @@ function foldFingerprint(
 }
 
 function macroOptionsForRegexScript(script: RegexScript): EvaluateOptions | undefined {
+  if (script.owner_extension_identifier) {
+    return { sourceOwner: { extensionIdentifier: script.owner_extension_identifier } };
+  }
   if (script.preset_id && script.owner_extension_identifier == null) {
     return { sourceOwner: "host", sourceHint: "regex_script:preset" };
   }

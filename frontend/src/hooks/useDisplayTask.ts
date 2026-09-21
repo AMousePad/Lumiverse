@@ -40,7 +40,7 @@ export class DisplayTaskQueue {
  * Accept completed streaming prefixes, even when the next token has arrived.
  * Rewrites, context invalidations, new streams and unmounts reject old work.
  */
-export function useDisplayTask(version: string, source: string, isStreaming: boolean) {
+export function useDisplayTask(version: unknown, source: string, isStreaming: boolean) {
   const latest = useRef({ version, source, isStreaming, epoch: 0 })
   const epoch = latest.current.epoch + (
     version !== latest.current.version || (!latest.current.isStreaming && isStreaming) ? 1 : 0

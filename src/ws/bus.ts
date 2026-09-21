@@ -1,4 +1,5 @@
 import type { ServerWebSocket } from "bun";
+import { advanceRuntimeStateRevision, runtimeMutationId } from '../spindle/runtime-state-revision';
 import {
   EventType,
   type EventMessage,
@@ -492,6 +493,8 @@ class EventBus {
       payload,
       timestamp: Date.now(),
       userId,
+      stateRevision: advanceRuntimeStateRevision(event, userId),
+      runtimeMutationId: runtimeMutationId(userId),
     };
 
     const json = JSON.stringify(message);

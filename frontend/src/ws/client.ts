@@ -1,13 +1,15 @@
 import { activeTab } from '@/lib/active-tab'
 import { EventType } from './events'
 import { BASE_URL } from '@/api/client'
+import { frontendSessionId } from '@/lib/frontend-session'
 import {
   getDesktopPresence,
   subscribeDesktopPresence,
   type DesktopPresence,
 } from '@/lib/desktop-presence'
 
-type EventHandler = (payload: any) => void
+export interface EventMetadata { stateRevision?: { epoch: string; sequence: number }; runtimeMutationId?: string }
+type EventHandler = (payload: any, metadata?: EventMetadata) => void
 
 /** Internal client-only event names — not part of the backend protocol. */
 export const WS_OPEN = '__ws_open'
@@ -100,8 +102,11 @@ export class WebSocketClient {
     this.url = url || `${protocol}//${window.location.host}${basePath}/ws`
   }
 
-  connect() {
+  private executionOwner = true
+
+  connect(options?: { executionOwner?: boolean }) {
     if (activeTab.signal.aborted) return
+    if (options?.executionOwner !== undefined) this.executionOwner = options.executionOwner
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return
 
     this.shouldReconnect = true
@@ -110,7 +115,10 @@ export class WebSocketClient {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
-    const socket = new WebSocket(this.url)
+    const socketUrl = new URL(this.url)
+    socketUrl.searchParams.set('frontend_session', frontendSessionId)
+    if (!this.executionOwner) socketUrl.searchParams.set('frontend_runtime', 'widget')
+    const socket = new WebSocket(socketUrl.toString())
     this.ws = socket
     this.armConnectWatchdog(socket)
     // Install lifecycle listeners while CONNECTING too. Otherwise an initial
@@ -166,7 +174,7 @@ export class WebSocketClient {
         ) {
           console.debug('[WS] ←', eventName, data.payload)
         }
-        this.emit(eventName, data.payload)
+        this.emit(eventName, data.payload, { stateRevision: data.stateRevision, runtimeMutationId: data.runtimeMutationId })
       } catch {
         // ignore malformed messages
       }
@@ -261,10 +269,10 @@ export class WebSocketClient {
     this.emit(event, payload)
   }
 
-  private emit(event: string, payload: any) {
+  private emit(event: string, payload: any, metadata?: EventMetadata) {
     this.handlers.get(event)?.forEach(handler => {
       try {
-        handler(payload)
+        handler(payload, metadata)
       } catch (err) {
         console.error(`[WS] Error in handler for ${event}:`, err)
       }

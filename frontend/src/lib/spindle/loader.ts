@@ -11,6 +11,7 @@ import type {
   SpindleDockPanelHandle,
 } from 'lumiverse-spindle-types'
 import { SPINDLE_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
+import { frontendSessionId } from '@/lib/frontend-session'
 import type { MacroCatalogResponse } from '@/api/macros'
 import type {
   Chat,
@@ -328,6 +329,7 @@ type FrontendExtensionHost = {
 }
 
 type FrontendExtensionContextBase = Omit<SpindleFrontendContext, 'ui' | 'messages' | 'dom'> & {
+  readonly frontendSessionId: string
   host: FrontendExtensionHost
   theme: SpindleThemeAuthoringAPI
   dom: FrontendExtensionDOM
@@ -1394,7 +1396,9 @@ async function doLoadFrontendExtension(
     const host = Object.freeze({
       descriptorVersion: 1 as const,
       lumiverseVersion: LUMIVERSE_VERSION,
-      capabilities: Object.freeze({ ...SPINDLE_HOST_CAPABILITIES, ...THEME_AUTHORING_HOST_CAPABILITIES }),
+      capabilities: Object.freeze({ ...SPINDLE_HOST_CAPABILITIES, ...THEME_AUTHORING_HOST_CAPABILITIES,
+        'frontend-session-origin-v1': 1,
+      }),
       extensionInstallationId: extensionId,
       surfaces: createHostSurfaceAPI({
         extensionId,
@@ -2002,6 +2006,7 @@ async function doLoadFrontendExtension(
           characterId: state.activeCharacterId ?? null,
         }
       },
+      frontendSessionId,
       sendToBackend(payload: unknown): void {
         assertFrontendActive()
         // Send via WebSocket to the backend worker

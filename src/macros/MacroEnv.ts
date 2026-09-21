@@ -1,3 +1,4 @@
+import { macroInterceptorChain } from "../spindle/macro-interceptor";
 import type { Character } from "../types/character";
 import { getEffectiveCharacterName } from "../types/character";
 import type { Persona } from "../types/persona";
@@ -156,6 +157,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
     extra: {
       userId: ctx.userId ?? (chat as any).user_id as string | undefined,
       characterId: character.id,
+      preserveMessageSource: macroInterceptorChain.ownsMessageSource(character.extensions, ctx.userId ?? (chat as any).user_id),
       groupFocusedCharacter: buildFocusedCharacterMacroState(focusedCharacter, chat, messages),
       messages: messages.map((m) => ({ content: m.content, name: m.name, is_user: m.is_user })),
       chatCreatedAt: (chat as any).created_at as number | undefined,
