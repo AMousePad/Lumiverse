@@ -12,6 +12,7 @@ import { useAppInit } from '@/hooks/useAppInit'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
+import ActiveTabGuard from '@/components/auth/ActiveTabGuard'
 import ViewportDrawer from '@/components/panels/ViewportDrawer'
 import CharacterEditorPage from '@/components/panels/character-browser/CharacterEditorPage'
 import ModalContainer from '@/components/modals/ModalContainer'
@@ -54,6 +55,16 @@ const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
 export { acknowledgePendingConnectionsDeepLink }
 
 export default function App() {
+  return (
+    <AuthGuard>
+      {isDesktopFloatingWidgetWindow()
+        ? <Application />
+        : <ActiveTabGuard><Application /></ActiveTabGuard>}
+    </AuthGuard>
+  )
+}
+
+function Application() {
   'use memo'
 
   const { t } = useTranslation('common')
@@ -373,9 +384,5 @@ export default function App() {
     </>
   )
 
-  return (
-    <AuthGuard>
-      {content}
-    </AuthGuard>
-  )
+  return content
 }

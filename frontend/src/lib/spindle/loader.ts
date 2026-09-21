@@ -1,3 +1,4 @@
+import { activeTab } from '@/lib/active-tab'
 import type {
   SpindleManifest,
   SpindleFrontendContext,
@@ -625,6 +626,7 @@ async function doLoadFrontendExtension(
   force = false,
   options: FrontendLoadOptions = {},
 ): Promise<void> {
+  activeTab.assertActive()
   let loaded!: LoadedExtension
   let cleanupLoadedExtension: ((reportTeardownError?: boolean) => void) | undefined
   let identityRegistered = false
@@ -643,8 +645,9 @@ async function doLoadFrontendExtension(
   bootstrappingGenerations.set(extensionId, generation)
   loadGeneration.set(extensionId, generation)
   let frontendLifecycleActive = true
-  const currentGeneration = () => loadGeneration.get(extensionId) === generation
+  const currentGeneration = () => !activeTab.signal.aborted && loadGeneration.get(extensionId) === generation
   const assertFrontendActive = () => {
+    activeTab.assertActive()
     if (
       frontendLifecycleActive === false
       || currentGeneration() === false
@@ -2400,6 +2403,7 @@ export async function loadFrontendExtension(
   force = false,
   options: FrontendLoadOptions = {},
 ): Promise<void> {
+  activeTab.assertActive()
   const manifestSignature = getManifestSignature(manifest, options)
   const pending = loadInFlight.get(extensionId)
 
@@ -2733,7 +2737,10 @@ export function getExtensionMountPointsVersion(): number {
 }
 
 export async function unloadAllFrontendExtensions(): Promise<void> {
-  for (const [id] of loadedExtensions) {
-    await unloadFrontendExtension(id)
-  }
+  const ids = new Set([...loadedExtensions.keys(), ...loadInFlight.keys()])
+  await Promise.all([...ids].map(id => unloadFrontendExtension(id)))
 }
+
+activeTab.signal.addEventListener('abort', () => {
+  void unloadAllFrontendExtensions().catch(error => console.error('[Spindle] Frontend shutdown failed:', error))
+}, { once: true })
