@@ -290,6 +290,10 @@ function sanitizeHtml(html: string, options: SanitizeHtmlOptions): string {
   if (options.allowInlineSvg) sanitizeSvgSubtrees(sanitized)
   sanitizeNavigableElements(sanitized)
 
+  for (const card of sanitized.querySelectorAll<HTMLElement>('[data-card-padding]')) {
+    card.style?.setProperty('padding-block', 'var(--card-padding, 12px)')
+  }
+
   for (const img of sanitized.querySelectorAll('img')) {
     const src = img.getAttribute('src') || ''
     if (!isAllowedImageSrc(src)) {

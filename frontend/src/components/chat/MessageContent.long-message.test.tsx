@@ -207,21 +207,27 @@ describe('MessageContent inline HTML rendering', () => {
     expect(host.textContent).not.toContain('<div')
   })
 
+  test('checkbox panels remain siblings when styled content is present', async () => {
+    await render('<div></div><input id="panel-toggle" type="checkbox"><label for="panel-toggle">Open</label>' + inlineScene(3))
+    host.querySelector<HTMLLabelElement>('label')!.click()
+    expect(host.querySelector<HTMLInputElement>('#panel-toggle')!.checked).toBe(true)
+    expect(host.querySelector('#panel-toggle:checked ~ .scene')).not.toBeNull()
+  })
+
   test.each([0, 1, 2, 3, 4, 8])('keeps %i inline styles reachable by document selectors', async (count) => {
     await render(inlineScene(count))
 
     expect(host.querySelectorAll('[data-lumiverse-html-island]')).toHaveLength(0)
-    expect(host.querySelectorAll('[data-lumiverse-inline-html-card]')).toHaveLength(count >= 3 ? 1 : 0)
+    expect(host.querySelectorAll('[data-lumiverse-inline-html-card]')).toHaveLength(0)
     expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(count)
     expect(host.querySelector('.scene > img')).not.toBeNull()
   })
 
-  test('restores spacing around a mid-message inline card without isolating it', async () => {
+  test('preserves a mid-message inline card without adding a wrapper', async () => {
     await render(`Before\n\n${inlineScene(3)}\n\nAfter`)
 
     const shell = host.querySelector<HTMLElement>('[data-lumiverse-inline-html-card]')
-    expect(shell?.firstElementChild).toBe(host.querySelector('.scene'))
-    expect(shell?.shadowRoot).toBeNull()
+    expect(shell).toBeNull()
     expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(3)
     expect(host.textContent).toContain('Before')
     expect(host.textContent).toContain('After')
@@ -235,10 +241,10 @@ describe('MessageContent inline HTML rendering', () => {
     for (const count of [3, 8, 1]) {
       await render(inlineScene(count), true)
       expect(host.querySelectorAll('[data-lumiverse-html-island]')).toHaveLength(0)
-      expect(host.querySelectorAll('[data-lumiverse-inline-html-card]')).toHaveLength(count >= 3 ? 1 : 0)
+      expect(host.querySelectorAll('[data-lumiverse-inline-html-card]')).toHaveLength(0)
       expect(host.querySelectorAll('.scene > span[style]')).toHaveLength(count)
       expect(host.querySelector('.scene')?.parentElement).toBe(prose)
-      expect(prose?.hasAttribute('data-lumiverse-inline-html-card')).toBe(count >= 3)
+      expect(prose?.hasAttribute('data-lumiverse-inline-html-card')).toBe(false)
       expect(host.querySelector('.scene > img') === image).toBe(true)
     }
     await render(inlineScene(1))

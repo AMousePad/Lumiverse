@@ -6,7 +6,7 @@ Self-contained styled HTML in chat messages is auto-extracted into a Shadow DOM 
 
 A block-level element (`<div>`, `<section>`, `<article>`, `<aside>`, `<nav>`, `<main>`, `<header>`, `<footer>`, `<form>`, `<fieldset>`, `<figure>`, `<details>`) becomes an island when its content contains a `<style>` tag. Full HTML wrappers (`<html>`, `<body>`) containing authored styles are also isolated.
 
-Blocks that use three or more inline `style="..."` attributes stay in the normal document tree so document-level CSS, controls, event delegation, and observers can reach them. Lumiverse places a light-DOM spacing shell around those blocks to reserve the same visual-effects bleed room as an island without creating a Shadow DOM boundary.
+Inline styling alone does not create an island or add spacing wrappers. Authored elements keep their parent and sibling relationships.
 
 Standalone `<style>` blocks not inside a wrapper element are extracted together with any subsequent sibling HTML, including complete document-shaped markup.
 
@@ -37,3 +37,21 @@ The attribute may appear anywhere on the opening tag, including across multiple 
 
 !!! warning "You own scoping and safety"
     Opting out disables both style isolation and the markdown-safety wrapper. Scope your selectors with a unique class prefix to avoid collisions with the chat UI, and ensure markdown will not misinterpret your content.
+
+## Optional card padding
+
+Add `data-card-padding` to an existing outer element to request 12px of padding above and below its content. No extra wrapper is inserted.
+
+```html
+<div data-card-padding>Card content</div>
+```
+
+Set `--card-padding` to customize the amount:
+
+```html
+<div data-card-padding style="--card-padding: 20px">Card content</div>
+```
+
+This applies to ordinary message HTML and HTML inside islands. It sets `padding-block` on the marked element, affecting its own box and background; horizontal padding is unchanged. Other inline styles remain intact. To remove the padding, use `--card-padding: 0px` or remove the attribute from the authored content.
+
+Existing inline-styled cards no longer receive automatic spacing. Add this attribute where spacing is wanted. The separate `--html-island-visual-bleed` setting for actual island containers is unchanged.

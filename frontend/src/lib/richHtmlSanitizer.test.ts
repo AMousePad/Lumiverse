@@ -219,3 +219,19 @@ describe('richHtmlSanitizer inline SVG support', () => {
     expect(root.querySelector('image')).toBeNull()
   })
 })
+
+for (const [name, sanitize] of [['prose', sanitizeRichHtml], ['island', sanitizeHtmlIsland]] as const) {
+  test(`${name}: card padding is explicit and preserves the authored tree`, () => {
+    const result = sanitize('<div id="plain">Plain</div><section data-card-padding style="--card-padding: 20px; color: red"><span>Card</span></section><div data-card-padding>Default</div>')
+    const root = new dom.window.DOMParser().parseFromString(result, 'text/html').body
+    expect(root.children).toHaveLength(3)
+    expect(root.querySelector('#plain')!.hasAttribute('style')).toBe(false)
+    const cards = root.querySelectorAll<HTMLElement>('[data-card-padding]')
+    expect(cards[0].style.paddingBlock).toBe('var(--card-padding, 12px)')
+    expect(cards[0].style.getPropertyValue('--card-padding')).toBe('20px')
+    expect(cards[0].style.color).toBe('red')
+    expect(cards[0].firstElementChild?.tagName).toBe('SPAN')
+    expect(cards[1].style.paddingBlock).toBe('var(--card-padding, 12px)')
+    expect(sanitize(result)).toBe(result)
+  })
+}

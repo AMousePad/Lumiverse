@@ -350,22 +350,6 @@ const YOUTUBE_EMBED_ALLOWED_QUERY_PARAMS = new Set([
 const SAFE_YOUTUBE_EMBED_TOKEN_RE = /^[A-Za-z0-9_-]{1,128}$/
 const NO_ISLAND_ATTR_RE = /\bdata-no-island(?=[\s=>"'/]|$)/i
 const ROOT_HTML_TAG_PREFIX_RE = /^<([a-z][\w:-]*)\b/i
-const INLINE_HTML_CARD_ATTR = 'data-lumiverse-inline-html-card'
-const INLINE_HTML_CARD_STYLE_THRESHOLD = 3
-const INLINE_HTML_CARD_TAGS = new Set([
-  'article',
-  'aside',
-  'details',
-  'div',
-  'fieldset',
-  'figure',
-  'footer',
-  'form',
-  'header',
-  'main',
-  'nav',
-  'section',
-])
 const VOID_HTML_TAGS = new Set([
   'area',
   'base',
@@ -1481,78 +1465,6 @@ function getChatFindHighlightRoots(container: HTMLElement): ChatFindHighlightRoo
   return roots
 }
 
-function hasInlineHtmlCardStyleCount(html: string): boolean {
-  const inlineStyleRe = /\bstyle\s*=/gi
-  for (let count = 0; inlineStyleRe.exec(html); count++) {
-    if (count + 1 >= INLINE_HTML_CARD_STYLE_THRESHOLD) return true
-  }
-  return false
-}
-
-/**
- * Keep the legacy visual breathing room for heavily inline-styled cards without
- * moving the card into a shadow root. Counts are accumulated bottom-up and
- * capped at the threshold, so both discovery and wrapping stay linear even for
- * deeply nested or very long messages.
- */
-function restoreInlineHtmlCardSpacing(root: HTMLElement, html: string): void {
-  root.classList.remove(styles.inlineHtmlCard)
-  root.removeAttribute(INLINE_HTML_CARD_ATTR)
-  if (!hasInlineHtmlCardStyleCount(html)) return
-
-  const elements = Array.from(root.querySelectorAll('*'))
-  const styleCounts = new Map<Element, number>()
-
-  for (let i = elements.length - 1; i >= 0; i--) {
-    const element = elements[i]
-    let count = element.hasAttribute('style') ? 1 : 0
-    for (const child of element.children) {
-      count += styleCounts.get(child) ?? 0
-      if (count >= INLINE_HTML_CARD_STYLE_THRESHOLD) break
-    }
-    styleCounts.set(element, Math.min(count, INLINE_HTML_CARD_STYLE_THRESHOLD))
-  }
-
-  const insideCard = new Map<Element, boolean>()
-  const cards: Element[] = []
-  for (const element of elements) {
-    const parent = element.parentElement
-    const parentInsideCard = parent !== null
-      && parent !== root
-      && (insideCard.get(parent) ?? false)
-    const isCard = !parentInsideCard
-      && INLINE_HTML_CARD_TAGS.has(element.localName)
-      && (styleCounts.get(element) ?? 0) >= INLINE_HTML_CARD_STYLE_THRESHOLD
-
-    insideCard.set(element, parentInsideCard || isCard)
-    if (isCard) cards.push(element)
-  }
-
-  if (
-    cards.length === 1
-    && cards[0].parentElement === root
-    && Array.from(root.childNodes).every((node) => (
-      node === cards[0]
-      || node.nodeType === Node.COMMENT_NODE
-      || (node.nodeType === Node.TEXT_NODE && !node.textContent?.trim())
-    ))
-  ) {
-    root.classList.add(styles.inlineHtmlCard)
-    root.setAttribute(INLINE_HTML_CARD_ATTR, '')
-    return
-  }
-
-  for (const card of cards) {
-    const parent = card.parentNode
-    if (!parent) continue
-    const shell = document.createElement('div')
-    shell.className = styles.inlineHtmlCard
-    shell.setAttribute(INLINE_HTML_CARD_ATTR, '')
-    parent.insertBefore(shell, card)
-    shell.appendChild(card)
-  }
-}
-
 /**
  * dangerouslySetInnerHTML wrapper that preserves IMG element identity by
  * src across innerHTML replacements, so images don't redo the cache lookup,
@@ -1568,7 +1480,6 @@ export function ProseHtml({ html, className }: { html: string; className?: strin
     if (lastHtmlRef.current === html) return
 
     replaceHtmlPreservingImages(el, html)
-    restoreInlineHtmlCardSpacing(el, html)
     lastHtmlRef.current = html
     notifyMessageContentLayout(el)
   }, [html])
