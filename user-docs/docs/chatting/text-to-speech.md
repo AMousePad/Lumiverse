@@ -110,6 +110,15 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 - **Output format:** WAV.
 - **Streaming:** Lumiverse currently uses OpenVox's buffered speech response.
 
+### Fish Audio
+
+- **API key:** Required — your Fish Audio API key (`Bearer` token).
+- **Default URL:** `https://api.fish.audio`.
+- **Models:** Static list including `s2.1-pro` (Recommended), `s2.1-pro-free` (Zero-cost tier), `s2-pro`, `s1`, and `drama-3-preview`.
+- **Voices:** Fetched dynamically from your account's created voice models (`GET /model?self=true`), falling back to public library models. You can also paste any voice ID directly into the voice field as a reference voice.
+- **Parameters:** `format` (MP3, WAV, PCM, Opus), `mp3_bitrate` (64, 128, 192 kbps), `latency` (normal, balanced), `speed` (0.5 – 2.0×), `volume` (-10 to +10 dB), `temperature`, `top_p`, `chunk_length`, and `normalize`.
+- **Streaming:** Supported.
+
 ---
 
 ## Playing Audio

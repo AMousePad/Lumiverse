@@ -24,6 +24,7 @@ export const PROVIDER_COLORS: Record<string, string> = {
   qwen3_tts_server: '#f97316',
   google_tts: '#4285f4',
   google_vertex_tts: '#34a853',
+  fish_audio: '#ff5c5c',
   // fallback
   custom: 'var(--lumiverse-text-dim)',
 }
