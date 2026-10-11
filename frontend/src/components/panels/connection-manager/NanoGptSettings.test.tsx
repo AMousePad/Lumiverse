@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, expect, mock, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
-import { act, useState } from 'react'
+import { act, useEffect, useState } from 'react'
 import type { Root, createRoot as CreateRoot } from 'react-dom/client'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
@@ -56,7 +56,7 @@ async function render(subscriptionOnly = false, initial: NanoGptConnectionSettin
   function Harness() {
     const [settings, setSettings] = useState(initial)
     const [selectedModel, setModel] = useState(model)
-    switchModel = setModel
+    useEffect(() => { switchModel = setModel }, [setModel])
     return <I18nextProvider i18n={i18n}><Settings settings={settings} onChange={(next) => { latest = next; setSettings(next) }} model={selectedModel} connectionId="connection" apiKey="" apiUrl="" hasApiKey={hasApiKey} subscriptionOnly={subscriptionOnly} /></I18nextProvider>
   }
   host = document.createElement('div')
