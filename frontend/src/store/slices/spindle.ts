@@ -78,6 +78,10 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   pendingConfirm: null,
   pendingInputPrompt: null,
   pendingContextMenu: null,
+  systemAudioSessions: [],
+
+  addSystemAudioSession: (session) => set((state) => ({ systemAudioSessions: [...state.systemAudioSessions, session] })),
+  removeSystemAudioSession: (id) => set((state) => ({ systemAudioSessions: state.systemAudioSessions.filter((s) => s.id !== id) })),
 
   loadExtensions: () => shareExtensionLoad(async () => {
     try {

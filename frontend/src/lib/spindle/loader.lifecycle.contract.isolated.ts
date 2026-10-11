@@ -1538,6 +1538,96 @@ test('wrapper opt-out requires app manipulation and is revoked without removing 
   }
 })
 
+test('system audio is capability-gated, asks the user, and ends on revoke and unload', async () => {
+  const id = 'system-audio-lifecycle'
+  const manifest = { ...placementManifest(id), permissions: ['system_audio'] as SpindleManifest['permissions'] }
+  const globals = globalThis as typeof globalThis & Record<string, any>
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, '__systemAudioContext')
+  const { registerSystemAudioSource } = await import('./system-audio-source')
+  let stops = 0
+  let handlers: { onFrame(frame: unknown): void } | null = null
+  const unregister = registerSystemAudioSource({
+    availability: () => ({ available: true }),
+    async start(h) {
+      handlers = h
+      return { stop: () => { stops++ } }
+    },
+  })
+  const answer = (confirmed: boolean) => {
+    const request = confirmRequests[confirmRequests.length - 1]
+    window.dispatchEvent(new CustomEvent('spindle:confirm-resolved', { detail: { requestId: request.requestId, confirmed } }))
+  }
+  try {
+    mockedGrantedPermissions = ['system_audio']
+    await loadPlacementBundle(id, manifest, 'export function setup(ctx) { globalThis.__systemAudioContext = ctx }')
+    const ctx = globals.__systemAudioContext
+    expect(ctx.host.capabilities['system-audio-v1']).toBe(1)
+    expect(ctx.systemAudio.isAvailable()).toEqual({ available: true })
+
+    // Declined: the host's own prompt names the extension, nothing starts, and no indicator appears.
+    const declined = ctx.systemAudio.start({ onFrame() {} })
+    await Promise.resolve()
+    expect(confirmRequests).toHaveLength(1)
+    expect(confirmRequests[0].extensionId).toBe(id)
+    expect(confirmRequests[0].title).toBe('shared:spindle.systemAudio.consentTitle')
+    expect(confirmRequests[0].message).toBe('shared:spindle.systemAudio.consentMessage')
+    answer(false)
+    await expect(declined.ready).rejects.toMatchObject({ name: 'NotAllowedError' })
+    expect(handlers).toBeNull()
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
+
+    // Approved: analysis starts, frames arrive, and the host's indicator is up.
+    const frames: unknown[] = []
+    const ended: string[] = []
+    const session = ctx.systemAudio.start({ bands: 8, onFrame: (f: unknown) => frames.push(f), onEnd: (r: string) => ended.push(r) })
+    await Promise.resolve()
+    answer(true)
+    await session.ready
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(1)
+    expect(getSpindleStore().getState().systemAudioSessions[0].extensionId).toBe(id)
+    handlers!.onFrame({ amplitude: 0.5, peak: 0.6, frequencies: [0, 1] })
+    expect(frames).toHaveLength(1)
+    expect((frames[0] as { frequencies: number[] }).frequencies).toHaveLength(8)
+
+    // The indicator's Stop button is the user's own off switch.
+    getSpindleStore().getState().systemAudioSessions[0].stop()
+    expect(ended).toEqual(['user-stopped'])
+    expect(stops).toBe(1)
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
+
+    // Revoking the permission ends a running session and blocks the next one.
+    const next = ctx.systemAudio.start({ onFrame() {}, onEnd: (r: string) => ended.push(r) })
+    await Promise.resolve()
+    answer(true)
+    await next.ready
+    for (const handler of loaderWsHandlers.get('SPINDLE_PERMISSION_CHANGED') ?? []) {
+      handler({ extensionId: id, allGranted: [] })
+    }
+    expect(ended).toEqual(['user-stopped', 'revoked'])
+    expect(stops).toBe(2)
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
+    expect(() => ctx.systemAudio.start({ onFrame() {} })).toThrow('PERMISSION_DENIED:system_audio')
+    expect(ctx.systemAudio.isAvailable()).toEqual({ available: true }) // discovery stays free
+
+    // Unloading mid-session releases the device and shows nothing afterwards.
+    for (const handler of loaderWsHandlers.get('SPINDLE_PERMISSION_CHANGED') ?? []) {
+      handler({ extensionId: id, allGranted: ['system_audio'] })
+    }
+    const last = ctx.systemAudio.start({ onFrame() {} })
+    await Promise.resolve()
+    answer(true)
+    await last.ready
+    await unloadFrontendExtension(id)
+    expect(stops).toBe(3)
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
+    expect(() => ctx.systemAudio.isAvailable()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+  } finally {
+    unregister()
+    await unloadFrontendExtension(id)
+    restoreGlobalProperty('__systemAudioContext', descriptor)
+  }
+})
+
 test('speech is exposed with its capability and cancels on media revoke and unload', async () => {
   const id = 'speech-lifecycle'
   const manifest = { ...placementManifest(id), permissions: ['media'] as SpindleManifest['permissions'] }

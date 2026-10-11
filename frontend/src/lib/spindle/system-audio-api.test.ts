@@ -1,0 +1,360 @@
+import { describe, expect, test } from 'bun:test'
+import { clampInt, createFrontendSystemAudioAPI, resampleBands, type FrontendSystemAudioDependencies } from './system-audio-api'
+import {
+  getSystemAudioSource,
+  registerSystemAudioSource,
+  type SystemAudioAvailability,
+  type SystemAudioSource,
+  type SystemAudioSourceFrame,
+  type SystemAudioSourceHandlers,
+} from './system-audio-source'
+import type { SpindleSystemAudioEndReason, SpindleSystemAudioFrame } from 'lumiverse-spindle-types'
+
+/** A source the test drives by hand. */
+class FakeSource implements SystemAudioSource {
+  status: SystemAudioAvailability = { available: true }
+  starts = 0
+  stops = 0
+  failStart: Error | null = null
+  handlers!: SystemAudioSourceHandlers
+  availability() { return this.status }
+  async start(handlers: SystemAudioSourceHandlers) {
+    this.starts++
+    if (this.failStart) throw this.failStart
+    this.handlers = handlers
+    return { stop: () => { this.stops++ } }
+  }
+  frame(frame: Partial<SystemAudioSourceFrame> = {}) {
+    this.handlers.onFrame({ amplitude: 0.5, peak: 0.8, frequencies: [0, 0.5, 1], ...frame })
+  }
+}
+
+function setup(overrides: Partial<FrontendSystemAudioDependencies> & { source?: FakeSource | null; approve?: boolean } = {}) {
+  const source = overrides.source === undefined ? new FakeSource() : overrides.source
+  const granted = new Set(['system_audio'])
+  let clock = 1000
+  const state = { consents: 0, indicators: 0, stopFromIndicator: null as null | (() => void), torn: [] as Array<() => void>, active: true }
+  const deps: FrontendSystemAudioDependencies = {
+    assertActive() { if (!state.active) throw new Error('SPINDLE_FRONTEND_INACTIVE') },
+    requirePermission(permission, member) {
+      if (!granted.has(permission)) throw new Error(`PERMISSION_DENIED:${permission} - ${member} requires the ${permission} permission`)
+    },
+    onTeardown(handler) { state.torn.push(handler); return () => {} },
+    getSource: () => source,
+    requestConsent: async () => { state.consents++; return overrides.approve ?? true },
+    showIndicator(stop) {
+      state.indicators++
+      state.stopFromIndicator = stop
+      return () => { state.indicators--; state.stopFromIndicator = null }
+    },
+    now: () => clock,
+    ...overrides,
+  }
+  const made = createFrontendSystemAudioAPI(deps)
+  return {
+    ...made, source, granted, state,
+    advance: (ms: number) => { clock += ms },
+    teardown: () => state.torn.forEach((handler) => handler()),
+  }
+}
+
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+describe('resampleBands', () => {
+  test('keeps an exact-size spectrum and clamps junk to 0 – 1', () => {
+    expect(resampleBands([0, 0.5, 2, -1, Number.NaN], 5)).toEqual([0, 0.5, 1, 0, 0])
+  })
+  test('groups a longer spectrum by its loudest value so a narrow peak survives', () => {
+    expect(resampleBands([0, 1, 0, 0, 0, 0, 0, 0], 4)).toEqual([1, 0, 0, 0])
+  })
+  test('interpolates a shorter spectrum from end to end', () => {
+    expect(resampleBands([0, 1], 3)).toEqual([0, 0.5, 1])
+  })
+  test('an empty spectrum is silence of the requested length', () => {
+    expect(resampleBands([], 4)).toEqual([0, 0, 0, 0])
+  })
+})
+
+describe('clampInt', () => {
+  test('rounds, clamps and falls back on anything that is not a finite number', () => {
+    expect(clampInt(12.6, 8, 64, 32)).toBe(13)
+    expect(clampInt(1, 8, 64, 32)).toBe(8)
+    expect(clampInt(1000, 8, 64, 32)).toBe(64)
+    expect(clampInt(Number.NaN, 8, 64, 32)).toBe(32)
+    expect(clampInt('40', 8, 64, 32)).toBe(32)
+    expect(clampInt(undefined, 8, 64, 32)).toBe(32)
+  })
+})
+
+describe('source registry', () => {
+  test('is empty until a native adapter registers, and unregisters only itself', () => {
+    expect(getSystemAudioSource()).toBeNull()
+    const a = new FakeSource()
+    const b = new FakeSource()
+    const offA = registerSystemAudioSource(a)
+    expect(getSystemAudioSource()).toBe(a)
+    const offB = registerSystemAudioSource(b)
+    offA() // a stale handle must not remove the newer adapter
+    expect(getSystemAudioSource()).toBe(b)
+    offB()
+    expect(getSystemAudioSource()).toBeNull()
+  })
+})
+
+describe('isAvailable', () => {
+  test('is unsupported without an adapter, without needing the permission or prompting', () => {
+    const t = setup({ source: null })
+    t.granted.clear()
+    expect(t.api.isAvailable()).toEqual({ available: false, unavailableReason: 'unsupported' })
+    expect(t.state.consents).toBe(0)
+  })
+  test('reports an adapter that exists but is switched off', () => {
+    const source = new FakeSource()
+    source.status = { available: false, reason: 'disabled' }
+    expect(setup({ source }).api.isAvailable()).toEqual({ available: false, unavailableReason: 'disabled' })
+  })
+  test('reports an available adapter', () => {
+    expect(setup().api.isAvailable()).toEqual({ available: true })
+  })
+})
+
+describe('start: authorisation and consent', () => {
+  test('requires the system_audio permission, before anything else happens', () => {
+    const t = setup()
+    t.granted.clear()
+    expect(() => t.api.start({ onFrame() {} })).toThrow('PERMISSION_DENIED:system_audio')
+    expect(t.state.consents).toBe(0)
+    expect(t.source!.starts).toBe(0)
+  })
+  test('needs a frame callback', () => {
+    expect(() => setup().api.start({} as never)).toThrow('SYSTEM_AUDIO_FRAME_CALLBACK_REQUIRED')
+  })
+  test('rejects with NotSupportedError, never prompting, when no adapter exists', async () => {
+    const t = setup({ source: null })
+    await expect(t.api.start({ onFrame() {} }).ready).rejects.toMatchObject({ name: 'NotSupportedError' })
+    expect(t.state.consents).toBe(0)
+  })
+  test('a declined prompt rejects with NotAllowedError and never touches the device', async () => {
+    const t = setup({ approve: false })
+    const ended: SpindleSystemAudioEndReason[] = []
+    await expect(t.api.start({ onFrame() {}, onEnd: (reason) => ended.push(reason) }).ready).rejects.toMatchObject({ name: 'NotAllowedError' })
+    expect(t.source!.starts).toBe(0)
+    expect(t.state.indicators).toBe(0)
+    expect(ended).toEqual([])
+    // ...and the slot is free again.
+    expect(() => t.api.start({ onFrame() {} })).not.toThrow()
+  })
+  test('asks on every start, never remembering an earlier approval', async () => {
+    const t = setup()
+    const first = t.api.start({ onFrame() {} })
+    await first.ready
+    first.stop()
+    await t.api.start({ onFrame() {} }).ready
+    expect(t.state.consents).toBe(2)
+  })
+  test('the permission being revoked while the prompt is open stops it before the device is touched', async () => {
+    let release!: (approved: boolean) => void
+    const t = setup({ requestConsent: () => new Promise<boolean>((resolve) => { release = resolve }) })
+    const session = t.api.start({ onFrame() {} })
+    t.granted.clear()
+    release(true)
+    await expect(session.ready).rejects.toThrow('PERMISSION_DENIED:system_audio')
+    expect(t.source!.starts).toBe(0)
+  })
+  test('only one session per extension', async () => {
+    const t = setup()
+    const first = t.api.start({ onFrame() {} })
+    expect(() => t.api.start({ onFrame() {} })).toThrow('SYSTEM_AUDIO_BUSY')
+    await first.ready
+    expect(() => t.api.start({ onFrame() {} })).toThrow('SYSTEM_AUDIO_BUSY')
+    first.stop()
+    expect(() => t.api.start({ onFrame() {} })).not.toThrow()
+  })
+  test('a source that fails to start frees the slot and shows no indicator', async () => {
+    const source = new FakeSource()
+    source.failStart = new Error('device gone')
+    const t = setup({ source })
+    await expect(t.api.start({ onFrame() {} }).ready).rejects.toThrow('device gone')
+    expect(t.state.indicators).toBe(0)
+    source.failStart = null
+    await expect(t.api.start({ onFrame() {} }).ready).resolves.toBeUndefined()
+  })
+})
+
+describe('start: frames', () => {
+  async function running(options: { bands?: number; maxFps?: number } = {}) {
+    const t = setup()
+    const frames: SpindleSystemAudioFrame[] = []
+    const ended: SpindleSystemAudioEndReason[] = []
+    const session = t.api.start({ ...options, onFrame: (frame) => frames.push(frame), onEnd: (reason) => ended.push(reason) })
+    await session.ready
+    return { t, frames, ended, session }
+  }
+
+  test('delivers analysis only, rebinned to the requested band count', async () => {
+    const { t, frames } = await running({ bands: 8 })
+    t.source!.frame({ frequencies: [0, 1] })
+    expect(Object.keys(frames[0]).sort()).toEqual(['amplitude', 'frequencies', 'peak'])
+    expect(frames[0].frequencies).toHaveLength(8)
+    expect(frames[0].frequencies[0]).toBe(0)
+    expect(frames[0].frequencies[7]).toBe(1)
+  })
+  test('defaults to 32 bands and clamps the request to 8 – 64', async () => {
+    const a = await running()
+    a.t.source!.frame()
+    expect(a.frames[0].frequencies).toHaveLength(32)
+    const b = await running({ bands: 1 })
+    b.t.source!.frame()
+    expect(b.frames[0].frequencies).toHaveLength(8)
+    const c = await running({ bands: 5000 })
+    c.t.source!.frame()
+    expect(c.frames[0].frequencies).toHaveLength(64)
+  })
+  test('sanitises levels from the source', async () => {
+    const { t, frames } = await running()
+    t.source!.frame({ amplitude: Number.NaN, peak: 7 })
+    expect(frames[0].amplitude).toBe(0)
+    expect(frames[0].peak).toBe(1)
+  })
+  test('is rate-limited to maxFps (default 30) however fast the source sends', async () => {
+    const { t, frames } = await running({ maxFps: 10 })
+    for (let i = 0; i < 100; i++) {
+      t.source!.frame()
+      t.advance(5) // 200 fps from the source
+    }
+    expect(frames.length).toBeGreaterThanOrEqual(4)
+    expect(frames.length).toBeLessThanOrEqual(6) // 500 ms at 10 fps
+    const fast = await running()
+    for (let i = 0; i < 100; i++) {
+      fast.t.source!.frame()
+      fast.t.advance(5)
+    }
+    expect(fast.frames.length).toBeLessThanOrEqual(16) // never above 30 fps: 500 ms
+  })
+  test('a throwing frame callback does not stop the session', async () => {
+    const t = setup()
+    let calls = 0
+    const log = console.error
+    console.error = () => {} // the host logs the extension's error; keep the test output clean
+    try {
+      const session = t.api.start({ onFrame() { calls++; throw new Error('extension bug') } })
+      await session.ready
+      t.source!.frame()
+      t.advance(100)
+      t.source!.frame()
+    } finally {
+      console.error = log
+    }
+    expect(calls).toBe(2)
+  })
+  test('shows the host indicator while it runs and removes it on stop(), which releases the device', async () => {
+    const { t, session } = await running()
+    expect(t.state.indicators).toBe(1)
+    session.stop()
+    session.stop() // safe to repeat
+    expect(t.state.indicators).toBe(0)
+    expect(t.source!.stops).toBe(1)
+  })
+})
+
+describe('start: how a session ends', () => {
+  async function running() {
+    const t = setup()
+    const frames: SpindleSystemAudioFrame[] = []
+    const ended: SpindleSystemAudioEndReason[] = []
+    const session = t.api.start({ onFrame: (frame) => frames.push(frame), onEnd: (reason) => ended.push(reason) })
+    await session.ready
+    return { t, frames, ended, session }
+  }
+
+  test('the indicator’s Stop button ends it with user-stopped', async () => {
+    const { t, ended } = await running()
+    t.state.stopFromIndicator!()
+    expect(ended).toEqual(['user-stopped'])
+    expect(t.source!.stops).toBe(1)
+    expect(t.state.indicators).toBe(0)
+  })
+  test('revoking the permission ends it with revoked and no further frames arrive', async () => {
+    const { t, frames, ended } = await running()
+    t.revoke()
+    expect(ended).toEqual(['revoked'])
+    expect(t.source!.stops).toBe(1)
+    t.source!.frame()
+    expect(frames).toHaveLength(0)
+  })
+  test('a frame that arrives after the grant was withdrawn ends it rather than leaking', async () => {
+    const { t, frames, ended } = await running()
+    t.granted.clear()
+    t.source!.frame()
+    expect(frames).toHaveLength(0)
+    expect(ended).toEqual(['revoked'])
+    expect(t.source!.stops).toBe(1)
+  })
+  test('the source going away is reported with its own reason', async () => {
+    const { t, ended } = await running()
+    t.source!.handlers.onEnd('source-lost')
+    expect(ended).toEqual(['source-lost'])
+    expect(t.state.indicators).toBe(0)
+    t.source!.handlers.onEnd('host-disabled') // already over: reported once
+    expect(ended).toEqual(['source-lost'])
+  })
+  test('unloading the extension stops the device quietly', async () => {
+    const { t, ended } = await running()
+    t.teardown()
+    expect(t.source!.stops).toBe(1)
+    expect(t.state.indicators).toBe(0)
+    expect(ended).toEqual([])
+    expect(() => t.api.isAvailable()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+    expect(() => t.api.start({ onFrame() {} })).toThrow('SPINDLE_FRONTEND_INACTIVE')
+  })
+  test('an AbortSignal that is already aborted never prompts', async () => {
+    const t = setup()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(t.api.start({ onFrame() {}, signal: controller.signal }).ready).rejects.toMatchObject({ name: 'AbortError' })
+    expect(t.state.consents).toBe(0)
+  })
+  test('aborting while the prompt is open cancels the prompt and never starts the device', async () => {
+    let aborted = false
+    const t = setup({
+      requestConsent: (signal) => new Promise<boolean>((resolve) => {
+        signal.addEventListener('abort', () => { aborted = true; resolve(false) })
+      }),
+    })
+    const controller = new AbortController()
+    const session = t.api.start({ onFrame() {}, signal: controller.signal })
+    controller.abort()
+    await expect(session.ready).rejects.toMatchObject({ name: 'AbortError' })
+    expect(aborted).toBe(true)
+    expect(t.source!.starts).toBe(0)
+    expect(t.state.indicators).toBe(0)
+  })
+  test('aborting a running session stops the device', async () => {
+    const t = setup()
+    const controller = new AbortController()
+    const session = t.api.start({ onFrame() {}, signal: controller.signal })
+    await session.ready
+    controller.abort()
+    await flush()
+    expect(t.source!.stops).toBe(1)
+    expect(t.state.indicators).toBe(0)
+  })
+  test('stopping while the device is still starting releases it as soon as it is up', async () => {
+    const source = new FakeSource()
+    let finish!: () => void
+    source.start = async (handlers) => {
+      source.starts++
+      source.handlers = handlers
+      await new Promise<void>((resolve) => { finish = resolve })
+      return { stop: () => { source.stops++ } }
+    }
+    const t = setup({ source })
+    const session = t.api.start({ onFrame() {} })
+    await flush()
+    session.stop()
+    finish()
+    await expect(session.ready).rejects.toMatchObject({ name: 'AbortError' })
+    expect(source.stops).toBe(1)
+    expect(t.state.indicators).toBe(0)
+  })
+})

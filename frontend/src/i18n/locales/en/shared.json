@@ -116,6 +116,14 @@
     "replaceAll": "Replace All"
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "Analyse system audio?",
+      "consentMessage": "It will receive a spectrum and loudness only, never the audio itself, and nothing is recorded or sent anywhere. A “listening” indicator stays on screen with a Stop button while it runs, and you will be asked again next time.",
+      "allow": "Allow",
+      "notNow": "Not now",
+      "listening": "{{name}} is analysing system audio",
+      "stop": "Stop"
+    },
     "floatWidget": "Float Widget",
     "drawerTab": "Drawer Tab",
     "dockPanel": "Dock ({{edge}})",

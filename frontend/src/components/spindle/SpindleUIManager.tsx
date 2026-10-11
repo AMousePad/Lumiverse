@@ -7,6 +7,7 @@ import SpindleFloatWidget from './SpindleFloatWidget'
 import SpindleDockPanel from './SpindleDockPanel'
 import SpindleAppMount from './SpindleAppMount'
 import ContainerTabContent from './ContainerTabContent'
+import SystemAudioIndicator from './SystemAudioIndicator'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { InputPromptModal } from '@/components/shared/InputPromptModal'
@@ -97,6 +98,7 @@ export default function SpindleUIManager() {
       <SpindleConfirm />
       <SpindleInputPrompt />
       <SpindleContextMenu />
+      <SystemAudioIndicator />
     </>
   )
 }
