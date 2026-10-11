@@ -465,6 +465,8 @@ const result = await spindle.generate.dryRun({
 | `model` | `string` | The model that would be used. |
 | `provider` | `string` | The provider that would be used. |
 | `tokenCount` | `DryRunTokenCountDTO` | Optional. Per-block token counts (if a tokenizer is available). |
+| `chatHistoryTokens` | `number` | Optional. Chat-history token total from the token breakdown. Zero is a valid count. |
+| `contextClipStats` | `ContextClipStats` | Optional. Context-budget and clipping statistics, including `maxContext`, `inputBudget`, `chatHistoryTokensBefore`, `chatHistoryTokensAfter`, `messagesDropped`, and `tokensDropped`. Use `maxContext` here for the configured context limit; it is stripped from provider parameters. |
 | `worldInfoStats` | `ActivationStatsDTO` | Optional. World info activation statistics. |
 | `memoryStats` | `MemoryStatsDTO` | Optional. Long-term memory retrieval statistics. |
 

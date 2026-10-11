@@ -105,6 +105,7 @@ import type {
   MediaTransformResultDTO,
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
+import type { DryRunResultDTO } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef } from "./desktop-capture-contract";
 import { deserializeWorkerResponseError } from "./worker-response-error";
 import { deriveCharacterOverlay } from "../utils/color-engine";
@@ -716,7 +717,10 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate"> & {
+  generate: Omit<SpindleAPI["generate"], "dryRun"> & {
+    dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
+  };
   desktop: SpindleDesktopAPI;
   runtimeState: {
     read(chatId: string, characterId: string, userId?: string): Promise<unknown>;
@@ -1741,7 +1745,7 @@ const spindleApi: RuntimeSpindleAPI = {
         input,
         userId,
       });
-      return result as import("lumiverse-spindle-types").DryRunResultDTO;
+      return result as DryRunResultDTO;
     },
 
     observe(chatId: string): import("lumiverse-spindle-types").GenerationObserver {

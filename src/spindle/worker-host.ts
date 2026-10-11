@@ -15,7 +15,6 @@ import type {
   ReasoningEffortDTO,
   ThinkingDisplayDTO,
   DatabankDocumentCreateDTO,
-  DryRunResultDTO,
   SpindleCommandDTO,
   SpindleCommandContextDTO,
   CouncilMemberContext,
@@ -26,6 +25,7 @@ import type {
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX, SPINDLE_HOST_CAPABILITIES } from "lumiverse-spindle-types";
 import { WorkerHostDesktopCaptureApi } from "./worker-host-desktop-capture-api";
+import type { DryRunResultDTO } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { createOAuthState } from "./oauth-state";
@@ -4589,6 +4589,8 @@ export class WorkerHost {
         model: dryRunResult.model,
         provider: dryRunResult.provider,
         tokenCount: dryRunResult.tokenCount,
+        chatHistoryTokens: dryRunResult.chatHistoryTokens,
+        contextClipStats: dryRunResult.contextClipStats,
         worldInfoStats: dryRunResult.worldInfoStats,
         memoryStats: dryRunResult.memoryStats,
       };
