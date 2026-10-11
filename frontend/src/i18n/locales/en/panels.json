@@ -606,6 +606,17 @@
     "noVoices": "No voices found. Enter one manually.",
     "geminiSpeechStyle": "Speech style",
     "geminiSpeechStyleHint": "Keep delivery guidance brief. Defaults to relaxed conversation; clear it to use the voice's usual delivery.",
+    "fishGroups": {
+      "delivery": "Voice and delivery",
+      "sampling": "Sampling",
+      "audio": "Audio output",
+      "generation": "Advanced generation",
+      "pronunciation": "Pronunciation dictionary"
+    },
+    "fishReset": "Reset Fish Audio settings",
+    "fishPcmExternal": "PCM (external playback)",
+    "fishDictionaryIncomplete": "Enter both the dictionary ID and its published version, or clear both.",
+    "fishDictionaryInvalid": "Dictionary IDs and versions must contain 1–128 letters, numbers, underscores, or hyphens.",
     "qwenLanguage": "Language",
     "qwenLanguageHint": "Keep Auto unless the server consistently misidentifies the target language.",
     "qwenLanguageAuto": "Auto",

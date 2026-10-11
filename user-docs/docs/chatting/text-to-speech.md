@@ -116,7 +116,12 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 - **Default URL:** `https://api.fish.audio`.
 - **Models:** Static list including `s2.1-pro` (Recommended), `s2.1-pro-free` (Zero-cost tier), `s2-pro`, `s1`, and `drama-3-preview`.
 - **Voices:** Fetched dynamically from your account's created voice models (`GET /model?self=true`), falling back to public library models. You can also paste any voice ID directly into the voice field as a reference voice.
-- **Parameters:** `format` (MP3, WAV, PCM, Opus), `mp3_bitrate` (64, 128, 192 kbps), `latency` (normal, balanced), `speed` (0.5 – 2.0×), `volume` (-10 to +10 dB), `temperature`, `top_p`, `chunk_length`, and `normalize`.
+- **Settings:** The connection form groups voice and delivery, sampling, audio output, advanced generation, and pronunciation settings. It uses sliders, inputs, selects, and toggles; untouched settings use Fish's defaults.
+- **Delivery:** Optional plain-language voice direction for S2/Drama, speed (0.5 – 2.0×), volume in dB, and S2 loudness normalization. A saved Fish connection speed takes precedence over the global speed; a character/narrator speed override takes precedence over both.
+- **Sampling and generation:** Temperature, top-p, repetition penalty, chunk lengths, maximum audio tokens, previous-chunk context, early stopping, text normalization, and optional quality guard.
+- **Output:** MP3, WAV, and Opus for app playback, with format-specific sample rates and bitrates. Raw PCM remains available through the API for external playback. Latency can be normal, balanced, or low; Fish audio is buffered before playback in the app.
+- **Pronunciation:** Supply a published Fish dictionary ID and its explicit version ID to apply recurring name/term pronunciations.
+- **Inline directions:** S2/Drama square-bracket directions stay with the following spoken text. Drama also preserves paired delivery tags such as `<whisper>…</whisper>` and experimental language tags through speech/narration parsing. Other voices retain the enclosed words while removing unsupported wrappers.
 - **Streaming:** Supported.
 
 ---

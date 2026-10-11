@@ -630,17 +630,18 @@ export interface QwenCustomVoiceDeleteResult {
  * (voiceSettings.narrationVoice).
  *
  * `voice` is the provider-side voice id (empty string falls back to the
- * connection's default voice). `parameters.speed` is optional and overrides
+ * connection's default voice). `parameters` holds synthesis overrides; speed overrides
  * the global speed for this voice when set.
  */
 export interface VoiceRef {
   connectionId: string
   voice: string
-  parameters?: { speed?: number }
+  parameters?: Record<string, unknown> & { speed?: number }
 }
 
 export interface TtsParameterSchema {
   type: 'number' | 'integer' | 'boolean' | 'string' | 'select';
+  label?: string;
   default?: any;
   min?: number;
   max?: number;
@@ -649,6 +650,8 @@ export interface TtsParameterSchema {
   required?: boolean;
   options?: Array<{ id: string; label: string }>;
   group?: string;
+  models?: string[];
+  formats?: string[];
 }
 
 export interface TtsProviderCapabilities {
