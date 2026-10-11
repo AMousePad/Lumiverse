@@ -329,7 +329,9 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
             ? defaultParameters
             : isOpenVox && Object.keys(openVoxDefaults).length > 0
               ? openVoxDefaults
-              : undefined,
+              : Object.keys(defaultParameters).length > 0
+                ? defaultParameters
+                : undefined,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     })
   }, [name, provider, apiKey, apiUrl, model, voice, isDefault, isQwen, isGoogle, isOpenVox, defaultParameters, onSave, isVertex, vertexRegion, saFileName, profile?.metadata])
