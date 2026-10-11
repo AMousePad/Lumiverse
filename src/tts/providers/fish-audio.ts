@@ -1,5 +1,5 @@
 import type { TtsProvider } from "../provider";
-import type { TtsProviderCapabilities } from "../param-schema";
+import type { TtsParameterSchemaMap, TtsProviderCapabilities } from "../param-schema";
 import type { TtsRequest, TtsResponse, TtsStreamChunk, TtsVoice } from "../types";
 import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
@@ -11,9 +11,28 @@ export const FISH_AUDIO_MODELS: Array<{ id: string; label: string }> = [
   { id: "drama-3-preview", label: "Drama 3 (Preview)" },
 ];
 
-export const FISH_AUDIO_PARAMETERS = {
+const S2_MODELS = ["s2-pro", "s2.1-pro", "s2.1-pro-free"];
+const EXPRESSIVE_MODELS = [...S2_MODELS, "drama-3-preview"];
+
+export const FISH_AUDIO_SAMPLE_RATES: Record<string, number[]> = {
+  wav: [8000, 16000, 24000, 32000, 44100],
+  pcm: [8000, 16000, 24000, 32000, 44100],
+  mp3: [32000, 44100],
+  opus: [48000],
+};
+
+export const FISH_AUDIO_PARAMETERS: TtsParameterSchemaMap = {
+  voice_direction: {
+    type: "string",
+    default: "",
+    label: "Voice direction",
+    description: "Describe the delivery in plain language, such as warm, measured, or barely holding back laughter. Inline directions can refine individual lines.",
+    group: "delivery",
+    models: EXPRESSIVE_MODELS,
+  },
   format: {
     type: "select" as const,
+    label: "Output format",
     default: "mp3",
     description: "Audio output format (mp3, wav, pcm, opus)",
     options: [
@@ -22,9 +41,11 @@ export const FISH_AUDIO_PARAMETERS = {
       { id: "opus", label: "Opus" },
       { id: "pcm", label: "PCM" },
     ],
+    group: "audio",
   },
   mp3_bitrate: {
     type: "select" as const,
+    label: "MP3 bitrate",
     default: "128",
     description: "MP3 bitrate (kbps) — only applies when format is mp3",
     options: [
@@ -32,17 +53,45 @@ export const FISH_AUDIO_PARAMETERS = {
       { id: "128", label: "128 kbps" },
       { id: "192", label: "192 kbps" },
     ],
-    group: "advanced",
+    group: "audio",
+    formats: ["mp3"],
+  },
+  opus_bitrate: {
+    type: "select",
+    default: "-1000",
+    label: "Opus bitrate",
+    description: "Opus bitrate. Automatic lets Fish choose the bitrate.",
+    options: [
+      { id: "-1000", label: "Automatic" },
+      { id: "24000", label: "24 kbps" },
+      { id: "32000", label: "32 kbps" },
+      { id: "48000", label: "48 kbps" },
+      { id: "64000", label: "64 kbps" },
+    ],
+    group: "audio",
+    formats: ["opus"],
+  },
+  sample_rate: {
+    type: "select",
+    default: "",
+    label: "Sample rate",
+    description: "Automatic uses the output format's default sample rate.",
+    options: [
+      { id: "", label: "Automatic" },
+      ...[8000, 16000, 24000, 32000, 44100, 48000].map((rate) => ({ id: String(rate), label: `${rate / 1000} kHz` })),
+    ],
+    group: "audio",
   },
   latency: {
     type: "select" as const,
     default: "normal",
-    description: "Latency trade-off (normal for quality, balanced for lower latency)",
+    description: "Trade audio quality for faster generation.",
     options: [
       { id: "normal", label: "Normal (Higher quality)" },
       { id: "balanced", label: "Balanced (Lower latency)" },
+      { id: "low", label: "Low (Lowest latency)" },
     ],
-    group: "advanced",
+    group: "audio",
   },
   speed: {
     type: "number" as const,
@@ -51,16 +100,22 @@ export const FISH_AUDIO_PARAMETERS = {
     max: 2.0,
     step: 0.05,
     description: "Playback speed (0.5x – 2.0x)",
-    group: "advanced",
+    group: "delivery",
   },
   volume: {
     type: "number" as const,
     default: 0,
-    min: -10,
-    max: 10,
     step: 0.5,
-    description: "Volume adjustment in dB (-10 to +10 dB, default 0)",
-    group: "advanced",
+    description: "Volume adjustment in decibels. Zero keeps the original volume.",
+    group: "delivery",
+  },
+  normalize_loudness: {
+    type: "boolean",
+    default: true,
+    label: "Normalize loudness",
+    description: "Keep perceived volume consistent between generated passages.",
+    group: "delivery",
+    models: S2_MODELS,
   },
   temperature: {
     type: "number" as const,
@@ -69,7 +124,7 @@ export const FISH_AUDIO_PARAMETERS = {
     max: 1,
     step: 0.05,
     description: "Generation temperature (higher = more variance)",
-    group: "advanced",
+    group: "sampling",
   },
   top_p: {
     type: "number" as const,
@@ -78,7 +133,16 @@ export const FISH_AUDIO_PARAMETERS = {
     max: 1,
     step: 0.05,
     description: "Top-p sampling probability threshold",
-    group: "advanced",
+    label: "Top-p",
+    group: "sampling",
+  },
+  repetition_penalty: {
+    type: "number",
+    default: 1.2,
+    step: 0.05,
+    label: "Repetition penalty",
+    description: "Values above 1 reduce repeated audio patterns.",
+    group: "sampling",
   },
   chunk_length: {
     type: "integer" as const,
@@ -87,19 +151,113 @@ export const FISH_AUDIO_PARAMETERS = {
     max: 300,
     step: 10,
     description: "Text chunk segment length (100–300)",
-    group: "advanced",
+    label: "Chunk length",
+    group: "generation",
+  },
+  min_chunk_length: {
+    type: "integer",
+    default: 50,
+    min: 0,
+    max: 100,
+    step: 1,
+    label: "Minimum chunk length",
+    description: "Minimum characters before splitting into a new chunk.",
+    group: "generation",
+  },
+  max_new_tokens: {
+    type: "integer",
+    default: 1024,
+    step: 1,
+    label: "Maximum audio tokens",
+    description: "Maximum audio tokens per text chunk. A small limit can cut speech short.",
+    group: "generation",
+  },
+  condition_on_previous_chunks: {
+    type: "boolean",
+    default: true,
+    label: "Use previous chunks as context",
+    description: "Use preceding audio to keep the voice consistent within a request.",
+    group: "generation",
+  },
+  early_stop_threshold: {
+    type: "number",
+    default: 1,
+    min: 0,
+    max: 1,
+    step: 0.05,
+    label: "Early stopping threshold",
+    description: "Early stopping threshold for batch processing.",
+    group: "generation",
   },
   normalize: {
     type: "boolean" as const,
     default: true,
     description: "Normalize text before synthesis (numbers to words, etc.)",
-    group: "advanced",
+    label: "Normalize numbers and text",
+    group: "generation",
+  },
+  quality_guard: {
+    type: "boolean",
+    default: false,
+    label: "Quality guard",
+    description: "Request Fish's quality guard to reduce low-quality generations. Availability depends on the selected model.",
+    group: "generation",
+  },
+  pronunciation_dictionary_id: {
+    type: "string",
+    default: "",
+    label: "Dictionary ID",
+    description: "Optional published pronunciation dictionary from Fish Audio.",
+    group: "pronunciation",
+  },
+  pronunciation_dictionary_version: {
+    type: "string",
+    default: "",
+    label: "Dictionary version",
+    description: "Use the explicit published version ID for this dictionary.",
+    group: "pronunciation",
   },
 };
 
 export function buildFishAudioBody(request: TtsRequest): Record<string, any> {
   const p = request.parameters || {};
+  const model = request.model?.trim() || "s2.1-pro";
   const format = request.outputFormat || p.format || "mp3";
+  const invalid = (detail: string): never => {
+    throw new ProviderRequestError({
+      provider: "Fish Audio",
+      operation: "tts parameters",
+      status: 400,
+      code: "invalid_tts_parameters",
+      detail,
+      retryable: false,
+    });
+  };
+  if (typeof format !== "string" || !Object.hasOwn(FISH_AUDIO_SAMPLE_RATES, format)) invalid("Unsupported audio format");
+  const values: Record<string, any> = {};
+  for (const [key, schema] of Object.entries(FISH_AUDIO_PARAMETERS)) {
+    const value = p[key];
+    if (value == null || value === "") continue;
+    if (schema.models && !schema.models.includes(model)) continue;
+    if (schema.formats && !schema.formats.includes(format)) continue;
+    if (schema.type === "number" || schema.type === "integer") {
+      if ((typeof value !== "number" && typeof value !== "string") || String(value).trim() === "") invalid(`${schema.label || key} requires a number`);
+      const number = Number(value);
+      if (!Number.isFinite(number) || (schema.type === "integer" && !Number.isInteger(number))) invalid(`${schema.label || key} requires a finite ${schema.type}`);
+      if (schema.min != null && number < schema.min) invalid(`${schema.label || key} requires a value of at least ${schema.min}`);
+      if (schema.max != null && number > schema.max) invalid(`${schema.label || key} requires a value of at most ${schema.max}`);
+      values[key] = number;
+    } else if (schema.type === "boolean") {
+      if (value !== true && value !== false && value !== "true" && value !== "false") invalid(`${schema.label || key} requires true or false`);
+      values[key] = value === true || value === "true";
+    } else if (schema.type === "select") {
+      if (!schema.options?.some((option) => option.id === String(value))) invalid(`Unsupported ${schema.label || key}`);
+      values[key] = String(value);
+    } else {
+      if (typeof value !== "string") invalid(`${schema.label || key} requires text`);
+      values[key] = value.trim();
+    }
+  }
   const body: Record<string, any> = {
     text: request.text,
     format,
@@ -107,28 +265,40 @@ export function buildFishAudioBody(request: TtsRequest): Record<string, any> {
   if (request.voice && request.voice.trim()) {
     body.reference_id = request.voice.trim();
   }
-  if (format === "mp3" && p.mp3_bitrate) {
-    body.mp3_bitrate = Number(p.mp3_bitrate);
+  for (const key of [
+    "latency", "chunk_length", "min_chunk_length", "max_new_tokens", "normalize",
+    "temperature", "top_p", "repetition_penalty", "condition_on_previous_chunks", "early_stop_threshold",
+  ]) {
+    if (values[key] != null) body[key] = values[key];
   }
-  if (p.latency) {
-    body.latency = p.latency;
+  for (const key of ["mp3_bitrate", "opus_bitrate", "sample_rate"]) {
+    if (values[key] != null) body[key] = Number(values[key]);
   }
-  if (p.chunk_length != null) {
-    body.chunk_length = Number(p.chunk_length);
-  }
-  if (p.normalize != null) {
-    body.normalize = Boolean(p.normalize);
-  }
-  if (p.temperature != null) {
-    body.temperature = Number(p.temperature);
-  }
-  if (p.top_p != null) {
-    body.top_p = Number(p.top_p);
-  }
-  const speed = p.speed != null ? Number(p.speed) : 1.0;
-  const volume = p.volume != null ? Number(p.volume) : 0;
-  if (speed !== 1.0 || volume !== 0) {
+  if (body.sample_rate != null && !FISH_AUDIO_SAMPLE_RATES[format]!.includes(body.sample_rate)) invalid("Unsupported sample rate for the selected format");
+  const speed = values.speed ?? 1;
+  const volume = values.volume ?? 0;
+  if (speed !== 1 || volume !== 0 || values.normalize_loudness != null) {
     body.prosody = { speed, volume };
+    if (values.normalize_loudness != null) body.prosody.normalize_loudness = values.normalize_loudness;
+  }
+  if (values.voice_direction) {
+    const direction = values.voice_direction.replace(/[\[\]]/g, "").replace(/\s+/g, " ").trim();
+    if (direction) body.text = `[${direction}] ${request.text}`;
+  }
+  if (p.features != null && (!Array.isArray(p.features) || !p.features.every((flag: unknown) => typeof flag === "string"))) invalid("TTS features requires an array of strings");
+  const features: string[] = [...(p.features || [])];
+  if (values.quality_guard === true && !features.includes("quality-guard")) features.push("quality-guard");
+  body.features = values.quality_guard === false ? features.filter((flag) => flag !== "quality-guard") : features;
+  if (body.features.length === 0) delete body.features;
+  if (p.pronunciation_dictionary != null) {
+    if (!Array.isArray(p.pronunciation_dictionary) || p.pronunciation_dictionary.length > 3) invalid("Pronunciation dictionary requires an array of up to three dictionaries");
+    body.pronunciation_dictionary = p.pronunciation_dictionary;
+  } else if (values.pronunciation_dictionary_id || values.pronunciation_dictionary_version) {
+    const id = values.pronunciation_dictionary_id;
+    const version = values.pronunciation_dictionary_version;
+    if (!id || !version) invalid("Pronunciation dictionary requires both an ID and a version");
+    if (![id, version].every((value) => /^[A-Za-z0-9_-]{1,128}$/.test(value))) invalid("Unsupported pronunciation dictionary ID or version");
+    body.pronunciation_dictionary = [{ id, version }];
   }
   return body;
 }
@@ -190,7 +360,7 @@ export class FishAudioTtsProvider implements TtsProvider {
     }
 
     const body = buildFishAudioBody(request);
-    const model = request.model || "s2.1-pro";
+    const model = request.model?.trim() || "s2.1-pro";
 
     const res = await fetch(`${this.baseUrl(apiUrl)}/v1/tts`, {
       method: "POST",
@@ -227,7 +397,7 @@ export class FishAudioTtsProvider implements TtsProvider {
     }
 
     const body = buildFishAudioBody(request);
-    const model = request.model || "s2.1-pro";
+    const model = request.model?.trim() || "s2.1-pro";
 
     const res = await fetch(`${this.baseUrl(apiUrl)}/v1/tts`, {
       method: "POST",

@@ -1,4 +1,5 @@
 import { activeTab } from '@/lib/active-tab'
+import { downloadExtensionFile } from './file-downloads'
 import type {
   SpindleManifest,
   SpindleFrontendContext,
@@ -1882,6 +1883,12 @@ async function doLoadFrontendExtension(
         generation,
         { hasPermission: (permission) => cachedGrantedPermissions.includes(permission) },
       ),
+      files: {
+        download(fileId: string) {
+          assertFrontendActive()
+          downloadExtensionFile(manifest.identifier, fileId)
+        },
+      },
       uploads: {
         async pickFile(options) {
           assertFrontendActive()

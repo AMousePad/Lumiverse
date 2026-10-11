@@ -15,7 +15,6 @@ import type {
   ReasoningEffortDTO,
   ThinkingDisplayDTO,
   DatabankDocumentCreateDTO,
-  DryRunResultDTO,
   SpindleCommandDTO,
   SpindleCommandContextDTO,
   CouncilMemberContext,
@@ -24,10 +23,14 @@ import type {
   QuietTrackedRequestDTO,
   ConnectionDispatchDescriptorDTO,
 } from "lumiverse-spindle-types";
+import { WorkerHostFilesApi } from "./worker-host-files-api";
 import { PERMISSION_DENIED_PREFIX, SPINDLE_HOST_CAPABILITIES } from "lumiverse-spindle-types";
 import { WorkerHostDesktopCaptureApi } from "./worker-host-desktop-capture-api";
+import type { DryRunResultDTO, GetBreakdownWorkerMessage } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
+import type { ImageReadBinaryMessage } from "./image-binary-contract";
+import type { ActivationPatternsMessage } from "./activation-patterns-contract";
 import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
 import { eventBus } from "../ws/bus";
@@ -60,6 +63,7 @@ import {
 } from "./prompt-regex-ownership";
 import * as managerSvc from "./manager.service";
 import * as generateSvc from "../services/generate.service";
+import * as breakdownSvc from "../services/breakdown.service";
 import * as connectionsSvc from "../services/connections.service";
 import * as chatsSvc from "../services/chats.service";
 import type * as presetsSvc from "../services/presets.service";
@@ -297,6 +301,9 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | ActivationPatternsMessage
+  | ImageReadBinaryMessage
+  | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -923,6 +930,7 @@ export class WorkerHost {
   private readonly installScope: "operator" | "user";
   private readonly installedByUserId: string | null;
   private readonly storageApi: WorkerHostStorageApi;
+  private readonly filesApi: WorkerHostFilesApi;
   private readonly stateApi: WorkerHostStateApi;
   private readonly contentApi: WorkerHostContentApi;
   private readonly memoryApi: WorkerHostMemoryApi;
@@ -950,6 +958,13 @@ export class WorkerHost {
       installScope: this.installScope,
       installedByUserId: this.installedByUserId,
       hasPermission: (permission) => this.hasPermission(permission),
+      postResponse: (message) => this.postToWorker(message),
+    });
+    this.filesApi = new WorkerHostFilesApi({
+      extensionId, identifier: manifest.identifier,
+      hasPermission: (permission) => this.hasPermission(permission),
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
       postResponse: (message) => this.postToWorker(message),
     });
     this.stateApi = new WorkerHostStateApi({
@@ -1263,6 +1278,7 @@ export class WorkerHost {
   }
 
   async stop(): Promise<void> {
+    await this.filesApi.dispose();
     if (!this.runtime) return;
     const runtime = this.runtime;
     const runtimeExitPromise = this.runtimeExitPromise;
@@ -1343,6 +1359,7 @@ export class WorkerHost {
   }
 
   private cleanup(): void {
+    void this.filesApi.dispose().catch(error => console.warn("[spindle-files] worker cleanup failed", error));
     this.desktopCaptureApi.dispose();
     this.stopRuntimeStatsSampling();
     this.processApi.stopAllFrontendProcesses("backend_unloaded");
@@ -1704,6 +1721,9 @@ export class WorkerHost {
   }
 
   private handleMessageInScope(msg: RuntimeWorkerToHost): void {
+    if (this.filesApi.dispatch(msg as unknown as { type: string; [key: string]: unknown })) {
+      return;
+    }
     if (this.storageApi.dispatch(msg as unknown as { type: string; [key: string]: unknown })) {
       return;
     }
@@ -1792,6 +1812,9 @@ export class WorkerHost {
       // ─── Dry Run (gated: "generation") ───────────────────────────────
       case "generate_dry_run":
         this.handleGenerateDryRun(msg.requestId, msg.input, msg.userId);
+        break;
+      case "generate_get_breakdown":
+        this.handleGetBreakdown(msg.requestId, msg.messageId, msg.userId);
         break;
       case "assemble_prompt":
         this.handleAssemblePrompt(msg.requestId, msg.input, msg.userId);
@@ -2210,6 +2233,9 @@ export class WorkerHost {
       case "regex_scripts_get":
         this.contentApi.handleRegexScriptsGet(msg.requestId, msg.scriptId, msg.userId);
         break;
+      case "regex_scripts_prepare_activation_patterns":
+        this.contentApi.handleRegexScriptsPrepareActivationPatterns(msg.requestId, msg.options);
+        break;
       case "regex_scripts_get_active":
         this.contentApi.handleRegexScriptsGetActive(
           msg.requestId,
@@ -2278,6 +2304,9 @@ export class WorkerHost {
           msg.chatId,
           msg.userId,
         );
+        break;
+      case "images_read_binary":
+        void this.contentApi.handleImagesReadBinary(msg.requestId, msg.imageId, msg.userId);
         break;
       case "images_get":
         this.contentApi.handleImagesGet(
@@ -4538,6 +4567,26 @@ export class WorkerHost {
 
   // ─── Characters (gated: "characters") ──────────────────────────────
 
+  private handleGetBreakdown(requestId: string, messageId: string, userId?: string): void {
+    try {
+      if (!this.hasPermission("generation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      if (typeof messageId !== "string" || !messageId.trim()) {
+        throw new Error("messageId is required");
+      }
+      this.postToWorker({
+        type: "response", requestId,
+        result: breakdownSvc.getBreakdown(resolvedUserId, messageId),
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
   private async handleGenerateDryRun(
     requestId: string,
     input: any,
@@ -4589,6 +4638,8 @@ export class WorkerHost {
         model: dryRunResult.model,
         provider: dryRunResult.provider,
         tokenCount: dryRunResult.tokenCount,
+        chatHistoryTokens: dryRunResult.chatHistoryTokens,
+        contextClipStats: dryRunResult.contextClipStats,
         worldInfoStats: dryRunResult.worldInfoStats,
         memoryStats: dryRunResult.memoryStats,
       };

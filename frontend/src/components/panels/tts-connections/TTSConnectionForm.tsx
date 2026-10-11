@@ -7,6 +7,7 @@ import { VERTEX_REGIONS } from '@/components/panels/connection-manager/vertexCon
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import { isQwenTtsProvider, QWEN_LANGUAGE_OPTIONS } from '@/lib/qwenTts'
 import { getTtsVoiceLabel, getTtsVoiceSublabel } from '@/lib/ttsVoiceLabels'
+import FishAudioSettings, { fishDictionaryError } from './FishAudioSettings'
 import type {
   TtsProviderInfo,
   TtsConnectionProfile,
@@ -58,6 +59,7 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
       : capabilities?.parameters?.speech_style?.default || ''
   const isQwen = isQwenTtsProvider(provider)
   const isOpenVox = provider === 'openvox_tts'
+  const fishDictionaryInvalid = provider === 'fish_audio' && !!fishDictionaryError(defaultParameters)
   const qwenLanguage = typeof defaultParameters.language === 'string'
     && QWEN_LANGUAGE_OPTIONS.some((option) => option.value === defaultParameters.language)
     ? defaultParameters.language
@@ -453,6 +455,10 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
         </FormField>
       )}
 
+      {provider === 'fish_audio' && capabilities && (
+        <FishAudioSettings model={model} schema={capabilities.parameters} values={defaultParameters} onChange={setDefaultParameters} />
+      )}
+
       {isGoogle && (
         <FormField label="">
           <Toggle.Checkbox
@@ -512,7 +518,7 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
 
       <div className={styles.formActions}>
         <Button variant="ghost" size="sm" onClick={onCancel}>{t('ttsConnectionForm.cancel')}</Button>
-        <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!name.trim()}>
+        <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!name.trim() || fishDictionaryInvalid}>
           {profile ? t('ttsConnectionForm.save') : t('ttsConnectionForm.create')}
         </Button>
       </div>

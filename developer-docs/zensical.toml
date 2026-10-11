@@ -54,6 +54,7 @@ nav = [
     { "Event Tracking" = "backend-api/event-tracking.md" },
     { "Secure Enclave" = "backend-api/secure-enclave.md" },
     { "CORS Proxy" = "backend-api/cors-proxy.md" },
+    { "Large Files and Archives" = "backend-api/file-transfers.md" },
     { "OAuth" = "backend-api/oauth.md" },
     { "Logging" = "backend-api/logging.md" },
     { "Toast Notifications" = "backend-api/toast.md" },

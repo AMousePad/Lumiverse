@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { FishAudioTtsProvider, FISH_AUDIO_MODELS, buildFishAudioBody } from "./fish-audio";
+
+const originalFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe("FishAudioTtsProvider metadata and capabilities", () => {
   const provider = new FishAudioTtsProvider();
@@ -95,6 +98,55 @@ describe("buildFishAudioBody", () => {
     });
     expect(wavBody).not.toHaveProperty("mp3_bitrate");
   });
+
+  test("preserves zero/false generation controls and maps quality guard", () => {
+    const body = buildFishAudioBody({ text: "Hello", model: "s2.1-pro", voice: "", parameters: {
+      temperature: 0, top_p: 0, min_chunk_length: 0, early_stop_threshold: 0,
+      repetition_penalty: 1.4, max_new_tokens: 2048, condition_on_previous_chunks: false,
+      normalize: "false", normalize_loudness: "false", quality_guard: true,
+    } });
+    expect(body).toEqual({ text: "Hello", format: "mp3", temperature: 0, top_p: 0,
+      min_chunk_length: 0, early_stop_threshold: 0, repetition_penalty: 1.4, max_new_tokens: 2048,
+      condition_on_previous_chunks: false, normalize: false,
+      prosody: { speed: 1, volume: 0, normalize_loudness: false }, features: ["quality-guard"],
+    });
+  });
+
+  test("maps Opus settings using the effective format and omits MP3 bitrate", () => {
+    expect(buildFishAudioBody({ text: "Hello", model: "s2-pro", voice: "", outputFormat: "opus", parameters: {
+      format: "mp3", sample_rate: "48000", opus_bitrate: "-1000", mp3_bitrate: 192,
+    } })).toEqual({ text: "Hello", format: "opus", sample_rate: 48000, opus_bitrate: -1000 });
+  });
+
+  test("only sends loudness normalization to documented S2 models", () => {
+    expect(buildFishAudioBody({ text: "Hello", model: "drama-3-preview", voice: "", parameters: {
+      normalize_loudness: false, voice_direction: "[warm and measured]", speed: 1.1,
+    } })).toEqual({ text: "[warm and measured] Hello", format: "mp3", prosody: { speed: 1.1, volume: 0 } });
+    expect(buildFishAudioBody({ text: "Hello", model: "s1", voice: "", parameters: { voice_direction: "warm" } }).text).toBe("Hello");
+  });
+
+  test("published dictionary IDs require an explicit version", () => {
+    expect(buildFishAudioBody({ text: "Hello", model: "s2.1-pro", voice: "", parameters: {
+      pronunciation_dictionary_id: "cast_names", pronunciation_dictionary_version: "version-2",
+    } }).pronunciation_dictionary).toEqual([{ id: "cast_names", version: "version-2" }]);
+    expect(() => buildFishAudioBody({ text: "Hello", model: "s2.1-pro", voice: "", parameters: {
+      pronunciation_dictionary_id: "cast_names",
+    } })).toThrow("requires both an ID and a version");
+  });
+
+  test("an explicit quality guard override preserves other feature flags", () => {
+    expect(buildFishAudioBody({ text: "Hello", model: "s2.1-pro", voice: "", parameters: {
+      features: ["quality-guard", "other-feature"], quality_guard: false,
+    } }).features).toEqual(["other-feature"]);
+  });
+
+  test.each([
+    { temperature: 1.1 }, { min_chunk_length: -1 }, { chunk_length: 200.5 },
+    { speed: "invalid" }, { normalize: "no" }, { repetition_penalty: Infinity },
+    { format: "mp3", sample_rate: 8000 }, { format: "opus", opus_bitrate: 128 },
+  ])("rejects invalid settings before making a provider request: %j", (parameters) => {
+    expect(() => buildFishAudioBody({ text: "Hello", model: "s2.1-pro", voice: "", parameters })).toThrow();
+  });
 });
 
 describe("FishAudioTtsProvider synthesis and streaming", () => {
@@ -169,6 +221,25 @@ describe("FishAudioTtsProvider synthesis and streaming", () => {
     expect(chunks[0]).toEqual({ data: chunk1, done: false, kind: "bytes", mimeType: "audio/mpeg" });
     expect(chunks[1]).toEqual({ data: chunk2, done: false, kind: "bytes", mimeType: "audio/mpeg" });
     expect(chunks[2]).toEqual({ data: new Uint8Array(0), done: true, kind: "bytes", mimeType: "audio/mpeg" });
+  });
+
+  test("buffered and streaming synthesis send the same advanced settings", async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = (async (_input: any, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("model")).toBe("drama-3-preview");
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "audio/mpeg" } });
+    }) as typeof fetch;
+    const request = { text: "<whisper>Hello.</whisper>", model: " drama-3-preview ", voice: "", parameters: {
+      repetition_penalty: 1.3, normalize: false, condition_on_previous_chunks: false,
+      quality_guard: true, voice_direction: "quiet, hesitant",
+    } };
+    await provider.synthesize("key", "", request);
+    for await (const _chunk of provider.synthesizeStream("key", "", request)) { /* drain */ }
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toEqual(bodies[1]);
+    expect(bodies[0].text).toBe("[quiet, hesitant] <whisper>Hello.</whisper>");
+    expect(bodies[0].condition_on_previous_chunks).toBe(false);
   });
 });
 

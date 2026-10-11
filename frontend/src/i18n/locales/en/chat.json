@@ -406,7 +406,10 @@
     "deleteMessage_plural": "Permanently delete {{count}} messages? This cannot be undone.",
     "deselectAll": "Deselect all",
     "selectAll": "Select all",
-    "selectedCount": "{{selected}} of {{total}} selected"
+    "selectedCount": "{{selected}} of {{total}} selected",
+    "selectMessage": "Select message {{index}} from {{name}}",
+    "selectMessagePreview": "Select message {{index}} from {{name}}: {{preview}}",
+    "toolbar": "Message selection"
   },
   "messageContent": {
     "copyCode": "Copy code",
