@@ -28,6 +28,7 @@ import { WorkerHostDesktopCaptureApi } from "./worker-host-desktop-capture-api";
 import type { DryRunResultDTO, GetBreakdownWorkerMessage } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
+import type { ImageReadBinaryMessage } from "./image-binary-contract";
 import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
 import { eventBus } from "../ws/bus";
@@ -298,6 +299,7 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | ImageReadBinaryMessage
   | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
@@ -2283,6 +2285,9 @@ export class WorkerHost {
           msg.chatId,
           msg.userId,
         );
+        break;
+      case "images_read_binary":
+        void this.contentApi.handleImagesReadBinary(msg.requestId, msg.imageId, msg.userId);
         break;
       case "images_get":
         this.contentApi.handleImagesGet(

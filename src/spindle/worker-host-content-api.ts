@@ -32,6 +32,7 @@ import * as personasSvc from "../services/personas.service";
 import * as globalAddonsSvc from "../services/global-addons.service";
 import * as settingsSvc from "../services/settings.service";
 import * as imagesSvc from "../services/images.service";
+import { IMAGE_READ_MAX_BYTES } from "./image-binary-contract";
 import * as mediaSvc from "../services/media.service";
 import * as audioSvc from "../services/audio.service";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
@@ -405,6 +406,27 @@ export class WorkerHostContentApi {
   }
 
   // ─── Images CRUD (gated: "images") ─────────────────────────────────
+
+  async handleImagesReadBinary(requestId: string, imageId: string, userId?: string): Promise<void> {
+    try {
+      if (!this.hasPermission("images")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} images - Images permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      if (typeof imageId !== "string" || !imageId) throw new Error("imageId is required");
+      const path = await imagesSvc.getImageFilePath(resolvedUserId, imageId);
+      if (!path) throw new Error("Image not found");
+      const file = Bun.file(path);
+      if (file.size > IMAGE_READ_MAX_BYTES) throw new Error("Image exceeds the 25 MiB binary read limit");
+      const data = new Uint8Array(await file.slice(0, IMAGE_READ_MAX_BYTES + 1).arrayBuffer());
+      if (data.byteLength > IMAGE_READ_MAX_BYTES) throw new Error("Image exceeds the 25 MiB binary read limit");
+      this.postToWorker({ type: "response", requestId, result: data });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
 
   private toImageDTO(img: any): ImageDTO {
     return {

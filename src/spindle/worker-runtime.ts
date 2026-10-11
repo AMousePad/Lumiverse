@@ -106,6 +106,7 @@ import type {
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
 import type { DryRunResultDTO, GetBreakdownWorkerMessage, SavedBreakdownDTO } from "./generation-contract";
+import type { ImageReadBinaryMessage } from "./image-binary-contract";
 import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef } from "./desktop-capture-contract";
 import { deserializeWorkerResponseError } from "./worker-response-error";
 import { deriveCharacterOverlay } from "../utils/color-engine";
@@ -304,6 +305,7 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | ImageReadBinaryMessage
   | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
@@ -718,7 +720,10 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images"> & {
+  images: SpindleAPI["images"] & {
+    readBinary(imageId: string, userId?: string): Promise<Uint8Array>;
+  };
   generate: Omit<SpindleAPI["generate"], "dryRun"> & {
     dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
     getBreakdown(messageId: string, userId?: string): Promise<SavedBreakdownDTO | null>;
@@ -2551,6 +2556,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   images: {
+    async readBinary(imageId: string, userId?: string): Promise<Uint8Array> {
+      const requestId = crypto.randomUUID();
+      return await request({ type: "images_read_binary", requestId, imageId, userId }) as Uint8Array;
+    },
     async list(options?: ImageListOptionsDTO): Promise<{ data: ImageDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({
