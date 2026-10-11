@@ -15,7 +15,7 @@ use std::{
         Arc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use windows::{
@@ -23,20 +23,24 @@ use windows::{
     Win32::{
         Foundation::{HANDLE, WIN32_ERROR},
         Media::Audio::{
-            eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
-            AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_RESOURCES_INVALIDATED,
-            AUDCLNT_E_SERVICE_NOT_RUNNING, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX,
+            eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
+            MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_DEVICE_INVALIDATED,
+            AUDCLNT_E_RESOURCES_INVALIDATED, AUDCLNT_E_SERVICE_NOT_RUNNING,
+            AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX,
             WAVEFORMATEXTENSIBLE,
         },
         System::{
-            Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED},
+            Com::{
+                CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+                COINIT_MULTITHREADED,
+            },
             Power::{
-                PowerRegisterSuspendResumeNotification, PowerUnregisterSuspendResumeNotification, HPOWERNOTIFY,
-                DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS,
+                PowerRegisterSuspendResumeNotification, PowerUnregisterSuspendResumeNotification,
+                DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS, HPOWERNOTIFY,
             },
             RemoteDesktop::{
-                WTSFreeMemory, WTSQuerySessionInformationW, WTSSessionInfoEx, WTSINFOEXW, WTS_CURRENT_SERVER_HANDLE,
-                WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK,
+                WTSFreeMemory, WTSQuerySessionInformationW, WTSSessionInfoEx, WTSINFOEXW,
+                WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK,
             },
         },
         UI::WindowsAndMessaging::DEVICE_NOTIFY_CALLBACK,
@@ -44,13 +48,14 @@ use windows::{
 };
 
 use super::analyzer::{Analyzer, Frame};
-pub use super::engine::{Capture, Exit, Options};
 use super::engine::{spawn, Device, Fault, Session};
+pub use super::engine::{Capture, Exit, Options};
 
 /// 200 ms of engine buffer: ample for a 30 fps drain, small enough not to hold stale audio.
 const BUFFER_100NS: i64 = 2_000_000;
 const REOPEN_TRIES: u32 = 6;
 const REOPEN_WAIT: Duration = Duration::from_millis(500);
+const DEFAULT_OUTPUT_EVERY: Duration = Duration::from_millis(500);
 
 const WAVE_FORMAT_PCM: u16 = 1;
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
@@ -121,6 +126,8 @@ enum Sample {
 }
 
 struct Stream {
+    enumerator: IMMDeviceEnumerator,
+    default_output: DefaultOutput,
     client: IAudioClient,
     capture: IAudioCaptureClient,
     channels: usize,
@@ -128,6 +135,32 @@ struct Stream {
     sample: Sample,
     /// Reused for every packet, so a drain allocates nothing once warm.
     scratch: Vec<f32>,
+}
+
+struct DefaultOutput {
+    id: Vec<u16>,
+    next_check: Instant,
+}
+
+impl DefaultOutput {
+    fn changed(
+        &mut self,
+        now: Instant,
+        resolve: impl FnOnce() -> windows::core::Result<Vec<u16>>,
+    ) -> windows::core::Result<bool> {
+        if now < self.next_check {
+            return Ok(false);
+        }
+        self.next_check = now + DEFAULT_OUTPUT_EVERY;
+        Ok(resolve()? != self.id)
+    }
+}
+
+unsafe fn endpoint_id(device: &IMMDevice) -> windows::core::Result<Vec<u16>> {
+    let id = device.GetId()?;
+    let value = id.as_wide().to_vec();
+    CoTaskMemFree(Some(id.0 as *const c_void));
+    Ok(value)
 }
 
 impl Drop for Stream {
@@ -140,8 +173,13 @@ impl Drop for Stream {
 
 impl Stream {
     unsafe fn open() -> windows::core::Result<Stream> {
-        let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
         let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
+        let default_output = DefaultOutput {
+            id: endpoint_id(&device)?,
+            next_check: Instant::now(),
+        };
         let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
 
         let format = client.GetMixFormat()?;
@@ -155,7 +193,9 @@ impl Stream {
                 format,
                 None,
             ),
-            None => Err(windows::core::Error::from(windows::Win32::Foundation::E_NOTIMPL)),
+            None => Err(windows::core::Error::from(
+                windows::Win32::Foundation::E_NOTIMPL,
+            )),
         };
         CoTaskMemFree(Some(format as *const c_void));
         initialised?;
@@ -163,7 +203,16 @@ impl Stream {
 
         let capture: IAudioCaptureClient = client.GetService()?;
         client.Start()?;
-        Ok(Stream { client, capture, channels, sample_rate, sample, scratch: Vec::new() })
+        Ok(Stream {
+            enumerator,
+            default_output,
+            client,
+            capture,
+            channels,
+            sample_rate,
+            sample,
+            scratch: Vec::new(),
+        })
     }
 
     fn width(&self) -> usize {
@@ -221,6 +270,15 @@ impl Device for Stream {
     }
 
     fn drain(&mut self, analyzer: &mut Analyzer, discard: bool) -> Result<f32, Fault> {
+        // Changing the default does not invalidate a still-connected old endpoint. Check its identity even while
+        // silent or hidden, at a bounded rate, and let the shared engine reopen the stream when it changes.
+        let enumerator = &self.enumerator;
+        match self.default_output.changed(Instant::now(), || unsafe {
+            endpoint_id(&enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?)
+        }) {
+            Ok(false) => {}
+            Ok(true) | Err(_) => return Err(Fault::Gone),
+        }
         unsafe { self.drain_packets(analyzer, discard) }.map_err(|error| {
             if device_gone(&error) {
                 Fault::Gone
@@ -353,6 +411,38 @@ impl Drop for Interrupts {
 mod tests {
     use super::*;
     use std::{sync::atomic::AtomicUsize, time::Instant};
+
+    #[test]
+    fn default_output_switch_is_detected_without_invalidating_the_old_endpoint() {
+        let now = Instant::now();
+        let mut output = DefaultOutput {
+            id: vec![1, 2],
+            next_check: now,
+        };
+        assert!(!output.changed(now, || Ok(vec![1, 2])).unwrap());
+        assert!(!output
+            .changed(now + Duration::from_millis(100), || panic!(
+                "queried too often"
+            ))
+            .unwrap());
+        assert!(output
+            .changed(now + DEFAULT_OUTPUT_EVERY, || Ok(vec![3, 4]))
+            .unwrap());
+    }
+
+    #[test]
+    fn loss_of_the_default_output_triggers_recovery() {
+        let now = Instant::now();
+        let mut output = DefaultOutput {
+            id: vec![1],
+            next_check: now,
+        };
+        assert!(output
+            .changed(now, || Err(windows::core::Error::from(
+                windows::Win32::Foundation::E_FAIL
+            )))
+            .is_err());
+    }
 
     #[test]
     fn mix_format_decoding_rejects_what_it_cannot_read() {

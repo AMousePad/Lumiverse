@@ -135,7 +135,8 @@ jobs:
         working-directory: desktop
         run: |
           bun run build
-          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml capture:: system_audio::
+          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml capture::
+          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml system_audio::
 
       - name: Test Linux system audio boundaries
         if: matrix.target == 'x86_64-unknown-linux-gnu'

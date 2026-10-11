@@ -1,5 +1,6 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { uuidv4 } from '../uuid'
 import {
   registerSystemAudioSource,
   type SystemAudioAvailability,
@@ -45,6 +46,8 @@ const KIND_HOST_DISABLED = 2
 const HEADER_FLOATS = 3
 
 export function createTauriBridge(): NativeSystemAudioBridge {
+  // Scope cleanup to this adapter installation, including a late stop after its device open settles.
+  const sessionKey = uuidv4()
   return {
     status: () => invoke<NativeSystemAudioStatus>('desktop_system_audio_status'),
     async watch(onStatus) {
@@ -53,9 +56,9 @@ export function createTauriBridge(): NativeSystemAudioBridge {
     async start(maxFps, onMessage) {
       const events = new Channel<unknown>()
       events.onmessage = onMessage
-      await invoke('desktop_system_audio_start', { events, maxFps })
+      await invoke('desktop_system_audio_start', { events, maxFps, sessionKey })
     },
-    stop: () => invoke('desktop_system_audio_stop'),
+    stop: () => invoke('desktop_system_audio_stop', { sessionKey }),
   }
 }
 
@@ -75,6 +78,9 @@ export function createTauriSystemAudioSource(
   /** Bumped whenever a session is replaced or ended, so a message from an old channel is ignored. */
   let generation = 0
   let queue: Promise<void> = Promise.resolve()
+  let disposed = false
+  let starting = false
+  let disposal: Promise<void> | undefined
 
   const endAll = (reason: SystemAudioSourceEndReason) => {
     generation++
@@ -106,6 +112,7 @@ export function createTauriSystemAudioSource(
 
   /** Make the native session match what the subscribers need: none, or one at the fastest rate anyone asked for. */
   const reconcile = async () => {
+    if (disposed) return
     const wanted = Math.max(0, ...[...subscribers].map((subscriber) => subscriber.maxFps))
     if (wanted === 0) {
       if (runningFps === 0) return
@@ -114,16 +121,19 @@ export function createTauriSystemAudioSource(
       await bridge.stop()
       return
     }
-    if (wanted <= runningFps) return
-    // Native `start` replaces the running session, so raising the rate is a plain restart with no gap in consent.
+    if (wanted === runningFps) return
+    // Native `start` replaces the running session when the fastest requested rate changes in either direction.
     const own = ++generation
     runningFps = 0
+    starting = true
     try {
       await bridge.start(wanted, receive(own))
       if (own === generation) runningFps = wanted
     } catch (error) {
       if (own === generation) endAll('source-lost')
       throw error
+    } finally {
+      starting = false
     }
   }
 
@@ -136,14 +146,17 @@ export function createTauriSystemAudioSource(
 
   const source: SystemAudioSource = {
     availability(): SystemAudioAvailability {
+      if (disposed) return { available: false, reason: 'disabled' }
       if (!status.supported) return { available: false, reason: 'unsupported' }
       return status.enabled ? { available: true } : { available: false, reason: 'disabled' }
     },
     async start(handlers, hints?: SystemAudioSourceStartHints) {
+      if (disposed) throw new DOMException('System audio adapter was disposed', 'AbortError')
       const subscriber: Subscriber = { handlers, maxFps: Math.min(30, Math.max(1, Math.round(hints?.maxFps ?? 30))) }
       subscribers.add(subscriber)
       try {
         await sync()
+        if (disposed) throw new DOMException('System audio adapter was disposed', 'AbortError')
       } catch (error) {
         subscribers.delete(subscriber)
         throw error
@@ -158,8 +171,21 @@ export function createTauriSystemAudioSource(
 
   return {
     source,
+    dispose(): Promise<void> {
+      if (disposed) return disposal ?? Promise.resolve()
+      disposed = true
+      const pending = starting
+      endAll('source-lost')
+      const stop = () => bridge.stop().catch((error) => console.warn('[system-audio] Could not stop native capture', error))
+      const stopped = stop()
+      // Cancel immediately, then release a handle that might finish opening after the first native stop.
+      // The real bridge's session key prevents this late cleanup from stopping a new installation's capture.
+      disposal = pending ? queue.then(() => stopped).then(stop) : stopped
+      return disposal
+    },
     /** The tray changed the switch or the session state. */
     update(next: NativeSystemAudioStatus) {
+      if (disposed) return
       status = next
     },
   }
@@ -181,7 +207,7 @@ export async function installTauriSystemAudioSource(
   }
   if (!initial?.supported) return () => {}
 
-  const { source, update } = createTauriSystemAudioSource(bridge, initial)
+  const { source, update, dispose } = createTauriSystemAudioSource(bridge, initial)
   const unregister = registerSystemAudioSource(source)
   let unwatch: (() => void) | null = null
   let disposed = false
@@ -190,8 +216,10 @@ export async function installTauriSystemAudioSource(
     .then((stop) => (disposed ? stop() : (unwatch = stop)))
     .catch((error) => console.warn('[system-audio] Could not watch the native switch', error))
   return () => {
+    if (disposed) return
     disposed = true
     unwatch?.()
     unregister()
+    void dispose()
   }
 }

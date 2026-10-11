@@ -60,8 +60,12 @@ type Events = Channel<InvokeResponseBody>;
 
 struct Session {
     id: u64,
-    capture: platform::Capture,
+    /// Identifies this adapter installation, so an old page cleanup cannot stop a newer adapter's session.
+    session_key: String,
+    /// None while the device is opening. Stop and page departure must also end this pending session.
+    capture: Option<platform::Capture>,
     events: Events,
+    cancelled: Arc<AtomicBool>,
 }
 
 struct Inner {
@@ -96,7 +100,7 @@ pub struct Status {
     supported: bool,
     /// The owner has switched the feature on in the tray.
     enabled: bool,
-    /// A session is running right now.
+    /// A session is opening or running right now.
     active: bool,
 }
 
@@ -124,13 +128,68 @@ fn lock(state: &SystemAudioState) -> Result<std::sync::MutexGuard<'_, Inner>, St
 /// Stop the running session, if any. `farewell` is told to the page first (the page ends its own side on receipt).
 fn end_session(inner: &mut Inner, farewell: Option<f32>) {
     if let Some(session) = inner.session.take() {
-        session.capture.stop();
+        session.cancelled.store(true, Ordering::SeqCst);
+        if let Some(capture) = session.capture {
+            capture.stop();
+        }
         if let Some(kind) = farewell {
             let _ = session
                 .events
                 .send(InvokeResponseBody::Raw(Frame::default().encode(kind)));
         }
     }
+}
+
+fn begin_session(
+    inner: &mut Inner,
+    id: u64,
+    session_key: String,
+    events: Events,
+) -> Result<Arc<AtomicBool>, String> {
+    if !inner.enabled {
+        return Err("System audio is turned off in the Lumiverse desktop client".into());
+    }
+    end_session(inner, None);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    inner.session = Some(Session {
+        id,
+        session_key,
+        capture: None,
+        events,
+        cancelled: cancelled.clone(),
+    });
+    Ok(cancelled)
+}
+
+fn stop_adapter(inner: &mut Inner, session_key: &str) {
+    if inner
+        .session
+        .as_ref()
+        .is_some_and(|session| session.session_key == session_key)
+    {
+        end_session(inner, None);
+    }
+}
+
+fn complete_session(inner: &mut Inner, id: u64, capture: platform::Capture) -> Result<(), String> {
+    if let Some(session) = inner.session.as_mut().filter(|session| session.id == id) {
+        session.capture = Some(capture);
+        Ok(())
+    } else {
+        capture.stop();
+        Err("System audio was cancelled or ended while the device was opening".into())
+    }
+}
+
+fn finish_session(inner: &mut Inner, id: u64, exit: platform::Exit) -> bool {
+    if !matches!(&inner.session, Some(session) if session.id == id) {
+        return false;
+    }
+    end_session(
+        inner,
+        (exit == platform::Exit::Lost).then_some(KIND_SOURCE_LOST),
+    );
+    true
 }
 
 fn require_frontend(window: &WebviewWindow) -> Result<(), String> {
@@ -181,64 +240,61 @@ pub async fn desktop_system_audio_start(
     state: State<'_, SystemAudioState>,
     events: Events,
     max_fps: u32,
+    session_key: String,
 ) -> Result<(), String> {
     require_frontend(&window)?;
-    {
-        let mut inner = lock(&state)?;
-        if !inner.enabled {
-            return Err("System audio is turned off in the Lumiverse desktop client".into());
-        }
-        end_session(&mut inner, None);
+    if session_key.is_empty() || session_key.len() > 128 {
+        return Err("Invalid system audio session key".into());
     }
-    let id = state.next_id.fetch_add(1, Ordering::SeqCst) + 1;
-    state.paused.store(
-        !(window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)),
-        Ordering::Relaxed,
-    );
+    let (id, cancelled, status) = {
+        let mut inner = lock(&state)?;
+        let id = state.next_id.fetch_add(1, Ordering::SeqCst) + 1;
+        let cancelled = begin_session(&mut inner, id, session_key, events.clone())?;
+        state.paused.store(
+            !(window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)),
+            Ordering::Relaxed,
+        );
+        (id, cancelled, status_of(&inner))
+    };
+    // Show native activity before the device can deliver any audio.
+    publish(&app, &status);
 
     let options = platform::Options::new(
         Duration::from_secs_f64(1.0 / f64::from(max_fps.clamp(1, MAX_FPS))),
         state.paused.clone(),
     );
-    let ended = Arc::new(AtomicBool::new(false));
-    let (frames, farewell, done, notify) =
-        (events.clone(), events.clone(), ended.clone(), app.clone());
+    let (frames, notify) = (events, app.clone());
     let capture = tauri::async_runtime::spawn_blocking(move || {
         platform::start(
             options,
             move |frame| {
-                frames
-                    .send(InvokeResponseBody::Raw(frame.encode(KIND_FRAME)))
-                    .is_ok()
+                !cancelled.load(Ordering::SeqCst)
+                    && frames
+                        .send(InvokeResponseBody::Raw(frame.encode(KIND_FRAME)))
+                        .is_ok()
             },
             move |exit| {
-                done.store(true, Ordering::SeqCst);
-                finished(&notify, id, exit, &farewell);
+                finished(&notify, id, exit);
             },
         )
     })
     .await
-    .map_err(|_| "The system audio thread failed".to_string())??;
+    .map_err(|_| "The system audio thread failed".to_string())
+    .and_then(|capture| capture);
 
-    let status = {
+    let (result, status) = {
         let mut inner = lock(&state)?;
-        if !inner.enabled {
-            // Switched off while the device was opening.
-            capture.stop();
-            return Err("System audio was turned off".into());
-        }
-        // A capture that already ended before we got here must not leave a stale "in use" behind.
-        if !ended.load(Ordering::SeqCst) {
-            inner.session = Some(Session {
-                id,
-                capture,
-                events,
-            });
-        }
-        status_of(&inner)
+        let result = match capture {
+            Ok(capture) => complete_session(&mut inner, id, capture),
+            Err(error) => {
+                finish_session(&mut inner, id, platform::Exit::Lost);
+                Err(error)
+            }
+        };
+        (result, status_of(&inner))
     };
     publish(&app, &status);
-    Ok(())
+    result
 }
 
 #[tauri::command]
@@ -246,11 +302,12 @@ pub fn desktop_system_audio_stop(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, SystemAudioState>,
+    session_key: String,
 ) -> Result<(), String> {
     require_frontend(&window)?;
     let status = {
         let mut inner = lock(&state)?;
-        end_session(&mut inner, None);
+        stop_adapter(&mut inner, &session_key);
         status_of(&inner)
     };
     publish(&app, &status);
@@ -259,7 +316,7 @@ pub fn desktop_system_audio_stop(
 
 /// Runs on the capture thread once the device is released. A session that ended because its owner stopped it is
 /// already gone from the state, so only a loss the page does not know about is reported.
-fn finished<R: Runtime>(app: &AppHandle<R>, id: u64, exit: platform::Exit, events: &Events) {
+fn finished<R: Runtime>(app: &AppHandle<R>, id: u64, exit: platform::Exit) {
     let Some(state) = app.try_state::<SystemAudioState>() else {
         return;
     };
@@ -267,17 +324,11 @@ fn finished<R: Runtime>(app: &AppHandle<R>, id: u64, exit: platform::Exit, event
         let Ok(mut inner) = state.inner.lock() else {
             return;
         };
-        if !matches!(&inner.session, Some(session) if session.id == id) {
+        if !finish_session(&mut inner, id, exit) {
             return;
         }
-        inner.session = None;
         status_of(&inner)
     };
-    if exit == platform::Exit::Lost {
-        let _ = events.send(InvokeResponseBody::Raw(
-            Frame::default().encode(KIND_SOURCE_LOST),
-        ));
-    }
     publish(app, &status);
 }
 
@@ -305,4 +356,122 @@ pub fn frontend_gone<R: Runtime>(app: &AppHandle<R>) {
         status_of(&inner)
     };
     publish(app, &status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine::{Device, Fault};
+
+    struct SilentDevice;
+    impl Device for SilentDevice {
+        fn sample_rate(&self) -> u32 {
+            48_000
+        }
+        fn drain(&mut self, _: &mut analyzer::Analyzer, _: bool) -> Result<f32, Fault> {
+            Ok(0.0)
+        }
+    }
+
+    fn capture() -> platform::Capture {
+        engine::spawn(
+            engine::Options::new(Duration::from_secs(1), Arc::new(AtomicBool::new(false))),
+            || {
+                Ok(engine::Session {
+                    device: SilentDevice,
+                    reopen: Box::new(|_| None),
+                    interrupted: Box::new(|| false),
+                    keep: Box::new(()),
+                })
+            },
+            |_| true,
+            |_| {},
+        )
+        .unwrap()
+    }
+
+    fn rig() -> (Inner, Events, Arc<Mutex<Vec<Vec<u8>>>>) {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let sink = messages.clone();
+        let events = Channel::new(move |body| {
+            match body {
+                InvokeResponseBody::Raw(bytes) => sink.lock().unwrap().push(bytes),
+                _ => panic!("Only encoded analysis may cross IPC"),
+            }
+            Ok(())
+        });
+        (
+            Inner {
+                enabled: true,
+                session: None,
+            },
+            events,
+            messages,
+        )
+    }
+
+    #[test]
+    fn stopping_a_pending_open_rejects_its_late_capture() {
+        let (mut inner, events, _) = rig();
+        let cancelled = begin_session(&mut inner, 1, "adapter".into(), events).unwrap();
+        stop_adapter(&mut inner, "adapter");
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(complete_session(&mut inner, 1, capture()).is_err());
+        assert!(inner.session.is_none());
+    }
+
+    #[test]
+    fn page_departure_also_cancels_a_pending_open() {
+        let (mut inner, events, _) = rig();
+        let cancelled = begin_session(&mut inner, 1, "adapter".into(), events).unwrap();
+        end_session(&mut inner, None);
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(complete_session(&mut inner, 1, capture()).is_err());
+    }
+
+    #[test]
+    fn disabling_and_reenabling_cannot_revive_an_old_open() {
+        let (mut inner, events, messages) = rig();
+        begin_session(&mut inner, 1, "adapter".into(), events).unwrap();
+        inner.enabled = false;
+        end_session(&mut inner, Some(KIND_HOST_DISABLED));
+        inner.enabled = true;
+        assert!(complete_session(&mut inner, 1, capture()).is_err());
+        let bytes = &messages.lock().unwrap()[0];
+        assert_eq!(
+            f32::from_le_bytes(bytes[..4].try_into().unwrap()),
+            KIND_HOST_DISABLED
+        );
+    }
+
+    #[test]
+    fn a_stale_open_or_stop_cannot_replace_or_end_a_new_adapter() {
+        let (mut inner, events, _) = rig();
+        let cancelled = begin_session(&mut inner, 1, "old".into(), events.clone()).unwrap();
+        begin_session(&mut inner, 2, "new".into(), events).unwrap();
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(complete_session(&mut inner, 1, capture()).is_err());
+        assert!(!finish_session(&mut inner, 1, platform::Exit::Lost));
+        stop_adapter(&mut inner, "old");
+        assert_eq!(inner.session.as_ref().unwrap().id, 2);
+        complete_session(&mut inner, 2, capture()).unwrap();
+        assert!(inner.session.as_ref().unwrap().capture.is_some());
+        end_session(&mut inner, None);
+    }
+
+    #[test]
+    fn loss_during_open_notifies_the_page_and_rejects_startup() {
+        let (mut inner, events, messages) = rig();
+        begin_session(&mut inner, 1, "adapter".into(), events).unwrap();
+        assert!(finish_session(&mut inner, 1, platform::Exit::Lost));
+        assert!(complete_session(&mut inner, 1, capture()).is_err());
+        assert!(inner.session.is_none());
+        let messages = messages.lock().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].len(), analyzer::MESSAGE_FLOATS * 4);
+        assert_eq!(
+            f32::from_le_bytes(messages[0][..4].try_into().unwrap()),
+            KIND_SOURCE_LOST
+        );
+    }
 }

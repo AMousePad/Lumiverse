@@ -46,6 +46,34 @@ static inline void ring_write(Ring *ring, float value) {
     atomic_store_explicit(&ring->head, head + 1, memory_order_release);
 }
 
+// A tap-only aggregate has exactly the tap's channels. Validate the actual IO buffers rather than assuming their
+// layout from the tap's ASBD: Core Audio can supply one interleaved buffer or several planar buffers.
+static void TapInputToRing(Ring *ring, const AudioBufferList *input, UInt32 tapChannels) {
+    if (!input || input->mNumberBuffers == 0 || tapChannels == 0) return;
+    UInt32 channels = 0;
+    UInt32 frames = UINT32_MAX;
+    for (UInt32 b = 0; b < input->mNumberBuffers; b++) {
+        const AudioBuffer *buffer = &input->mBuffers[b];
+        if (!buffer->mData || buffer->mNumberChannels == 0 || buffer->mNumberChannels > tapChannels - channels) return;
+        const UInt32 stride = sizeof(float) * buffer->mNumberChannels;
+        if (buffer->mDataByteSize % stride != 0) return;
+        channels += buffer->mNumberChannels;
+        frames = MIN(frames, buffer->mDataByteSize / stride);
+    }
+    if (channels != tapChannels) return;
+    for (UInt32 frame = 0; frame < frames; frame++) {
+        float sum = 0;
+        for (UInt32 b = 0; b < input->mNumberBuffers; b++) {
+            const AudioBuffer *buffer = &input->mBuffers[b];
+            const float *samples = buffer->mData;
+            for (UInt32 c = 0; c < buffer->mNumberChannels; c++) {
+                sum += samples[frame * buffer->mNumberChannels + c];
+            }
+        }
+        ring_write(ring, sum / channels);
+    }
+}
+
 static AudioObjectPropertyAddress DefaultOutputAddress(void) {
     AudioObjectPropertyAddress address = {
         kAudioHardwarePropertyDefaultOutputDevice,
@@ -115,7 +143,8 @@ void *lumiverse_audio_tap_open(int *status) {
         session->proc = NULL;
         atomic_init(&session->outputChanged, false);
 
-        // The device whose clock drives the aggregate: whatever the user is listening on right now.
+        // Require an output, but do not add the hardware device to the aggregate: a duplex output would also donate
+        // its microphone inputs. The process tap supplies the aggregate's only input streams and their clock.
         AudioObjectPropertyAddress outputAddress = DefaultOutputAddress();
         AudioDeviceID output = kAudioObjectUnknown;
         UInt32 size = sizeof(output);
@@ -124,17 +153,6 @@ void *lumiverse_audio_tap_open(int *status) {
             *status = kLumiverseTapNoOutputDevice;
             return NULL;
         }
-        AudioObjectPropertyAddress uidAddress = {
-            kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain,
-        };
-        CFStringRef uidRef = NULL;
-        size = sizeof(uidRef);
-        if (AudioObjectGetPropertyData(output, &uidAddress, 0, NULL, &size, &uidRef) != noErr || uidRef == NULL) {
-            *status = kLumiverseTapNoOutputDevice;
-            return NULL;
-        }
-        NSString *outputUID = (NSString *)CFBridgingRelease(uidRef);
-
         // Everything the device plays, mixed to stereo, not muted, and invisible to other apps.
         CATapDescription *description = [[CATapDescription alloc] initStereoGlobalTapButExcludeProcesses:@[]];
         description.name = @"Lumiverse system audio analysis";
@@ -149,11 +167,10 @@ void *lumiverse_audio_tap_open(int *status) {
         NSDictionary *aggregateDescription = @{
             @kAudioAggregateDeviceNameKey: @"Lumiverse analysis tap",
             @kAudioAggregateDeviceUIDKey: [NSUUID UUID].UUIDString,
-            @kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             @kAudioAggregateDeviceIsPrivateKey: @YES,
             @kAudioAggregateDeviceIsStackedKey: @NO,
             @kAudioAggregateDeviceTapAutoStartKey: @YES,
-            @kAudioAggregateDeviceSubDeviceListKey: @[ @{ @kAudioSubDeviceUIDKey: outputUID } ],
+            @kAudioAggregateDeviceSubDeviceListKey: @[],
             @kAudioAggregateDeviceTapListKey: @[ @{
                 @kAudioSubTapDriftCompensationKey: @YES,
                 @kAudioSubTapUIDKey: description.UUID.UUIDString,
@@ -179,7 +196,7 @@ void *lumiverse_audio_tap_open(int *status) {
             return NULL;
         }
         session->sampleRate = (UInt32)format.mSampleRate;
-        const BOOL nonInterleaved = (format.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+        const UInt32 tapChannels = format.mChannelsPerFrame;
 
         Ring *ring = calloc(1, sizeof(Ring));
         ring->data = calloc(RING_CAPACITY, sizeof(float));
@@ -190,25 +207,11 @@ void *lumiverse_audio_tap_open(int *status) {
             &session->proc, session->aggregate, session->queue,
             ^(const AudioTimeStamp *now, const AudioBufferList *input, const AudioTimeStamp *inputTime,
               AudioBufferList *playback, const AudioTimeStamp *playbackTime) {
-                if (!input || input->mNumberBuffers == 0) return;
-                if (nonInterleaved) {
-                    const UInt32 buffers = input->mNumberBuffers;
-                    const UInt32 frames = input->mBuffers[0].mDataByteSize / sizeof(float);
-                    for (UInt32 frame = 0; frame < frames; frame++) {
-                        float sum = 0;
-                        for (UInt32 b = 0; b < buffers; b++) sum += ((const float *)input->mBuffers[b].mData)[frame];
-                        ring_write(ring, sum / buffers);
-                    }
-                } else {
-                    const UInt32 channels = input->mBuffers[0].mNumberChannels ? input->mBuffers[0].mNumberChannels : 1;
-                    const UInt32 frames = input->mBuffers[0].mDataByteSize / (sizeof(float) * channels);
-                    const float *samples = (const float *)input->mBuffers[0].mData;
-                    for (UInt32 frame = 0; frame < frames; frame++) {
-                        float sum = 0;
-                        for (UInt32 c = 0; c < channels; c++) sum += samples[frame * channels + c];
-                        ring_write(ring, sum / channels);
-                    }
-                }
+                (void)now;
+                (void)inputTime;
+                (void)playback;
+                (void)playbackTime;
+                TapInputToRing(ring, input, tapChannels);
             });
         if (created != noErr || !session->proc) {
             TearDown(session);
@@ -219,6 +222,8 @@ void *lumiverse_audio_tap_open(int *status) {
         // Follow the user to another output device (headphones, a dock): Rust reopens the tap on the new one.
         __unsafe_unretained LumiverseTapSession *weakSession = session;
         session->listener = ^(UInt32 count, const AudioObjectPropertyAddress *addresses) {
+            (void)count;
+            (void)addresses;
             atomic_store(&weakSession->outputChanged, true);
         };
         AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &outputAddress, session->queue, session->listener);
@@ -297,7 +302,10 @@ void *lumiverse_audio_watch_open(void) {
     watch->tokens = [NSMutableArray new];
     watch->centers = [NSMutableArray new];
     __unsafe_unretained LumiverseSessionWatch *weakWatch = watch;
-    void (^trip)(NSNotification *) = ^(NSNotification *note) { atomic_store(&weakWatch->tripped, true); };
+    void (^trip)(NSNotification *) = ^(NSNotification *note) {
+        (void)note;
+        atomic_store(&weakWatch->tripped, true);
+    };
 
     NSNotificationCenter *workspace = NSWorkspace.sharedWorkspace.notificationCenter;
     for (NSNotificationName name in @[ NSWorkspaceWillSleepNotification, NSWorkspaceSessionDidResignActiveNotification ]) {

@@ -239,13 +239,13 @@ describe("system audio boundary", () => {
 
   test("only analysis frames can leave the capture thread", () => {
     const analyzer = readSource("system_audio/analyzer.rs");
-    const source = readSource("system_audio/mod.rs");
+    const source = readSource("system_audio/mod.rs").split("#[cfg(test)]")[0];
     // The wire message is a fixed-size header plus one value per band, nothing else.
     expect(analyzer).toContain("pub const MESSAGE_FLOATS: usize = 3 + BANDS;");
     expect(analyzer).toContain("pub fn encode(&self, kind: f32)");
-    // Every message sent to the page is an encoded Frame: exactly three call sites, none carrying anything else.
+    // Every message sent to the page is an encoded Frame, including loss of a pending session.
     const sends = source.split("InvokeResponseBody::Raw(").slice(1);
-    expect(sends.length).toBe(3);
+    expect(sends.length).toBe(2);
     for (const rest of sends) expect(rest.slice(0, 48)).toContain(".encode(");
     expect(source).not.toContain("emit_to(label, STATE_EVENT, frame");
   });
