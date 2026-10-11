@@ -421,9 +421,10 @@ export class WorkerHostContentApi {
       const path = await imagesSvc.getImageFilePath(resolvedUserId, imageId);
       if (!path) throw new Error("Image not found");
       const file = Bun.file(path);
-      if (file.size > IMAGE_READ_MAX_BYTES) throw new Error("Image exceeds the 25 MiB binary read limit");
+      const sizeLimitError = `Image exceeds the ${IMAGE_READ_MAX_BYTES / (1024 * 1024)} MiB binary read limit`;
+      if (file.size > IMAGE_READ_MAX_BYTES) throw new Error(sizeLimitError);
       const data = new Uint8Array(await file.slice(0, IMAGE_READ_MAX_BYTES + 1).arrayBuffer());
-      if (data.byteLength > IMAGE_READ_MAX_BYTES) throw new Error("Image exceeds the 25 MiB binary read limit");
+      if (data.byteLength > IMAGE_READ_MAX_BYTES) throw new Error(sizeLimitError);
       this.postToWorker({ type: "response", requestId, result: data });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });

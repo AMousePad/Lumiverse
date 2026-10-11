@@ -6,4 +6,4 @@ export type ImageReadBinaryMessage = {
   userId?: string;
 };
 
-export const IMAGE_READ_MAX_BYTES = 25 * 1024 * 1024;
+export const IMAGE_READ_MAX_BYTES = 100 * 1024 * 1024;

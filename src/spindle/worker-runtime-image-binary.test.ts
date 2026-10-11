@@ -4,17 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-test("image bytes survive the subprocess RPC and retain explicit user scope", async () => {
+test.each([3, 100 * 1024 * 1024])("%i image bytes survive the subprocess RPC and retain explicit user scope", async (size) => {
   const directory = await mkdtemp(join(tmpdir(), "spindle-image-rpc-"));
   const entry = join(directory, "backend.mjs");
   await Bun.write(entry, `
     const bytes = await spindle.images.readBinary('asset', 'alice');
-    spindle.sendToFrontend({ typed: bytes instanceof Uint8Array, bytes: [...bytes] });
+    spindle.sendToFrontend({ typed: bytes instanceof Uint8Array, size: bytes.byteLength, head: [...bytes.subarray(0, 3)], last: bytes[bytes.byteLength - 1] });
   `);
-  const bytes = new Uint8Array([0, 0x80, 0xff]);
+  const bytes = new Uint8Array(size);
+  bytes.set([0, 0x80, 0xff]);
+  bytes[size - 1] = 0xff;
   const completed = Promise.withResolvers<any>();
   let request: any;
-  const timer = setTimeout(() => completed.reject(new Error("Image binary RPC timed out")), 5000);
+  const timer = setTimeout(() => completed.reject(new Error("Image binary RPC timed out")), 10_000);
   const worker = Bun.spawn([process.execPath, join(import.meta.dir, "worker-runtime.ts")], {
     stdout: "ignore", stderr: "pipe",
     ipc(message: any, child) {
@@ -30,7 +32,7 @@ test("image bytes survive the subprocess RPC and retain explicit user scope", as
   });
   try {
     worker.send({ type: "init", manifest: { identifier: "image-rpc-test", entry_backend: pathToFileURL(entry).href, permissions: ["images"] }, storagePath: directory });
-    expect(await completed.promise).toEqual({ typed: true, bytes: [0, 0x80, 0xff] });
+    expect(await completed.promise).toEqual({ typed: true, size, head: [0, 0x80, 0xff], last: 0xff });
     expect(request).toMatchObject({ imageId: "asset", userId: "alice" });
   } finally {
     clearTimeout(timer);

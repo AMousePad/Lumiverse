@@ -92,7 +92,7 @@ const deletedCount = await spindle.images.deleteMany(imageIds)
 |---|---|---|
 | `list(options?)` | `Promise<{ data: ImageDTO[], total: number }>` | List stored assets. Options: `{ limit?, offset?, specificity?, onlyOwned?, characterId?, chatId? }`. Defaults: limit 50, max 200. |
 | `get(imageId, options?)` | `Promise<ImageDTO \| null>` | Get a single asset DTO. Options: `{ specificity?, onlyOwned?, characterId?, chatId? }`. Returns `null` when the asset is missing or excluded by the ownership filters. |
-| `readBinary(imageId, userId?)` | `Promise<Uint8Array>` | Read the original stored asset bytes, up to 25 MiB. Requires `images` and access as the effective user. Rejects for missing, inaccessible, or oversized assets. Operator-scoped extensions must supply `userId`. |
+| `readBinary(imageId, userId?)` | `Promise<Uint8Array>` | Read the original stored asset bytes, up to 100 MiB. Requires `images` and access as the effective user. Rejects for missing, inaccessible, or oversized assets. Operator-scoped extensions must supply `userId`. |
 | `upload(input)` | `Promise<ImageDTO>` | Upload raw image or video bytes. The host automatically tags the stored asset with the current extension identifier. |
 | `uploadMany(items, options?)` | `Promise<Array<{ id?: string; error?: string }>>` | Batch upload multiple assets in a single IPC call. Per-item failures captured as `{error}` rather than throwing. Options: `{ userId?, concurrency? }` (concurrency capped at 32, default 16). |
 | `uploadFromDataUrl(dataUrl, options?)` | `Promise<ImageDTO>` | Upload a base64 image data URL. The host automatically tags the stored asset with the current extension identifier. |
