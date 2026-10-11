@@ -210,7 +210,8 @@
     "embeddings": "Embedding Models",
     "imageGeneration": "Image Generation",
     "speechToText": "Speech-to-Text",
-    "textToSpeech": "Text-to-Speech"
+    "textToSpeech": "Text-to-Speech",
+    "decisionModels": "Decision models"
   },
   "branchTree": {
     "currentChat": "Current chat",
@@ -3894,5 +3895,37 @@
       "deleteConfirmTitle": "Delete Theme Asset",
       "deleteConfirmMessage": "Delete \"{{name}}\"? Any CSS referencing this asset will stop loading it. This cannot be undone."
     }
+  },
+  "decisionConnectionManager": {
+    "loading": "Loading Decision connections...",
+    "newConnection": "New Decision connection",
+    "empty": "No Decision connections yet. Add OpenRouter or TypeSafe to get started.",
+    "deleteTitle": "Delete Decision Connection",
+    "deleteMessage": "Delete \"{{name}}\"? This cannot be undone.",
+    "deleteConfirm": "Delete"
+  },
+  "decisionConnectionForm": {
+    "name": "Name",
+    "connectionName": "My Decision connection",
+    "provider": "Provider",
+    "apiKey": "API Key",
+    "keySetHint": "Key is set. Enter a new value to replace it.",
+    "enterApiKey": "Enter API key",
+    "apiUrl": "API URL",
+    "apiUrlHint": "Versioned API base URL. Changing the provider or endpoint requires a new API key.",
+    "model": "Model",
+    "modelHint": "Choose a Decision model or enter its exact ID.",
+    "modelPlaceholder": "Select or enter a Decision model",
+    "noModels": "No compatible Decision models found",
+    "setDefault": "Set as default Decision connection",
+    "cancel": "Cancel",
+    "save": "Save",
+    "create": "Create",
+    "modelError": "Could not load Decision models",
+    "sample": "Run sample decision (uses provider credits)",
+    "checking": "Running sample decision…",
+    "removeKey": "Remove saved API key",
+    "saveFailed": "Could not save Decision connection",
+    "unsupportedModel": "This model is unavailable for Decision connections."
   }
 }

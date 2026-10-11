@@ -143,7 +143,7 @@ export interface StartupSettings {
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
   spindleSettings?: Partial<SpindleSettings>
-  connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
+  connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts' | 'decision', string[]>>
   activeProfileId?: string | null
   toastPosition?: ToastPosition
   defaultImpersonationMode?: ImpersonationPreference
@@ -831,7 +831,7 @@ export interface SettingsSlice {
   savedThemes: SavedTheme[]
   spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
-  connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>
+  connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts' | 'decision', string[]>
   quickToolbarSettings: QuickToolbarSettings
   connectionsPickerSettings: ConnectionsPickerSettings
   loreIndicatorSettings: LoreIndicatorSettings
@@ -1782,6 +1782,18 @@ export interface McpServersSlice {
 }
 
 // ---- TTS Connections Slice ----
+export interface DecisionConnectionsSlice {
+  decisionProfiles: import('@/types/api').DecisionConnectionProfile[]
+  decisionProviders: import('@/types/api').DecisionProviderInfo[]
+
+  setDecisionProfiles: (profiles: import('@/types/api').DecisionConnectionProfile[]) => void
+  addDecisionProfile: (profile: import('@/types/api').DecisionConnectionProfile) => void
+  updateDecisionProfile: (id: string, updates: Partial<import('@/types/api').DecisionConnectionProfile>) => void
+  removeDecisionProfile: (id: string) => void
+  applyDecisionProfileOrder: (orderedIds: string[]) => void
+  setDecisionProviders: (providers: import('@/types/api').DecisionProviderInfo[]) => void
+}
+
 export interface SttConnectionsSlice {
   sttProfiles: import('@/types/api').SttConnectionProfile[]
   sttProviders: import('@/types/api').SttProviderInfo[]
@@ -2115,6 +2127,7 @@ export type AppStore = ChatSlice &
   ExpressionSlice &
   ImageGenConnectionsSlice &
   SttConnectionsSlice &
+  DecisionConnectionsSlice &
   TtsConnectionsSlice &
   McpServersSlice &
   LoadoutsSlice &

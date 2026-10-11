@@ -31,6 +31,7 @@ nav = [
     { "Context Handlers" = "backend-api/context-handlers.md" },
     { "LLM Tools" = "backend-api/llm-tools.md" },
     { "Generation" = "backend-api/generation.md" },
+    { "Decision Models" = "backend-api/decisions.md" },
     { "Image Generation" = "backend-api/image-generation.md" },
     { "Images" = "backend-api/images.md" },
     { "Media" = "backend-api/media.md" },

@@ -476,6 +476,38 @@ export interface ImageGenProviderInfo {
   capabilities: ImageGenProviderCapabilities;
 }
 
+// ---- Decision Connection ----
+export type DecisionConnectionProfile = import('lumiverse-spindle-types').DecisionConnectionProfileDTO;
+
+export interface CreateDecisionConnectionInput {
+  name: string;
+  provider: string;
+  api_url?: string;
+  model?: string;
+  is_default?: boolean;
+  default_parameters?: Record<string, any>;
+  metadata?: Record<string, any>;
+  api_key?: string;
+}
+
+export type UpdateDecisionConnectionInput = Partial<CreateDecisionConnectionInput>;
+
+export interface DecisionConnectionTestResult {
+  success: boolean;
+  message: string;
+  provider: string;
+}
+
+export interface DecisionConnectionModelsResult {
+  models: DecisionModelInfo[];
+  provider: string;
+  error?: string;
+}
+
+export type DecisionProviderInfo = import('lumiverse-spindle-types').DecisionProviderDTO;
+export type DecisionProviderCapabilities = DecisionProviderInfo['capabilities'];
+export type DecisionModelInfo = import('lumiverse-spindle-types').DecisionModelDTO;
+
 // ---- STT Connection ----
 export interface SttConnectionProfile {
   id: string;

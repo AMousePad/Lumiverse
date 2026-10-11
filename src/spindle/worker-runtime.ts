@@ -5,6 +5,8 @@
  */
 
 import type {
+  SpindleDecisionsAPI,
+  DecisionResult,
   SpindleManifest,
   WorkerToHost,
   HostToWorker,
@@ -1552,6 +1554,31 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
 const spindleApi: RuntimeSpindleAPI = {
+  decisions: {
+    async listProviders(options) {
+      return await request({ type: "decisions_providers", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["listProviders"]>>;
+    },
+    async listConnections(options) {
+      return await request({ type: "decisions_connections_list", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["listConnections"]>>;
+    },
+    async getConnection(connectionId, options) {
+      return await request({ type: "decisions_connection_get", requestId: crypto.randomUUID(), connectionId, userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["getConnection"]>>;
+    },
+    async getModels(connectionId, options) {
+      return await request({ type: "decisions_models", requestId: crypto.randomUUID(), connectionId, userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["getModels"]>>;
+    },
+    async evaluate(input, options) {
+      assertMutationAllowed("spindle.decisions.evaluate()");
+      options?.signal?.throwIfAborted();
+      const requestId = crypto.randomUUID();
+      const cancel = () => post({ type: "decisions_cancel", requestId });
+      const result = request({ type: "decisions_evaluate", requestId, input });
+      options?.signal?.addEventListener("abort", cancel, { once: true });
+      if (options?.signal?.aborted) cancel();
+      try { return await result as DecisionResult<typeof input.questions>; }
+      finally { options?.signal?.removeEventListener("abort", cancel); pendingResponses.delete(requestId); }
+    },
+  },
   files: {
     fetch(url, options = {}) {
       const { signal: _signal, ...wireOptions } = options;

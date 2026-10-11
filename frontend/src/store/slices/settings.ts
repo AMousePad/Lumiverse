@@ -1452,6 +1452,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           llm: get().profiles,
           imageGen: get().imageGenProfiles,
           stt: get().sttProfiles,
+          decision: get().decisionProfiles,
           tts: get().ttsProfiles,
         })
         if (args.llm) {
@@ -1465,6 +1466,10 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         if (args.stt) {
           if (!isCurrentLoad()) return
           get().applySttProfileOrder(args.stt)
+        }
+        if (args.decision) {
+          if (!isCurrentLoad()) return
+          get().applyDecisionProfileOrder(args.decision)
         }
         if (args.tts) {
           if (!isCurrentLoad()) return
