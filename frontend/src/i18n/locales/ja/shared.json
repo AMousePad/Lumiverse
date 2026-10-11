@@ -100,6 +100,14 @@
     "searchMacros": "マクロを検索..."
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "システム音声を解析しますか？",
+      "consentMessage": "受け取るのはスペクトルと音量のみで、音声そのものは渡されず、録音や送信も行われません。実行中は「聞き取り中」の表示と停止ボタンが画面に残り、次回も改めて確認します。",
+      "allow": "許可",
+      "notNow": "今はしない",
+      "listening": "{{name}} がシステム音声を解析しています",
+      "stop": "停止"
+    },
     "floatWidget": "フロート ウィジェット",
     "drawerTab": "ドロワー タブ",
     "dockPanel": "ドック ({{edge}})",

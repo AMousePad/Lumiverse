@@ -1242,6 +1242,14 @@ export interface PendingConfirmRequest {
   cancelLabel: string
 }
 
+/** An extension analysing the device's audio right now. The host shows an indicator for each, with a Stop button. */
+export interface SystemAudioSessionInfo {
+  id: string
+  extensionId: string
+  extensionName: string
+  stop: () => void
+}
+
 export interface PendingContextMenuRequest {
   requestId: string
   extensionId: string
@@ -1317,6 +1325,9 @@ export interface SpindleSlice {
   pendingConfirm: PendingConfirmRequest | null
   pendingInputPrompt: PendingInputPromptRequest | null
   pendingContextMenu: PendingContextMenuRequest | null
+  systemAudioSessions: SystemAudioSessionInfo[]
+  addSystemAudioSession: (session: SystemAudioSessionInfo) => void
+  removeSystemAudioSession: (id: string) => void
   setExtensionUpdates: (updates: import('./spindle-updates').ExtensionUpdateInfo[]) => void
   loadExtensions: () => Promise<void>
   installExtension: (githubUrl: string, branch?: string | null) => Promise<void>

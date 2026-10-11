@@ -90,6 +90,14 @@
     "searchMacros": "Cerca macro..."
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "Analizzare l’audio di sistema?",
+      "consentMessage": "Riceverà solo uno spettro e il livello sonoro, mai l’audio stesso, e nulla viene registrato o inviato. Finché è attiva, resta visibile un indicatore «in ascolto» con un pulsante Interrompi, e la prossima volta verrà richiesto di nuovo.",
+      "allow": "Consenti",
+      "notNow": "Non ora",
+      "listening": "{{name}} sta analizzando l’audio di sistema",
+      "stop": "Interrompi"
+    },
     "floatWidget": "Widget flottante",
     "drawerTab": "Scheda cassetto",
     "dockPanel": "Dock ({{edge}})",

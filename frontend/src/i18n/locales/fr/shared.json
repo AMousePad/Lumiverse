@@ -100,6 +100,14 @@
     "searchMacros": "Rechercher des macros..."
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "Analyser l’audio du système ?",
+      "consentMessage": "Elle recevra uniquement un spectre et un niveau sonore, jamais l’audio lui-même, et rien n’est enregistré ni envoyé. Un indicateur « écoute » reste affiché avec un bouton Arrêter tant qu’elle fonctionne, et la permission sera redemandée la prochaine fois.",
+      "allow": "Autoriser",
+      "notNow": "Pas maintenant",
+      "listening": "{{name}} analyse l’audio du système",
+      "stop": "Arrêter"
+    },
     "floatWidget": "Widget flottant",
     "drawerTab": "Onglet Tiroir",
     "dockPanel": "Quai ({{edge}})",

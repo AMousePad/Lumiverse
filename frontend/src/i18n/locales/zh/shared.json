@@ -100,6 +100,14 @@
     "searchMacros": "搜索宏…"
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "分析系统音频？",
+      "consentMessage": "它只会收到频谱和响度，不会收到音频本身，也不会录音或向任何地方发送。运行期间屏幕上会一直显示“正在聆听”指示器和停止按钮，下次仍会再次征求你的同意。",
+      "allow": "允许",
+      "notNow": "暂不",
+      "listening": "{{name}} 正在分析系统音频",
+      "stop": "停止"
+    },
     "floatWidget": "浮动组件",
     "drawerTab": "抽屉标签",
     "dockPanel": "停靠 ({{edge}})",
