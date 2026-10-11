@@ -106,7 +106,9 @@
       "allow": "允许",
       "notNow": "暂不",
       "listening": "{{name}} 正在分析系统音频",
-      "stop": "停止"
+      "stop": "停止",
+      "minimise": "最小化",
+      "show": "显示：{{name}} 正在分析系统音频"
     },
     "floatWidget": "浮动组件",
     "drawerTab": "抽屉标签",

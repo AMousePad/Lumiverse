@@ -66,7 +66,7 @@ Every number in a frame is between 0 and 1. `frequencies` holds `bands` log-spac
 ## What the user sees
 
 - **A prompt on every start.** `start()` shows the host's own confirmation, titled with your extension's name. Its wording comes from the host, not from you, and there is no remembered approval: every `start()` asks again. A declined prompt starts nothing.
-- **An indicator for as long as it runs.** The host draws a persistent "*name* is analysing system audio" pill with a **Stop** button outside any extension's DOM, so an extension can neither hide nor restyle it. Pressing Stop ends the session immediately (`onEnd('user-stopped')`).
+- **An indicator for as long as it runs.** The host draws a persistent "*name* is analysing system audio" pill with a **Stop** button outside any extension's DOM, so an extension can neither hide nor restyle it. Pressing Stop ends the session immediately (`onEnd('user-stopped')`). The user can minimise the pill to a small ♪ chip when it is in the way; the chip is never removed while a session runs, Stop is one click from it, and each new session starts expanded. Only the user's own click on the host's component can do this, never an extension.
 - **Nothing is recorded or sent.** The host passes you the analysis above, rebinned and rate-limited. Nothing is stored.
 
 ## Limits and cleanup
