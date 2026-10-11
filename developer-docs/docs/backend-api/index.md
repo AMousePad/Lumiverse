@@ -33,6 +33,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Runtime State](runtime-state.md) | Per operation | Read combined chat state and correlate mutation acknowledgements with events |
 | [Tokens](tokens.md) | Free | Count text, message arrays, or stored chats against an explicit model or the main/sidecar model |
 | [Uploads](uploads.md) | Free | Receive large files via a resumable tus endpoint, then read them in the worker by id |
+| [Large Files and Archives](file-transfers.md) | `cors_proxy` for downloads; local operations free | Stage binary downloads, consume ZIP64 archives, and stream exports to the browser |
 | [Characters](characters.md) | `characters` | CRUD on character cards |
 | [Chats](chats.md) | `chats` | CRUD on chat sessions + active chat |
 | [Presets](presets.md) | `presets` | CRUD on user presets, prompt blocks, and category groups |

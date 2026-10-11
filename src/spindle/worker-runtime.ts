@@ -105,6 +105,12 @@ import type {
   MediaTransformResultDTO,
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
+import {
+  SPINDLE_FILE_CHUNK_BYTES as FILE_CHUNK_BYTES,
+  SPINDLE_FILE_MAX_COUNT as FILE_MAX_COUNT,
+  type FileOperationOptions,
+  type FileTransferWorkerMessage,
+} from "lumiverse-spindle-types";
 import type { DryRunResultDTO, GetBreakdownWorkerMessage, SavedBreakdownDTO } from "./generation-contract";
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
 import type { ActivationPatternsMessage, ActivationPatternsOptions, ActivationPatternsResult } from "./activation-patterns-contract";
@@ -1157,6 +1163,27 @@ function request(msg: RuntimeWorkerToHost & { requestId: string }): Promise<unkn
   });
 }
 
+async function fileOperation<T>(msg: FileTransferWorkerMessage & { requestId: string }, options?: FileOperationOptions): Promise<T> {
+  if (msg.type !== "files_read_chunk" && msg.type !== "files_download_url") assertMutationAllowed(`spindle.${msg.type}()`);
+  if (msg.type === "files_write_chunk" && (!(msg.data instanceof Uint8Array) || msg.data.byteLength === 0 || msg.data.byteLength > FILE_CHUNK_BYTES)) {
+    throw new Error(`Chunk must contain 1 to ${FILE_CHUNK_BYTES} bytes`);
+  }
+  if (msg.type === "archives_create" && (!Array.isArray(msg.entries) || msg.entries.length > FILE_MAX_COUNT || msg.entries.reduce((bytes, entry) => bytes + Buffer.byteLength(entry.name), 0) > 1024 * 1024)) {
+    throw new Error("Archive entry metadata exceeds size limit");
+  }
+  options?.signal?.throwIfAborted();
+  const cancel = () => post({ type: "files_cancel", operationId: msg.requestId });
+  // request() posts synchronously; cancellation must be ordered after it.
+  const result = request(msg);
+  options?.signal?.addEventListener("abort", cancel, { once: true });
+  if (options?.signal?.aborted) cancel();
+  try { return await result as T; }
+  finally {
+    options?.signal?.removeEventListener("abort", cancel);
+    pendingResponses.delete(msg.requestId);
+  }
+}
+
 function normalizeOwnedRpcPoolEndpoint(endpoint: string): string {
   return normalizeOwnedSharedRpcEndpoint(manifest.identifier, endpoint);
 }
@@ -1525,6 +1552,40 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
 const spindleApi: RuntimeSpindleAPI = {
+  files: {
+    fetch(url, options = {}) {
+      const { signal: _signal, ...wireOptions } = options;
+      return fileOperation({ type: "files_fetch", requestId: crypto.randomUUID(), url, options: wireOptions }, options);
+    },
+    create(input) {
+      return fileOperation({ type: "files_create", requestId: crypto.randomUUID(), input });
+    },
+    writeChunk(fileId, offset, data, userId) {
+      return fileOperation({ type: "files_write_chunk", requestId: crypto.randomUUID(), fileId, offset, data, userId });
+    },
+    finish(fileId, userId) {
+      return fileOperation({ type: "files_finish", requestId: crypto.randomUUID(), fileId, userId });
+    },
+    readChunk(source, offset, userId) {
+      return fileOperation({ type: "files_read_chunk", requestId: crypto.randomUUID(), source, offset, userId });
+    },
+    delete(fileId, userId) {
+      return fileOperation({ type: "files_delete", requestId: crypto.randomUUID(), fileId, userId });
+    },
+    getDownloadUrl(fileId, userId) {
+      return fileOperation({ type: "files_download_url", requestId: crypto.randomUUID(), fileId, userId });
+    },
+  },
+  archives: {
+    create(entries, options = {}) {
+      const { signal: _signal, ...wireOptions } = options;
+      return fileOperation({ type: "archives_create", requestId: crypto.randomUUID(), entries, options: wireOptions }, options);
+    },
+    extract(source, options = {}) {
+      const { signal: _signal, ...wireOptions } = options;
+      return fileOperation({ type: "archives_extract", requestId: crypto.randomUUID(), source, options: wireOptions }, options);
+    },
+  },
   desktop: {
     capture: {
       async listDevices(options) {

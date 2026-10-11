@@ -23,6 +23,7 @@ import type {
   QuietTrackedRequestDTO,
   ConnectionDispatchDescriptorDTO,
 } from "lumiverse-spindle-types";
+import { WorkerHostFilesApi } from "./worker-host-files-api";
 import { PERMISSION_DENIED_PREFIX, SPINDLE_HOST_CAPABILITIES } from "lumiverse-spindle-types";
 import { WorkerHostDesktopCaptureApi } from "./worker-host-desktop-capture-api";
 import type { DryRunResultDTO, GetBreakdownWorkerMessage } from "./generation-contract";
@@ -929,6 +930,7 @@ export class WorkerHost {
   private readonly installScope: "operator" | "user";
   private readonly installedByUserId: string | null;
   private readonly storageApi: WorkerHostStorageApi;
+  private readonly filesApi: WorkerHostFilesApi;
   private readonly stateApi: WorkerHostStateApi;
   private readonly contentApi: WorkerHostContentApi;
   private readonly memoryApi: WorkerHostMemoryApi;
@@ -956,6 +958,13 @@ export class WorkerHost {
       installScope: this.installScope,
       installedByUserId: this.installedByUserId,
       hasPermission: (permission) => this.hasPermission(permission),
+      postResponse: (message) => this.postToWorker(message),
+    });
+    this.filesApi = new WorkerHostFilesApi({
+      extensionId, identifier: manifest.identifier,
+      hasPermission: (permission) => this.hasPermission(permission),
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
       postResponse: (message) => this.postToWorker(message),
     });
     this.stateApi = new WorkerHostStateApi({
@@ -1269,6 +1278,7 @@ export class WorkerHost {
   }
 
   async stop(): Promise<void> {
+    await this.filesApi.dispose();
     if (!this.runtime) return;
     const runtime = this.runtime;
     const runtimeExitPromise = this.runtimeExitPromise;
@@ -1349,6 +1359,7 @@ export class WorkerHost {
   }
 
   private cleanup(): void {
+    void this.filesApi.dispose().catch(error => console.warn("[spindle-files] worker cleanup failed", error));
     this.desktopCaptureApi.dispose();
     this.stopRuntimeStatsSampling();
     this.processApi.stopAllFrontendProcesses("backend_unloaded");
@@ -1710,6 +1721,9 @@ export class WorkerHost {
   }
 
   private handleMessageInScope(msg: RuntimeWorkerToHost): void {
+    if (this.filesApi.dispatch(msg as unknown as { type: string; [key: string]: unknown })) {
+      return;
+    }
     if (this.storageApi.dispatch(msg as unknown as { type: string; [key: string]: unknown })) {
       return;
     }
