@@ -12,6 +12,9 @@ on:
       - "desktop/src-tauri/Cargo.lock"
       - "desktop/src-tauri/tauri.conf.json"
       - "desktop/src-tauri/src/capture/**"
+      - "desktop/src-tauri/src/system_audio/**"
+      - "desktop/src-tauri/capabilities/system-audio.json"
+      - "desktop/src-tauri/permissions/system-audio.toml"
       - "desktop/src-tauri/capabilities/desktop-capture.json"
       - "desktop/src-tauri/permissions/desktop-capture.toml"
       - "desktop/src-tauri/permissions.test.ts"
@@ -132,7 +135,12 @@ jobs:
         working-directory: desktop
         run: |
           bun run build
-          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml capture::
+          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml capture:: system_audio::
+
+      - name: Test Linux system audio boundaries
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: desktop
+        run: cargo test --locked --lib --manifest-path src-tauri/Cargo.toml system_audio::
 
       - name: Build desktop installers
         uses: tauri-apps/tauri-action@v1

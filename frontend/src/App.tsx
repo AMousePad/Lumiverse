@@ -49,6 +49,7 @@ import {
 import styles from './App.module.css'
 import { acknowledgePendingConnectionsDeepLink } from '@/lib/uiProductivityDefaults'
 import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-extension-availability'
+import { installTauriSystemAudioSource } from '@/lib/spindle/system-audio-tauri'
 import { createDesktopDownloadFeedback, type DesktopDownloadEvent } from '@/lib/desktop-download-feedback'
 import { toast } from '@/lib/toast'
 
@@ -140,6 +141,22 @@ function Application() {
       closeCustomCSSDock()
     }
   }, [customCSSDockUnavailable, customCSSDockOpen, closeCustomCSSDock])
+
+  // The desktop client can hear the device's output; extensions reach it only through `ctx.systemAudio`, which is
+  // permission-gated, prompted and indicated. Browsers and floating widget windows register nothing.
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
+    let uninstall: (() => void) | undefined
+    let disposed = false
+    void installTauriSystemAudioSource().then((stop) => {
+      if (disposed) stop()
+      else uninstall = stop
+    })
+    return () => {
+      disposed = true
+      uninstall?.()
+    }
+  }, [])
 
   // Native child windows send their resized bounds back here. Keeping the
   // primary placement registry current means a later extension setSize call
