@@ -6,7 +6,7 @@ This is the user's desktop audio, not the microphone and not a tab they share. A
 
 ## Availability and permission
 
-Feature-detect `ctx.systemAudio` and `ctx.host.capabilities['system-audio-v1'] >= 1`. `lumiverse-spindle-types` 0.6.41 declares the optional API and exports its option, frame, session and availability types. It is optional for compatibility with older hosts and API mocks.
+Feature-detect `ctx.systemAudio` and `ctx.host.capabilities['system-audio-v1'] >= 1`. `lumiverse-spindle-types` 0.6.43 declares the optional API and exports its option, frame, session and availability types. It is optional for compatibility with older hosts and API mocks.
 
 Declare `"system_audio"` in `spindle.json`. It is a privileged permission and is never auto-granted. `isAvailable()` is free; `start()` requires the permission.
 
