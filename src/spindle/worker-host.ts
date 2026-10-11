@@ -29,6 +29,7 @@ import type { DryRunResultDTO, GetBreakdownWorkerMessage } from "./generation-co
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
+import type { ActivationPatternsMessage } from "./activation-patterns-contract";
 import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
 import { eventBus } from "../ws/bus";
@@ -299,6 +300,7 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
@@ -2216,6 +2218,9 @@ export class WorkerHost {
         break;
       case "regex_scripts_get":
         this.contentApi.handleRegexScriptsGet(msg.requestId, msg.scriptId, msg.userId);
+        break;
+      case "regex_scripts_prepare_activation_patterns":
+        this.contentApi.handleRegexScriptsPrepareActivationPatterns(msg.requestId, msg.options);
         break;
       case "regex_scripts_get_active":
         this.contentApi.handleRegexScriptsGetActive(

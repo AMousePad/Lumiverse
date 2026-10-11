@@ -107,6 +107,7 @@ import type {
 import { initializeSandbox } from "./worker-runtime-sandbox";
 import type { DryRunResultDTO, GetBreakdownWorkerMessage, SavedBreakdownDTO } from "./generation-contract";
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
+import type { ActivationPatternsMessage, ActivationPatternsOptions, ActivationPatternsResult } from "./activation-patterns-contract";
 import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef } from "./desktop-capture-contract";
 import { deserializeWorkerResponseError } from "./worker-response-error";
 import { deriveCharacterOverlay } from "../utils/color-engine";
@@ -305,6 +306,7 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
@@ -720,7 +722,10 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts"> & {
+  regex_scripts: SpindleAPI["regex_scripts"] & {
+    prepareActivationPatterns(options: ActivationPatternsOptions): Promise<ActivationPatternsResult>;
+  };
   images: SpindleAPI["images"] & {
     readBinary(imageId: string, userId?: string): Promise<Uint8Array>;
   };
@@ -3104,6 +3109,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   regex_scripts: {
+    async prepareActivationPatterns(options: ActivationPatternsOptions): Promise<ActivationPatternsResult> {
+      const requestId = crypto.randomUUID();
+      return await request({ type: "regex_scripts_prepare_activation_patterns", requestId, options }) as ActivationPatternsResult;
+    },
     async list(options?: RegexScriptListOptionsDTO): Promise<{ data: RegexScriptDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({

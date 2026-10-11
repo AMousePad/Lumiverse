@@ -33,6 +33,8 @@ import * as globalAddonsSvc from "../services/global-addons.service";
 import * as settingsSvc from "../services/settings.service";
 import * as imagesSvc from "../services/images.service";
 import { IMAGE_READ_MAX_BYTES } from "./image-binary-contract";
+import { prepareActivationPatterns } from "../services/regex-activation-inputs.service";
+import type { ActivationPatternsOptions } from "./activation-patterns-contract";
 import * as mediaSvc from "../services/media.service";
 import * as audioSvc from "../services/audio.service";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
@@ -2518,6 +2520,25 @@ export class WorkerHostContentApi {
 
       const s = regexScriptsSvc.getRegexScript(resolvedUserId, scriptId);
       this.postToWorker({ type: "response", requestId, result: s ? this.toRegexScriptDTO(s) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  handleRegexScriptsPrepareActivationPatterns(requestId: string, options: ActivationPatternsOptions): void {
+    try {
+      if (!this.hasPermission("regex_scripts")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts - Regex scripts permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(options?.userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const result = prepareActivationPatterns(resolvedUserId, {
+        preset_id: options?.presetId, patterns: options?.patterns,
+        chat_id: options?.chatId, character_id: options?.characterId,
+        persona_id: options?.personaId, connection_id: options?.connectionId,
+      });
+      this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
