@@ -2176,7 +2176,7 @@ export async function processChunk(
         generateRawFn,
         sidecarConnectionId,
         config.sidecarTimeoutMs,
-        buildSidecarSamplingParameters(config.sidecar, { includeMaxTokens: false }),
+        buildSidecarSamplingParameters(config.sidecar),
         config.nonProseScaffoldTags,
       )
       .catch((err) => {
@@ -2599,7 +2599,7 @@ export async function rebuildCortex(
         generateRawFn,
         sidecarConnectionId,
         config.sidecarTimeoutMs,
-        buildSidecarSamplingParameters(config.sidecar, { includeMaxTokens: false }),
+        buildSidecarSamplingParameters(config.sidecar),
         config.nonProseScaffoldTags,
         { signal },
       );
@@ -2885,8 +2885,9 @@ export function getRelationsIncludingInactive(chatId: string) {
  * silently fell back to the legacy hardcoded {temperature: 0.1} and ignored
  * the user's configuration entirely.
  *
- * `includeMaxTokens` is opt-out for consolidation, which manages max_tokens
- * per-call from config.maxTokensPerSummary.
+ * `includeMaxTokens` is opt-out for utility calls with their own fixed budget.
+ * Consolidation receives the total budget and requests its shorter summary
+ * separately, leaving room for reasoning within the response limit.
  */
 function buildSidecarSamplingParameters(
   sidecar: MemoryCortexConfig["sidecar"],
