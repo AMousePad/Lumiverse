@@ -61,6 +61,7 @@ export interface ConsolidationSidecarOptions {
   sidecarTimeoutMs?: number;
   sidecar?: { connectionProfileId?: string | null; model?: string | null };
   signal?: AbortSignal;
+  onProgress?: (phase: "scene" | "arc") => void;
 }
 
 // ─── Row Mapper ────────────────────────────────────────────────
@@ -273,6 +274,7 @@ function resolveConsolidationSidecarOptions(
       sidecarTimeoutMs: sidecarOptions.sidecarTimeoutMs ?? sidecarTimeoutMs,
       sidecar: sidecarOptions.sidecar,
       signal: sidecarOptions.signal,
+      onProgress: sidecarOptions.onProgress,
     };
   }
 
@@ -355,6 +357,7 @@ export async function maybeConsolidate(
     userId, sidecarConnectionId, sidecarTimeoutMs, sidecarOptions,
   );
   if (resolvedSidecar.signal?.aborted) return false;
+  resolvedSidecar.onProgress?.("scene");
 
   if (config.useSidecar && generateRawFn) {
     const decision = await generateConsolidationSummary(
@@ -501,6 +504,7 @@ async function maybeConsolidateArcs(
   let arcTitle: string | null = null;
 
   if (sidecarOptions?.signal?.aborted) return;
+  sidecarOptions?.onProgress?.("arc");
 
   if (config.useSidecar && generateRawFn) {
     const combined = summaries.join("\n\n---\n\n");

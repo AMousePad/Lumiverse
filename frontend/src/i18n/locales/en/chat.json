@@ -327,6 +327,8 @@
     "cortexChunks": ", {{current}}/{{total}} chunks",
     "cortexPreparingMemory": "Preparing Memory Cortex",
     "cortexRebuildingMemory": "Rebuilding Memory Cortex",
+    "cortexConsolidatingScenes": "Consolidating scene memories",
+    "cortexConsolidatingArcs": "Consolidating arc memories",
     "backgroundMemoryFailed": "Memory Cortex processing failed.",
     "cortexCombined": "Preparing Memory Cortex and processing updates{{chunks}}",
     "dismissMemoryNotice": "Dismiss memory notice",

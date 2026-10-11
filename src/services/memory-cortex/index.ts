@@ -2204,6 +2204,7 @@ export type RebuildPhase =
   | "awaiting_provider"
   | "ingesting"
   | "consolidating"
+  | "consolidating_arcs"
   | "idle_between_batches";
 
 interface RebuildState {
@@ -2601,7 +2602,15 @@ export async function rebuildCortex(
         config.sidecarTimeoutMs,
         buildSidecarSamplingParameters(config.sidecar),
         config.nonProseScaffoldTags,
-        { signal },
+        {
+          signal,
+          onProgress: (kind) => {
+            const phase = kind === "arc" ? "consolidating_arcs" : "consolidating";
+            if (state.phase === phase) return;
+            state.phase = phase;
+            emit();
+          },
+        },
       );
       if (created > 0) {
         console.info(`[memory-cortex] Rebuild created ${created} scene consolidation(s) for chat ${chatId}`);
