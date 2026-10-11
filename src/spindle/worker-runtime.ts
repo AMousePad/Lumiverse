@@ -105,7 +105,7 @@ import type {
   MediaTransformResultDTO,
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
-import type { DryRunResultDTO } from "./generation-contract";
+import type { DryRunResultDTO, GetBreakdownWorkerMessage, SavedBreakdownDTO } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef } from "./desktop-capture-contract";
 import { deserializeWorkerResponseError } from "./worker-response-error";
 import { deriveCharacterOverlay } from "../utils/color-engine";
@@ -304,6 +304,7 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -720,6 +721,7 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate"> & {
   generate: Omit<SpindleAPI["generate"], "dryRun"> & {
     dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
+    getBreakdown(messageId: string, userId?: string): Promise<SavedBreakdownDTO | null>;
   };
   desktop: SpindleDesktopAPI;
   runtimeState: {
@@ -1736,6 +1738,14 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     quietStream(input) {
       return requestGenerationStream({ ...input, type: "quiet" });
+    },
+    async getBreakdown(messageId: string, userId?: string) {
+      return await request({
+        type: "generate_get_breakdown",
+        requestId: crypto.randomUUID(),
+        messageId,
+        userId,
+      }) as SavedBreakdownDTO | null;
     },
     async dryRun(input, userId?: string) {
       const requestId = crypto.randomUUID();

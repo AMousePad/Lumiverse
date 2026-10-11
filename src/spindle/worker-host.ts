@@ -25,7 +25,7 @@ import type {
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX, SPINDLE_HOST_CAPABILITIES } from "lumiverse-spindle-types";
 import { WorkerHostDesktopCaptureApi } from "./worker-host-desktop-capture-api";
-import type { DryRunResultDTO } from "./generation-contract";
+import type { DryRunResultDTO, GetBreakdownWorkerMessage } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { createOAuthState } from "./oauth-state";
@@ -60,6 +60,7 @@ import {
 } from "./prompt-regex-ownership";
 import * as managerSvc from "./manager.service";
 import * as generateSvc from "../services/generate.service";
+import * as breakdownSvc from "../services/breakdown.service";
 import * as connectionsSvc from "../services/connections.service";
 import * as chatsSvc from "../services/chats.service";
 import type * as presetsSvc from "../services/presets.service";
@@ -297,6 +298,7 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -1792,6 +1794,9 @@ export class WorkerHost {
       // ─── Dry Run (gated: "generation") ───────────────────────────────
       case "generate_dry_run":
         this.handleGenerateDryRun(msg.requestId, msg.input, msg.userId);
+        break;
+      case "generate_get_breakdown":
+        this.handleGetBreakdown(msg.requestId, msg.messageId, msg.userId);
         break;
       case "assemble_prompt":
         this.handleAssemblePrompt(msg.requestId, msg.input, msg.userId);
@@ -4537,6 +4542,26 @@ export class WorkerHost {
   }
 
   // ─── Characters (gated: "characters") ──────────────────────────────
+
+  private handleGetBreakdown(requestId: string, messageId: string, userId?: string): void {
+    try {
+      if (!this.hasPermission("generation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      if (typeof messageId !== "string" || !messageId.trim()) {
+        throw new Error("messageId is required");
+      }
+      this.postToWorker({
+        type: "response", requestId,
+        result: breakdownSvc.getBreakdown(resolvedUserId, messageId),
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
 
   private async handleGenerateDryRun(
     requestId: string,

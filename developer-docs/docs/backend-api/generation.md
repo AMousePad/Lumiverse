@@ -516,6 +516,23 @@ When an interceptor returns `breakdown: [{ messageIndex, name? }]`, the host tur
 
 ---
 
+## Saved Prompt Breakdowns
+
+`spindle.generate.getBreakdown(messageId, userId?)` reads the prompt breakdown saved for a generated message. Requires the `generation` permission. It does not assemble a new prompt or call the model.
+
+```ts
+const saved = await spindle.generate.getBreakdown(messageId, userId)
+if (saved) {
+  spindle.log.info(`Saved prompt used ${saved.totalTokens} tokens`)
+}
+```
+
+User-scoped extensions always read as their owner; `userId` is required for operator-scoped extensions. The method returns `null` when the message has no readable saved breakdown, including when it belongs to another user. Missing or blank message IDs are rejected.
+
+The result contains the stored snapshot: `entries` (block names, types, token counts, and available content), `totalTokens`, `maxContext`, `model`, and `provider`. Optional fields include `chatHistoryTokens`, `messages`, `parameters`, `usage`, `presetName`, `presetId`, and `tokenizer_name`. Older snapshots can omit optional fields. The snapshot can contain full prompt text; treat it as private chat data.
+
+---
+
 ## Structured Output
 
 Some providers support native structured output, ensuring the LLM response conforms to a JSON schema. Pass provider-specific parameters via the `parameters` field.

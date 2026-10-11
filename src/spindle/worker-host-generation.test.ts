@@ -1,14 +1,30 @@
-import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ExtensionInfo, SpindleManifest } from "lumiverse-spindle-types";
 import * as generateSvc from "../services/generate.service";
+import { storeBreakdown } from "../services/breakdown.service";
+import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { WorkerHost } from "./worker-host";
 import { providerRegistry } from "./provider-registry";
 
 const dryRun = spyOn(generateSvc, "dryRunGeneration");
-afterAll(() => dryRun.mockRestore());
+beforeAll(() => {
+  initDatabase(":memory:");
+  getDb().run(`CREATE TABLE message_breakdowns (
+    message_id TEXT PRIMARY KEY, chat_id TEXT, user_id TEXT, data TEXT NOT NULL
+  )`);
+});
+afterAll(() => {
+  dryRun.mockRestore();
+  closeDatabase();
+});
 afterEach(() => {
   dryRun.mockReset();
   providerRegistry.reset();
+  getDb().run("DELETE FROM message_breakdowns");
 });
 
 function fixture(scope: "user" | "operator" = "user", permitted = true) {
@@ -68,3 +84,95 @@ test("dry run still requires generation permission and enforces user scope", asy
   await fixture()({ ...request, userId: "bob" });
   expect(dryRun.mock.calls[0]?.[0].userId).toBe("alice");
 });
+
+const saved = {
+  entries: [{ name: "System", type: "block", tokens: 10, content: "Synthetic prompt" }],
+  messages: [{ role: "system", content: "Synthetic prompt" }],
+  totalTokens: 30, chatHistoryTokens: 20, maxContext: 8192,
+  model: "test", provider: "test", parameters: { temperature: 0.5 },
+  usage: { prompt_tokens: 30, completion_tokens: 5, total_tokens: 35 },
+  presetName: "Test", presetId: "preset", tokenizer_name: "test",
+};
+
+test("saved breakdowns return the stored snapshot without generating a prompt", async () => {
+  storeBreakdown("alice", "message", "chat", saved);
+  const response = await fixture()({ type: "generate_get_breakdown", messageId: "message" });
+  expect(response).toEqual({ type: "response", requestId: "request", result: saved });
+  expect(dryRun).not.toHaveBeenCalled();
+});
+
+test("saved breakdown reads cannot escape the extension owner's scope", async () => {
+  storeBreakdown("alice", "alice-message", "alice-chat", saved);
+  storeBreakdown("bob", "bob-message", "bob-chat", { ...saved, model: "bob-private" });
+  const send = fixture();
+  expect((await send({ type: "generate_get_breakdown", messageId: "bob-message", userId: "bob" })).result).toBeNull();
+  expect((await send({ type: "generate_get_breakdown", messageId: "alice-message", userId: "bob" })).result).toEqual(saved);
+});
+
+test("saved breakdown reads require generation permission and an operator user context", async () => {
+  const request = { type: "generate_get_breakdown", messageId: "message" };
+  expect((await fixture("user", false)(request)).error).toContain("generation");
+  expect((await fixture("operator")(request)).error).toContain("userId is required");
+  storeBreakdown("bob", "message", "chat", saved);
+  expect((await fixture("operator")({ ...request, userId: "bob" })).result).toEqual(saved);
+});
+
+test("absent or unreadable snapshots return null; invalid message IDs reject", async () => {
+  const send = fixture();
+  storeBreakdown("alice", "corrupt", "chat", "invalid JSON");
+  storeBreakdown("alice", "old", "chat", { entries: [], totalTokens: 0 });
+  for (const messageId of ["missing", "corrupt"]) {
+    expect((await send({ type: "generate_get_breakdown", messageId })).result).toBeNull();
+  }
+  expect((await send({ type: "generate_get_breakdown", messageId: "old" })).result).toEqual({ entries: [], totalTokens: 0 });
+  for (const messageId of [undefined, "", "  ", 123]) {
+    expect((await send({ type: "generate_get_breakdown", messageId })).error).toBe("messageId is required");
+  }
+});
+
+test("extension runtime round-trips preview fields, saved snapshots, nulls and errors through the host", async () => {
+  storeBreakdown("bob", "message", "chat", saved);
+  dryRun.mockResolvedValue({ ...baseResult, chatHistoryTokens: 42 });
+  const directory = await mkdtemp(join(tmpdir(), "spindle-generation-test-"));
+  const entry = join(directory, "backend.mjs");
+  await Bun.write(entry, `
+    const preview = await spindle.generate.dryRun({ chatId: "chat" }, "bob");
+    const saved = await spindle.generate.getBreakdown("message", "bob");
+    const missing = await spindle.generate.getBreakdown("missing", "bob");
+    let error;
+    try { await spindle.generate.getBreakdown("", "bob"); }
+    catch (e) { error = e.message; }
+    spindle.sendToFrontend({ preview, saved, missing, error });
+  `);
+  const dispatch = fixture("operator");
+  let resolveResult!: (message: any) => void;
+  let rejectResult!: (error: Error) => void;
+  const result = new Promise<any>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+  const timer = setTimeout(() => rejectResult(new Error("Extension did not return generation results")), 5000);
+  const worker = Bun.spawn([process.execPath, join(import.meta.dir, "worker-runtime.ts")], {
+    stdout: "ignore", stderr: "pipe",
+    ipc(message: any, child) {
+      if (message.type === "permissions_get_granted") {
+        child.send({ type: "response", requestId: message.requestId, result: ["generation"] });
+      } else if (message.type === "generate_dry_run" || message.type === "generate_get_breakdown") {
+        void dispatch(message).then(response => child.send(response)).catch(rejectResult);
+      } else if (message.type === "frontend_message") {
+        resolveResult(message.payload);
+      }
+    },
+  });
+  try {
+    worker.send({ type: "init", manifest: { identifier: "generation-test", entry_backend: pathToFileURL(entry).href }, storagePath: directory });
+    const response = await result;
+    expect(response.preview.chatHistoryTokens).toBe(42);
+    expect(response.saved).toEqual(saved);
+    expect(response.missing).toBeNull();
+    expect(response.error).toBe("messageId is required");
+    expect(dryRun.mock.calls[0]?.[0].userId).toBe("bob");
+  } finally {
+    clearTimeout(timer);
+    worker.kill();
+    await worker.exited;
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 10000);
