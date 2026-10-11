@@ -40,7 +40,7 @@ export function clampInt(value: unknown, min: number, max: number, fallback: num
  * Bring a source's spectrum to exactly `bands` values in 0 – 1. Fewer source bands are interpolated; more are
  * grouped, keeping each group's loudest value so a narrow peak is not averaged away.
  */
-export function resampleBands(source: ReadonlyArray<number>, bands: number): number[] {
+export function resampleBands(source: ArrayLike<number>, bands: number): number[] {
   const out = new Array<number>(bands).fill(0)
   const n = source.length
   if (n === 0) return out
@@ -188,10 +188,13 @@ export function createFrontendSystemAudioAPI(deps: FrontendSystemAudioDependenci
       if (session.finished) throw abortError()
       if (!approved) throw new DOMException('The user did not allow system audio analysis', 'NotAllowedError')
       authorize() // the permission may have been revoked while the prompt was open
-      const handle = await source.start({
-        onFrame: (frame) => deliver(session, frame),
-        onEnd: (reason) => finish(session, reason),
-      })
+      const handle = await source.start(
+        {
+          onFrame: (frame) => deliver(session, frame),
+          onEnd: (reason) => finish(session, reason),
+        },
+        { maxFps: fps },
+      )
       if (session.finished) {
         handle.stop()
         throw abortError()

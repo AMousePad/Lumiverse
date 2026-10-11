@@ -275,7 +275,7 @@ impl CaptureRequest {
     }
 }
 
-fn trusted_host(window: &WebviewWindow) -> Result<(), String> {
+pub(crate) fn trusted_host(window: &WebviewWindow) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Capture controls require the bundled tray host".into());
     }

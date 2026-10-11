@@ -14,8 +14,11 @@ export interface SystemAudioSourceFrame {
   amplitude: number
   /** Loudest recent level, 0 – 1. */
   peak: number
-  /** Log-spaced band magnitudes, 0 – 1, lowest first, any count. The host rebins them for the extension. */
-  frequencies: ReadonlyArray<number>
+  /**
+   * Log-spaced band magnitudes, 0 – 1, lowest first, any count. The host rebins them for the extension. May be a
+   * view into a transport buffer: it is only valid during the `onFrame` call.
+   */
+  frequencies: ArrayLike<number>
 }
 
 /** Why a source stopped by itself. */
@@ -25,6 +28,12 @@ export interface SystemAudioSourceHandlers {
   onFrame(frame: SystemAudioSourceFrame): void
   /** The source stopped by itself (device removed, the user switched capture off in the client). */
   onEnd(reason: SystemAudioSourceEndReason): void
+}
+
+/** What the extension asked for, so a source can do no more work than that. */
+export interface SystemAudioSourceStartHints {
+  /** The highest frame rate any consumer will use, 1 – 30. Frames above it are dropped anyway. */
+  maxFps: number
 }
 
 export interface SystemAudioSourceHandle {
@@ -43,7 +52,7 @@ export interface SystemAudioSource {
    * Begin capture. The user has already approved this start in the host's own prompt, but a native adapter should
    * apply its own OS-level consent too. Rejects if capture cannot start.
    */
-  start(handlers: SystemAudioSourceHandlers): Promise<SystemAudioSourceHandle>
+  start(handlers: SystemAudioSourceHandlers, hints?: SystemAudioSourceStartHints): Promise<SystemAudioSourceHandle>
 }
 
 let registered: SystemAudioSource | null = null

@@ -7,6 +7,7 @@ import {
   type SystemAudioSource,
   type SystemAudioSourceFrame,
   type SystemAudioSourceHandlers,
+  type SystemAudioSourceStartHints,
 } from './system-audio-source'
 import type { SpindleSystemAudioEndReason, SpindleSystemAudioFrame } from 'lumiverse-spindle-types'
 
@@ -15,11 +16,13 @@ class FakeSource implements SystemAudioSource {
   status: SystemAudioAvailability = { available: true }
   starts = 0
   stops = 0
+  hints: Array<SystemAudioSourceStartHints | undefined> = []
   failStart: Error | null = null
   handlers!: SystemAudioSourceHandlers
   availability() { return this.status }
-  async start(handlers: SystemAudioSourceHandlers) {
+  async start(handlers: SystemAudioSourceHandlers, hints?: SystemAudioSourceStartHints) {
     this.starts++
+    this.hints.push(hints)
     if (this.failStart) throw this.failStart
     this.handlers = handlers
     return { stop: () => { this.stops++ } }
@@ -229,6 +232,23 @@ describe('start: frames', () => {
     const c = await running({ bands: 5000 })
     c.t.source!.frame()
     expect(c.frames[0].frequencies).toHaveLength(64)
+  })
+  test('tells the source the frame rate, so it does no more work than the extension will use', async () => {
+    const a = await running({ maxFps: 12 })
+    expect(a.t.source!.hints).toEqual([{ maxFps: 12 }])
+    const b = await running()
+    expect(b.t.source!.hints).toEqual([{ maxFps: 30 }])
+    const c = await running({ maxFps: 9000 })
+    expect(c.t.source!.hints).toEqual([{ maxFps: 30 }])
+  })
+  test('accepts a typed-array view, as a transport buffer delivers it', async () => {
+    const { t, frames } = await running({ bands: 8 })
+    const buffer = new Float32Array([9, 0.5, 0.5, 0, 1]) // a header the view skips, then two bands
+    t.source!.frame({ frequencies: buffer.subarray(3) })
+    expect(frames[0].frequencies).toHaveLength(8)
+    expect(frames[0].frequencies[0]).toBe(0)
+    expect(frames[0].frequencies[7]).toBe(1)
+    expect(Array.isArray(frames[0].frequencies)).toBe(true) // a plain copy, not the transport's memory
   })
   test('sanitises levels from the source', async () => {
     const { t, frames } = await running()
