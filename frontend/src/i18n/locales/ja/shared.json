@@ -106,7 +106,9 @@
       "allow": "許可",
       "notNow": "今はしない",
       "listening": "{{name}} がシステム音声を解析しています",
-      "stop": "停止"
+      "stop": "停止",
+      "minimise": "最小化",
+      "show": "表示: {{name}} がシステム音声を解析しています"
     },
     "floatWidget": "フロート ウィジェット",
     "drawerTab": "ドロワー タブ",

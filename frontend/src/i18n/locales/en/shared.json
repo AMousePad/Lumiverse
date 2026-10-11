@@ -122,7 +122,9 @@
       "allow": "Allow",
       "notNow": "Not now",
       "listening": "{{name}} is analysing system audio",
-      "stop": "Stop"
+      "stop": "Stop",
+      "minimise": "Minimise",
+      "show": "Show: {{name}} is analysing system audio"
     },
     "floatWidget": "Float Widget",
     "drawerTab": "Drawer Tab",

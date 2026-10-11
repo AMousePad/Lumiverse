@@ -96,7 +96,9 @@
       "allow": "Consenti",
       "notNow": "Non ora",
       "listening": "{{name}} sta analizzando l’audio di sistema",
-      "stop": "Interrompi"
+      "stop": "Interrompi",
+      "minimise": "Riduci a icona",
+      "show": "Mostra: {{name}} sta analizzando l’audio di sistema"
     },
     "floatWidget": "Widget flottante",
     "drawerTab": "Scheda cassetto",

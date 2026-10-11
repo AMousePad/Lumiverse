@@ -106,7 +106,9 @@
       "allow": "Autoriser",
       "notNow": "Pas maintenant",
       "listening": "{{name}} analyse l’audio du système",
-      "stop": "Arrêter"
+      "stop": "Arrêter",
+      "minimise": "Réduire",
+      "show": "Afficher : {{name}} analyse l’audio du système"
     },
     "floatWidget": "Widget flottant",
     "drawerTab": "Onglet Tiroir",
