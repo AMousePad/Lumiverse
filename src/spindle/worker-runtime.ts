@@ -105,6 +105,9 @@ import type {
   MediaTransformResultDTO,
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
+import type { DryRunResultDTO, GetBreakdownWorkerMessage, SavedBreakdownDTO } from "./generation-contract";
+import type { ImageReadBinaryMessage } from "./image-binary-contract";
+import type { ActivationPatternsMessage, ActivationPatternsOptions, ActivationPatternsResult } from "./activation-patterns-contract";
 import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef } from "./desktop-capture-contract";
 import { deserializeWorkerResponseError } from "./worker-response-error";
 import { deriveCharacterOverlay } from "../utils/color-engine";
@@ -303,6 +306,9 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | ActivationPatternsMessage
+  | ImageReadBinaryMessage
+  | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -716,7 +722,17 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts"> & {
+  regex_scripts: SpindleAPI["regex_scripts"] & {
+    prepareActivationPatterns(options: ActivationPatternsOptions): Promise<ActivationPatternsResult>;
+  };
+  images: SpindleAPI["images"] & {
+    readBinary(imageId: string, userId?: string): Promise<Uint8Array>;
+  };
+  generate: Omit<SpindleAPI["generate"], "dryRun"> & {
+    dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
+    getBreakdown(messageId: string, userId?: string): Promise<SavedBreakdownDTO | null>;
+  };
   desktop: SpindleDesktopAPI;
   runtimeState: {
     read(chatId: string, characterId: string, userId?: string): Promise<unknown>;
@@ -1733,6 +1749,14 @@ const spindleApi: RuntimeSpindleAPI = {
     quietStream(input) {
       return requestGenerationStream({ ...input, type: "quiet" });
     },
+    async getBreakdown(messageId: string, userId?: string) {
+      return await request({
+        type: "generate_get_breakdown",
+        requestId: crypto.randomUUID(),
+        messageId,
+        userId,
+      }) as SavedBreakdownDTO | null;
+    },
     async dryRun(input, userId?: string) {
       const requestId = crypto.randomUUID();
       const result = await request({
@@ -1741,7 +1765,7 @@ const spindleApi: RuntimeSpindleAPI = {
         input,
         userId,
       });
-      return result as import("lumiverse-spindle-types").DryRunResultDTO;
+      return result as DryRunResultDTO;
     },
 
     observe(chatId: string): import("lumiverse-spindle-types").GenerationObserver {
@@ -2537,6 +2561,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   images: {
+    async readBinary(imageId: string, userId?: string): Promise<Uint8Array> {
+      const requestId = crypto.randomUUID();
+      return await request({ type: "images_read_binary", requestId, imageId, userId }) as Uint8Array;
+    },
     async list(options?: ImageListOptionsDTO): Promise<{ data: ImageDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({
@@ -3081,6 +3109,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   regex_scripts: {
+    async prepareActivationPatterns(options: ActivationPatternsOptions): Promise<ActivationPatternsResult> {
+      const requestId = crypto.randomUUID();
+      return await request({ type: "regex_scripts_prepare_activation_patterns", requestId, options }) as ActivationPatternsResult;
+    },
     async list(options?: RegexScriptListOptionsDTO): Promise<{ data: RegexScriptDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({
