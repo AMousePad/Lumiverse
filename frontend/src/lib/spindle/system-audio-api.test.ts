@@ -29,6 +29,26 @@ class FakeSource implements SystemAudioSource {
   }
 }
 
+/** A source whose startup can remain pending after its session is cancelled. */
+class PendingSource extends FakeSource {
+  private markStarting!: () => void
+  readonly starting = new Promise<void>((resolve) => { this.markStarting = resolve })
+  resolveStart!: () => void
+  rejectStart!: (error: Error) => void
+
+  override async start(handlers: SystemAudioSourceHandlers) {
+    this.starts++
+    this.handlers = handlers
+    const pending = new Promise<void>((resolve, reject) => {
+      this.resolveStart = resolve
+      this.rejectStart = reject
+    })
+    this.markStarting()
+    await pending
+    return { stop: () => { this.stops++ } }
+  }
+}
+
 function setup(overrides: Partial<FrontendSystemAudioDependencies> & { source?: FakeSource | null; approve?: boolean } = {}) {
   const source = overrides.source === undefined ? new FakeSource() : overrides.source
   const granted = new Set(['system_audio'])
@@ -339,21 +359,74 @@ describe('start: how a session ends', () => {
     expect(t.source!.stops).toBe(1)
     expect(t.state.indicators).toBe(0)
   })
-  test('stopping while the device is still starting releases it as soon as it is up', async () => {
-    const source = new FakeSource()
-    let finish!: () => void
-    source.start = async (handlers) => {
-      source.starts++
-      source.handlers = handlers
-      await new Promise<void>((resolve) => { finish = resolve })
-      return { stop: () => { source.stops++ } }
-    }
+  for (const cancellation of ['stop', 'abort', 'revoke', 'unload', 'dispose'] as const) {
+    test(`${cancellation} rejects ready before pending device startup settles and releases a late handle`, async () => {
+      const source = new PendingSource()
+      const t = setup({ source })
+      const controller = new AbortController()
+      const frames: SpindleSystemAudioFrame[] = []
+      const ended: SpindleSystemAudioEndReason[] = []
+      const session = t.api.start({
+        signal: controller.signal,
+        onFrame: (frame) => frames.push(frame),
+        onEnd: (reason) => ended.push(reason),
+      })
+      let readyError: unknown
+      void session.ready.catch((error) => { readyError = error })
+      await source.starting
+      switch (cancellation) {
+        case 'stop': session.stop(); break
+        case 'abort': controller.abort(); break
+        case 'revoke': t.revoke(); break
+        case 'unload': t.teardown(); break
+        case 'dispose': t.dispose(); break
+      }
+      await flush()
+      expect(readyError).toBeInstanceOf(DOMException)
+      expect(readyError).toMatchObject({ name: 'AbortError' })
+      expect(source.stops).toBe(0)
+      source.frame()
+      expect(frames).toHaveLength(0)
+      source.resolveStart()
+      await flush()
+      expect(source.stops).toBe(1)
+      expect(t.state.indicators).toBe(0)
+      expect(ended).toHaveLength(0)
+    })
+  }
+
+  test('a device startup failure after cancellation preserves AbortError', async () => {
+    const source = new PendingSource()
     const t = setup({ source })
     const session = t.api.start({ onFrame() {} })
-    await flush()
+    await source.starting
     session.stop()
-    finish()
+    source.rejectStart(new Error('device startup failed'))
     await expect(session.ready).rejects.toMatchObject({ name: 'AbortError' })
+    await flush()
+    expect(source.stops).toBe(0)
+    expect(t.state.indicators).toBe(0)
+  })
+
+  test('a late startup handle is stopped without ending a replacement session', async () => {
+    const oldSource = new PendingSource()
+    let source: FakeSource = oldSource
+    const t = setup({ getSource: () => source })
+    const oldSession = t.api.start({ onFrame() {} })
+    await oldSource.starting
+    oldSession.stop()
+    source = new FakeSource()
+    const frames: SpindleSystemAudioFrame[] = []
+    const session = t.api.start({ onFrame: (frame) => frames.push(frame) })
+    await session.ready
+    oldSource.resolveStart()
+    await flush()
+    expect(oldSource.stops).toBe(1)
+    expect(source.stops).toBe(0)
+    expect(t.state.indicators).toBe(1)
+    source.frame()
+    expect(frames).toHaveLength(1)
+    session.stop()
     expect(source.stops).toBe(1)
     expect(t.state.indicators).toBe(0)
   })

@@ -173,11 +173,14 @@ export function createFrontendSystemAudioAPI(deps: FrontendSystemAudioDependenci
       return Object.freeze({ ready: rejected, stop() {} })
     }
     current = session
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      session.abort.signal.addEventListener('abort', () => reject(abortError()), { once: true })
+    })
     const onAbort = () => finish(session, null)
     signal?.addEventListener('abort', onAbort, { once: true })
     session.detach = () => signal?.removeEventListener('abort', onAbort)
 
-    const ready = (async () => {
+    const startup = (async () => {
       const source = deps.getSource()
       const status = source?.availability()
       if (!source || !status?.available) throw new DOMException('System audio is not available here', 'NotSupportedError')
@@ -197,6 +200,9 @@ export function createFrontendSystemAudioAPI(deps: FrontendSystemAudioDependenci
       session.started = true
       session.removeIndicator = deps.showIndicator(() => finish(session, 'user-stopped'))
     })()
+    // Cancellation must settle ready even if native startup stays pending. Keep observing startup so a late
+    // handle is stopped above and a late failure is handled without replacing the cancellation error.
+    const ready = Promise.race([startup, cancelled])
     // Whatever went wrong, free the slot. This also marks the rejection handled, so an extension that ignores
     // `ready` does not raise an unhandled rejection.
     ready.catch(() => finish(session, null))
