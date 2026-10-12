@@ -57,10 +57,12 @@ import styles from './SpindlePanel.module.css'
 import clsx from 'clsx'
 import {
   EXTENSION_SORT_OPTIONS,
+  EXTENSION_STATUS_FILTERS,
   filterExtensions,
   reconcileExtensionOrder,
   sortExtensions,
   type ExtensionSortMode,
+  type ExtensionStatusFilter,
 } from './spindle-extension-sort'
 
 interface EnableAllPermissionsTarget {
@@ -217,6 +219,7 @@ export default function SpindlePanel() {
   const [enableAllPermissionsTarget, setEnableAllPermissionsTarget] = useState<EnableAllPermissionsTarget | null>(null)
   const [bulkPermissionExtensionId, setBulkPermissionExtensionId] = useState<string | null>(null)
   const [extensionSearch, setExtensionSearch] = useState('')
+  const [extensionStatusFilter, setExtensionStatusFilter] = useState<ExtensionStatusFilter>('all')
   const [extensionSortMode, setExtensionSortMode] = useState<ExtensionSortMode>(() => readPanelPreferences().sortMode)
   const [extensionViewMode, setExtensionViewMode] = useState<ExtensionViewMode>(() => readPanelPreferences().viewMode)
   const [manualExtensionOrder, setManualExtensionOrder] = useState<string[]>(() => readPanelPreferences().manualOrder)
@@ -505,9 +508,13 @@ export default function SpindlePanel() {
     return isPrivileged || (scope === 'user' && !!user?.id && installedBy === user.id)
   })
   const manageableCount = manageableExtensions.length
+  const extensionFilterCounts = useMemo(() => {
+    const active = extensions.filter((extension) => extension.enabled).length
+    return { all: extensions.length, active, inactive: extensions.length - active }
+  }, [extensions])
   const filteredExtensions = useMemo(
-    () => filterExtensions(extensions, extensionSearch),
-    [extensions, extensionSearch],
+    () => filterExtensions(extensions, extensionSearch, extensionStatusFilter),
+    [extensions, extensionSearch, extensionStatusFilter],
   )
   const sortedExtensions = useMemo(
     () => sortExtensions(filteredExtensions, extensionSortMode, manualExtensionOrder),
@@ -613,7 +620,7 @@ export default function SpindlePanel() {
   }, [])
 
   const handleExtensionDragEnd = useCallback((event: DragEndEvent) => {
-    if (extensionSortMode !== 'manual' || extensionSearch.trim()) return
+    if (extensionSortMode !== 'manual' || extensionSearch.trim() || extensionStatusFilter !== 'all') return
     const { active, over } = event
     if (!over || active.id === over.id) return
 
@@ -622,9 +629,9 @@ export default function SpindlePanel() {
     const newIndex = reconciled.indexOf(String(over.id))
     if (oldIndex < 0 || newIndex < 0) return
     setManualExtensionOrder(arrayMove(reconciled, oldIndex, newIndex))
-  }, [extensionSortMode, extensionSearch, extensions, manualExtensionOrder])
+  }, [extensionSortMode, extensionSearch, extensionStatusFilter, extensions, manualExtensionOrder])
 
-  const canDragExtensions = extensionSortMode === 'manual' && !extensionSearch.trim()
+  const canDragExtensions = extensionSortMode === 'manual' && !extensionSearch.trim() && extensionStatusFilter === 'all'
 
   return (
     <>
@@ -724,7 +731,7 @@ export default function SpindlePanel() {
         </span>
         <div className={styles.listHeaderActions}>
           <div className={styles.listHeaderMeta}>
-            {extensionSearch.trim() && (
+            {(extensionSearch.trim() || extensionStatusFilter !== 'all') && (
               <span>
                 {t('spindlePanel.searchResults', {
                   count: sortedExtensions.length,
@@ -732,7 +739,7 @@ export default function SpindlePanel() {
                 })}
               </span>
             )}
-            {extensionSortMode === 'manual' && (
+            {extensionSortMode === 'manual' && extensionStatusFilter === 'all' && (
               <span>
                 {extensionSearch.trim()
                   ? t('spindlePanel.clearSearchToReorder', { defaultValue: 'Clear search to reorder' })
@@ -768,6 +775,28 @@ export default function SpindlePanel() {
         </div>
       </div>
 
+      <div
+        className={styles.statusFilters}
+        role="group"
+        aria-label={t('spindlePanel.statusFilter.label')}
+      >
+        {EXTENSION_STATUS_FILTERS.map((filter) => (
+          <button
+            key={filter}
+            type="button"
+            className={clsx(styles.statusFilterBtn, extensionStatusFilter === filter && styles.statusFilterBtnActive)}
+            aria-pressed={extensionStatusFilter === filter}
+            onClick={() => setExtensionStatusFilter(filter)}
+          >
+            {t(`spindlePanel.statusFilter.${filter}`)}
+            <span className={styles.statusFilterCount}>{extensionFilterCounts[filter]}</span>
+          </button>
+        ))}
+        {extensionSortMode === 'manual' && extensionStatusFilter !== 'all' && (
+          <span className={styles.statusFilterHint}>{t('spindlePanel.statusFilter.clearToReorder')}</span>
+        )}
+      </div>
+
       {extensions.length === 0 ? (
         <div className={styles.emptyState}>
           {t('spindlePanel.noExtensions')}
@@ -780,7 +809,21 @@ export default function SpindlePanel() {
         </div>
       ) : sortedExtensions.length === 0 ? (
         <div className={styles.emptyState}>
-          {t('spindlePanel.noSearchResults', { defaultValue: 'No installed extensions match this search.' })}
+          {extensionStatusFilter === 'all'
+            ? t('spindlePanel.noSearchResults', { defaultValue: 'No installed extensions match this search.' })
+            : extensionSearch.trim()
+              ? t('spindlePanel.statusFilter.noMatches')
+              : t(`spindlePanel.statusFilter.${extensionStatusFilter === 'active' ? 'noActive' : 'noInactive'}`)}
+          <button
+            type="button"
+            className={styles.showAllBtn}
+            onClick={() => {
+              setExtensionStatusFilter('all')
+              setExtensionSearch('')
+            }}
+          >
+            {t('spindlePanel.statusFilter.showAll')}
+          </button>
         </div>
       ) : (
         <DndContext

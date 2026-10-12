@@ -1961,6 +1961,17 @@
     "delete": "Supprimer"
   },
   "spindlePanel": {
+    "statusFilter": {
+      "label": "Filtrer les extensions par activité",
+      "all": "Toutes",
+      "active": "Actives",
+      "inactive": "Inactives",
+      "noActive": "Aucune extension active.",
+      "noInactive": "Aucune extension inactive.",
+      "noMatches": "Aucune extension ne correspond à cette recherche et à ce filtre.",
+      "showAll": "Afficher toutes les extensions",
+      "clearToReorder": "Sélectionnez Toutes et effacez la recherche pour réorganiser"
+    },
     "settings": {
       "interceptorTimeout": "Délai d'expiration de l'intercepteur",
       "interceptorTimeoutAria": "Délai d'expiration de l'intercepteur (secondes)",

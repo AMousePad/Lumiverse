@@ -1961,6 +1961,17 @@
     "delete": "刪除"
   },
   "spindlePanel": {
+    "statusFilter": {
+      "label": "依啟用狀態篩選擴充功能",
+      "all": "全部",
+      "active": "已啟用",
+      "inactive": "已停用",
+      "noActive": "沒有已啟用的擴充功能。",
+      "noInactive": "沒有已停用的擴充功能。",
+      "noMatches": "沒有符合此搜尋及篩選條件的擴充功能。",
+      "showAll": "顯示全部擴充功能",
+      "clearToReorder": "選擇「全部」並清除搜尋以調整順序"
+    },
     "settings": {
       "interceptorTimeout": "攔截器超時",
       "interceptorTimeoutAria": "攔截器超時（秒）",

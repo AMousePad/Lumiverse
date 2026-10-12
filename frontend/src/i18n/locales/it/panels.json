@@ -1962,6 +1962,17 @@
     "delete": "Elimina"
   },
   "spindlePanel": {
+    "statusFilter": {
+      "label": "Filtra le estensioni per attività",
+      "all": "Tutte",
+      "active": "Attive",
+      "inactive": "Inattive",
+      "noActive": "Nessuna estensione attiva.",
+      "noInactive": "Nessuna estensione inattiva.",
+      "noMatches": "Nessuna estensione corrisponde alla ricerca e al filtro.",
+      "showAll": "Mostra tutte le estensioni",
+      "clearToReorder": "Seleziona Tutte e cancella la ricerca per riordinare"
+    },
     "settings": {
       "interceptorTimeout": "Timeout interceptore",
       "interceptorTimeoutAria": "Timeout interceptore (secondi)",

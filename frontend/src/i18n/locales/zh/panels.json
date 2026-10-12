@@ -1961,6 +1961,17 @@
     "delete": "删除"
   },
   "spindlePanel": {
+    "statusFilter": {
+      "label": "按启用状态筛选扩展",
+      "all": "全部",
+      "active": "已启用",
+      "inactive": "已禁用",
+      "noActive": "没有已启用的扩展。",
+      "noInactive": "没有已禁用的扩展。",
+      "noMatches": "没有符合此搜索和筛选条件的扩展。",
+      "showAll": "显示全部扩展",
+      "clearToReorder": "选择「全部」并清除搜索以调整顺序"
+    },
     "settings": {
       "interceptorTimeout": "拦截器超时",
       "interceptorTimeoutAria": "拦截器超时（秒）",
