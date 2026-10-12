@@ -26,6 +26,7 @@ on:
       - "scripts/finalize-appimage.sh"
       - "scripts/smoke-test-appimage.sh"
       - "scripts/tauri-finalized.ts"
+      - "scripts/tauri-finalized.test.ts"
       - "scripts/verify-appimage-gstreamer.sh"
       - "scripts/runner.ts"
       - "scripts/runner/**"
@@ -110,6 +111,7 @@ jobs:
           src/services/runner-control-transport.test.ts
           scripts/runner/server-manager.test.ts
           scripts/windows-msvc.test.ts
+          scripts/tauri-finalized.test.ts
           desktop/src-tauri/permissions.test.ts
 
       - uses: dtolnay/rust-toolchain@stable
@@ -152,7 +154,7 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: desktop
         run: |
-          bun test tests/system-audio-coreaudio.test.ts
+          bun test tests/system-audio-coreaudio.test.ts ../scripts/tauri-finalized.test.ts
           bun run build
           cargo test --locked --lib --manifest-path src-tauri/Cargo.toml system_audio::
 
