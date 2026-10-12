@@ -1114,6 +1114,9 @@ export interface ImageGenSettings {
   activeImageGenConnectionId?: string | null
   includeCharacters: boolean
   includePersona: boolean
+  describeCharacterAvatar?: boolean
+  describePersonaAvatar?: boolean
+  activeCaptioningPresetId?: string | null
   promptMode?: 'scene' | 'custom' | 'parsed_custom'
   customPrompt?: string
   customNegativePrompt?: string

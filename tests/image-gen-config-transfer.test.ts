@@ -64,6 +64,9 @@ async function seedExporter() {
     promptParserParameters: { temperature: 1 },
     includeCharacters: true,
     includePersona: false,
+    describeCharacterAvatar: true,
+    describePersonaAvatar: false,
+    activeCaptioningPresetId: null,
     customPrompt: "shared custom prompt",
     sceneChangeThreshold: 3,
     activePromptPresetId: MAIN_PRESET.id,
@@ -100,6 +103,8 @@ describe("image gen config import/export", () => {
     expect(settings.sceneChangeThreshold).toBe(3);
     expect(settings.includeCharacters).toBe(true);
     expect(settings.includePersona).toBe(false);
+    expect(settings.describeCharacterAvatar).toBe(true);
+    expect(settings.describePersonaAvatar).toBe(false);
     // Active preset reference travels because the preset itself is included.
     expect(settings.activePromptPresetId).toBe(MAIN_PRESET.id);
     expect("enabled" in settings).toBe(false);
@@ -166,6 +171,8 @@ describe("image gen config import/export", () => {
     expect(settings.sceneChangeThreshold).toBe(3);
     expect(settings.includeCharacters).toBe(true);
     expect(settings.includePersona).toBe(false);
+    expect(settings.describeCharacterAvatar).toBe(true);
+    expect(settings.describePersonaAvatar).toBe(false);
     expect(settings.activePromptPresetId).toBe(MAIN_PRESET.id);
     // The receiver's enabled state and parser setup are never touched.
     expect(settings.enabled).toBe(false);
