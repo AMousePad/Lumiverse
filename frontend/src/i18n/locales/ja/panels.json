@@ -1962,12 +1962,14 @@
   },
   "spindlePanel": {
     "statusFilter": {
-      "label": "拡張機能を有効状態で絞り込む",
+      "label": "インストール済み拡張機能を絞り込む",
       "all": "すべて",
       "active": "有効",
       "inactive": "無効",
+      "updatable": "更新",
       "noActive": "有効な拡張機能はありません。",
       "noInactive": "無効な拡張機能はありません。",
+      "noUpdatable": "更新可能な拡張機能はありません。",
       "noMatches": "検索条件とフィルターに一致する拡張機能はありません。",
       "showAll": "すべての拡張機能を表示",
       "clearToReorder": "並べ替えるには「すべて」を選択して検索をクリアしてください"

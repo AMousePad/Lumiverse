@@ -1963,12 +1963,14 @@
   },
   "spindlePanel": {
     "statusFilter": {
-      "label": "Filtra le estensioni per attività",
+      "label": "Filtra le estensioni installate",
       "all": "Tutte",
       "active": "Attive",
       "inactive": "Inattive",
+      "updatable": "Aggiornamenti",
       "noActive": "Nessuna estensione attiva.",
       "noInactive": "Nessuna estensione inattiva.",
+      "noUpdatable": "Nessun aggiornamento delle estensioni disponibile.",
       "noMatches": "Nessuna estensione corrisponde alla ricerca e al filtro.",
       "showAll": "Mostra tutte le estensioni",
       "clearToReorder": "Seleziona Tutte e cancella la ricerca per riordinare"

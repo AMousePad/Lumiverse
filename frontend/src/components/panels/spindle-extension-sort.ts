@@ -2,7 +2,7 @@ import type { ExtensionInfo } from 'lumiverse-spindle-types'
 
 export type ExtensionSortMode = 'manual' | 'installed' | 'updated' | 'name-asc' | 'name-desc'
 
-export const EXTENSION_STATUS_FILTERS = ['all', 'active', 'inactive'] as const
+export const EXTENSION_STATUS_FILTERS = ['all', 'active', 'inactive', 'updatable'] as const
 export type ExtensionStatusFilter = typeof EXTENSION_STATUS_FILTERS[number]
 
 export const EXTENSION_SORT_OPTIONS: ReadonlyArray<{ value: ExtensionSortMode; labelKey: string }> = [
@@ -49,17 +49,19 @@ export function reconcileExtensionOrder(extensions: readonly ExtensionInfo[], pe
   return reconciled
 }
 
-/** Search visible metadata and filter by the same enabled state used by the toggle. */
+/** Search visible metadata and filter by enabled state or detected updates. */
 export function filterExtensions(
   extensions: readonly ExtensionInfo[],
   query: string,
   statusFilter: ExtensionStatusFilter = 'all',
+  updatableExtensionIds: ReadonlySet<string> = new Set(),
 ): ExtensionInfo[] {
   const needle = normalized(query)
 
   return extensions.filter((extension) => {
     if (statusFilter === 'active' && !extension.enabled) return false
     if (statusFilter === 'inactive' && extension.enabled) return false
+    if (statusFilter === 'updatable' && !updatableExtensionIds.has(extension.id)) return false
     if (!needle) return true
 
     const metadata = (extension.metadata as Record<string, unknown> | null) ?? {}

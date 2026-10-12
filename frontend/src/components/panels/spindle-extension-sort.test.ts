@@ -94,3 +94,22 @@ test('extensions move between activity filters after their enabled state changes
   expect(filterExtensions(toggled, '', 'active').map((item) => item.id)).toEqual(['errored', 'frontend'])
   expect(filterExtensions(toggled, '', 'inactive').map((item) => item.id)).toEqual(['running', 'disabled'])
 })
+
+test('updatable filters follow detected update ids for both active and inactive extensions', () => {
+  const updates = new Set(['running', 'disabled', 'uninstalled'])
+  expect(filterExtensions(activityExtensions, '', 'updatable', updates).map((item) => item.id))
+    .toEqual(['running', 'disabled'])
+  expect(filterExtensions(activityExtensions, '', 'updatable')).toEqual([])
+  expect(filterExtensions(activityExtensions, '', 'active', updates).map((item) => item.id))
+    .toEqual(['running', 'errored', 'frontend'])
+})
+
+test('updatable filters combine with search and preserve manual ordering without modifying installed extensions', () => {
+  const updates = new Set(['running', 'disabled'])
+  expect(filterExtensions(activityExtensions, ' TOOLKIT ', 'updatable', updates).map((item) => item.id))
+    .toEqual(['running'])
+  expect(filterExtensions(activityExtensions, 'World Info', 'updatable', updates)).toEqual([])
+  expect(sortExtensions(filterExtensions(activityExtensions, '  ', 'updatable', updates), 'manual', ['disabled', 'running'])
+    .map((item) => item.id)).toEqual(['disabled', 'running'])
+  expect(activityExtensions.map((item) => item.id)).toEqual(['running', 'disabled', 'errored', 'frontend'])
+})

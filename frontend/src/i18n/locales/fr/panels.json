@@ -1962,12 +1962,14 @@
   },
   "spindlePanel": {
     "statusFilter": {
-      "label": "Filtrer les extensions par activité",
+      "label": "Filtrer les extensions installées",
       "all": "Toutes",
       "active": "Actives",
       "inactive": "Inactives",
+      "updatable": "Mises à jour",
       "noActive": "Aucune extension active.",
       "noInactive": "Aucune extension inactive.",
+      "noUpdatable": "Aucune mise à jour d’extension disponible.",
       "noMatches": "Aucune extension ne correspond à cette recherche et à ce filtre.",
       "showAll": "Afficher toutes les extensions",
       "clearToReorder": "Sélectionnez Toutes et effacez la recherche pour réorganiser"

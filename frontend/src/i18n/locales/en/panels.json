@@ -2230,12 +2230,14 @@
   },
   "spindlePanel": {
     "statusFilter": {
-      "label": "Filter extensions by activity",
+      "label": "Filter installed extensions",
       "all": "All",
       "active": "Active",
       "inactive": "Inactive",
+      "updatable": "Updates",
       "noActive": "No active extensions.",
       "noInactive": "No inactive extensions.",
+      "noUpdatable": "No extension updates available.",
       "noMatches": "No extensions match this search and filter.",
       "showAll": "Show all extensions",
       "clearToReorder": "Select All and clear search to reorder"

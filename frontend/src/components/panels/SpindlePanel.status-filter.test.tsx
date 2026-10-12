@@ -6,6 +6,7 @@ import { create } from 'zustand'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import type { ExtensionInfo } from 'lumiverse-spindle-types'
+import type { ExtensionUpdateInfo } from '@/types/spindle-updates'
 import panels from '../../i18n/locales/en/panels.json'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -38,16 +39,23 @@ const store = create(() => ({
   extensions: fixtures,
   spindlePrivileged: true,
   user: null,
-  extensionUpdates: [],
+  extensionUpdates: [] as ExtensionUpdateInfo[],
   spindleSettings: { extensionUpdateToastDisabled: {} },
   extensionOperationStatus: null,
   bulkUpdateStatus: null,
   loadExtensions: async () => {},
   enableExtension: async (id: string) => toggle(id, true),
   disableExtension: async (id: string) => toggle(id, false),
+  updateExtension: async (id: string) => {
+    store.setState(state => ({ extensionUpdates: state.extensionUpdates.filter(update => update.extensionId !== id) }))
+  },
+  setExtensionOperationStatus: () => {},
 }))
 function toggle(id: string, enabled: boolean) {
   store.setState(state => ({ extensions: state.extensions.map(extension => extension.id === id ? { ...extension, enabled } : extension) }))
+}
+function update(extensionId: string): ExtensionUpdateInfo {
+  return { extensionId, identifier: extensionId, name: extensionId, currentVersion: '1.0.0', branch: 'main', localCommit: 'old', remoteCommit: 'new' }
 }
 mock.module('@/store', () => ({ useStore: store }))
 mock.module('@/lib/spindle/loader', () => ({
@@ -74,7 +82,7 @@ afterEach(async () => {
   root = undefined
   container?.remove()
   dom.window.localStorage.clear()
-  store.setState({ extensions: fixtures })
+  store.setState({ extensions: fixtures, extensionUpdates: [] })
 })
 async function renderPanel() {
   dom.window.localStorage.setItem('lumiverse:spindle:extension-panel-preferences', JSON.stringify({ sortMode: 'manual', viewMode: 'list', manualOrder: ['active', 'inactive'] }))
@@ -84,7 +92,7 @@ async function renderPanel() {
   await act(async () => root!.render(<I18nextProvider i18n={i18n}><SpindlePanel /></I18nextProvider>))
 }
 function filterButton(filter: string) {
-  return [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Filter extensions by activity"] button')]
+  return [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Filter installed extensions"] button')]
     .find(button => button.textContent?.startsWith(filter))!
 }
 async function click(button: HTMLButtonElement) {
@@ -140,4 +148,33 @@ test('search combines with activity in card view and Show all clears both contro
   expect(filterButton('All').getAttribute('aria-pressed')).toBe('true')
   expect(container.textContent).toContain('Active Toolkit')
   expect(container.textContent).toContain('Inactive Realm')
+})
+
+test('Updates includes enabled and disabled extensions and ignores stale or repeated update notices', async () => {
+  store.setState({ extensionUpdates: [update('active'), update('inactive'), update('uninstalled'), update('active')] })
+  await renderPanel()
+  expect(filterButton('Updates').textContent).toBe('Updates2')
+  await click(filterButton('Updates'))
+  expect(filterButton('Updates').getAttribute('aria-pressed')).toBe('true')
+  expect(container.textContent).toContain('Active Toolkit')
+  expect(container.textContent).toContain('Inactive Realm')
+  expect(container.querySelectorAll('[aria-label^="Drag "]')).toHaveLength(0)
+  await click(filterButton('All'))
+  expect(container.querySelectorAll('[aria-label^="Drag "]')).toHaveLength(2)
+})
+
+test('Updates responds to update-check results and clears after the last update completes', async () => {
+  await renderPanel()
+  await click(filterButton('Updates'))
+  expect(container.textContent).toContain('No extension updates available.')
+  await act(async () => store.setState({ extensionUpdates: [update('active')] }))
+  expect(filterButton('Updates').textContent).toBe('Updates1')
+  expect(container.textContent).toContain('Active Toolkit')
+  expect(container.textContent).not.toContain('Inactive Realm')
+  await click(container.querySelector<HTMLButtonElement>('[title="Card view"]')!)
+  const updateButton = [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === 'Update')!
+  await click(updateButton)
+  expect(filterButton('Updates').textContent).toBe('Updates0')
+  expect(container.textContent).toContain('No extension updates available.')
+  expect(filterButton('Updates').getAttribute('aria-pressed')).toBe('true')
 })

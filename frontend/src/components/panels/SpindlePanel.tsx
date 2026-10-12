@@ -95,6 +95,12 @@ const SORT_LABEL_FALLBACKS: Record<ExtensionSortMode, string> = {
   'name-desc': 'Name Z–A',
 }
 
+const EMPTY_FILTER_MESSAGE_KEYS: Record<Exclude<ExtensionStatusFilter, 'all'>, string> = {
+  active: 'noActive',
+  inactive: 'noInactive',
+  updatable: 'noUpdatable',
+}
+
 function readPanelPreferences(): ExtensionPanelPreferences {
   if (typeof window === 'undefined') return DEFAULT_PANEL_PREFERENCES
   try {
@@ -508,13 +514,18 @@ export default function SpindlePanel() {
     return isPrivileged || (scope === 'user' && !!user?.id && installedBy === user.id)
   })
   const manageableCount = manageableExtensions.length
+  const updatableExtensionIds = useMemo(
+    () => new Set(extensionUpdates.map((update) => update.extensionId)),
+    [extensionUpdates],
+  )
   const extensionFilterCounts = useMemo(() => {
     const active = extensions.filter((extension) => extension.enabled).length
-    return { all: extensions.length, active, inactive: extensions.length - active }
-  }, [extensions])
+    const updatable = extensions.filter((extension) => updatableExtensionIds.has(extension.id)).length
+    return { all: extensions.length, active, inactive: extensions.length - active, updatable }
+  }, [extensions, updatableExtensionIds])
   const filteredExtensions = useMemo(
-    () => filterExtensions(extensions, extensionSearch, extensionStatusFilter),
-    [extensions, extensionSearch, extensionStatusFilter],
+    () => filterExtensions(extensions, extensionSearch, extensionStatusFilter, updatableExtensionIds),
+    [extensions, extensionSearch, extensionStatusFilter, updatableExtensionIds],
   )
   const sortedExtensions = useMemo(
     () => sortExtensions(filteredExtensions, extensionSortMode, manualExtensionOrder),
@@ -524,10 +535,6 @@ export default function SpindlePanel() {
     value: option.value,
     label: t(`spindlePanel.sort.${option.labelKey}`, { defaultValue: SORT_LABEL_FALLBACKS[option.value] }),
   }))
-  const extensionUpdatesById = useMemo(
-    () => new Map(extensionUpdates.map((update) => [update.extensionId, update])),
-    [extensionUpdates],
-  )
 
   const bulkUpdating = !!bulkUpdateStatus && !bulkUpdateStatus.done
   const bulkProcessed = bulkUpdateStatus
@@ -813,7 +820,7 @@ export default function SpindlePanel() {
             ? t('spindlePanel.noSearchResults', { defaultValue: 'No installed extensions match this search.' })
             : extensionSearch.trim()
               ? t('spindlePanel.statusFilter.noMatches')
-              : t(`spindlePanel.statusFilter.${extensionStatusFilter === 'active' ? 'noActive' : 'noInactive'}`)}
+              : t(`spindlePanel.statusFilter.${EMPTY_FILTER_MESSAGE_KEYS[extensionStatusFilter]}`)}
           <button
             type="button"
             className={styles.showAllBtn}
@@ -843,7 +850,7 @@ export default function SpindlePanel() {
                 const isNonDefaultBranch = extBranch && extBranch !== 'main' && extBranch !== 'master'
                 const canManage = isPrivileged || (installScope === 'user' && !!user?.id && installedBy === user.id)
                 const scopeLabel = installScope === 'user' ? t('spindlePanel.personal') : t('spindlePanel.operator')
-                const hasUpdate = extensionUpdatesById.has(ext.id)
+                const hasUpdate = updatableExtensionIds.has(ext.id)
                 const updateToastsEnabled = spindleSettings.extensionUpdateToastDisabled[ext.identifier] !== true
                 const updateAlertLabel = updateToastsEnabled
                   ? t('spindlePanel.updateAlertsToastAndBadge')
