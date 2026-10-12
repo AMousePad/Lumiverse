@@ -514,6 +514,8 @@ export default function SpindlePanel() {
     return isPrivileged || (scope === 'user' && !!user?.id && installedBy === user.id)
   })
   const manageableCount = manageableExtensions.length
+  // The existing monitor checks enabled extensions and clears notices on disable.
+  // Updates reflects its detected snapshot, not every extension that could be updated.
   const updatableExtensionIds = useMemo(
     () => new Set(extensionUpdates.map((update) => update.extensionId)),
     [extensionUpdates],
@@ -795,7 +797,7 @@ export default function SpindlePanel() {
             aria-pressed={extensionStatusFilter === filter}
             onClick={() => setExtensionStatusFilter(filter)}
           >
-            {t(`spindlePanel.statusFilter.${filter}`)}
+            {t(`spindlePanel.statusFilter.${filter}`)}{' '}
             <span className={styles.statusFilterCount}>{extensionFilterCounts[filter]}</span>
           </button>
         ))}
