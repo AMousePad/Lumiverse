@@ -24,6 +24,7 @@ import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useIsMobile from '@/hooks/useIsMobile'
+import { resolveChatWallpaper, resolveGlobalWallpaper } from '@/lib/wallpaper'
 import {
   clampCustomCSSDockSize,
   CUSTOM_CSS_DOCK_BREAKPOINT,
@@ -126,7 +127,8 @@ function Application() {
   const wallpaper = useStore((s) => s.wallpaper)
   const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
   const sceneBackground = useStore((s) => s.sceneBackground)
-  const globalWallpaperHidden = !!activeChatWallpaper?.image_id || !!sceneBackground
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const globalWallpaperHidden = !!resolveChatWallpaper(activeChatWallpaper, activeChatMetadata, isMobile)?.image_id || !!sceneBackground
   const editingCharacterId = useStore((s) => s.editingCharacterId)
   const floatWidgets = useStore((s) => s.floatWidgets)
   const extensions = useStore((s) => s.extensions)
@@ -379,7 +381,7 @@ function Application() {
                   {t(`safeTheme.${safeTheme.source ?? 'url'}`)}
                 </div>
               )}
-              <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
+              <WallpaperLayer wallpaper={resolveGlobalWallpaper(wallpaper, isMobile)} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
               <ErrorBoundary label="App">
                 {/* Mirrors react-router context out to detached drawer-tab roots */}
                 <RouterContextExporter />
