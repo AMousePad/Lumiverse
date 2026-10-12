@@ -252,7 +252,7 @@
     }
   },
   "palette": {
-    "search": "Befehle suchen…",
+    "search": "Befehle suchen\u2026",
     "clear": "Suche löschen",
     "aria": "Befehlspalette",
     "noResults": "Keine Ergebnisse für „{{query}}“",

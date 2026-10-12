@@ -3057,13 +3057,13 @@
     "openChatHint": "Open a chat to set a per-chat wallpaper.",
     "uploadStatus": {
       "title": "{{target}} Upload",
-      "uploading": "Uploading wallpaper…",
-      "waiting": "Upload complete · waiting for backend processing…",
-      "preparing": "Preparing video processing…",
-      "transcodingPrimary": "Encoding {{codec}} playback…",
-      "transcodingVariant": "Encoding {{codec}} playback copy…",
-      "extractingPoster": "Generating preview frame…",
-      "finalizing": "Transcoding complete · saving wallpaper…",
+      "uploading": "Uploading wallpaper\u2026",
+      "waiting": "Upload complete \u00b7 waiting for backend processing\u2026",
+      "preparing": "Preparing video processing\u2026",
+      "transcodingPrimary": "Encoding {{codec}} playback\u2026",
+      "transcodingVariant": "Encoding {{codec}} playback copy\u2026",
+      "extractingPoster": "Generating preview frame\u2026",
+      "finalizing": "Transcoding complete \u00b7 saving wallpaper\u2026",
       "completed": "Wallpaper ready",
       "uploadedPercent": "{{percent}}% uploaded",
       "awaitingBackend": "Handed off to backend",
@@ -3100,7 +3100,7 @@
     "thumbnailAlt": "Wallpaper thumbnail",
     "noPreview": "No preview",
     "untitled": "Untitled wallpaper",
-    "unknownValue": "—"
+    "unknownValue": "\u2014"
   },
   "personaToolbar": {
     "searchPersonas": "Search personas...",

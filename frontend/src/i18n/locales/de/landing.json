@@ -59,14 +59,14 @@
   "branchFailed": "Chat konnte nicht verzweigt werden",
   "tagline": "Setze deine Geschichte fort",
   "tempChat": "Temporärer Chat",
-  "tempChatWithProfile": "Temporärer Chat · {{name}}",
-  "tempChatTitle": "Einen Wegwerf-Chat starten — wird beim Zurückkehren zur Startseite gelöscht",
-  "tempChatTitleWithProfile": "{{name}} in einem Wegwerf-Chat ausprobieren — wird beim Zurückkehren zur Startseite gelöscht",
+  "tempChatWithProfile": "Temporärer Chat \u00b7 {{name}}",
+  "tempChatTitle": "Einen Wegwerf-Chat starten \u2014 wird beim Zurückkehren zur Startseite gelöscht",
+  "tempChatTitleWithProfile": "{{name}} in einem Wegwerf-Chat ausprobieren \u2014 wird beim Zurückkehren zur Startseite gelöscht",
   "tempChatMenu": {
     "withPreset": "Mit aktuellem Preset",
     "withPresetHint": "Verwendet Ihr aktives Preset",
     "noPreset": "Kein Preset",
-    "noPresetHint": "Reiner Modelltest — keine Preset-Blöcke oder -Parameter"
+    "noPresetHint": "Reiner Modelltest \u2014 keine Preset-Blöcke oder -Parameter"
   },
   "logOutTitle": "Auf diesem Gerät abmelden",
   "loadFailed": "Chats konnten nicht geladen werden",
