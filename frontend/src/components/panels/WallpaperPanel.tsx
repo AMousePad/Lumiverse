@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ImageIcon, Upload, Trash2, Monitor, MessageSquare } from 'lucide-react'
+import { ImageIcon, Upload, Trash2, Monitor, Smartphone, MessageSquare } from 'lucide-react'
 import { useStore } from '@/store'
 import { imagesApi } from '@/api/images'
 import { chatsApi } from '@/api/chats'
@@ -9,6 +9,7 @@ import { EventType, type WallpaperUploadProgressPayload } from '@/ws/events'
 import { FormField, Select, EditorSection } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
 import { flushSettingsNow } from '@/store/slices/settings'
+import { getChatMobileWallpaper } from '@/lib/wallpaper'
 import type { WallpaperRef } from '@/types/store'
 import WallpaperLibraryModal from './WallpaperLibraryModal'
 import styles from './WallpaperPanel.module.css'
@@ -24,10 +25,11 @@ const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.m4v'])
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'])
 
 type WallpaperUploadPhase = 'uploading' | 'waiting_server' | WallpaperUploadProgressPayload['phase']
+type WallpaperTarget = 'global' | 'mobile' | 'chat' | 'chat-mobile'
 
 interface WallpaperUploadStatus {
   uploadId: string
-  target: 'global' | 'chat'
+  target: WallpaperTarget
   kind: 'image' | 'video'
   phase: WallpaperUploadPhase
   uploadPercent: number
@@ -188,18 +190,31 @@ export default function WallpaperPanel() {
   const [uploadStatus, setUploadStatus] = useState<WallpaperUploadStatus | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const uploadStatusClearTimerRef = useRef<number | null>(null)
-  const [uploadTarget, setUploadTarget] = useState<'global' | 'chat'>('global')
-  const [libraryTarget, setLibraryTarget] = useState<'global' | 'chat' | null>(null)
+  const [uploadTarget, setUploadTarget] = useState<WallpaperTarget>('global')
+  const [libraryTarget, setLibraryTarget] = useState<WallpaperTarget | null>(null)
+  const [mobileEditorOpen, setMobileEditorOpen] = useState(false)
+
+  const [chatMobileEditorOpen, setChatMobileEditorOpen] = useState(false)
+  useEffect(() => {
+    setChatMobileEditorOpen(false)
+    setLibraryTarget(null)
+  }, [activeChatId])
 
   const globalWp = wallpaper.global
+  const mobileWp = wallpaper.mobile
   const chatWp = activeChatWallpaper
+  const chatMobileWp = getChatMobileWallpaper(activeChatMetadata)
+  const chatMobilePreviewUrl = getWallpaperPreviewUrl(chatMobileWp)
   const globalPreviewUrl = getWallpaperPreviewUrl(globalWp)
+  const mobilePreviewUrl = getWallpaperPreviewUrl(mobileWp)
   const chatPreviewUrl = getWallpaperPreviewUrl(chatWp)
   const blurValue = Math.min(Math.max(wallpaper.blur ?? 0, 0), MAX_WALLPAPER_BLUR)
   const uploadStatusTargetLabel = uploadStatus
-    ? uploadStatus.target === 'chat'
+    ? uploadStatus.target === 'chat-mobile'
+      ? t('wallpaperPanel.chatMobileWallpaper')
+      : uploadStatus.target === 'chat'
       ? t('wallpaperPanel.chatWallpaper')
-      : t('wallpaperPanel.globalWallpaper')
+      : uploadStatus.target === 'mobile' ? t('wallpaperPanel.mobileWallpaper') : t('wallpaperPanel.globalWallpaper')
     : null
   const uploadProgressPercent = uploadStatus ? getWallpaperUploadPercent(uploadStatus) : 0
   const uploadStatusMessage = uploadStatus ? getWallpaperUploadMessage(uploadStatus, t) : null
@@ -244,7 +259,7 @@ export default function WallpaperPanel() {
     })
   }, [])
 
-  const handleUpload = async (target: 'global' | 'chat') => {
+  const handleUpload = async (target: WallpaperTarget) => {
     setUploadTarget(target)
     // Opening the native file picker can briefly hide/blur the page. Suppress
     // the next fast resume ping so a large wallpaper upload does not trip a
@@ -253,20 +268,30 @@ export default function WallpaperPanel() {
     fileInputRef.current?.click()
   }
 
-  const applyWallpaper = async (target: 'global' | 'chat', ref: WallpaperRef) => {
+  const updateChatWallpaper = async (target: 'chat' | 'chat-mobile', ref: WallpaperRef | null) => {
+    if (!activeChatId) throw new Error(t('wallpaperPanel.openChatHint'))
+    const key = target === 'chat-mobile' ? 'mobile_wallpaper' : 'wallpaper'
+    const oldImageId = (target === 'chat-mobile' ? chatMobileWp : chatWp)?.image_id
+    await chatsApi.patchMetadata(activeChatId, { [key]: ref })
+    const current = useStore.getState()
+    if (current.activeChatId === activeChatId) {
+      setActiveChatMetadata({ ...current.activeChatMetadata, [key]: ref })
+      if (target === 'chat') setActiveChatWallpaper(ref)
+      if (target === 'chat-mobile' && !ref) setChatMobileEditorOpen(false)
+    }
+    if (oldImageId && oldImageId !== ref?.image_id) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
+  }
+
+  const applyWallpaper = async (target: WallpaperTarget, ref: WallpaperRef) => {
     setError(null)
     try {
-      if (target === 'chat') {
-        if (!activeChatId) throw new Error(t('wallpaperPanel.openChatHint'))
-        const oldImageId = activeChatWallpaper?.image_id
-        await chatsApi.patchMetadata(activeChatId, { wallpaper: ref })
-        setActiveChatWallpaper(ref)
-        if (oldImageId && oldImageId !== ref.image_id) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
+      if (target === 'chat' || target === 'chat-mobile') {
+        await updateChatWallpaper(target, ref)
         return
       }
 
-      const oldImageId = wallpaper.global?.image_id
-      setWallpaper({ global: ref })
+      const oldImageId = wallpaper[target]?.image_id
+      setWallpaper({ [target]: ref })
       await flushSettingsNow()
       if (oldImageId && oldImageId !== ref.image_id) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
     } catch (err: any) {
@@ -352,20 +377,17 @@ export default function WallpaperPanel() {
     }
   }
 
-  const clearGlobal = async () => {
-    const oldImageId = wallpaper.global?.image_id
-    setWallpaper({ global: null })
+  const clearWallpaper = async (target: 'global' | 'mobile') => {
+    const oldImageId = wallpaper[target]?.image_id
+    setWallpaper({ [target]: null })
+    if (target === 'mobile') setMobileEditorOpen(false)
     await flushSettingsNow()
     if (oldImageId) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
   }
 
-  const clearChat = async () => {
-    if (!activeChatId) return
-    const oldImageId = activeChatWallpaper?.image_id
+  const clearChat = async (target: 'chat' | 'chat-mobile') => {
     try {
-      await chatsApi.patchMetadata(activeChatId, { wallpaper: null })
-      setActiveChatWallpaper(null)
-      if (oldImageId) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
+      await updateChatWallpaper(target, null)
     } catch (err: any) {
       setError(err?.message || t('wallpaperPanel.clearChatFailed'))
     }
@@ -375,11 +397,20 @@ export default function WallpaperPanel() {
     if (wallpaper.global?.image_id === imageId) {
       setWallpaper({ global: null })
     }
+    if (wallpaper.mobile?.image_id === imageId) {
+      setWallpaper({ mobile: null })
+    }
 
+    const cleared: Record<string, null> = {}
     if (activeChatWallpaper?.image_id === imageId) {
       setActiveChatWallpaper(null)
-      setActiveChatMetadata(activeChatMetadata ? { ...activeChatMetadata, wallpaper: null } : { wallpaper: null })
+      cleared.wallpaper = null
     }
+    if (chatMobileWp?.image_id === imageId) {
+      cleared.mobile_wallpaper = null
+      setChatMobileEditorOpen(false)
+    }
+    if (Object.keys(cleared).length) setActiveChatMetadata({ ...activeChatMetadata, ...cleared })
   }
 
   return (
@@ -433,6 +464,12 @@ export default function WallpaperPanel() {
           <Upload size={14} />
           <span>{uploading && uploadTarget === 'global' ? t('wallpaperPanel.uploading') : t('wallpaperPanel.setGlobal')}</span>
         </button>
+        {!mobileWp && !mobileEditorOpen && (
+          <button type="button" className={styles.secondaryBtn} onClick={() => setMobileEditorOpen(true)} disabled={uploading}>
+            <Smartphone size={14} />
+            <span>{t('wallpaperPanel.addMobileWallpaper')}</span>
+          </button>
+        )}
         <button
           type="button"
           className={styles.secondaryBtn}
@@ -442,7 +479,7 @@ export default function WallpaperPanel() {
           <span>{t('wallpaperPanel.browseLibrary')}</span>
         </button>
         {globalWp && (
-          <button type="button" className={styles.dangerBtn} onClick={clearGlobal}>
+          <button type="button" className={styles.dangerBtn} onClick={() => clearWallpaper('global')}>
             <Trash2 size={14} />
             <span>{t('wallpaperPanel.clear')}</span>
           </button>
@@ -450,6 +487,50 @@ export default function WallpaperPanel() {
       </div>
 
       <hr className={styles.divider} />
+
+      {/* Mobile wallpaper section */}
+      {(mobileWp || mobileEditorOpen) && (
+        <>
+          <span className={styles.scopeLabel}>{t('wallpaperPanel.mobileWallpaper')}</span>
+          <div className={`${styles.preview} ${styles.mobilePreview}`}>
+            {mobilePreviewUrl ? (
+              <>
+                <img className={styles.previewImg} src={mobilePreviewUrl} alt={t('wallpaperPanel.mobileWallpaperAlt')} />
+                {mobileWp?.type === 'video' && <span className={styles.previewBadge}>{t('wallpaperPanel.video')}</span>}
+              </>
+            ) : (
+              <div className={styles.previewPlaceholder}>
+                <Smartphone size={16} />
+                <span>{t('wallpaperPanel.noMobileWallpaper')}</span>
+              </div>
+            )}
+          </div>
+          <div className={styles.actions}>
+            <button type="button" className={styles.primaryBtn} onClick={() => handleUpload('mobile')} disabled={uploading}>
+              <Upload size={14} />
+              <span>{uploading && uploadTarget === 'mobile' ? t('wallpaperPanel.uploading') : t('wallpaperPanel.setMobile')}</span>
+            </button>
+            <button type="button" className={styles.secondaryBtn} onClick={() => setLibraryTarget('mobile')}>
+              <ImageIcon size={14} />
+              <span>{t('wallpaperPanel.browseLibrary')}</span>
+            </button>
+            {mobileWp && (
+              <button type="button" className={styles.dangerBtn} onClick={() => clearWallpaper('mobile')}>
+                <Trash2 size={14} />
+                <span>{t('wallpaperPanel.clear')}</span>
+              </button>
+            )}
+            {!mobileWp && (
+              <button type="button" className={styles.secondaryBtn} onClick={() => setMobileEditorOpen(false)} disabled={uploading}>
+                <span>{t('wallpaperPanel.cancelMobileWallpaper')}</span>
+              </button>
+            )}
+          </div>
+          <div className={styles.info}>{t('wallpaperPanel.mobileWallpaperHint')}</div>
+
+          <hr className={styles.divider} />
+        </>
+      )}
 
       {/* Per-chat wallpaper section */}
       <span className={styles.scopeLabel}>{t('wallpaperPanel.chatWallpaper')}</span>
@@ -478,6 +559,12 @@ export default function WallpaperPanel() {
               <Upload size={14} />
               <span>{uploading && uploadTarget === 'chat' ? t('wallpaperPanel.uploading') : t('wallpaperPanel.setForChat')}</span>
             </button>
+            {!chatMobileWp && !chatMobileEditorOpen && (
+              <button type="button" className={styles.secondaryBtn} onClick={() => setChatMobileEditorOpen(true)} disabled={uploading}>
+                <Smartphone size={14} />
+                <span>{t('wallpaperPanel.addMobileWallpaper')}</span>
+              </button>
+            )}
             <button
               type="button"
               className={styles.secondaryBtn}
@@ -487,7 +574,7 @@ export default function WallpaperPanel() {
               <span>{t('wallpaperPanel.browseLibrary')}</span>
             </button>
             {chatWp && (
-              <button type="button" className={styles.dangerBtn} onClick={clearChat}>
+              <button type="button" className={styles.dangerBtn} onClick={() => clearChat('chat')}>
                 <Trash2 size={14} />
                 <span>{t('wallpaperPanel.clear')}</span>
               </button>
@@ -496,6 +583,46 @@ export default function WallpaperPanel() {
           <div className={styles.info}>
             {t('wallpaperPanel.chatOverrideHint')}
           </div>
+          {(chatMobileWp || chatMobileEditorOpen) && (
+            <>
+              <hr className={styles.divider} />
+              <span className={styles.scopeLabel}>{t('wallpaperPanel.chatMobileWallpaper')}</span>
+              <div className={`${styles.preview} ${styles.mobilePreview}`}>
+                {chatMobilePreviewUrl ? (
+                  <>
+                    <img className={styles.previewImg} src={chatMobilePreviewUrl} alt={t('wallpaperPanel.chatMobileWallpaperAlt')} />
+                    {chatMobileWp?.type === 'video' && <span className={styles.previewBadge}>{t('wallpaperPanel.video')}</span>}
+                  </>
+                ) : (
+                  <div className={styles.previewPlaceholder}>
+                    <Smartphone size={16} />
+                    <span>{t('wallpaperPanel.noChatMobileWallpaper')}</span>
+                  </div>
+                )}
+              </div>
+              <div className={styles.actions}>
+                <button type="button" className={styles.primaryBtn} onClick={() => handleUpload('chat-mobile')} disabled={uploading}>
+                  <Upload size={14} />
+                  <span>{uploading && uploadTarget === 'chat-mobile' ? t('wallpaperPanel.uploading') : t('wallpaperPanel.setMobile')}</span>
+                </button>
+                <button type="button" className={styles.secondaryBtn} onClick={() => setLibraryTarget('chat-mobile')}>
+                  <ImageIcon size={14} />
+                  <span>{t('wallpaperPanel.browseLibrary')}</span>
+                </button>
+                {chatMobileWp ? (
+                  <button type="button" className={styles.dangerBtn} onClick={() => clearChat('chat-mobile')}>
+                    <Trash2 size={14} />
+                    <span>{t('wallpaperPanel.clear')}</span>
+                  </button>
+                ) : (
+                  <button type="button" className={styles.secondaryBtn} onClick={() => setChatMobileEditorOpen(false)} disabled={uploading}>
+                    <span>{t('wallpaperPanel.cancelMobileWallpaper')}</span>
+                  </button>
+                )}
+              </div>
+              <div className={styles.info}>{t('wallpaperPanel.chatMobileWallpaperHint')}</div>
+            </>
+          )}
         </>
       ) : (
         <div className={styles.info}>
@@ -569,7 +696,7 @@ export default function WallpaperPanel() {
       <WallpaperLibraryModal
         isOpen={libraryTarget !== null}
         target={libraryTarget ?? 'global'}
-        currentImageId={libraryTarget === 'chat' ? chatWp?.image_id ?? null : globalWp?.image_id ?? null}
+        currentImageId={libraryTarget === 'chat-mobile' ? chatMobileWp?.image_id ?? null : libraryTarget === 'chat' ? chatWp?.image_id ?? null : libraryTarget === 'mobile' ? mobileWp?.image_id ?? null : globalWp?.image_id ?? null}
         onClose={() => setLibraryTarget(null)}
         onSelect={(ref) => applyWallpaper(libraryTarget ?? 'global', ref)}
         onDelete={handleLibraryDelete}
