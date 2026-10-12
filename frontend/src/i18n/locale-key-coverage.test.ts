@@ -106,4 +106,25 @@ describe('i18n locale key coverage', () => {
       expect(panels.multiplayerPanel, `${lng} multiplayerPanel`).toBeTruthy()
     }
   })
+
+  test('wallpaper controls and library have complete keys and interpolation variables in every locale', () => {
+    const english = loadJson(join(EN_DIR, 'panels.json')) as Record<string, unknown>
+    for (const lng of localeDirs()) {
+      const panels = loadJson(join(LOCALES_ROOT, lng, 'panels.json')) as Record<string, unknown>
+      for (const scope of ['wallpaperPanel', 'wallpaperLibrary']) {
+        const expected = english[scope]
+        const actual = panels[scope]
+        const keys = leafKeyPaths(expected).sort()
+        expect(leafKeyPaths(actual).sort(), `${lng}.${scope} keys`).toEqual(keys)
+        for (const key of keys) {
+          const valueAt = (value: unknown) => key.split('.').reduce((node: any, part) => node?.[part], value)
+          const translation = valueAt(actual)
+          expect(typeof translation, `${lng}.${scope}.${key}`).toBe('string')
+          expect(translation.trim(), `${lng}.${scope}.${key} is empty`).not.toBe('')
+          const variables = (value: string) => [...value.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)].map(match => match[1]).sort()
+          expect(variables(translation), `${lng}.${scope}.${key} variables`).toEqual(variables(valueAt(expected)))
+        }
+      }
+    }
+  })
 })

@@ -773,6 +773,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   toastPosition: 'bottom-right',
   wallpaper: {
     global: null,
+    mobile: null,
     opacity: 0.3,
     fit: 'cover',
     blur: 0,
