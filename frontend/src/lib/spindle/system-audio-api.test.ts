@@ -167,7 +167,7 @@ describe('start: authorisation and consent', () => {
     // ...and the slot is free again.
     expect(() => t.api.start({ onFrame() {} })).not.toThrow()
   })
-  test('asks on every start, never remembering an earlier approval', async () => {
+  test('checks host consent on every start', async () => {
     const t = setup()
     const first = t.api.start({ onFrame() {} })
     await first.ready

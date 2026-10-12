@@ -40,7 +40,7 @@ button.addEventListener('click', () => {
 stopButton.addEventListener('click', () => session?.stop());
 ```
 
-Call `start()` directly from a user gesture such as a button handler.
+For the first start, call `start()` from a user gesture such as a button handler. If the user explicitly remembers approval in Lumiverse, later starts can reuse it, including after an extension or page reload. An extension may remember whether its visualiser should run, but Lumiverse owns the consent decision.
 
 ## API
 
@@ -65,9 +65,11 @@ Every number in a frame is between 0 and 1. `frequencies` holds `bands` log-spac
 
 ## What the user sees
 
-- **A prompt on every start.** `start()` shows the host's own confirmation, titled with your extension's name. Its wording comes from the host, not from you, and there is no remembered approval: every `start()` asks again. A declined prompt starts nothing.
+- **Explicit consent.** By default, `start()` shows the host's own confirmation, titled with your extension's name. The user can select **Remember my approval for this extension on this device**, unchecked by default. Approval is local to the signed-in account and installed extension on this device; it is not shared with another account, device or reinstallation. A declined or cancelled prompt saves nothing. The user can revoke approval in the extension's permissions area, which also stops an active session. Revoking `system_audio` or uninstalling the extension clears its remembered approval.
 - **An indicator for as long as it runs.** The host draws a persistent "*name* is analysing system audio" pill with a **Stop** button outside any extension's DOM, so an extension can neither hide nor restyle it. Pressing Stop ends the session immediately (`onEnd('user-stopped')`). The user can minimise the pill to a small ♪ chip when it is in the way; the chip is never removed while a session runs, Stop is one click from it, and each new session starts expanded. Only the user's own click on the host's component can do this, never an extension.
-- **Nothing is recorded or sent.** The host passes you the analysis above, rebinned and rate-limited. Nothing is stored.
+- **Analysis only.** Lumiverse passes spectrum and loudness to the extension, rebinned and rate-limited. It does not record or transmit audio samples.
+
+Pressing the host indicator's **Stop** pauses future starts for that extension, even if approval was remembered. Calls to `start()` then reject with `NotAllowedError` without opening another prompt or a device. This pause survives reloads. The user must select **Allow requests again** in the extension's permissions area before a new start can proceed; that control permits requests and does not start capture itself. An extension's own `session.stop()` does not pause future starts. Remembered approval does not bypass the `system_audio` permission, the desktop tray switch, or OS permissions.
 
 ## Limits and cleanup
 

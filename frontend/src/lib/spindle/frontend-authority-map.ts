@@ -134,7 +134,7 @@ const DOMAIN_ROWS: readonly AuthorityRow[] = [
   free({ surface: 'ctx_member', id: 'ctx.systemAudio.isAvailable', source: 'systemAudio.availability', ctxLeaf: 'ctx.systemAudio.isAvailable', freeBecause: 'pure-host-action: reports whether a native adapter exists and is enabled, without opening it or prompting' }),
   gated('system_audio', {
     surface: 'ctx_member', id: 'ctx.systemAudio.start', source: 'systemAudio.start', ctxLeaf: 'ctx.systemAudio.start',
-    gatedBecause: 'Rule-B clause (c): starts host-managed analysis of the audio the device is playing, behind a host-owned prompt on every start',
+    gatedBecause: 'Rule-B clause (c): starts host-managed analysis of the audio the device is playing, with host-owned consent and an active capture indicator',
   }),
   ...(['prepare', 'start', 'transcribe'] as const).map((method) => gated('media', {
     surface: 'ctx_member' as const, id: `ctx.stt.${method}`, source: `stt.${method}`, ctxLeaf: `ctx.stt.${method}`,

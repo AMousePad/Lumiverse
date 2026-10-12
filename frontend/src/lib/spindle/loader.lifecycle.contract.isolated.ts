@@ -78,6 +78,7 @@ function getSpindleStore(): StoreApi<SpindleSlice> {
 
 function readStoreState(): TestStoreState {
   return {
+    user: { id: 'lifecycle-test-user' },
     activeProfileId: null,
     messages: [],
     profiles: [],
@@ -1553,9 +1554,9 @@ test('system audio is capability-gated, asks the user, and ends on revoke and un
       return { stop: () => { stops++ } }
     },
   })
-  const answer = (confirmed: boolean) => {
+  const answer = (confirmed: boolean, checkboxChecked = false) => {
     const request = confirmRequests[confirmRequests.length - 1]
-    window.dispatchEvent(new CustomEvent('spindle:confirm-resolved', { detail: { requestId: request.requestId, confirmed } }))
+    useStoreMock.getState().closeSpindleConfirm(request.requestId, confirmed, checkboxChecked)
   }
   try {
     mockedGrantedPermissions = ['system_audio']
@@ -1571,7 +1572,7 @@ test('system audio is capability-gated, asks the user, and ends on revoke and un
     expect(confirmRequests[0].extensionId).toBe(id)
     expect(confirmRequests[0].title).toBe('shared:spindle.systemAudio.consentTitle')
     expect(confirmRequests[0].message).toBe('shared:spindle.systemAudio.consentMessage')
-    answer(false)
+    answer(false, true)
     await expect(declined.ready).rejects.toMatchObject({ name: 'NotAllowedError' })
     expect(handlers).toBeNull()
     expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
@@ -1596,10 +1597,15 @@ test('system audio is capability-gated, asks the user, and ends on revoke and un
     expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
 
     // Revoking the permission ends a running session and blocks the next one.
+    const { systemAudioConsent } = await import('./system-audio-consent')
+    const blocked = ctx.systemAudio.start({ onFrame() {} })
+    await expect(blocked.ready).rejects.toMatchObject({ name: 'NotAllowedError' })
+    systemAudioConsent.resume('lifecycle-test-user', id)
     const next = ctx.systemAudio.start({ onFrame() {}, onEnd: (r: string) => ended.push(r) })
     await Promise.resolve()
-    answer(true)
+    answer(true, true)
     await next.ready
+    expect(systemAudioConsent.read('lifecycle-test-user', id).remembered).toBe(true)
     for (const handler of loaderWsHandlers.get('SPINDLE_PERMISSION_CHANGED') ?? []) {
       handler({ extensionId: id, allGranted: [] })
     }
@@ -1607,6 +1613,7 @@ test('system audio is capability-gated, asks the user, and ends on revoke and un
     expect(stops).toBe(2)
     expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
     expect(() => ctx.systemAudio.start({ onFrame() {} })).toThrow('PERMISSION_DENIED:system_audio')
+    expect(systemAudioConsent.read('lifecycle-test-user', id).remembered).toBe(false)
     expect(ctx.systemAudio.isAvailable()).toEqual({ available: true }) // discovery stays free
 
     // Unloading mid-session releases the device and shows nothing afterwards.
@@ -1615,12 +1622,21 @@ test('system audio is capability-gated, asks the user, and ends on revoke and un
     }
     const last = ctx.systemAudio.start({ onFrame() {} })
     await Promise.resolve()
-    answer(true)
+    answer(true, true)
     await last.ready
     await unloadFrontendExtension(id)
     expect(stops).toBe(3)
     expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
     expect(() => ctx.systemAudio.isAvailable()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+
+    // A remembered approval survives unloading; the new extension generation still owns its own live session.
+    const promptsBeforeReload = confirmRequests.length
+    await loadPlacementBundle(id, manifest, 'export function setup(ctx) { globalThis.__systemAudioContext = ctx }')
+    await globals.__systemAudioContext.systemAudio.start({ onFrame() {} }).ready
+    expect(confirmRequests).toHaveLength(promptsBeforeReload)
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(1)
+    await unloadFrontendExtension(id)
+    expect(stops).toBe(4)
   } finally {
     unregister()
     await unloadFrontendExtension(id)

@@ -19,8 +19,8 @@ export interface FrontendSystemAudioDependencies {
   onTeardown(handler: () => void): () => void
   getSource(): SystemAudioSource | null
   /**
-   * Host-owned prompt, worded by the host (never by the extension). Resolves true only when the user approves;
-   * resolves false when they decline or when `signal` aborts.
+   * Host-owned consent check. Resolves true for an explicit or remembered approval; any prompt is worded by the
+   * host. Resolves false when the user declines, has paused starts, or when `signal` aborts.
    */
   requestConsent(signal: AbortSignal): Promise<boolean>
   /** Host-owned indicator that stays on screen while analysis runs. `stop` ends the session. Returns its remover. */
@@ -89,7 +89,7 @@ interface ActiveSession {
  * `ctx.systemAudio`: a spectrum and levels of what the device is playing, for visualisers and reactive effects.
  *
  * - `isAvailable()` is free and never prompts.
- * - `start()` needs `system_audio`, asks the user on **every** start in a host-owned prompt, shows a host-owned
+ * - `start()` needs `system_audio` and host-owned consent (prompted or explicitly remembered), shows a host-owned
  *   indicator while it runs, and delivers analysis only (rebinned, clamped, rate-limited), never samples.
  * - One session per extension. Revoking the permission, unloading the extension, aborting, the indicator's Stop,
  *   or the source going away all end it at once.
@@ -223,6 +223,10 @@ export function createFrontendSystemAudioAPI(deps: FrontendSystemAudioDependenci
     /** The permission was revoked: end the running session and tell the extension why. */
     revoke() {
       if (current) finish(current, 'revoked')
+    },
+    /** The user stopped analysis: retained approval must not restart it until the host allows requests again. */
+    pause() {
+      if (current) finish(current, 'user-stopped')
     },
     dispose() {
       unsubscribe()

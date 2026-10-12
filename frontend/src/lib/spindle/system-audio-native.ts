@@ -3,13 +3,17 @@ import { useStore } from '@/store'
 import { generateUUID } from '@/lib/uuid'
 import { createFrontendSystemAudioAPI, type FrontendSystemAudioDependencies } from './system-audio-api'
 import { getSystemAudioSource } from './system-audio-source'
+import { systemAudioConsent } from './system-audio-consent'
 
 /**
  * The consent prompt reuses the host's own confirmation dialog, which names the extension in its title. Every word
  * of the body comes from the host's locale files: an extension cannot influence what the user is asked.
  */
-function confirmWithHost(extensionId: string, extensionName: string, signal: AbortSignal): Promise<boolean> {
+function confirmWithHost(userId: string | null, extensionId: string, extensionName: string, signal: AbortSignal, authorize: () => void): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false)
+  const consent = systemAudioConsent.read(userId, extensionId)
+  if (consent.paused) return Promise.resolve(false)
+  if (consent.remembered) return Promise.resolve(true)
   const requestId = generateUUID()
   return new Promise<boolean>((resolve) => {
     let settled = false
@@ -21,7 +25,15 @@ function confirmWithHost(extensionId: string, extensionName: string, signal: Abo
       resolve(confirmed)
     }
     const onResolved = ((event: CustomEvent) => {
-      if (event.detail?.requestId === requestId) done(Boolean(event.detail.confirmed))
+      if (event.detail?.requestId !== requestId) return
+      const approved = Boolean(event.detail.confirmed) && !signal.aborted
+        && (useStore.getState().user?.id ?? null) === userId
+        && !systemAudioConsent.read(userId, extensionId).paused
+      if (approved) {
+        try { authorize() } catch { done(false); return }
+      }
+      if (approved && event.detail.checkboxChecked === true) systemAudioConsent.remember(userId, extensionId)
+      done(approved)
     }) as EventListener
     const onAbort = () => {
       const pending = useStore.getState().pendingConfirm
@@ -39,6 +51,7 @@ function confirmWithHost(extensionId: string, extensionName: string, signal: Abo
       variant: 'warning',
       confirmLabel: i18n.t('shared:spindle.systemAudio.allow'),
       cancelLabel: i18n.t('shared:spindle.systemAudio.notNow'),
+      checkboxLabel: i18n.t('shared:spindle.systemAudio.remember'),
     })
   })
 }
@@ -50,14 +63,51 @@ export function createNativeSystemAudioAPI(
   },
 ) {
   const { extensionId, extensionName, ...rest } = deps
-  return createFrontendSystemAudioAPI({
+  const userId = useStore.getState().user?.id ?? null
+  let unwatchConsent = () => {}
+  let unwatchOwner = () => {}
+  const unwatch = () => { unwatchConsent(); unwatchOwner() }
+  const controller = createFrontendSystemAudioAPI({
     ...rest,
+    assertActive() {
+      rest.assertActive()
+      if ((useStore.getState().user?.id ?? null) !== userId) {
+        throw new Error('SPINDLE_FRONTEND_INACTIVE: system audio belongs to another account')
+      }
+    },
+    onTeardown(handler) {
+      return rest.onTeardown(() => { unwatch(); handler() })
+    },
     getSource: getSystemAudioSource,
-    requestConsent: (signal) => confirmWithHost(extensionId, extensionName, signal),
+    requestConsent: (signal) => confirmWithHost(userId, extensionId, extensionName, signal, () => {
+      rest.assertActive()
+      rest.requirePermission('system_audio', 'ctx.systemAudio.start')
+    }),
     showIndicator(stop) {
       const id = generateUUID()
-      useStore.getState().addSystemAudioSession({ id, extensionId, extensionName, stop })
+      useStore.getState().addSystemAudioSession({
+        id, extensionId, extensionName,
+        stop() {
+          systemAudioConsent.pause(userId, extensionId)
+          stop()
+        },
+      })
       return () => useStore.getState().removeSystemAudioSession(id)
     },
   })
+  unwatchConsent = systemAudioConsent.subscribe(userId, extensionId, (consent, change, previous) => {
+    if (change === 'revoke' || change === 'clear' || (change === 'external' && previous.remembered && !consent.remembered)) controller.revoke()
+    else if (consent.paused) controller.pause()
+  })
+  unwatchOwner = useStore.subscribe((state) => {
+    if ((state.user?.id ?? null) !== userId) { unwatch(); controller.dispose() }
+  })
+  return {
+    ...controller,
+    revoke() {
+      systemAudioConsent.clear(userId, extensionId)
+      controller.revoke()
+    },
+    dispose() { unwatch(); controller.dispose() },
+  }
 }

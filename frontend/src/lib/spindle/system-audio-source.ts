@@ -49,7 +49,7 @@ export interface SystemAudioSource {
   /** Cheap and side-effect free: no prompt, no device access. */
   availability(): SystemAudioAvailability
   /**
-   * Begin capture. The user has already approved this start in the host's own prompt, but a native adapter should
+   * Begin capture. The host has verified consent for this start (prompted or remembered), but a native adapter should
    * apply its own OS-level consent too. Rejects if capture cannot start.
    */
   start(handlers: SystemAudioSourceHandlers, hints?: SystemAudioSourceStartHints): Promise<SystemAudioSourceHandle>

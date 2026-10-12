@@ -1240,6 +1240,8 @@ export interface PendingConfirmRequest {
   variant: 'info' | 'warning' | 'danger' | 'success'
   confirmLabel: string
   cancelLabel: string
+  /** Optional host-provided checkbox; extension confirmation protocol remains unchanged. */
+  checkboxLabel?: string
 }
 
 /** An extension analysing the device's audio right now. The host shows an indicator for each, with a Stop button. */
@@ -1349,7 +1351,7 @@ export interface SpindleSlice {
   closeSpindleModal: (requestId: string, dismissedBy: 'user' | 'extension' | 'cleanup') => void
   dismissSpindleModal: (requestId: string) => void
   openSpindleConfirm: (request: PendingConfirmRequest) => void
-  closeSpindleConfirm: (requestId: string, confirmed: boolean) => void
+  closeSpindleConfirm: (requestId: string, confirmed: boolean, checkboxChecked?: boolean) => void
   openInputPrompt: (request: PendingInputPromptRequest) => void
   closeInputPrompt: (requestId: string, value: string | null) => void
   openContextMenu: (request: PendingContextMenuRequest) => void

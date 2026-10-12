@@ -42,6 +42,7 @@ import { spindleApi } from '@/api/spindle'
 import type { ExtensionInfo, SpindlePermission } from 'lumiverse-spindle-types'
 import SpindleUIControlPanel from '@/components/spindle/SpindleUIControlPanel'
 import SpindleSettings from './SpindleSettings'
+import SystemAudioConsentControl from '@/components/spindle/SystemAudioConsentControl'
 import { Spinner } from '@/components/shared/Spinner'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { getSafeHttpsUrl } from '@/lib/navigationSafety'
@@ -995,6 +996,9 @@ export default function SpindlePanel() {
                                   )
                                 })}
                               </div>
+                            )}
+                            {allPerms.includes('system_audio') && (
+                              <SystemAudioConsentControl extensionId={ext.id} granted={ext.granted_permissions.includes('system_audio')} />
                             )}
                           </div>
                         )}
