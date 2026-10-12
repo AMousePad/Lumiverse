@@ -246,7 +246,7 @@ function Application() {
     for (const p of enabledDockPanels) {
       if (hiddenPlacements.includes(p.id)) continue
       const size = p.collapsed ? 36 : p.size
-      const edge = resolveDockPanelEdge(p.edge, dockPanelDesktopSide, isMobile)
+      const edge = resolveDockPanelEdge(p.edge, dockPanelDesktopSide, isMobile, p.respectRequestedEdge)
       switch (edge) {
         case 'left': left = Math.max(left, size); break
         case 'right': right = Math.max(right, size); break
