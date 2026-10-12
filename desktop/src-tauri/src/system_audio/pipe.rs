@@ -62,7 +62,8 @@ impl PipeDevice {
     /// `interval` is the frame interval: the reader hands over one chunk per interval, so it wakes no more often than
     /// the engine does.
     pub fn new(open: Opener, interval: Duration) -> Self {
-        let frames = ((SAMPLE_RATE as f64 * interval.as_secs_f64()) as usize).clamp(256, SAMPLE_RATE as usize);
+        let frames = ((SAMPLE_RATE as f64 * interval.as_secs_f64()) as usize)
+            .clamp(256, SAMPLE_RATE as usize);
         Self {
             open,
             chunk_bytes: frames * BYTES_PER_FRAME,
@@ -75,25 +76,37 @@ impl PipeDevice {
     /// Start the child and make sure it stays up past its first moments.
     pub fn connect(&mut self) -> io::Result<()> {
         self.close();
-        let Running { mut reader, mut end } = (self.open)()?;
+        let Running {
+            mut reader,
+            mut end,
+        } = (self.open)()?;
         let (tx, chunks) = mpsc::sync_channel::<Vec<u8>>(16);
         let size = self.chunk_bytes;
-        thread::Builder::new().name("lumiverse-system-audio-pipe".into()).spawn(move || loop {
-            let mut chunk = vec![0u8; size];
-            if reader.read_exact(&mut chunk).is_err() || tx.send(chunk).is_err() {
-                break;
-            }
-        })?;
+        thread::Builder::new()
+            .name("lumiverse-system-audio-pipe".into())
+            .spawn(move || loop {
+                let mut chunk = vec![0u8; size];
+                if reader.read_exact(&mut chunk).is_err() || tx.send(chunk).is_err() {
+                    break;
+                }
+            })?;
         // `sync_channel` has no `recv_timeout` on the sending half, so health-check on the receiving one.
         let first = match chunks.recv_timeout(HEALTH_CHECK) {
             Ok(chunk) => Some(chunk),
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => {
                 end();
-                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "the audio source exited immediately"));
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "the audio source exited immediately",
+                ));
             }
         };
-        self.live = Some(Live { chunks, end, pending: first });
+        self.live = Some(Live {
+            chunks,
+            end,
+            pending: first,
+        });
         self.quiet_since = Instant::now();
         Ok(())
     }
@@ -202,13 +215,20 @@ mod tests {
 
     impl Read for Pipe {
         fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-            if self.dies_at_once || self.ended.load(Ordering::SeqCst) || self.dies_later.load(Ordering::SeqCst) {
+            if self.dies_at_once
+                || self.ended.load(Ordering::SeqCst)
+                || self.dies_later.load(Ordering::SeqCst)
+            {
                 return Ok(0);
             }
             thread::sleep(Duration::from_millis(2));
             for pair in out.chunks_exact_mut(8) {
                 self.phase += 2.0 * std::f32::consts::PI * 440.0 / SAMPLE_RATE as f32;
-                let v = if self.loud.load(Ordering::SeqCst) { 0.3 * self.phase.sin() } else { 0.0 };
+                let v = if self.loud.load(Ordering::SeqCst) {
+                    0.3 * self.phase.sin()
+                } else {
+                    0.0
+                };
                 pair[..4].copy_from_slice(&v.to_le_bytes());
                 pair[4..].copy_from_slice(&v.to_le_bytes());
             }
@@ -245,7 +265,10 @@ mod tests {
     }
 
     fn device(fake: &Fake) -> (PipeDevice, Analyzer) {
-        (PipeDevice::new(fake.opener(), Duration::from_millis(20)), Analyzer::new(SAMPLE_RATE))
+        (
+            PipeDevice::new(fake.opener(), Duration::from_millis(20)),
+            Analyzer::new(SAMPLE_RATE),
+        )
     }
 
     fn drain_for(device: &mut PipeDevice, analyzer: &mut Analyzer, ms: u64) -> f32 {
@@ -278,6 +301,27 @@ mod tests {
     }
 
     #[test]
+    fn pipe_preserves_separate_sides_and_sanitises_non_finite_samples() {
+        let fake = Fake::default();
+        let mut device = PipeDevice::new(fake.opener(), Duration::from_millis(20));
+        let bytes: Vec<u8> = (0..4096)
+            .flat_map(|i| {
+                let l = 0.02
+                    * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin();
+                [l, f32::NAN].into_iter().flat_map(|v| v.to_le_bytes())
+            })
+            .collect();
+        let mut analyzer = Analyzer::with_stereo(SAMPLE_RATE, true);
+        assert!(device.consume(&mut analyzer, &bytes) > 0.0);
+        let mut frame = super::super::analyzer::Frame::default();
+        assert!(analyzer.analyse(&mut frame));
+        let stereo = frame.stereo.unwrap();
+        assert!(stereo.left.amplitude > 0.0);
+        assert_eq!(stereo.right.amplitude, 0.0);
+        assert!(stereo.right.bands.iter().all(|&b| b == 0.0));
+    }
+
+    #[test]
     fn a_hidden_window_ends_the_child_and_showing_it_again_starts_a_new_one() {
         let fake = Fake::default();
         fake.loud.store(true, Ordering::SeqCst);
@@ -286,7 +330,11 @@ mod tests {
         assert_eq!(fake.starts.load(Ordering::SeqCst), 1);
 
         assert_eq!(device.drain(&mut analyzer, true), Ok(0.0));
-        assert_eq!(fake.ends.load(Ordering::SeqCst), 1, "the child was left running while hidden");
+        assert_eq!(
+            fake.ends.load(Ordering::SeqCst),
+            1,
+            "the child was left running while hidden"
+        );
         // Hidden drains stay hidden: no restart.
         device.drain(&mut analyzer, true).unwrap();
         assert_eq!(fake.starts.load(Ordering::SeqCst), 1);
@@ -302,7 +350,11 @@ mod tests {
         fake.dies_at_once.store(true, Ordering::SeqCst);
         let (mut device, _) = device(&fake);
         assert!(device.connect().is_err());
-        assert_eq!(fake.ends.load(Ordering::SeqCst), 1, "a dead child must still be reaped");
+        assert_eq!(
+            fake.ends.load(Ordering::SeqCst),
+            1,
+            "a dead child must still be reaped"
+        );
     }
 
     #[test]
@@ -331,7 +383,11 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(result, Err(Fault::Gone));
-        assert_eq!(fake.ends.load(Ordering::SeqCst), 1, "the exited child is cleaned up");
+        assert_eq!(
+            fake.ends.load(Ordering::SeqCst),
+            1,
+            "the exited child is cleaned up"
+        );
     }
 
     #[test]
@@ -377,6 +433,7 @@ pub fn parec_args(interval: Duration) -> Vec<String> {
         "--format=float32le",
         "--rate=48000",
         "--channels=2",
+        "--channel-map=front-left,front-right",
         "--raw",
         "--client-name=Lumiverse",
         "--stream-name=Lumiverse extension audio analysis",
@@ -389,7 +446,11 @@ pub fn parec_args(interval: Duration) -> Vec<String> {
 
 /// Seconds since boot including time spent suspended, from `/proc/uptime`.
 pub fn parse_uptime(text: &str) -> Option<f64> {
-    text.split_whitespace().next()?.parse::<f64>().ok().filter(|up| up.is_finite() && *up >= 0.0)
+    text.split_whitespace()
+        .next()?
+        .parse::<f64>()
+        .ok()
+        .filter(|up| up.is_finite() && *up >= 0.0)
 }
 
 /// `Instant` stops during suspend and uptime does not, so uptime pulling ahead of it means the machine slept.
@@ -410,17 +471,36 @@ mod helper_tests {
     fn parec_records_the_default_outputs_monitor_never_the_microphone() {
         for interval in [0u64, 10, 33, 500] {
             let args = parec_args(Duration::from_millis(interval));
-            assert!(args.contains(&"--device=@DEFAULT_MONITOR@".to_string()), "{args:?}");
+            assert!(
+                args.contains(&"--device=@DEFAULT_MONITOR@".to_string()),
+                "{args:?}"
+            );
             // The only device-selecting arguments allowed are that one.
-            assert_eq!(args.iter().filter(|a| a.starts_with("--device") || a.starts_with("-d")).count(), 1);
-            assert!(args.iter().all(|a| !a.contains("DEFAULT_SOURCE") && !a.contains("input")));
-            assert!(args.contains(&"--format=float32le".to_string()) && args.contains(&"--raw".to_string()));
+            assert_eq!(
+                args.iter()
+                    .filter(|a| a.starts_with("--device") || a.starts_with("-d"))
+                    .count(),
+                1
+            );
+            assert!(args
+                .iter()
+                .all(|a| !a.contains("DEFAULT_SOURCE") && !a.contains("input")));
+            assert!(
+                args.contains(&"--format=float32le".to_string())
+                    && args.contains(&"--raw".to_string())
+            );
+            assert!(args.contains(&"--channel-map=front-left,front-right".to_string()));
         }
     }
 
     #[test]
     fn latency_follows_the_frame_interval_within_sane_bounds() {
-        let latency = |ms| parec_args(Duration::from_millis(ms)).last().cloned().unwrap();
+        let latency = |ms| {
+            parec_args(Duration::from_millis(ms))
+                .last()
+                .cloned()
+                .unwrap()
+        };
         assert_eq!(latency(0), "--latency-msec=10");
         assert_eq!(latency(33), "--latency-msec=33");
         assert_eq!(latency(1000), "--latency-msec=100");

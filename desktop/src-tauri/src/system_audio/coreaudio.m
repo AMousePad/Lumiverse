@@ -5,8 +5,8 @@
 // Why a process tap rather than ScreenCaptureKit: it needs only the "System Audio Recording" permission (an orange
 // indicator in the menu bar), not Screen Recording, and it carries no video stream.
 //
-// The audio callback runs on a real-time thread. It does nothing but average the channels into a lock-free mono ring
-// of floats; Rust drains the ring at the frame rate. Samples never leave this process: Rust turns them into levels
+// The audio callback runs on a real-time thread. It writes mono or complete stereo frames into a lock-free ring;
+// Rust drains the ring at the frame rate. Samples never leave this process: Rust turns them into levels
 // and bands and only those are sent on.
 //
 // Hidden window: Rust asks for the IO to be stopped (AudioDeviceStop) and started again, so nothing runs while
@@ -34,15 +34,18 @@ enum {
 
 typedef struct {
     float *data;
+    UInt32 channels; // stored floats per frame: 1 for mono, 2 for stereo
     _Atomic size_t head; // written by the real-time thread
     _Atomic size_t tail; // written by the reader
 } Ring;
 
-static inline void ring_write(Ring *ring, float value) {
+static inline void ring_write(Ring *ring, float left, float right) {
     size_t head = atomic_load_explicit(&ring->head, memory_order_relaxed);
     size_t tail = atomic_load_explicit(&ring->tail, memory_order_acquire);
     if (head - tail >= RING_CAPACITY) return; // the reader fell behind: drop rather than block
-    ring->data[head & (RING_CAPACITY - 1)] = value;
+    size_t at = (head & (RING_CAPACITY - 1)) * ring->channels;
+    ring->data[at] = left;
+    if (ring->channels == 2) ring->data[at + 1] = right;
     atomic_store_explicit(&ring->head, head + 1, memory_order_release);
 }
 
@@ -61,16 +64,32 @@ static void TapInputToRing(Ring *ring, const AudioBufferList *input, UInt32 tapC
         frames = MIN(frames, buffer->mDataByteSize / stride);
     }
     if (channels != tapChannels) return;
+    if (ring->channels == 1) {
+        for (UInt32 frame = 0; frame < frames; frame++) {
+            float sum = 0;
+            for (UInt32 b = 0; b < input->mNumberBuffers; b++) {
+                const AudioBuffer *buffer = &input->mBuffers[b];
+                const float *samples = buffer->mData;
+                for (UInt32 c = 0; c < buffer->mNumberChannels; c++) sum += samples[frame * buffer->mNumberChannels + c];
+            }
+            ring_write(ring, sum / channels, 0);
+        }
+        return;
+    }
     for (UInt32 frame = 0; frame < frames; frame++) {
-        float sum = 0;
+        float left = 0, right = 0;
+        UInt32 index = 0;
         for (UInt32 b = 0; b < input->mNumberBuffers; b++) {
             const AudioBuffer *buffer = &input->mBuffers[b];
             const float *samples = buffer->mData;
             for (UInt32 c = 0; c < buffer->mNumberChannels; c++) {
-                sum += samples[frame * buffer->mNumberChannels + c];
+                float sample = samples[frame * buffer->mNumberChannels + c];
+                if (index == 0) left = sample;
+                if (index == 1) right = sample;
+                index++;
             }
         }
-        ring_write(ring, sum / channels);
+        ring_write(ring, left, channels == 1 ? left : right);
     }
 }
 
@@ -134,7 +153,7 @@ bool lumiverse_audio_tap_available(void) {
 }
 
 // Opens a stopped tap. The caller starts it with lumiverse_audio_tap_set_running. Returns NULL and a status on failure.
-void *lumiverse_audio_tap_open(int *status) {
+void *lumiverse_audio_tap_open(int *status, bool stereo) {
     *status = kLumiverseTapUnavailableOS;
     if (@available(macOS 14.2, *)) {
         LumiverseTapSession *session = [LumiverseTapSession new];
@@ -190,7 +209,8 @@ void *lumiverse_audio_tap_open(int *status) {
         size = sizeof(format);
         if (AudioObjectGetPropertyData(session->tap, &formatAddress, 0, NULL, &size, &format) != noErr ||
             format.mFormatID != kAudioFormatLinearPCM || !(format.mFormatFlags & kAudioFormatFlagIsFloat) ||
-            format.mBitsPerChannel != 32 || format.mChannelsPerFrame == 0 || format.mSampleRate < 8000) {
+            format.mBitsPerChannel != 32 || format.mChannelsPerFrame == 0 || format.mSampleRate < 8000 ||
+            (stereo && format.mChannelsPerFrame > 2)) {
             TearDown(session);
             *status = kLumiverseTapUnsupportedFormat;
             return NULL;
@@ -199,8 +219,11 @@ void *lumiverse_audio_tap_open(int *status) {
         const UInt32 tapChannels = format.mChannelsPerFrame;
 
         Ring *ring = calloc(1, sizeof(Ring));
-        ring->data = calloc(RING_CAPACITY, sizeof(float));
+        if (!ring) { TearDown(session); *status = kLumiverseTapStartFailed; return NULL; }
+        ring->channels = stereo ? 2 : 1;
+        ring->data = calloc(RING_CAPACITY * ring->channels, sizeof(float));
         session->ring = ring;
+        if (!ring->data) { TearDown(session); *status = kLumiverseTapStartFailed; return NULL; }
 
         session->queue = dispatch_queue_create("chat.lumiverse.system-audio", DISPATCH_QUEUE_SERIAL);
         OSStatus created = AudioDeviceCreateIOProcIDWithBlock(
@@ -253,17 +276,21 @@ bool lumiverse_audio_tap_set_running(void *handle, bool run) {
     return false;
 }
 
-// Copy up to `capacity` mono samples out of the ring. Returns how many were copied.
+// Copy complete frames, returning the number of floats copied. Head/tail count frames so pairs never split.
 size_t lumiverse_audio_tap_read(void *handle, float *out, size_t capacity) {
     if (@available(macOS 14.2, *)) {
         Ring *ring = ((__bridge LumiverseTapSession *)handle)->ring;
         size_t tail = atomic_load_explicit(&ring->tail, memory_order_relaxed);
         size_t head = atomic_load_explicit(&ring->head, memory_order_acquire);
         size_t available = head - tail;
-        size_t count = available < capacity ? available : capacity;
-        for (size_t i = 0; i < count; i++) out[i] = ring->data[(tail + i) & (RING_CAPACITY - 1)];
+        size_t frames = capacity / ring->channels;
+        size_t count = available < frames ? available : frames;
+        for (size_t i = 0; i < count; i++) {
+            size_t at = ((tail + i) & (RING_CAPACITY - 1)) * ring->channels;
+            for (UInt32 c = 0; c < ring->channels; c++) out[i * ring->channels + c] = ring->data[at + c];
+        }
         atomic_store_explicit(&ring->tail, tail + count, memory_order_release);
-        return count;
+        return count * ring->channels;
     }
     return 0;
 }

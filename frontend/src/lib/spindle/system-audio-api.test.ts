@@ -139,9 +139,27 @@ describe('isAvailable', () => {
   test('reports an available adapter', () => {
     expect(setup().api.isAvailable()).toEqual({ available: true })
   })
+  test('reports stereo capability even while the native switch is disabled', () => {
+    const source = new FakeSource()
+    source.status = { available: false, reason: 'disabled', stereoSupported: true }
+    expect(setup({ source }).api.isAvailable()).toEqual({ available: false, unavailableReason: 'disabled', stereoSupported: true })
+  })
 })
 
 describe('start: authorisation and consent', () => {
+  test('unsupported stereo fails before prompting and leaves mono available', async () => {
+    const t = setup()
+    await expect(t.api.start({ stereo: true, onFrame() {} }).ready).rejects.toMatchObject({ name: 'NotSupportedError' })
+    expect(t.state.consents).toBe(0)
+    expect(t.source!.starts).toBe(0)
+    await t.api.start({ onFrame() {} }).ready
+    expect(t.source!.starts).toBe(1)
+  })
+  test('rejects an invalid stereo mode without prompting', () => {
+    const t = setup()
+    expect(() => t.api.start({ stereo: 'true' as never, onFrame() {} })).toThrow('SYSTEM_AUDIO_STEREO_INVALID')
+    expect(t.state.consents).toBe(0)
+  })
   test('requires the system_audio permission, before anything else happens', () => {
     const t = setup()
     t.granted.clear()
@@ -205,8 +223,9 @@ describe('start: authorisation and consent', () => {
 })
 
 describe('start: frames', () => {
-  async function running(options: { bands?: number; maxFps?: number } = {}) {
+  async function running(options: { bands?: number; maxFps?: number; stereo?: boolean } = {}) {
     const t = setup()
+    if (options.stereo) t.source!.status = { available: true, stereoSupported: true }
     const frames: SpindleSystemAudioFrame[] = []
     const ended: SpindleSystemAudioEndReason[] = []
     const session = t.api.start({ ...options, onFrame: (frame) => frames.push(frame), onEnd: (reason) => ended.push(reason) })
@@ -221,6 +240,42 @@ describe('start: frames', () => {
     expect(frames[0].frequencies).toHaveLength(8)
     expect(frames[0].frequencies[0]).toBe(0)
     expect(frames[0].frequencies[7]).toBe(1)
+  })
+  test('stereo is copied, rebinned and sanitised independently while combined output is preserved', async () => {
+    const { t, frames } = await running({ stereo: true, bands: 8, maxFps: 12 })
+    expect(t.source!.hints).toEqual([{ maxFps: 12, stereo: true }])
+    const left = new Float32Array([0, 1])
+    const right = new Float32Array([1, 0])
+    t.source!.frame({ stereo: {
+      left: { amplitude: Number.NaN, peak: 7, frequencies: left },
+      right: { amplitude: -1, peak: 0.5, frequencies: right },
+    } })
+    const frame = frames[0]
+    expect(Object.keys(frame).sort()).toEqual(['amplitude', 'frequencies', 'peak', 'stereo'])
+    expect(frame.amplitude).toBe(0.5)
+    expect(frame.stereo!.left.amplitude).toBe(0)
+    expect(frame.stereo!.left.peak).toBe(1)
+    expect(frame.stereo!.right.amplitude).toBe(0)
+    expect(frame.stereo!.right.peak).toBe(0.5)
+    expect(frame.stereo!.left.frequencies).toHaveLength(8)
+    expect(frame.stereo!.right.frequencies).toHaveLength(8)
+    expect(frame.stereo!.left.frequencies[7]).toBe(1)
+    expect(frame.stereo!.right.frequencies[7]).toBe(0)
+    left.fill(0)
+    right.fill(0)
+    expect(frame.stereo!.left.frequencies[7]).toBe(1)
+  })
+  test('mono subscribers receive the original shape even from a stereo-capable source', async () => {
+    const { t, frames } = await running()
+    t.source!.frame({ stereo: { left: { amplitude: 1, peak: 1, frequencies: [1] }, right: { amplitude: 0, peak: 0, frequencies: [0] } } })
+    expect(Object.keys(frames[0]).sort()).toEqual(['amplitude', 'frequencies', 'peak'])
+  })
+  test('missing stereo analysis ends a stereo session instead of silently returning mono', async () => {
+    const { t, frames, ended } = await running({ stereo: true })
+    t.source!.frame()
+    expect(frames).toHaveLength(0)
+    expect(ended).toEqual(['source-lost'])
+    expect(t.source!.stops).toBe(1)
   })
   test('defaults to 32 bands and clamps the request to 8 – 64', async () => {
     const a = await running()

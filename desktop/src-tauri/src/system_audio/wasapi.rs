@@ -48,6 +48,7 @@ use windows::{
 };
 
 use super::analyzer::{Analyzer, Frame};
+use super::channels::StereoMix;
 use super::engine::{spawn, Device, Fault, Session};
 pub use super::engine::{Capture, Exit, Options};
 
@@ -73,15 +74,17 @@ pub fn start(
     on_frame: impl FnMut(&Frame) -> bool + Send + 'static,
     on_end: impl FnOnce(Exit) + Send + 'static,
 ) -> Result<Capture, String> {
+    let stereo = options.stereo;
     spawn(
         options,
-        || {
+        move || {
             let com = Com::init();
             let guard = Interrupts::register()?;
-            let device = unsafe { Stream::open() }.map_err(|error| describe_open_error(&error))?;
+            let device =
+                unsafe { Stream::open(stereo) }.map_err(|error| describe_open_error(&error))?;
             Ok(Session {
                 device,
-                reopen: Box::new(reopen),
+                reopen: Box::new(move |stop| reopen(stop, stereo)),
                 interrupted: Box::new(move || guard.tripped() || session_locked()),
                 keep: Box::new(com),
             })
@@ -135,6 +138,7 @@ struct Stream {
     sample: Sample,
     /// Reused for every packet, so a drain allocates nothing once warm.
     scratch: Vec<f32>,
+    stereo_mix: Option<StereoMix>,
 }
 
 struct DefaultOutput {
@@ -172,7 +176,7 @@ impl Drop for Stream {
 }
 
 impl Stream {
-    unsafe fn open() -> windows::core::Result<Stream> {
+    unsafe fn open(stereo: bool) -> windows::core::Result<Stream> {
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
         let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
@@ -183,7 +187,8 @@ impl Stream {
         let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
 
         let format = client.GetMixFormat()?;
-        let described = describe_format(format);
+        let described = describe_format(format)
+            .filter(|(channels, _, _, mask)| !stereo || StereoMix::new(*channels, *mask).is_some());
         let initialised = match described {
             Some(_) => client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
@@ -199,7 +204,7 @@ impl Stream {
         };
         CoTaskMemFree(Some(format as *const c_void));
         initialised?;
-        let (channels, sample_rate, sample) = described.unwrap_or((2, 48_000, Sample::F32));
+        let (channels, sample_rate, sample, mask) = described.unwrap();
 
         let capture: IAudioCaptureClient = client.GetService()?;
         client.Start()?;
@@ -212,6 +217,11 @@ impl Stream {
             sample_rate,
             sample,
             scratch: Vec::new(),
+            stereo_mix: if stereo {
+                StereoMix::new(channels, mask)
+            } else {
+                None
+            },
         })
     }
 
@@ -233,20 +243,29 @@ impl Stream {
             out.push(value);
         };
         match self.sample {
-            Sample::F32 => bytes.chunks_exact(4).for_each(|b| push(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))),
-            Sample::I16 => bytes.chunks_exact(2).for_each(|b| push(i16::from_le_bytes([b[0], b[1]]) as f32 / 32_768.0)),
-            Sample::I32 => bytes
+            Sample::F32 => bytes
                 .chunks_exact(4)
-                .for_each(|b| push(i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 / 2_147_483_648.0)),
+                .for_each(|b| push(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))),
+            Sample::I16 => bytes
+                .chunks_exact(2)
+                .for_each(|b| push(i16::from_le_bytes([b[0], b[1]]) as f32 / 32_768.0)),
+            Sample::I32 => bytes.chunks_exact(4).for_each(|b| {
+                push(i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 / 2_147_483_648.0)
+            }),
         }
         loudest
     }
 
-    unsafe fn drain_packets(&mut self, analyzer: &mut Analyzer, discard: bool) -> windows::core::Result<f32> {
+    unsafe fn drain_packets(
+        &mut self,
+        analyzer: &mut Analyzer,
+        discard: bool,
+    ) -> windows::core::Result<f32> {
         let mut loudest = 0.0f32;
         while self.capture.GetNextPacketSize()? > 0 {
             let (mut data, mut frames, mut flags) = (std::ptr::null_mut::<u8>(), 0u32, 0u32);
-            self.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
+            self.capture
+                .GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
             if !discard {
                 let count = frames as usize * self.channels;
                 self.scratch.clear();
@@ -256,7 +275,11 @@ impl Stream {
                     let bytes = std::slice::from_raw_parts(data, count * self.width());
                     loudest = loudest.max(self.decode(bytes));
                 }
-                analyzer.push(&self.scratch, self.channels);
+                if let Some(mix) = &self.stereo_mix {
+                    analyzer.push_mapped(&self.scratch, mix);
+                } else {
+                    analyzer.push(&self.scratch, self.channels);
+                }
             }
             self.capture.ReleaseBuffer(frames)?;
         }
@@ -290,18 +313,29 @@ impl Device for Stream {
 }
 
 /// Channels, rate and sample type of a mix format, or None for one this adapter does not read.
-unsafe fn describe_format(format: *const WAVEFORMATEX) -> Option<(usize, u32, Sample)> {
+unsafe fn describe_format(format: *const WAVEFORMATEX) -> Option<(usize, u32, Sample, u32)> {
     if format.is_null() {
         return None;
     }
     // The structs are packed: copy them out instead of taking references to their fields.
     let base = std::ptr::read_unaligned(format);
     let (tag, bits) = (base.wFormatTag, base.wBitsPerSample);
-    let tag = if tag == WAVE_FORMAT_EXTENSIBLE {
-        // The sub-format GUID starts with the same 16-bit tag.
-        std::ptr::read_unaligned(format as *const WAVEFORMATEXTENSIBLE).SubFormat.data1 as u16
+    let (tag, mask) = if tag == WAVE_FORMAT_EXTENSIBLE {
+        if base.cbSize < 22 {
+            return None;
+        }
+        let extended = std::ptr::read_unaligned(format as *const WAVEFORMATEXTENSIBLE);
+        let guid = extended.SubFormat;
+        if guid.data2 != 0
+            || guid.data3 != 0x10
+            || guid.data4 != [0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71]
+            || guid.data1 > u16::MAX as u32
+        {
+            return None;
+        }
+        (guid.data1 as u16, extended.dwChannelMask)
     } else {
-        tag
+        (tag, 0)
     };
     let sample = match (tag, bits) {
         (WAVE_FORMAT_IEEE_FLOAT, 32) => Sample::F32,
@@ -310,21 +344,25 @@ unsafe fn describe_format(format: *const WAVEFORMATEX) -> Option<(usize, u32, Sa
         _ => return None,
     };
     let (channels, rate) = (base.nChannels as usize, base.nSamplesPerSec);
-    (channels > 0 && channels <= 32 && rate >= 8_000).then_some((channels, rate, sample))
+    (channels > 0 && channels <= 32 && rate >= 8_000).then_some((channels, rate, sample, mask))
 }
 
 fn device_gone(error: &windows::core::Error) -> bool {
-    [AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_RESOURCES_INVALIDATED, AUDCLNT_E_SERVICE_NOT_RUNNING]
-        .contains(&error.code())
+    [
+        AUDCLNT_E_DEVICE_INVALIDATED,
+        AUDCLNT_E_RESOURCES_INVALIDATED,
+        AUDCLNT_E_SERVICE_NOT_RUNNING,
+    ]
+    .contains(&error.code())
 }
 
-fn reopen(stop: &AtomicBool) -> Option<Stream> {
+fn reopen(stop: &AtomicBool, stereo: bool) -> Option<Stream> {
     for _ in 0..REOPEN_TRIES {
         thread::sleep(REOPEN_WAIT);
         if stop.load(Ordering::Relaxed) {
             return None;
         }
-        if let Ok(stream) = unsafe { Stream::open() } {
+        if let Ok(stream) = unsafe { Stream::open(stereo) } {
             return Some(stream);
         }
     }
@@ -348,7 +386,8 @@ fn session_locked() -> bool {
         }
         let locked = !buffer.is_null() && length as usize >= std::mem::size_of::<WTSINFOEXW>() && {
             let info = &*(buffer.0 as *const WTSINFOEXW);
-            info.Level == 1 && info.Data.WTSInfoExLevel1.SessionFlags == WTS_SESSIONSTATE_LOCK as i32
+            info.Level == 1
+                && info.Data.WTSInfoExLevel1.SessionFlags == WTS_SESSIONSTATE_LOCK as i32
         };
         WTSFreeMemory(buffer.0 as *mut c_void);
         locked
@@ -363,7 +402,11 @@ struct Interrupts {
     _params: Box<DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS>,
 }
 
-unsafe extern "system" fn on_power(context: *const c_void, kind: u32, _setting: *const c_void) -> u32 {
+unsafe extern "system" fn on_power(
+    context: *const c_void,
+    kind: u32,
+    _setting: *const c_void,
+) -> u32 {
     if kind == PBT_APMSUSPEND && !context.is_null() {
         (*(context as *const AtomicBool)).store(true, Ordering::SeqCst);
     }
@@ -390,7 +433,12 @@ impl Interrupts {
             unsafe { drop(Arc::from_raw(context)) };
             return Err("Could not watch for system sleep, so system audio was not started".into());
         }
-        Ok(Self { suspended, handle, context, _params: params })
+        Ok(Self {
+            suspended,
+            handle,
+            context,
+            _params: params,
+        })
     }
 
     fn tripped(&self) -> bool {
@@ -453,15 +501,53 @@ mod tests {
             wBitsPerSample: 32,
             ..Default::default()
         };
-        assert!(matches!(unsafe { describe_format(&format) }, Some((2, 48_000, Sample::F32))));
+        assert!(matches!(
+            unsafe { describe_format(&format) },
+            Some((2, 48_000, Sample::F32, 0))
+        ));
         format.wBitsPerSample = 24; // packed 24-bit PCM is not read
         format.wFormatTag = WAVE_FORMAT_PCM;
         assert!(unsafe { describe_format(&format) }.is_none());
         format.wBitsPerSample = 16;
-        assert!(matches!(unsafe { describe_format(&format) }, Some((2, 48_000, Sample::I16))));
+        assert!(matches!(
+            unsafe { describe_format(&format) },
+            Some((2, 48_000, Sample::I16, 0))
+        ));
         format.nChannels = 0;
         assert!(unsafe { describe_format(&format) }.is_none());
         assert!(unsafe { describe_format(std::ptr::null()) }.is_none());
+    }
+
+    #[test]
+    fn extensible_mix_formats_retain_speaker_positions_and_validate_the_full_subformat() {
+        let mut format = WAVEFORMATEXTENSIBLE {
+            Format: WAVEFORMATEX {
+                wFormatTag: WAVE_FORMAT_EXTENSIBLE,
+                nChannels: 6,
+                nSamplesPerSec: 48_000,
+                wBitsPerSample: 32,
+                cbSize: 22,
+                ..Default::default()
+            },
+            dwChannelMask: 0x60f,
+            SubFormat: windows::core::GUID::from_values(
+                3,
+                0,
+                0x10,
+                [0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71],
+            ),
+            ..Default::default()
+        };
+        let pointer =
+            |format: &WAVEFORMATEXTENSIBLE| (format as *const WAVEFORMATEXTENSIBLE).cast();
+        assert!(matches!(
+            unsafe { describe_format(pointer(&format)) },
+            Some((6, 48_000, Sample::F32, 0x60f))
+        ));
+        format.SubFormat.data4[7] = 0;
+        assert!(unsafe { describe_format(pointer(&format)) }.is_none());
+        format.Format.cbSize = 0;
+        assert!(unsafe { describe_format(pointer(&format)) }.is_none());
     }
 
     #[test]
@@ -475,7 +561,10 @@ mod tests {
     #[test]
     #[ignore = "needs a real output device"]
     fn live_loopback() {
-        let seconds: u64 = std::env::var("LIVE_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+        let seconds: u64 = std::env::var("LIVE_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(12);
         let frames = Arc::new(AtomicUsize::new(0));
         let counter = frames.clone();
         let started = Instant::now();
@@ -484,7 +573,9 @@ mod tests {
             move |frame| {
                 let n = counter.fetch_add(1, Ordering::Relaxed);
                 if n % 10 == 0 || frame.amplitude == 0.0 {
-                    let top = (0..64).max_by(|&a, &b| frame.bands[a].total_cmp(&frame.bands[b])).unwrap();
+                    let top = (0..64)
+                        .max_by(|&a, &b| frame.bands[a].total_cmp(&frame.bands[b]))
+                        .unwrap();
                     println!(
                         "{:>6.2}s frame {n:>4} amp {:.2} peak {:.2} loudest band {top:>2} ({:.2})",
                         started.elapsed().as_secs_f32(),

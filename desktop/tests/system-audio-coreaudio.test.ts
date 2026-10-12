@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-test.skipIf(process.platform !== 'darwin')('Core Audio setup excludes hardware inputs and safely decodes tap buffers', () => {
+test.skipIf(process.platform !== 'darwin')('Core Audio setup excludes hardware inputs and preserves mono and stereo tap buffers', () => {
   const directory = mkdtempSync(join(tmpdir(), 'lumiverse-coreaudio-test-'))
   try {
     const binary = join(directory, 'coreaudio-test')

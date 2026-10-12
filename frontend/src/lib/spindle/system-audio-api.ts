@@ -72,6 +72,7 @@ const abortError = () => new DOMException('System audio session cancelled', 'Abo
 
 interface ActiveSession {
   bands: number
+  stereo: boolean
   minGapMs: number
   lastAt: number
   started: boolean
@@ -128,10 +129,19 @@ export function createFrontendSystemAudioAPI(deps: FrontendSystemAudioDependenci
     if (at - session.lastAt < session.minGapMs) return
     session.lastAt = at
     try { authorize() } catch { finish(session, 'revoked'); return }
+    if (session.stereo && !raw.stereo) { finish(session, 'source-lost'); return }
     const frame: SpindleSystemAudioFrame = {
       amplitude: clamp01(raw.amplitude),
       peak: clamp01(raw.peak),
       frequencies: resampleBands(raw.frequencies ?? [], session.bands),
+    }
+    if (session.stereo && raw.stereo) {
+      const channel = (value: typeof raw.stereo.left) => ({
+        amplitude: clamp01(value.amplitude),
+        peak: clamp01(value.peak),
+        frequencies: resampleBands(value.frequencies ?? [], session.bands),
+      })
+      frame.stereo = { left: channel(raw.stereo.left), right: channel(raw.stereo.right) }
     }
     try { session.onFrame(frame) } catch (error) { console.error('[Spindle] System audio onFrame failed', error) }
   }
@@ -143,7 +153,8 @@ export function createFrontendSystemAudioAPI(deps: FrontendSystemAudioDependenci
     if (!source) return { available: false, unavailableReason: 'unsupported' }
     const status = source.availability()
     // (`in`, not `.available`: this project compiles without strictNullChecks, which turns off that narrowing)
-    return 'reason' in status ? { available: false, unavailableReason: status.reason } : { available: true }
+    const stereo = status.stereoSupported === true ? { stereoSupported: true } : {}
+    return 'reason' in status ? { available: false, unavailableReason: status.reason, ...stereo } : { available: true, ...stereo }
   }
 
   const start = (options: SpindleSystemAudioStartOptions): SpindleSystemAudioSession => {
@@ -151,10 +162,14 @@ export function createFrontendSystemAudioAPI(deps: FrontendSystemAudioDependenci
     if (!options || typeof options.onFrame !== 'function') {
       throw new TypeError('SYSTEM_AUDIO_FRAME_CALLBACK_REQUIRED: start() needs an onFrame function')
     }
+    if (options.stereo !== undefined && typeof options.stereo !== 'boolean') {
+      throw new TypeError('SYSTEM_AUDIO_STEREO_INVALID: stereo must be a boolean')
+    }
     if (current) throw new Error('SYSTEM_AUDIO_BUSY: one system audio session per extension; stop() the running one first')
     const fps = clampInt(options.maxFps, SYSTEM_AUDIO_FPS.min, SYSTEM_AUDIO_FPS.max, SYSTEM_AUDIO_FPS.fallback)
     const session: ActiveSession = {
       bands: clampInt(options.bands, SYSTEM_AUDIO_BANDS.min, SYSTEM_AUDIO_BANDS.max, SYSTEM_AUDIO_BANDS.fallback),
+      stereo: options.stereo === true,
       minGapMs: 1000 / fps,
       lastAt: -Infinity,
       started: false,
@@ -184,6 +199,9 @@ export function createFrontendSystemAudioAPI(deps: FrontendSystemAudioDependenci
       const source = deps.getSource()
       const status = source?.availability()
       if (!source || !status?.available) throw new DOMException('System audio is not available here', 'NotSupportedError')
+      if (session.stereo && status.stereoSupported !== true) {
+        throw new DOMException('Stereo analysis needs an updated Lumiverse desktop client', 'NotSupportedError')
+      }
       const approved = await deps.requestConsent(session.abort.signal)
       if (session.finished) throw abortError()
       if (!approved) throw new DOMException('The user did not allow system audio analysis', 'NotAllowedError')
@@ -193,7 +211,7 @@ export function createFrontendSystemAudioAPI(deps: FrontendSystemAudioDependenci
           onFrame: (frame) => deliver(session, frame),
           onEnd: (reason) => finish(session, reason),
         },
-        { maxFps: fps },
+        { maxFps: fps, ...(session.stereo ? { stereo: true } : {}) },
       )
       if (session.finished) {
         handle.stop()

@@ -1,9 +1,9 @@
 //! Native adapter behind `ctx.systemAudio` (the Spindle `system_audio` permission).
 //!
 //! What crosses IPC, and what does not:
-//! - **Out of native code:** analysis frames only (a level, a peak and 64 log-spaced bands), as raw little-endian
+//! - **Out of native code:** analysis frames only (levels and 64 log-spaced bands, optionally per channel), as raw little-endian
 //!   `f32`s over a Tauri channel. Samples, device names and file paths never leave the capture thread.
-//! - **Into native code:** "start at N fps" and "stop". Nothing the page sends can choose a device or a format.
+//! - **Into native code:** "start at N fps", optional stereo, and "stop". The page cannot choose a device or arbitrary format.
 //!
 //! The guarantee that listening is never silent lives here, not in the page. Extension code shares the frontend's
 //! JavaScript realm, so the web layer's per-start prompt is a courtesy it cannot enforce against a forged call. Native
@@ -15,6 +15,7 @@
 //! The floating-widget windows get no grant at all.
 
 mod analyzer;
+mod channels;
 #[cfg(target_os = "macos")]
 mod coreaudio;
 mod engine;
@@ -102,13 +103,16 @@ pub struct Status {
     enabled: bool,
     /// A session is opening or running right now.
     active: bool,
+    stereo_supported: bool,
 }
 
 fn status_of(inner: &Inner) -> Status {
+    let supported = platform::supported();
     Status {
-        supported: platform::supported(),
+        supported,
         enabled: inner.enabled,
         active: inner.session.is_some(),
+        stereo_supported: supported,
     }
 }
 
@@ -241,6 +245,7 @@ pub async fn desktop_system_audio_start(
     events: Events,
     max_fps: u32,
     session_key: String,
+    stereo: Option<bool>,
 ) -> Result<(), String> {
     require_frontend(&window)?;
     if session_key.is_empty() || session_key.len() > 128 {
@@ -262,7 +267,8 @@ pub async fn desktop_system_audio_start(
     let options = platform::Options::new(
         Duration::from_secs_f64(1.0 / f64::from(max_fps.clamp(1, MAX_FPS))),
         state.paused.clone(),
-    );
+    )
+    .with_stereo(stereo.unwrap_or(false));
     let (frames, notify) = (events, app.clone());
     let capture = tauri::async_runtime::spawn_blocking(move || {
         platform::start(

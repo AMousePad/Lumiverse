@@ -1546,9 +1546,10 @@ test('system audio is capability-gated, asks the user, and ends on revoke and un
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, '__systemAudioContext')
   const { registerSystemAudioSource } = await import('./system-audio-source')
   let stops = 0
+  let stereoSupported = false
   let handlers: { onFrame(frame: unknown): void } | null = null
   const unregister = registerSystemAudioSource({
-    availability: () => ({ available: true }),
+    availability: () => ({ available: true, ...(stereoSupported ? { stereoSupported: true } : {}) }),
     async start(h) {
       handlers = h
       return { stop: () => { stops++ } }
@@ -1563,6 +1564,7 @@ test('system audio is capability-gated, asks the user, and ends on revoke and un
     await loadPlacementBundle(id, manifest, 'export function setup(ctx) { globalThis.__systemAudioContext = ctx }')
     const ctx = globals.__systemAudioContext
     expect(ctx.host.capabilities['system-audio-v1']).toBe(1)
+    expect(ctx.host.capabilities['system-audio-stereo-v1']).toBe(1)
     expect(ctx.systemAudio.isAvailable()).toEqual({ available: true })
 
     // Declined: the host's own prompt names the extension, nothing starts, and no indicator appears.
@@ -1620,10 +1622,19 @@ test('system audio is capability-gated, asks the user, and ends on revoke and un
     for (const handler of loaderWsHandlers.get('SPINDLE_PERMISSION_CHANGED') ?? []) {
       handler({ extensionId: id, allGranted: ['system_audio'] })
     }
-    const last = ctx.systemAudio.start({ onFrame() {} })
+    stereoSupported = true
+    const stereoFrames: any[] = []
+    const last = ctx.systemAudio.start({ stereo: true, bands: 8, onFrame: (frame: unknown) => stereoFrames.push(frame) })
     await Promise.resolve()
     answer(true, true)
     await last.ready
+    handlers!.onFrame({ amplitude: 0, peak: 0, frequencies: [0, 0], stereo: {
+      left: { amplitude: 0.5, peak: 0.6, frequencies: [0, 1] },
+      right: { amplitude: 0.7, peak: 0.8, frequencies: [1, 0] },
+    } })
+    expect(stereoFrames[0].stereo.left.frequencies).toHaveLength(8)
+    expect(stereoFrames[0].stereo.left.frequencies[7]).toBe(1)
+    expect(stereoFrames[0].stereo.right.frequencies[7]).toBe(0)
     await unloadFrontendExtension(id)
     expect(stops).toBe(3)
     expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
@@ -1632,7 +1643,7 @@ test('system audio is capability-gated, asks the user, and ends on revoke and un
     // A remembered approval survives unloading; the new extension generation still owns its own live session.
     const promptsBeforeReload = confirmRequests.length
     await loadPlacementBundle(id, manifest, 'export function setup(ctx) { globalThis.__systemAudioContext = ctx }')
-    await globals.__systemAudioContext.systemAudio.start({ onFrame() {} }).ready
+    await globals.__systemAudioContext.systemAudio.start({ stereo: true, onFrame() {} }).ready
     expect(confirmRequests).toHaveLength(promptsBeforeReload)
     expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(1)
     await unloadFrontendExtension(id)

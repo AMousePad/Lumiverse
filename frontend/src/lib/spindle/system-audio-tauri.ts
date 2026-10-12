@@ -8,14 +8,16 @@ import {
   type SystemAudioSourceEndReason,
   type SystemAudioSourceHandlers,
   type SystemAudioSourceStartHints,
+  type SystemAudioSourceFrame,
 } from './system-audio-source'
 
 /**
  * The desktop client's system-audio adapter, as the web layer sees it.
  *
  * Native code (`desktop/src-tauri/src/system_audio`) listens to the output device, does the analysis, and sends back
- * one small message per frame: little-endian `f32`s `[kind, amplitude, peak, band…]`. Nothing else crosses: no samples,
- * no device names. The page only ever asks to start at some frame rate and to stop.
+ * one small message per frame: little-endian `f32`s `[kind, amplitude, peak, band…]`, with optional channel blocks.
+ * Nothing else crosses: no samples,
+ * no device names. The page asks for a frame rate, optional stereo analysis, and stop.
  *
  * Efficiency lives on both sides of the boundary. Native analysis runs only at the frame rate somebody asked for, and
  * only while the window is visible and sound is playing. This side adds no copies: frames are read straight out of the
@@ -28,6 +30,8 @@ export interface NativeSystemAudioStatus {
   /** The owner switched the feature on in the tray. */
   enabled: boolean
   active: boolean
+  /** Absent in older desktop builds. */
+  stereoSupported?: boolean
 }
 
 /** The native surface, injectable so the adapter can be tested without a Tauri runtime. */
@@ -36,14 +40,19 @@ export interface NativeSystemAudioBridge {
   /** Calls `onStatus` whenever the tray switch or session state changes. Resolves to the unsubscribe function. */
   watch(onStatus: (status: NativeSystemAudioStatus) => void): Promise<() => void>
   /** Begin (or replace) the native session; every message from it goes to `onMessage`. */
-  start(maxFps: number, onMessage: (data: unknown) => void): Promise<void>
+  start(maxFps: number, onMessage: (data: unknown) => void, stereo?: boolean): Promise<void>
   stop(): Promise<void>
 }
 
 const KIND_FRAME = 0
 const KIND_SOURCE_LOST = 1
 const KIND_HOST_DISABLED = 2
+const KIND_STEREO_FRAME = 3
 const HEADER_FLOATS = 3
+const BANDS = 64
+const CHANNEL_FLOATS = 2 + BANDS
+const MONO_FLOATS = 1 + CHANNEL_FLOATS
+const STEREO_FLOATS = 1 + 3 * CHANNEL_FLOATS
 
 export function createTauriBridge(): NativeSystemAudioBridge {
   // Scope cleanup to this adapter installation, including a late stop after its device open settles.
@@ -53,10 +62,10 @@ export function createTauriBridge(): NativeSystemAudioBridge {
     async watch(onStatus) {
       return listen<NativeSystemAudioStatus>('desktop-system-audio-state', ({ payload }) => onStatus(payload))
     },
-    async start(maxFps, onMessage) {
+    async start(maxFps, onMessage, stereo = false) {
       const events = new Channel<unknown>()
       events.onmessage = onMessage
-      await invoke('desktop_system_audio_start', { events, maxFps, sessionKey })
+      await invoke('desktop_system_audio_start', { events, maxFps, sessionKey, stereo })
     },
     stop: () => invoke('desktop_system_audio_stop', { sessionKey }),
   }
@@ -65,6 +74,8 @@ export function createTauriBridge(): NativeSystemAudioBridge {
 interface Subscriber {
   handlers: SystemAudioSourceHandlers
   maxFps: number
+  stereo: boolean
+  ready: boolean
 }
 
 export function createTauriSystemAudioSource(
@@ -75,6 +86,7 @@ export function createTauriSystemAudioSource(
   const subscribers = new Set<Subscriber>()
   /** Frame rate of the native session now running, 0 when none. */
   let runningFps = 0
+  let runningStereo = false
   /** Bumped whenever a session is replaced or ended, so a message from an old channel is ignored. */
   let generation = 0
   let queue: Promise<void> = Promise.resolve()
@@ -85,6 +97,7 @@ export function createTauriSystemAudioSource(
   const endAll = (reason: SystemAudioSourceEndReason) => {
     generation++
     runningFps = 0
+    runningStereo = false
     const ending = [...subscribers]
     subscribers.clear()
     for (const subscriber of ending) {
@@ -92,16 +105,31 @@ export function createTauriSystemAudioSource(
     }
   }
 
-  const receive = (own: number) => (data: unknown) => {
+  const receive = (own: number, expectedStereo: boolean) => (data: unknown) => {
     if (own !== generation || !(data instanceof ArrayBuffer) || data.byteLength % 4 !== 0) return
     const values = new Float32Array(data)
     if (values.length < HEADER_FLOATS) return
     switch (values[0]) {
-      case KIND_FRAME: {
+      case KIND_FRAME:
+      case KIND_STEREO_FRAME: {
+        const stereo = values[0] === KIND_STEREO_FRAME
+        if (stereo && values.length !== STEREO_FLOATS) return
+        if (stereo !== expectedStereo) {
+          if (expectedStereo) endAll('source-lost')
+          return
+        }
         // `frequencies` is a view into the IPC buffer: the API copies what it keeps before the next message.
-        const frame = { amplitude: values[1], peak: values[2], frequencies: values.subarray(HEADER_FLOATS) }
+        const frame: SystemAudioSourceFrame = {
+          amplitude: values[1], peak: values[2], frequencies: values.subarray(HEADER_FLOATS, stereo ? MONO_FLOATS : undefined),
+        }
+        const channel = (offset: number) => ({
+          amplitude: values[offset], peak: values[offset + 1], frequencies: values.subarray(offset + 2, offset + CHANNEL_FLOATS),
+        })
+        const separated = stereo ? { ...frame, stereo: { left: channel(MONO_FLOATS), right: channel(MONO_FLOATS + CHANNEL_FLOATS) } } : null
         for (const subscriber of [...subscribers]) {
-          try { subscriber.handlers.onFrame(frame) } catch (error) { console.error('[Spindle] System audio onFrame failed', error) }
+          if (!subscribers.has(subscriber) || !subscriber.ready) continue
+          if (subscriber.stereo && !separated) { endAll('source-lost'); return }
+          try { subscriber.handlers.onFrame(subscriber.stereo ? separated! : frame) } catch (error) { console.error('[Spindle] System audio onFrame failed', error) }
         }
         return
       }
@@ -114,20 +142,23 @@ export function createTauriSystemAudioSource(
   const reconcile = async () => {
     if (disposed) return
     const wanted = Math.max(0, ...[...subscribers].map((subscriber) => subscriber.maxFps))
+    const wantedStereo = [...subscribers].some((subscriber) => subscriber.stereo)
     if (wanted === 0) {
       if (runningFps === 0) return
       generation++
       runningFps = 0
+      runningStereo = false
       await bridge.stop()
       return
     }
-    if (wanted === runningFps) return
-    // Native `start` replaces the running session when the fastest requested rate changes in either direction.
+    if (wanted === runningFps && wantedStereo === runningStereo) return
+    // Native `start` replaces the session when the rate or stereo demand changes in either direction.
     const own = ++generation
     runningFps = 0
+    runningStereo = wantedStereo
     starting = true
     try {
-      await bridge.start(wanted, receive(own))
+      await bridge.start(wanted, receive(own, wantedStereo), wantedStereo)
       if (own === generation) runningFps = wanted
     } catch (error) {
       if (own === generation) endAll('source-lost')
@@ -148,15 +179,21 @@ export function createTauriSystemAudioSource(
     availability(): SystemAudioAvailability {
       if (disposed) return { available: false, reason: 'disabled' }
       if (!status.supported) return { available: false, reason: 'unsupported' }
-      return status.enabled ? { available: true } : { available: false, reason: 'disabled' }
+      const stereo = status.stereoSupported === true ? { stereoSupported: true } : {}
+      return status.enabled ? { available: true, ...stereo } : { available: false, reason: 'disabled', ...stereo }
     },
     async start(handlers, hints?: SystemAudioSourceStartHints) {
       if (disposed) throw new DOMException('System audio adapter was disposed', 'AbortError')
-      const subscriber: Subscriber = { handlers, maxFps: Math.min(30, Math.max(1, Math.round(hints?.maxFps ?? 30))) }
+      if (hints?.stereo === true && status.stereoSupported !== true) {
+        throw new DOMException('This desktop build does not support stereo analysis', 'NotSupportedError')
+      }
+      const subscriber: Subscriber = { handlers, maxFps: Math.min(30, Math.max(1, Math.round(hints?.maxFps ?? 30))), stereo: hints?.stereo === true, ready: false }
       subscribers.add(subscriber)
       try {
         await sync()
         if (disposed) throw new DOMException('System audio adapter was disposed', 'AbortError')
+        if (!subscribers.has(subscriber)) throw new DOMException('System audio source ended during startup', 'AbortError')
+        subscriber.ready = true
       } catch (error) {
         subscribers.delete(subscriber)
         throw error

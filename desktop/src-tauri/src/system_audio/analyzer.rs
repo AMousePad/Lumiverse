@@ -4,7 +4,7 @@
 //! leaves this module, so there is no audio for anything downstream to leak.
 //!
 //! Cost: one FFT per *emitted* frame (not per packet) over a ring buffer of the latest samples, with every table and
-//! scratch buffer allocated once. Pushing samples is a mono downmix into the ring and nothing else.
+//! scratch buffer allocated once. Optional stereo adds two FFTs and two rings only when requested.
 
 use std::f32::consts::PI;
 
@@ -25,9 +25,17 @@ pub struct Frame {
     pub amplitude: f32,
     pub peak: f32,
     pub bands: [f32; BANDS],
+    pub stereo: Option<StereoFrame>,
 }
 
-impl Default for Frame {
+#[derive(Clone)]
+pub struct ChannelFrame {
+    pub amplitude: f32,
+    pub peak: f32,
+    pub bands: [f32; BANDS],
+}
+
+impl Default for ChannelFrame {
     fn default() -> Self {
         Self {
             amplitude: 0.0,
@@ -37,20 +45,71 @@ impl Default for Frame {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct StereoFrame {
+    pub left: ChannelFrame,
+    pub right: ChannelFrame,
+}
+
+impl Default for Frame {
+    fn default() -> Self {
+        Self {
+            amplitude: 0.0,
+            peak: 0.0,
+            bands: [0.0; BANDS],
+            stereo: None,
+        }
+    }
+}
+
 /// Wire format shared with the frontend adapter: little-endian `f32`s, `[kind, amplitude, peak, band…]`.
 pub const KIND_FRAME: f32 = 0.0;
 pub const KIND_SOURCE_LOST: f32 = 1.0;
 pub const KIND_HOST_DISABLED: f32 = 2.0;
+pub const KIND_STEREO_FRAME: f32 = 3.0;
 pub const MESSAGE_FLOATS: usize = 3 + BANDS;
+pub const STEREO_MESSAGE_FLOATS: usize = MESSAGE_FLOATS + 2 * (2 + BANDS);
 
 impl Frame {
+    pub fn silence(stereo: bool) -> Self {
+        Self {
+            stereo: stereo.then(StereoFrame::default),
+            ..Self::default()
+        }
+    }
+
     pub fn encode(&self, kind: f32) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(MESSAGE_FLOATS * 4);
+        // Terminal messages and mono frames keep the original layout. Stereo has a distinct kind and fixed length.
+        let stereo = (kind == KIND_FRAME)
+            .then_some(self.stereo.as_ref())
+            .flatten();
+        let kind = if stereo.is_some() {
+            KIND_STEREO_FRAME
+        } else {
+            kind
+        };
+        let mut bytes = Vec::with_capacity(
+            if stereo.is_some() {
+                STEREO_MESSAGE_FLOATS
+            } else {
+                MESSAGE_FLOATS
+            } * 4,
+        );
         for value in [kind, self.amplitude, self.peak]
             .iter()
             .chain(self.bands.iter())
         {
             bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        if let Some(stereo) = stereo {
+            for channel in [&stereo.left, &stereo.right] {
+                for value in [channel.amplitude, channel.peak]
+                    .iter()
+                    .chain(channel.bands.iter())
+                {
+                    bytes.extend_from_slice(&value.to_le_bytes());
+                }
+            }
         }
         bytes
     }
@@ -81,7 +140,7 @@ struct Band {
     frac: f32,
 }
 
-pub struct Analyzer {
+struct ChannelAnalyzer {
     n: usize,
     ring: Vec<f32>,
     write: usize,
@@ -96,7 +155,7 @@ pub struct Analyzer {
     peak_hold: f32,
 }
 
-impl Analyzer {
+impl ChannelAnalyzer {
     pub fn new(sample_rate: u32) -> Self {
         let n = fft_size(sample_rate);
         let bits = n.trailing_zeros();
@@ -182,8 +241,8 @@ impl Analyzer {
     }
 
     /// Analyse the latest window. Returns false (leaving `out` zeroed) before a full window has arrived.
-    pub fn analyse(&mut self, out: &mut Frame) -> bool {
-        *out = Frame::default();
+    pub fn analyse(&mut self, out: &mut ChannelFrame) -> bool {
+        *out = ChannelFrame::default();
         if self.filled < self.n {
             return false;
         }
@@ -250,6 +309,82 @@ impl Analyzer {
             }
             len *= 2;
         }
+    }
+}
+
+/// Mono remains the exact mean of all captured channels. Stereo uses independent channel histories and peak holds.
+pub struct Analyzer {
+    mono: ChannelAnalyzer,
+    stereo: Option<(ChannelAnalyzer, ChannelAnalyzer)>,
+}
+
+impl Analyzer {
+    pub fn new(sample_rate: u32) -> Self {
+        Self::with_stereo(sample_rate, false)
+    }
+
+    pub fn with_stereo(sample_rate: u32, stereo: bool) -> Self {
+        Self {
+            mono: ChannelAnalyzer::new(sample_rate),
+            stereo: stereo.then(|| {
+                (
+                    ChannelAnalyzer::new(sample_rate),
+                    ChannelAnalyzer::new(sample_rate),
+                )
+            }),
+        }
+    }
+
+    /// Used by mono and stereo capture devices. Mono inputs are duplicated in the optional stereo result.
+    pub fn push(&mut self, samples: &[f32], channels: usize) {
+        self.mono.push(samples, channels);
+        if let Some((left, right)) = &mut self.stereo {
+            assert!(
+                channels == 1 || channels == 2,
+                "Stereo requires a known channel layout"
+            );
+            for frame in samples.chunks_exact(channels) {
+                left.push(&frame[..1], 1);
+                right.push(&frame[channels - 1..channels], 1);
+            }
+        }
+    }
+
+    /// WASAPI retains its native channel count. A speaker-aware mix supplies the stereo view without changing mono.
+    pub fn push_mapped(&mut self, samples: &[f32], mix: &super::channels::StereoMix) {
+        self.mono.push(samples, mix.channels());
+        if let Some((left, right)) = &mut self.stereo {
+            for frame in samples.chunks_exact(mix.channels()) {
+                let (l, r) = mix.apply(frame);
+                left.push(&[l], 1);
+                right.push(&[r], 1);
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.mono.clear();
+        if let Some((left, right)) = &mut self.stereo {
+            left.clear();
+            right.clear();
+        }
+    }
+
+    pub fn analyse(&mut self, out: &mut Frame) -> bool {
+        *out = Frame::silence(self.stereo.is_some());
+        let mut mono = ChannelFrame::default();
+        if !self.mono.analyse(&mut mono) {
+            return false;
+        }
+        out.amplitude = mono.amplitude;
+        out.peak = mono.peak;
+        out.bands = mono.bands;
+        if let Some((left, right)) = &mut self.stereo {
+            let stereo = out.stereo.as_mut().unwrap();
+            left.analyse(&mut stereo.left);
+            right.analyse(&mut stereo.right);
+        }
+        true
     }
 }
 
@@ -381,5 +516,138 @@ mod tests {
             (float(0), float(1), float(2), float(MESSAGE_FLOATS - 1)),
             (2.0, 0.5, 0.75, 0.25)
         );
+    }
+
+    #[test]
+    fn stereo_separates_tones_and_keeps_the_original_mono_analysis() {
+        for rate in [44_100, 48_000, 96_000, 192_000] {
+            let left = tone(rate, 440.0, 0.02, 8192, 1);
+            let right = tone(rate, 5000.0, 0.02, 8192, 1);
+            let samples: Vec<f32> = left
+                .iter()
+                .zip(&right)
+                .flat_map(|(&l, &r)| [l, r])
+                .collect();
+            let mut analyzer = Analyzer::with_stereo(rate, true);
+            let mut mono = Analyzer::new(rate);
+            analyzer.push(&samples, 2);
+            mono.push(&samples, 2);
+            let (mut frame, mut old) = (Frame::default(), Frame::default());
+            assert!(analyzer.analyse(&mut frame) && mono.analyse(&mut old));
+            assert_eq!(frame.bands, old.bands);
+            assert_eq!((frame.amplitude, frame.peak), (old.amplitude, old.peak));
+            assert!(mono.stereo.is_none());
+            let stereo = frame.stereo.unwrap();
+            let peak = |channel: &ChannelFrame| {
+                (0..BANDS)
+                    .max_by(|&a, &b| channel.bands[a].total_cmp(&channel.bands[b]))
+                    .unwrap()
+            };
+            assert!((band_centre_hz(rate, peak(&stereo.left)) / 440.0 - 1.0).abs() < 0.2);
+            assert!((band_centre_hz(rate, peak(&stereo.right)) / 5000.0 - 1.0).abs() < 0.2);
+        }
+    }
+
+    #[test]
+    fn opposite_phase_survives_in_stereo_while_mono_stays_silent() {
+        let samples: Vec<f32> = tone(48_000, 440.0, 0.02, 4096, 1)
+            .iter()
+            .flat_map(|&l| [l, -l])
+            .collect();
+        let mut analyzer = Analyzer::with_stereo(48_000, true);
+        analyzer.push(&samples, 2);
+        let mut frame = Frame::default();
+        assert!(analyzer.analyse(&mut frame));
+        assert_eq!(frame.amplitude, 0.0);
+        assert!(frame.bands.iter().all(|&b| b == 0.0));
+        let stereo = frame.stereo.unwrap();
+        assert!(stereo.left.amplitude > 0.0 && stereo.right.amplitude > 0.0);
+        assert_eq!(stereo.left.bands, stereo.right.bands);
+    }
+
+    #[test]
+    fn silent_side_has_no_leakage_and_clear_resets_both_peak_holds() {
+        for side in [0, 1] {
+            let samples: Vec<f32> = tone(48_000, 440.0, 0.02, 4096, 1)
+                .iter()
+                .flat_map(|&v| if side == 0 { [v, 0.0] } else { [0.0, v] })
+                .collect();
+            let mut analyzer = Analyzer::with_stereo(48_000, true);
+            analyzer.push(&samples, 2);
+            let mut frame = Frame::default();
+            assert!(analyzer.analyse(&mut frame));
+            let stereo = frame.stereo.as_ref().unwrap();
+            let (loud, silent) = if side == 0 {
+                (&stereo.left, &stereo.right)
+            } else {
+                (&stereo.right, &stereo.left)
+            };
+            assert!(loud.peak > 0.0);
+            assert_eq!((silent.amplitude, silent.peak), (0.0, 0.0));
+            assert!(silent.bands.iter().all(|&b| b == 0.0));
+            analyzer.clear();
+            assert!(!analyzer.analyse(&mut frame));
+            analyzer.push(&vec![0.0; 8192], 2);
+            assert!(analyzer.analyse(&mut frame));
+            let stereo = frame.stereo.unwrap();
+            assert_eq!((stereo.left.peak, stereo.right.peak), (0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn stereo_duplicates_a_mono_source_and_mapped_surround_keeps_mono_unchanged() {
+        let samples = tone(48_000, 440.0, 0.02, 4096, 1);
+        let mut analyzer = Analyzer::with_stereo(48_000, true);
+        analyzer.push(&samples, 1);
+        let mut frame = Frame::default();
+        assert!(analyzer.analyse(&mut frame));
+        let stereo = frame.stereo.as_ref().unwrap();
+        assert_eq!(frame.bands, stereo.left.bands);
+        assert_eq!(stereo.left.bands, stereo.right.bands);
+
+        let surround: Vec<f32> = samples
+            .iter()
+            .flat_map(|&v| [0.0, 0.0, v, 0.0, 0.0, 0.0])
+            .collect();
+        let mix = super::super::channels::StereoMix::new(6, 0x3f).unwrap();
+        let mut analyzer = Analyzer::with_stereo(48_000, true);
+        let mut mono = Analyzer::new(48_000);
+        analyzer.push_mapped(&surround, &mix);
+        mono.push(&surround, 6);
+        let mut old = Frame::default();
+        analyzer.analyse(&mut frame);
+        mono.analyse(&mut old);
+        assert_eq!(frame.bands, old.bands);
+        let stereo = frame.stereo.unwrap();
+        assert!(stereo.left.amplitude > 0.0 && stereo.right.amplitude > 0.0);
+        assert_eq!(stereo.left.bands, stereo.right.bands);
+    }
+
+    #[test]
+    fn stereo_wire_layout_has_distinct_kind_and_fixed_channel_offsets() {
+        let mut frame = Frame::silence(true);
+        frame.amplitude = 0.1;
+        let stereo = frame.stereo.as_mut().unwrap();
+        stereo.left.amplitude = 0.2;
+        stereo.left.bands[0] = 0.3;
+        stereo.right.peak = 0.4;
+        stereo.right.bands[BANDS - 1] = 0.5;
+        let bytes = frame.encode(KIND_FRAME);
+        assert_eq!(bytes.len(), STEREO_MESSAGE_FLOATS * 4);
+        let at = |i: usize| f32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
+        assert_eq!(
+            (at(0), at(1), at(MESSAGE_FLOATS), at(MESSAGE_FLOATS + 2)),
+            (3.0, 0.1, 0.2, 0.3)
+        );
+        assert_eq!(
+            (
+                at(MESSAGE_FLOATS + 2 + BANDS + 1),
+                at(STEREO_MESSAGE_FLOATS - 1)
+            ),
+            (0.4, 0.5)
+        );
+        for kind in [KIND_SOURCE_LOST, KIND_HOST_DISABLED] {
+            assert_eq!(frame.encode(kind).len(), MESSAGE_FLOATS * 4);
+        }
     }
 }

@@ -11,7 +11,7 @@ mock.module('@tauri-apps/api/event', () => ({ listen: async () => () => {} }))
 const { createTauriBridge, createTauriSystemAudioSource, installTauriSystemAudioSource } = await import('./system-audio-tauri')
 const { getSystemAudioSource } = await import('./system-audio-source')
 import type { NativeSystemAudioBridge, NativeSystemAudioStatus } from './system-audio-tauri'
-import type { SystemAudioSourceEndReason } from './system-audio-source'
+import type { SystemAudioSourceEndReason, SystemAudioSourceFrame } from './system-audio-source'
 
 /** Let every queued promise callback run. */
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -53,6 +53,7 @@ function message(kind: number, amplitude = 0, peak = 0, bands: number[] = []): A
 
 class FakeBridge implements NativeSystemAudioBridge {
   starts: number[] = []
+  stereoStarts: boolean[] = []
   stops = 0
   failNextStart: Error | null = null
   statusResult: NativeSystemAudioStatus | Error = READY
@@ -68,13 +69,14 @@ class FakeBridge implements NativeSystemAudioBridge {
     this.watcher = onStatus
     return () => { this.unwatched++ }
   }
-  async start(maxFps: number, onMessage: (data: unknown) => void) {
+  async start(maxFps: number, onMessage: (data: unknown) => void, stereo = false) {
     if (this.failNextStart) {
       const error = this.failNextStart
       this.failNextStart = null
       throw error
     }
     this.starts.push(maxFps)
+    this.stereoStarts.push(stereo)
     this.sinks.push(onMessage)
   }
   async stop() { this.stops++ }
@@ -83,6 +85,104 @@ class FakeBridge implements NativeSystemAudioBridge {
   /** Deliver on an older session's channel (which native code has already replaced). */
   sendOn(index: number, data: unknown) { this.sinks[index](data) }
 }
+
+function stereoMessage(): ArrayBuffer {
+  return new Float32Array([
+    3, 0.5, 0.75, ...new Array(64).fill(0.25),
+    0.2, 0.4, ...new Array(64).fill(0.125),
+    0.8, 1, ...new Array(64).fill(0.875),
+  ]).buffer
+}
+
+describe('optional stereo analysis', () => {
+  test('native requests carry the explicit mode', async () => {
+    nativeInvocations.length = 0
+    const bridge = createTauriBridge()
+    await bridge.start(15, () => {}, true)
+    expect(nativeInvocations[0].args.stereo).toBe(true)
+  })
+
+  test('older native builds reject stereo before changing a shared mono session', async () => {
+    const { source, bridge, listener } = setup()
+    const mono = listener()
+    await source.start(mono.handlers, { maxFps: 30 })
+    await expect(source.start(listener().handlers, { maxFps: 30, stereo: true })).rejects.toMatchObject({ name: 'NotSupportedError' })
+    expect(bridge.starts).toEqual([30])
+    bridge.send(message(0, 1, 1, [1]))
+    expect(mono.frames).toHaveLength(1)
+  })
+
+  test('one shared capture upgrades and downgrades when stereo listeners join and leave', async () => {
+    const { source, bridge } = setup({ ...READY, stereoSupported: true })
+    const monoFrames: SystemAudioSourceFrame[] = []
+    const stereoFrames: SystemAudioSourceFrame[] = []
+    const handlers = (frames: SystemAudioSourceFrame[]) => ({ onFrame: (frame: SystemAudioSourceFrame) => frames.push(frame), onEnd() {} })
+    const mono = await source.start(handlers(monoFrames), { maxFps: 30 })
+    const pending = source.start(handlers(stereoFrames), { maxFps: 10, stereo: true })
+    // The old capture can deliver while the new subscriber waits for its upgrade.
+    bridge.send(message(0, 0.5, 0.75, [0.25]))
+    expect(monoFrames).toHaveLength(1)
+    expect(stereoFrames).toHaveLength(0)
+    const stereo = await pending
+    expect(bridge.starts).toEqual([30, 30])
+    expect(bridge.stereoStarts).toEqual([false, true])
+    const buffer = stereoMessage()
+    bridge.send(buffer)
+    const combined = monoFrames.at(-1)!
+    const split = stereoFrames[0]
+    expect(Object.keys(combined).sort()).toEqual(['amplitude', 'frequencies', 'peak'])
+    expect(Array.from(combined.frequencies)).toEqual(new Array(64).fill(0.25))
+    expect(split.stereo!.left.amplitude).toBeCloseTo(0.2)
+    expect(split.stereo!.right.peak).toBe(1)
+    expect(Array.from(split.stereo!.left.frequencies)).toEqual(new Array(64).fill(0.125))
+    expect(Array.from(split.stereo!.right.frequencies)).toEqual(new Array(64).fill(0.875))
+    expect((split.stereo!.left.frequencies as Float32Array).buffer).toBe(buffer)
+    stereo.stop()
+    await flush()
+    expect(bridge.stereoStarts).toEqual([false, true, false])
+    const before = monoFrames.length
+    bridge.sendOn(1, stereoMessage())
+    expect(monoFrames).toHaveLength(before)
+    bridge.send(message(0, 1, 1, [1]))
+    expect(monoFrames).toHaveLength(before + 1)
+    mono.stop()
+    await flush()
+    expect(bridge.stops).toBe(1)
+  })
+
+  test('stereo capture remains enabled until the last stereo subscriber stops', async () => {
+    const { source, bridge, listener } = setup({ ...READY, stereoSupported: true })
+    await source.start(listener().handlers, { maxFps: 30 })
+    const first = await source.start(listener().handlers, { maxFps: 30, stereo: true })
+    const second = await source.start(listener().handlers, { maxFps: 30, stereo: true })
+    first.stop()
+    await flush()
+    expect(bridge.stereoStarts).toEqual([false, true])
+    second.stop()
+    await flush()
+    expect(bridge.stereoStarts).toEqual([false, true, false])
+  })
+
+  test('truncated or oversized stereo frames cannot be interpreted as mono bands', async () => {
+    const { source, bridge } = setup({ ...READY, stereoSupported: true })
+    const frames: SystemAudioSourceFrame[] = []
+    await source.start({ onFrame: frame => frames.push(frame), onEnd() {} }, { maxFps: 30, stereo: true })
+    bridge.send(stereoMessage().slice(0, -4))
+    bridge.send(new Float32Array(200).fill(3).buffer)
+    expect(frames).toHaveLength(0)
+    bridge.send(stereoMessage())
+    expect(frames).toHaveLength(1)
+  })
+
+  test('a capture that unexpectedly sends mono ends stereo consumers explicitly', async () => {
+    const { source, bridge, listener } = setup({ ...READY, stereoSupported: true })
+    const stereo = listener()
+    await source.start(stereo.handlers, { maxFps: 30, stereo: true })
+    bridge.send(message(0, 1, 1, [1]))
+    expect(stereo.frames).toHaveLength(0)
+    expect(stereo.ends).toEqual(['source-lost'])
+  })
+})
 
 function setup(status: NativeSystemAudioStatus = READY) {
   const bridge = new FakeBridge()

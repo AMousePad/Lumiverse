@@ -9,7 +9,7 @@
  * extension-facing layer to leak: it receives a spectrum and levels, rebinned and rate-limited by the host.
  */
 
-export interface SystemAudioSourceFrame {
+export interface SystemAudioSourceChannel {
   /** Overall level, 0 – 1. */
   amplitude: number
   /** Loudest recent level, 0 – 1. */
@@ -19,6 +19,10 @@ export interface SystemAudioSourceFrame {
    * view into a transport buffer: it is only valid during the `onFrame` call.
    */
   frequencies: ArrayLike<number>
+}
+
+export interface SystemAudioSourceFrame extends SystemAudioSourceChannel {
+  stereo?: { left: SystemAudioSourceChannel; right: SystemAudioSourceChannel }
 }
 
 /** Why a source stopped by itself. */
@@ -34,6 +38,7 @@ export interface SystemAudioSourceHandlers {
 export interface SystemAudioSourceStartHints {
   /** The highest frame rate any consumer will use, 1 – 30. Frames above it are dropped anyway. */
   maxFps: number
+  stereo?: boolean
 }
 
 export interface SystemAudioSourceHandle {
@@ -42,8 +47,8 @@ export interface SystemAudioSourceHandle {
 }
 
 export type SystemAudioAvailability =
-  | { available: true }
-  | { available: false; reason: 'unsupported' | 'disabled' }
+  | { available: true; stereoSupported?: boolean }
+  | { available: false; reason: 'unsupported' | 'disabled'; stereoSupported?: boolean }
 
 export interface SystemAudioSource {
   /** Cheap and side-effect free: no prompt, no device access. */

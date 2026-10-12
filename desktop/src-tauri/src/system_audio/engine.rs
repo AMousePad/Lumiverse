@@ -6,7 +6,7 @@
 //!
 //! - **Silence costs almost nothing.** After [`Timings::silence_hold`] without sound the engine sends one zero frame,
 //!   drops its analysis, and only wakes [`Timings::idle`] apart to look for new audio.
-//! - **Sound costs one FFT per emitted frame**, at the rate the extension asked for, and nothing between frames.
+//! - **Sound costs one FFT per emitted mono frame**, or three with stereo, and nothing between frames.
 //! - **A hidden window costs a drain**: audio is released without being decoded, and nothing is sent.
 //! - The thread never sleeps longer than [`Timings::max_wait`], so a stop request is honoured promptly.
 //!
@@ -72,11 +72,22 @@ pub struct Options {
     /// Set while the frontend window is hidden or minimised.
     pub paused: Arc<AtomicBool>,
     pub timings: Timings,
+    pub stereo: bool,
 }
 
 impl Options {
     pub fn new(interval: Duration, paused: Arc<AtomicBool>) -> Self {
-        Self { interval, paused, timings: Timings::default() }
+        Self {
+            interval,
+            paused,
+            timings: Timings::default(),
+            stereo: false,
+        }
+    }
+
+    pub fn with_stereo(mut self, stereo: bool) -> Self {
+        self.stereo = stereo;
+        self
     }
 }
 
@@ -170,8 +181,20 @@ fn run<D: Device>(
     options: &Options,
     on_frame: &mut impl FnMut(&Frame) -> bool,
 ) -> Exit {
-    let Session { mut device, mut reopen, mut interrupted, keep } = session;
-    let exit = poll(&mut device, &mut reopen, &mut interrupted, stop, options, on_frame);
+    let Session {
+        mut device,
+        mut reopen,
+        mut interrupted,
+        keep,
+    } = session;
+    let exit = poll(
+        &mut device,
+        &mut reopen,
+        &mut interrupted,
+        stop,
+        options,
+        on_frame,
+    );
     // Device first, then whatever it depended on.
     drop(device);
     drop(reopen);
@@ -189,10 +212,11 @@ fn poll<D: Device>(
     on_frame: &mut impl FnMut(&Frame) -> bool,
 ) -> Exit {
     let timings = &options.timings;
-    let mut analyzer = Analyzer::new(device.sample_rate());
+    let mut analyzer = Analyzer::with_stereo(device.sample_rate(), options.stereo);
     let mut frame = Frame::default();
     let mut active = false;
-    let (mut last_sound, mut next_frame, mut last_guard) = (Instant::now(), Instant::now(), Instant::now());
+    let (mut last_sound, mut next_frame, mut last_guard) =
+        (Instant::now(), Instant::now(), Instant::now());
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -214,7 +238,7 @@ fn poll<D: Device>(
                 // approved listening to system audio, not to one particular device.
                 match reopen(stop) {
                     Some(reopened) => {
-                        analyzer = Analyzer::new(reopened.sample_rate());
+                        analyzer = Analyzer::with_stereo(reopened.sample_rate(), options.stereo);
                         *device = reopened;
                         active = false;
                         continue;
@@ -251,7 +275,7 @@ fn poll<D: Device>(
             // Sound stopped: one clean zero frame so the visual settles, then back to idle.
             active = false;
             analyzer.clear();
-            if !on_frame(&Frame::default()) {
+            if !on_frame(&Frame::silence(options.stereo)) {
                 return Exit::Stopped;
             }
             continue;
@@ -262,7 +286,10 @@ fn poll<D: Device>(
             }
             next_frame = (next_frame + options.interval).max(now);
         }
-        pause(next_frame.saturating_duration_since(Instant::now()), timings);
+        pause(
+            next_frame.saturating_duration_since(Instant::now()),
+            timings,
+        );
     }
 }
 
@@ -345,20 +372,32 @@ mod tests {
     }
 
     fn start(knobs: Knobs, listening: bool) -> Rig {
+        start_mode(knobs, listening, false)
+    }
+
+    fn start_mode(knobs: Knobs, listening: bool, stereo: bool) -> Rig {
         let paused = Arc::new(AtomicBool::new(false));
         let frames = Arc::new(Mutex::new(Vec::new()));
         let (tx, ended) = mpsc::channel();
         let setup_knobs = knobs.clone();
         let sink = frames.clone();
         let capture = spawn(
-            Options { interval: Duration::from_millis(10), paused: paused.clone(), timings: fast() },
+            Options {
+                interval: Duration::from_millis(10),
+                paused: paused.clone(),
+                timings: fast(),
+                stereo,
+            },
             move || {
                 let (reopen_knobs, lock_knobs) = (setup_knobs.clone(), setup_knobs.clone());
                 Ok(Session {
                     device: Fake(setup_knobs),
                     reopen: Box::new(move |_| {
                         reopen_knobs.reopens.fetch_add(1, Ordering::SeqCst);
-                        reopen_knobs.reopen_works.load(Ordering::SeqCst).then(|| Fake(reopen_knobs.clone()))
+                        reopen_knobs
+                            .reopen_works
+                            .load(Ordering::SeqCst)
+                            .then(|| Fake(reopen_knobs.clone()))
                     }),
                     interrupted: Box::new(move || lock_knobs.locked.load(Ordering::SeqCst)),
                     keep: Box::new(()),
@@ -373,7 +412,13 @@ mod tests {
             },
         )
         .expect("starts");
-        Rig { knobs, paused, frames, ended, capture }
+        Rig {
+            knobs,
+            paused,
+            frames,
+            ended,
+            capture,
+        }
     }
 
     fn settle(ms: u64) {
@@ -396,6 +441,53 @@ mod tests {
     }
 
     #[test]
+    fn stereo_mode_survives_device_reopen_and_emits_complete_silence() {
+        let rig = start_mode(Knobs::default(), true, true);
+        rig.knobs.loud.store(true, Ordering::SeqCst);
+        settle(150);
+        assert!(rig
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|f| f
+                .stereo
+                .as_ref()
+                .is_some_and(|s| s.left.amplitude > 0.0 && s.right.amplitude > 0.0)));
+        rig.knobs.reopen_works.store(true, Ordering::SeqCst);
+        rig.knobs.gone.store(true, Ordering::SeqCst);
+        settle(150);
+        assert!(rig.knobs.reopens.load(Ordering::SeqCst) > 0);
+        assert!(rig
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|f| f.stereo.is_some()));
+        rig.knobs.loud.store(false, Ordering::SeqCst);
+        settle(400);
+        let last = rig.frames.lock().unwrap().last().cloned().unwrap();
+        let stereo = last.stereo.unwrap();
+        assert_eq!(
+            (
+                last.amplitude,
+                stereo.left.amplitude,
+                stereo.right.amplitude
+            ),
+            (0.0, 0.0, 0.0)
+        );
+        assert_eq!((stereo.left.peak, stereo.right.peak), (0.0, 0.0));
+        assert!(stereo
+            .left
+            .bands
+            .iter()
+            .chain(&stereo.right.bands)
+            .all(|&v| v == 0.0));
+        rig.capture.stop();
+        assert_eq!(exit_of(&rig), Some(Exit::Stopped));
+    }
+
+    #[test]
     fn sound_produces_frames_at_roughly_the_requested_rate_then_one_zero_frame() {
         let rig = start(Knobs::default(), true);
         rig.knobs.loud.store(true, Ordering::SeqCst);
@@ -403,7 +495,12 @@ mod tests {
         let during = count(&rig);
         // 10 ms interval over ~400 ms, minus the time to fill the first window: a loose band, not a benchmark.
         assert!((8..=45).contains(&during), "{during} frames");
-        assert!(rig.frames.lock().unwrap().iter().any(|f| f.bands.iter().any(|&b| b > 0.0)));
+        assert!(rig
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|f| f.bands.iter().any(|&b| b > 0.0)));
 
         rig.knobs.loud.store(false, Ordering::SeqCst);
         settle(500);
@@ -429,7 +526,10 @@ mod tests {
         let discards = rig.knobs.discards.load(Ordering::SeqCst);
         settle(200);
         assert_eq!(count(&rig), sent, "frames were sent while hidden");
-        assert!(rig.knobs.discards.load(Ordering::SeqCst) > discards, "audio was not released while hidden");
+        assert!(
+            rig.knobs.discards.load(Ordering::SeqCst) > discards,
+            "audio was not released while hidden"
+        );
 
         rig.paused.store(false, Ordering::SeqCst);
         settle(300);
@@ -508,6 +608,9 @@ mod tests {
             |_| true,
             |_| {},
         );
-        assert_eq!(result.err().as_deref(), Some("No audio output device is available"));
+        assert_eq!(
+            result.err().as_deref(),
+            Some("No audio output device is available")
+        );
     }
 }

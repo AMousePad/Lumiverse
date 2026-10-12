@@ -6,21 +6,17 @@
 //! macOS asks the user for "System Audio Recording" the first time a tap is created. If that is refused, opening the
 //! tap fails and `start` says so; Lumiverse never requests Screen Recording for this feature.
 
-use std::{
-    ffi::c_void,
-    thread,
-    time::Duration,
-};
+use std::{ffi::c_void, thread, time::Duration};
 
+pub use super::engine::{Capture, Exit, Options};
 use super::{
     analyzer::{Analyzer, Frame},
     engine::{spawn, Device, Fault, Session},
 };
-pub use super::engine::{Capture, Exit, Options};
 
 extern "C" {
     fn lumiverse_audio_tap_available() -> bool;
-    fn lumiverse_audio_tap_open(status: *mut i32) -> *mut c_void;
+    fn lumiverse_audio_tap_open(status: *mut i32, stereo: bool) -> *mut c_void;
     fn lumiverse_audio_tap_sample_rate(handle: *mut c_void) -> u32;
     fn lumiverse_audio_tap_set_running(handle: *mut c_void, run: bool) -> bool;
     fn lumiverse_audio_tap_read(handle: *mut c_void, out: *mut f32, capacity: usize) -> usize;
@@ -57,16 +53,22 @@ struct Tap {
     handle: *mut c_void,
     running: bool,
     scratch: Vec<f32>,
+    channels: usize,
 }
 
 impl Tap {
-    fn open() -> Result<Self, String> {
+    fn open(stereo: bool) -> Result<Self, String> {
         let mut status = 0i32;
-        let handle = unsafe { lumiverse_audio_tap_open(&mut status) };
+        let handle = unsafe { lumiverse_audio_tap_open(&mut status, stereo) };
         if handle.is_null() {
             return Err(describe(status));
         }
-        Ok(Self { handle, running: false, scratch: vec![0.0; READ_CHUNK] })
+        Ok(Self {
+            handle,
+            running: false,
+            scratch: vec![0.0; READ_CHUNK],
+            channels: if stereo { 2 } else { 1 },
+        })
     }
 
     fn set_running(&mut self, run: bool) -> bool {
@@ -106,7 +108,9 @@ impl Device for Tap {
         }
         let mut loudest = 0.0f32;
         loop {
-            let count = unsafe { lumiverse_audio_tap_read(self.handle, self.scratch.as_mut_ptr(), self.scratch.len()) };
+            let count = unsafe {
+                lumiverse_audio_tap_read(self.handle, self.scratch.as_mut_ptr(), self.scratch.len())
+            };
             if count == 0 {
                 break;
             }
@@ -116,7 +120,7 @@ impl Device for Tap {
                 }
                 loudest = loudest.max(sample.abs());
             }
-            analyzer.push(&self.scratch[..count], 1);
+            analyzer.push(&self.scratch[..count], self.channels);
             if count < self.scratch.len() {
                 break;
             }
@@ -152,20 +156,21 @@ pub fn start(
     if !supported() {
         return Err(describe(1));
     }
+    let stereo = options.stereo;
     spawn(
         options,
-        || {
+        move || {
             let watch = Watch::open();
-            let device = Tap::open()?;
+            let device = Tap::open(stereo)?;
             Ok(Session {
                 device,
-                reopen: Box::new(|stop| {
+                reopen: Box::new(move |stop| {
                     for _ in 0..REOPEN_TRIES {
                         thread::sleep(REOPEN_WAIT);
                         if stop.load(std::sync::atomic::Ordering::Relaxed) {
                             return None;
                         }
-                        if let Ok(tap) = Tap::open() {
+                        if let Ok(tap) = Tap::open(stereo) {
                             return Some(tap);
                         }
                     }
@@ -179,4 +184,3 @@ pub fn start(
         on_end,
     )
 }
-
