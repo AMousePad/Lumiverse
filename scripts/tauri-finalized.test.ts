@@ -33,9 +33,9 @@ describe("finalized Tauri build routing", () => {
 
   test("routes target-specific bundles to Tauri's target directory", () => {
     expect(appImageBundleDirectory(["build", "--target", "aarch64-unknown-linux-gnu"]))
-      .toEndWith("desktop/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/appimage");
+      .toEndWith(join("desktop", "src-tauri", "target", "aarch64-unknown-linux-gnu", "release", "bundle", "appimage"));
     expect(appImageBundleDirectory(["build", "--target=x86_64-unknown-linux-gnu"]))
-      .toEndWith("desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage");
+      .toEndWith(join("desktop", "src-tauri", "target", "x86_64-unknown-linux-gnu", "release", "bundle", "appimage"));
   });
 
   test("uses FUSE-free, RELR-compatible linuxdeploy settings for Linux AppImages", () => {
