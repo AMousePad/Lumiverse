@@ -180,8 +180,12 @@ const SELF_ECHO_WINDOW_MS = 2_000
 function isEditableEntryField(target: EventTarget | null): target is HTMLElement {
   if (!(target instanceof HTMLElement)) return false
   if (!target.closest('[data-world-book-entry-editor="true"]')) return false
-  if (target.isContentEditable) return true
-  if (target instanceof HTMLTextAreaElement) return !target.disabled && !target.readOnly
+  // Multiline editors reveal their caret through the shared iOS PWA controller
+  // or native browser scrolling, just like preset content fields. Revealing
+  // their whole box here can alternate top/bottom alignment during keyboard
+  // resizing and move an already-visible caret again on every input event.
+  if (target instanceof HTMLTextAreaElement || target.isContentEditable ||
+      target.hasAttribute('data-keyboard-caret-managed')) return false
   if (target instanceof HTMLSelectElement) return !target.disabled
   if (!(target instanceof HTMLInputElement) || target.disabled || target.readOnly) return false
 
