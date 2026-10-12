@@ -13,6 +13,9 @@ export interface CaptionFingerprintInput {
   presetId?: string | null;
   prompt?: string;
   parserConnectionId?: string | null;
+  parserProvider?: string;
+  parserApiUrl?: string;
+  parserMetadata?: Record<string, any>;
   parserModel?: string;
   parserParameters?: Record<string, any>;
 }
@@ -41,6 +44,9 @@ export function buildCaptionFingerprint(input: CaptionFingerprintInput): string 
     presetId: input.presetId || null,
     prompt: typeof input.prompt === "string" ? input.prompt : "",
     parserConnectionId: input.parserConnectionId || null,
+    parserProvider: input.parserProvider || "",
+    parserApiUrl: input.parserApiUrl || "",
+    parserMetadata: input.parserMetadata || {},
     parserModel: typeof input.parserModel === "string" ? input.parserModel : "",
     parserParameters: input.parserParameters && typeof input.parserParameters === "object" && !Array.isArray(input.parserParameters)
       ? input.parserParameters

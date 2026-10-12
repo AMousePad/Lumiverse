@@ -857,14 +857,20 @@ export interface CaptionImageInput {
   parserModel?: string;
   parserParameters?: Record<string, any>;
   timeoutSeconds?: number;
+  signal?: AbortSignal;
 }
 
 export async function captionImage(
   userId: string,
   input: CaptionImageInput,
 ): Promise<{ caption: string }> {
+  input.signal?.throwIfAborted();
   const settings = getImageGenSettings(userId);
+  const request = await resolveCaptioningRequest(userId, settings, input);
+  return generateImageCaption(userId, input, request, settings.promptGenerationTimeoutSeconds ?? 60);
+}
 
+async function resolveCaptioningRequest(userId: string, settings: ImageGenSettings, input: Partial<CaptionImageInput>) {
   const promptText =
     input.prompt?.trim() ||
     (input.presetId
@@ -881,16 +887,24 @@ export async function captionImage(
     parserModel: input.parserModel || "",
     parserParameters: input.parserParameters || {},
   });
+  return { promptText, parser };
+}
 
-  const timeoutSecs = resolveTimeoutSeconds(input.timeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
-  const controller = new AbortController();
+async function generateImageCaption(
+  userId: string,
+  input: CaptionImageInput,
+  { promptText, parser }: Awaited<ReturnType<typeof resolveCaptioningRequest>>,
+  fallbackTimeoutSeconds: number,
+): Promise<{ caption: string }> {
+  const timeoutSecs = resolveTimeoutSeconds(input.timeoutSeconds, fallbackTimeoutSeconds);
   const timeout = createPhaseTimeoutSignal(
-    controller.signal,
+    input.signal ?? new AbortController().signal,
     timeoutSecs,
     `Image captioning timed out after ${timeoutSecs}s`,
   );
 
   try {
+    timeout.signal.throwIfAborted();
     const response = await rawGenerate(userId, {
       provider: parser.connection.provider,
       model: parser.model,
@@ -912,6 +926,7 @@ export async function captionImage(
       parameters: parser.parameters,
       signal: timeout.signal,
     }, { origin: { kind: "sidecar", name: "Image Generation", operation: "caption" } });
+    timeout.signal.throwIfAborted();
     return { caption: (response.content || "").trim() };
   } catch (err) {
     throw resolveAbortReason(timeout.signal) ?? err;
@@ -1205,13 +1220,15 @@ async function resolveAvatarAppearanceReferences(
   userId: string,
   chatId: string,
   settings: ImageGenSettings,
+  signal?: AbortSignal,
 ): Promise<AvatarAppearanceReferences> {
+  signal?.throwIfAborted();
   const wantCharacter = !!settings.describeCharacterAvatar;
   const wantPersona = !!settings.describePersonaAvatar;
   if (!wantCharacter && !wantPersona) return {};
 
   const source = resolveCaptioningSource(settings);
-  const fingerprint = avatarCaptionSvc.buildCaptionFingerprint(source);
+  let captioningRequest: ReturnType<typeof resolveCaptioningRequest> | undefined;
   const out: AvatarAppearanceReferences = {};
 
   const captionOne = async (
@@ -1219,21 +1236,32 @@ async function resolveAvatarAppearanceReferences(
     entityId: string,
     imageId: string,
   ): Promise<string | undefined> => {
-    const cached = avatarCaptionSvc.lookupCachedCaption(userId, subject, entityId, imageId, fingerprint);
-    if (cached) return cached;
     try {
+      signal?.throwIfAborted();
+      const request = await (captioningRequest ??= resolveCaptioningRequest(userId, settings, source));
+      signal?.throwIfAborted();
+      const { connection, model, parameters } = request.parser;
+      const fingerprint = avatarCaptionSvc.buildCaptionFingerprint({
+        presetId: source.presetId,
+        prompt: request.promptText,
+        parserConnectionId: connection.id,
+        parserProvider: connection.provider,
+        parserApiUrl: connection.api_url,
+        parserMetadata: connection.metadata,
+        parserModel: model,
+        parserParameters: parameters,
+      });
+      const cached = avatarCaptionSvc.lookupCachedCaption(userId, subject, entityId, imageId, fingerprint);
+      if (cached) return cached;
       const image = await loadAvatarImageBase64(userId, imageId);
       if (!image) return undefined;
-      const { caption } = await captionImage(userId, {
+      const { caption } = await generateImageCaption(userId, {
         image: image.data,
         mimeType: image.mimeType,
-        prompt: source.prompt,
-        presetId: source.presetId,
-        parserConnectionId: source.parserConnectionId,
-        parserModel: source.parserModel,
-        parserParameters: source.parserParameters,
         timeoutSeconds: settings.promptGenerationTimeoutSeconds,
-      });
+        signal,
+      }, request, settings.promptGenerationTimeoutSeconds ?? 60);
+      signal?.throwIfAborted();
       const trimmed = caption.trim();
       if (!trimmed) return undefined;
       avatarCaptionSvc.setCachedCaption(userId, subject, entityId, {
@@ -1243,6 +1271,7 @@ async function resolveAvatarAppearanceReferences(
       });
       return trimmed;
     } catch (err) {
+      signal?.throwIfAborted();
       console.warn(
         `[image-gen] Failed to caption ${subject} avatar for ${entityId}:`,
         err instanceof Error ? err.message : err,
@@ -1826,7 +1855,7 @@ export async function buildContextMessages(userId: string, chatId: string, setti
     if (personaInfo) msgs.push({ role: "system", content: `## User Persona\n${personaInfo}` });
   }
 
-  const avatarRefs = await resolveAvatarAppearanceReferences(userId, chatId, settings);
+  const avatarRefs = await resolveAvatarAppearanceReferences(userId, chatId, settings, signal);
   if (avatarRefs.character || avatarRefs.persona) {
     const blocks = [
       avatarRefs.character && `### Character avatar appearance (from portrait)\n${avatarRefs.character}`,
@@ -2252,7 +2281,6 @@ const TRANSFERABLE_SETTING_TYPES: Record<string, "boolean" | "number" | "string"
   includePersona: "boolean",
   describeCharacterAvatar: "boolean",
   describePersonaAvatar: "boolean",
-  activeCaptioningPresetId: "string",
   promptMode: "string",
   customPrompt: "string",
   customNegativePrompt: "string",
@@ -2345,6 +2373,12 @@ export function exportImageGenConfig(
     // The active preset reference only travels alongside the preset itself.
     if (settings.activePromptPresetId && out.presets?.some((p) => p.id === settings.activePromptPresetId)) {
       transferable.activePromptPresetId = settings.activePromptPresetId;
+    }
+    if (
+      settings.activeCaptioningPresetId === null
+      || out.presets?.some((p) => p.id === settings.activeCaptioningPresetId && p.kind === "captioning")
+    ) {
+      transferable.activeCaptioningPresetId = settings.activeCaptioningPresetId;
     }
     out.settings = transferable;
   }
@@ -2511,6 +2545,18 @@ export async function importImageGenConfig(
     if (typeof activeId === "string" && presets.some((p) => p.id === activeId && (p.kind ?? "main") === "main")) {
       next.activePromptPresetId = activeId;
       importedSettings = true;
+    }
+    if ("activeCaptioningPresetId" in payload.settings) {
+      const captioningId = payload.settings.activeCaptioningPresetId;
+      if (
+        captioningId === null
+        || (typeof captioningId === "string" && presets.some((p) => p.id === captioningId && p.kind === "captioning"))
+      ) {
+        next.activeCaptioningPresetId = captioningId;
+        importedSettings = true;
+      } else {
+        errors.push('Setting "activeCaptioningPresetId" must be null or reference a captioning preset; it was skipped');
+      }
     }
   }
 

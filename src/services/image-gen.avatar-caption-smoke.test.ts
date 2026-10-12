@@ -5,10 +5,11 @@ import { registerImageProvider, getImageProvider } from "../image-gen/registry";
 import type { ImageProvider } from "../image-gen/provider";
 import type { ImageGenRequest, ImageGenResponse } from "../image-gen/types";
 import * as charactersSvc from "./characters.service";
+import * as connectionsSvc from "./connections.service";
 import * as imageGenConnSvc from "./image-gen-connections.service";
 import * as settingsSvc from "./settings.service";
 import * as avatarCaptionSvc from "./image-gen-avatar-caption.service";
-import { buildContextMessages, generateSceneBackground, previewImagePrompt } from "./image-gen.service";
+import { buildContextMessages, generateSceneBackground, getImageGenSettings, previewImagePrompt } from "./image-gen.service";
 
 const USER_ID = "avatar-caption-smoke-user";
 
@@ -18,6 +19,7 @@ interface CapturedCall {
 
 let captured: CapturedCall[] = [];
 let originalSwarmUI: ImageProvider | undefined;
+let parserConnectionId: string;
 
 const fakeSwarmUI: ImageProvider = {
   name: "swarmui",
@@ -63,9 +65,11 @@ function seedCaptionedCharacter(imageId: string, caption: string) {
 
   const fingerprint = avatarCaptionSvc.buildCaptionFingerprint({
     presetId: null,
-    prompt: undefined,
-    parserConnectionId: null,
-    parserModel: "",
+    prompt: "Describe the avatar.",
+    parserConnectionId,
+    parserProvider: "custom",
+    parserApiUrl: "http://127.0.0.1:1",
+    parserModel: "vision-model",
     parserParameters: {},
   });
   avatarCaptionSvc.setCachedCaption(USER_ID, "character", char.id, {
@@ -92,6 +96,8 @@ async function seedConnectionAndSettings(extra: Record<string, unknown> = {}) {
     describeCharacterAvatar: true,
     describePersonaAvatar: false,
     activeCaptioningPresetId: null,
+    captionPrompt: "Describe the avatar.",
+    promptParserConnectionId: parserConnectionId,
     promptMode: "custom",
     customPrompt: "",
     promptPresets: [],
@@ -129,6 +135,7 @@ beforeAll(() => {
 
 afterAll(() => {
   if (originalSwarmUI) registerImageProvider(originalSwarmUI);
+  closeDatabase();
 });
 
 describe("avatar caption prompt injection", () => {
@@ -136,6 +143,9 @@ describe("avatar caption prompt injection", () => {
     closeDatabase();
     initDatabase(":memory:");
     await applyBaseline();
+    parserConnectionId = (await connectionsSvc.createConnection(USER_ID, {
+      name: "Vision parser", provider: "custom", model: "vision-model", api_url: "http://127.0.0.1:1",
+    })).id;
     captured = [];
   });
 
@@ -177,20 +187,7 @@ describe("avatar caption prompt injection", () => {
     await seedConnectionAndSettings();
     const chatId = insertChat(char.id);
 
-    const msgs = await buildContextMessages(USER_ID, chatId, {
-      enabled: true,
-      includeCharacters: false,
-      includePersona: false,
-      describeCharacterAvatar: true,
-      describePersonaAvatar: false,
-      sceneChangeThreshold: 2,
-      autoGenerate: true,
-      forceGeneration: false,
-      recycleGeneratedImages: false,
-      recycledImageLimit: 1,
-      backgroundOpacity: 0.35,
-      fadeTransitionMs: 800,
-    });
+    const msgs = await buildContextMessages(USER_ID, chatId, getImageGenSettings(USER_ID));
 
     const appearance = msgs.find(
       (m) => m.role === "system" && typeof m.content === "string" && m.content.includes("Visual appearance reference"),
@@ -207,20 +204,7 @@ describe("avatar caption prompt injection", () => {
     await seedConnectionAndSettings({ describeCharacterAvatar: false });
     const chatId = insertChat(char.id);
 
-    const msgs = await buildContextMessages(USER_ID, chatId, {
-      enabled: true,
-      includeCharacters: false,
-      includePersona: false,
-      describeCharacterAvatar: false,
-      describePersonaAvatar: false,
-      sceneChangeThreshold: 2,
-      autoGenerate: true,
-      forceGeneration: false,
-      recycleGeneratedImages: false,
-      recycledImageLimit: 1,
-      backgroundOpacity: 0.35,
-      fadeTransitionMs: 800,
-    });
+    const msgs = await buildContextMessages(USER_ID, chatId, getImageGenSettings(USER_ID));
 
     expect(msgs.some((m) => typeof m.content === "string" && m.content.includes("SHOULD_NOT_APPEAR"))).toBe(false);
   });
