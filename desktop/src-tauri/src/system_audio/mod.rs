@@ -15,6 +15,7 @@
 //! The floating-widget windows get no grant at all.
 
 mod analyzer;
+#[cfg(any(target_os = "windows", test))]
 mod channels;
 #[cfg(target_os = "macos")]
 mod coreaudio;

@@ -319,6 +319,7 @@ pub struct Analyzer {
 }
 
 impl Analyzer {
+    #[cfg(test)]
     pub fn new(sample_rate: u32) -> Self {
         Self::with_stereo(sample_rate, false)
     }
@@ -351,6 +352,7 @@ impl Analyzer {
     }
 
     /// WASAPI retains its native channel count. A speaker-aware mix supplies the stereo view without changing mono.
+    #[cfg(any(target_os = "windows", test))]
     pub fn push_mapped(&mut self, samples: &[f32], mix: &super::channels::StereoMix) {
         self.mono.push(samples, mix.channels());
         if let Some((left, right)) = &mut self.stereo {

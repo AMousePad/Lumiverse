@@ -40,6 +40,7 @@ pub enum Fault {
     /// The device went away (default output changed, driver restart). Worth reopening.
     Gone,
     /// Anything else. Not recoverable.
+    #[cfg(any(target_os = "windows", target_os = "macos", test))]
     Failed,
 }
 
@@ -247,6 +248,7 @@ fn poll<D: Device>(
                     None => return Exit::Lost,
                 }
             }
+            #[cfg(any(target_os = "windows", target_os = "macos", test))]
             Err(Fault::Failed) => return Exit::Lost,
         };
 
