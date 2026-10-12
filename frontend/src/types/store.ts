@@ -490,6 +490,7 @@ export interface WallpaperRef {
 
 export interface WallpaperSettings {
   global: WallpaperRef | null
+  mobile?: WallpaperRef | null
   opacity: number
   fit: 'cover' | 'contain' | 'fill'
   blur: number
