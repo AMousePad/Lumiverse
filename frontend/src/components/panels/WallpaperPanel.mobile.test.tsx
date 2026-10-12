@@ -23,6 +23,7 @@ const state = {
 const flush = mock(async () => {})
 const cleanup = mock(async () => {})
 const upload = mock(async () => ({ id: 'uploaded-mobile' }))
+const deleteFromLibrary = mock(async () => {})
 mock.module('@/store', () => ({ useStore: Object.assign((select: (value: typeof state) => unknown) => select(state), { getState: () => state }) }))
 mock.module('@/store/slices/settings', () => ({ flushSettingsNow: flush }))
 mock.module('@/api/images', () => ({ imagesApi: { url: (id: string) => `/images/${id}`, largeUrl: (id: string) => `/posters/${id}`, uploadWallpaper: upload, deleteIfUnused: cleanup } }))
@@ -40,7 +41,7 @@ mock.module('./WallpaperLibraryModal', () => ({ default: ({ isOpen, target, curr
   isOpen: boolean; target: string; currentImageId: string | null; onSelect: (ref: WallpaperRef) => Promise<void>; onDelete: (id: string) => void
 }) => isOpen ? <div data-scope={target} data-current={currentImageId}>
   <button onClick={() => onSelect({ image_id: 'library-video', type: 'video' })}>Choose library video</button>
-  <button onClick={() => onDelete('portrait')}>Delete portrait</button>
+  <button onClick={async () => { await deleteFromLibrary(); onDelete('portrait') }}>Delete portrait</button>
 </div> : null }))
 
 let createRoot: typeof import('react-dom/client').createRoot
@@ -63,6 +64,7 @@ afterEach(async () => {
   document.body.replaceChildren()
   flush.mockClear(); cleanup.mockClear(); upload.mockClear(); state.setWallpaper.mockClear()
   patchMetadata.mockClear(); state.setActiveChatWallpaper.mockClear(); state.setActiveChatMetadata.mockClear()
+  deleteFromLibrary.mockClear()
 })
 afterAll(() => {
   for (const [key, value] of Object.entries(previous)) {
@@ -190,4 +192,49 @@ test('deleting a shared library image clears both chat slots and retains metadat
   await act(async () => buttons('Delete portrait')[0].click())
   expect(state.activeChatWallpaper).toBeNull()
   expect(state.activeChatMetadata).toEqual({ wallpaper: null, mobile_wallpaper: null, topic: 'keep' })
+})
+
+test('uses current chat metadata when library deletion finishes after navigation', async () => {
+  await openChat(portrait)
+  let finish!: () => void
+  deleteFromLibrary.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+  await act(async () => buttons('wallpaperPanel.browseLibrary')[3].click())
+  await act(async () => buttons('Delete portrait')[0].click())
+  state.activeChatId = 'chat-2'
+  state.activeChatWallpaper = null
+  state.activeChatMetadata = { mobile_wallpaper: portrait, topic: 'new chat', active_avatar_id: 'new-avatar' }
+  await act(async () => root.render(<Panel />))
+  await act(async () => finish())
+  expect(state.activeChatMetadata).toEqual({ mobile_wallpaper: null, topic: 'new chat', active_avatar_id: 'new-avatar' })
+  expect(state.activeChatWallpaper).toBeNull()
+})
+
+test('retains assignments and metadata changed during library deletion', async () => {
+  await openChat(portrait)
+  let finish!: () => void
+  deleteFromLibrary.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+  await act(async () => buttons('wallpaperPanel.browseLibrary')[3].click())
+  await act(async () => buttons('Delete portrait')[0].click())
+  const replacement: WallpaperRef = { image_id: 'replacement', type: 'video' }
+  state.wallpaper = { ...state.wallpaper, mobile: replacement }
+  state.activeChatMetadata = { wallpaper: desktop, mobile_wallpaper: replacement, topic: 'updated' }
+  await act(async () => root.render(<Panel />))
+  await act(async () => finish())
+  expect(state.wallpaper.mobile).toEqual(replacement)
+  expect(state.activeChatMetadata).toEqual({ wallpaper: desktop, mobile_wallpaper: replacement, topic: 'updated' })
+})
+
+test.each(['chat', 'chat-mobile'] as const)('keeps a %s upload attached to the chat that opened the file picker', async (target) => {
+  await openChat(portrait)
+  await act(async () => (target === 'chat' ? buttons('wallpaperPanel.setForChat')[0] : buttons('wallpaperPanel.setMobile')[1]).click())
+  state.activeChatId = 'chat-2'
+  state.activeChatWallpaper = null
+  state.activeChatMetadata = { topic: 'new chat' }
+  await act(async () => root.render(<Panel />))
+  const input = document.querySelector('input[type="file"]')!
+  Object.defineProperty(input, 'files', { configurable: true, value: [new File(['image'], 'portrait.png', { type: 'image/png' })] })
+  await act(async () => input.dispatchEvent(new dom.window.Event('change', { bubbles: true })))
+  expect(patchMetadata).toHaveBeenCalledWith('chat-1', { [target === 'chat' ? 'wallpaper' : 'mobile_wallpaper']: { image_id: 'uploaded-mobile', type: 'image' } })
+  expect(state.activeChatMetadata).toEqual({ topic: 'new chat' })
+  expect(state.activeChatWallpaper).toBeNull()
 })

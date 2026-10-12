@@ -9,8 +9,9 @@ export function getChatMobileWallpaper(metadata: Record<string, unknown> | null 
   const ref = metadata?.mobile_wallpaper
   if (!ref || typeof ref !== 'object') return null
   const { image_id, type } = ref as Partial<WallpaperRef>
+  // ChatView's transition effect depends on this reference staying stable.
   return typeof image_id === 'string' && image_id && (type === 'image' || type === 'video')
-    ? { image_id, type } : null
+    ? ref as WallpaperRef : null
 }
 
 /** Mobile chats inherit their regular wallpaper when no mobile override is assigned. */

@@ -41,4 +41,8 @@ describe('chat mobile wallpapers', () => {
     const video = { image_id: 'chat-video', type: 'video' as const }
     expect(getChatMobileWallpaper({ mobile_wallpaper: video })).toEqual(video)
   })
+  test('keeps the wallpaper reference stable across renders and unrelated metadata changes', () => {
+    expect(getChatMobileWallpaper({ mobile_wallpaper: mobile })).toBe(mobile)
+    expect(resolveChatWallpaper(global, { mobile_wallpaper: mobile, topic: 'updated' }, true)).toBe(mobile)
+  })
 })

@@ -10,7 +10,7 @@ import { FormField, Select, EditorSection } from '@/components/shared/FormCompon
 import { Toggle } from '@/components/shared/Toggle'
 import { flushSettingsNow } from '@/store/slices/settings'
 import { getChatMobileWallpaper } from '@/lib/wallpaper'
-import type { WallpaperRef } from '@/types/store'
+import type { WallpaperRef, WallpaperSettings } from '@/types/store'
 import WallpaperLibraryModal from './WallpaperLibraryModal'
 import styles from './WallpaperPanel.module.css'
 
@@ -189,6 +189,7 @@ export default function WallpaperPanel() {
   const [error, setError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<WallpaperUploadStatus | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const uploadChatIdRef = useRef<string | null>(null)
   const uploadStatusClearTimerRef = useRef<number | null>(null)
   const [uploadTarget, setUploadTarget] = useState<WallpaperTarget>('global')
   const [libraryTarget, setLibraryTarget] = useState<WallpaperTarget | null>(null)
@@ -261,6 +262,7 @@ export default function WallpaperPanel() {
 
   const handleUpload = async (target: WallpaperTarget) => {
     setUploadTarget(target)
+    uploadChatIdRef.current = activeChatId
     // Opening the native file picker can briefly hide/blur the page. Suppress
     // the next fast resume ping so a large wallpaper upload does not trip a
     // false WS reconnect the moment the picker closes.
@@ -268,13 +270,16 @@ export default function WallpaperPanel() {
     fileInputRef.current?.click()
   }
 
-  const updateChatWallpaper = async (target: 'chat' | 'chat-mobile', ref: WallpaperRef | null) => {
-    if (!activeChatId) throw new Error(t('wallpaperPanel.openChatHint'))
+  const updateChatWallpaper = async (target: 'chat' | 'chat-mobile', ref: WallpaperRef | null, chatId = activeChatId) => {
+    if (!chatId) throw new Error(t('wallpaperPanel.openChatHint'))
     const key = target === 'chat-mobile' ? 'mobile_wallpaper' : 'wallpaper'
-    const oldImageId = (target === 'chat-mobile' ? chatMobileWp : chatWp)?.image_id
-    await chatsApi.patchMetadata(activeChatId, { [key]: ref })
+    const before = useStore.getState()
+    const oldImageId = before.activeChatId === chatId
+      ? (target === 'chat-mobile' ? getChatMobileWallpaper(before.activeChatMetadata) : before.activeChatWallpaper)?.image_id
+      : undefined
+    await chatsApi.patchMetadata(chatId, { [key]: ref })
     const current = useStore.getState()
-    if (current.activeChatId === activeChatId) {
+    if (current.activeChatId === chatId) {
       setActiveChatMetadata({ ...current.activeChatMetadata, [key]: ref })
       if (target === 'chat') setActiveChatWallpaper(ref)
       if (target === 'chat-mobile' && !ref) setChatMobileEditorOpen(false)
@@ -282,15 +287,15 @@ export default function WallpaperPanel() {
     if (oldImageId && oldImageId !== ref?.image_id) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
   }
 
-  const applyWallpaper = async (target: WallpaperTarget, ref: WallpaperRef) => {
+  const applyWallpaper = async (target: WallpaperTarget, ref: WallpaperRef, chatId = activeChatId) => {
     setError(null)
     try {
       if (target === 'chat' || target === 'chat-mobile') {
-        await updateChatWallpaper(target, ref)
+        await updateChatWallpaper(target, ref, chatId)
         return
       }
 
-      const oldImageId = wallpaper[target]?.image_id
+      const oldImageId = useStore.getState().wallpaper[target]?.image_id
       setWallpaper({ [target]: ref })
       await flushSettingsNow()
       if (oldImageId && oldImageId !== ref.image_id) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
@@ -323,6 +328,7 @@ export default function WallpaperPanel() {
     setUploading(true)
     const nextUploadId = createWallpaperUploadId()
     const nextTarget = uploadTarget
+    const nextChatId = uploadChatIdRef.current
     setUploadStatus({
       uploadId: nextUploadId,
       target: nextTarget,
@@ -354,7 +360,7 @@ export default function WallpaperPanel() {
         image_id: image.id,
         type: kind,
       }
-      await applyWallpaper(nextTarget, ref)
+      await applyWallpaper(nextTarget, ref, nextChatId)
       setUploadStatus((current) => {
         if (!current || current.uploadId !== nextUploadId) return current
         const totalSteps = current.totalSteps > 0 ? current.totalSteps : 1
@@ -394,23 +400,23 @@ export default function WallpaperPanel() {
   }
 
   const handleLibraryDelete = (imageId: string) => {
-    if (wallpaper.global?.image_id === imageId) {
-      setWallpaper({ global: null })
+    const current = useStore.getState()
+    const clearedSettings: Partial<WallpaperSettings> = {}
+    for (const scope of ['global', 'mobile'] as const) {
+      if (current.wallpaper[scope]?.image_id === imageId) clearedSettings[scope] = null
     }
-    if (wallpaper.mobile?.image_id === imageId) {
-      setWallpaper({ mobile: null })
-    }
+    if (Object.keys(clearedSettings).length) setWallpaper(clearedSettings)
 
     const cleared: Record<string, null> = {}
-    if (activeChatWallpaper?.image_id === imageId) {
+    if (current.activeChatWallpaper?.image_id === imageId) {
       setActiveChatWallpaper(null)
       cleared.wallpaper = null
     }
-    if (chatMobileWp?.image_id === imageId) {
+    if (getChatMobileWallpaper(current.activeChatMetadata)?.image_id === imageId) {
       cleared.mobile_wallpaper = null
       setChatMobileEditorOpen(false)
     }
-    if (Object.keys(cleared).length) setActiveChatMetadata({ ...activeChatMetadata, ...cleared })
+    if (Object.keys(cleared).length) setActiveChatMetadata({ ...current.activeChatMetadata, ...cleared })
   }
 
   return (
