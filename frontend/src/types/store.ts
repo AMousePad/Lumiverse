@@ -772,6 +772,8 @@ export interface SettingsSlice {
   bubbleOpacity: number
   inputBarEnterToSend: EnterToSendSettings
   saveDraftInput: boolean
+  /** Account-synced composer action bar layout; null until first saved. */
+  composerActionBar: { order: string[]; hidden: string[] } | null
   defaultImpersonationMode: ImpersonationPreference
   chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
   centerChatWithSidebar: boolean
