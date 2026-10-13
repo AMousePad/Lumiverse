@@ -7,21 +7,26 @@ const scriptDir = import.meta.dir;
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-// Use a tar-backed fake runtime/output plugin to exercise the real finalizer,
-// including repacking and extraction, without downloading Linux ELF tools.
+// Portable checks use a tar-backed runtime/output fixture. An integration test
+// also exercises the real SquashFS tools when they are installed (as in CI).
 const runtimeSize = 4096;
-const runtimeSource = `#!/usr/bin/env bash
+function runtimeSource(nativeSquashfs: boolean): string {
+  const extraction = nativeSquashfs
+    ? `unsquashfs -no-progress -offset ${runtimeSize} -dest squashfs-root "$0"`
+    : `mkdir squashfs-root\n    tail -c +${runtimeSize + 1} "$0" | tar -xpf - -C squashfs-root`;
+  return `#!/usr/bin/env bash
 set -euo pipefail
 case "\${1:-}" in
   --appimage-offset) echo ${runtimeSize} ;;
   --appimage-extract)
-    mkdir squashfs-root
-    tail -c +${runtimeSize + 1} "$0" | tar -xpf - -C squashfs-root
+    ${extraction}
+    find squashfs-root -type d -exec chmod 700 {} +
     ;;
   *) exit 1 ;;
 esac
 exit 0
 `;
+}
 
 function write(path: string, contents: string | Buffer, mode = 0o644): void {
   mkdirSync(resolve(path, ".."), { recursive: true });
@@ -29,7 +34,7 @@ function write(path: string, contents: string | Buffer, mode = 0o644): void {
   chmodSync(path, mode);
 }
 
-function fixture() {
+function fixture(nativeSquashfs = false) {
   const root = mkdtempSync(join(tmpdir(), "lumiverse-packaging-test-"));
   roots.push(root);
   const bundle = join(root, "bundle with spaces");
@@ -51,17 +56,32 @@ function fixture() {
     'GST_PLUGIN_SCANNER_1_0="${APPDIR}/usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"',
   ].join("\n"));
   write(join(toolDir, "gst-inspect-1.0"), "#!/bin/sh\nexit 0\n", 0o755);
+  if (!nativeSquashfs) {
+    write(join(toolDir, "unsquashfs"), `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == -no-progress && "$2" == -offset && "$4" == -dest ]]
+offset="$3"
+destination="$5"
+mkdir "$destination"
+tail -c +"$((offset + 1))" "$6" | tar -xpf - -C "$destination"
+`, 0o755);
+  }
   write(outputPlugin, `#!/usr/bin/env bash
 set -euo pipefail
 appdir="\${2#--appdir=}"
 if [[ "\${BREAK_PACKAGED_PERMISSIONS:-}" == 1 ]]; then
   chmod 770 "$appdir/AppRun.wrapped"
 fi
+if [[ "\${BREAK_PACKAGED_DIRECTORY:-}" == 1 ]]; then
+  chmod 700 "$appdir/usr"
+fi
 cat "$LDAI_RUNTIME_FILE" > "$LDAI_OUTPUT"
-tar -cpf - -C "$appdir" . >> "$LDAI_OUTPUT"
+${nativeSquashfs
+  ? 'mksquashfs "$appdir" "$LDAI_OUTPUT.squashfs" -noappend -no-progress -processors 1 -all-root >/dev/null\ncat "$LDAI_OUTPUT.squashfs" >> "$LDAI_OUTPUT"'
+  : 'tar -cpf - -C "$appdir" . >> "$LDAI_OUTPUT"'}
 `, 0o755);
   const runtime = Buffer.alloc(runtimeSize, " ");
-  runtime.write(runtimeSource);
+  runtime.write(runtimeSource(nativeSquashfs));
   write(appimage, runtime, 0o755);
   return { root, bundle, appdir, appimage, env: {
     ...process.env,
@@ -77,10 +97,11 @@ function run(script: string, argument: string, env = process.env) {
   return { code: result.exitCode, output: result.stdout.toString() + result.stderr.toString() };
 }
 
-function extract(appimage: string, root: string) {
+function extract(appimage: string, root: string, env: NodeJS.ProcessEnv) {
   const directory = join(root, "inspection");
   mkdirSync(directory);
-  const result = Bun.spawnSync([appimage, "--appimage-extract"], { cwd: directory, stderr: "pipe" });
+  const result = Bun.spawnSync(["unsquashfs", "-no-progress", "-offset", String(runtimeSize),
+    "-dest", join(directory, "squashfs-root"), appimage], { env, stderr: "pipe" });
   expect(result.exitCode).toBe(0);
   return join(directory, "squashfs-root");
 }
@@ -125,19 +146,49 @@ describe.skipIf(process.platform === "win32")("AppImage packaging permissions", 
     const result = run("finalize-appimage.sh", f.bundle, f.env);
     expect(result.output).toContain("Finalized Lumiverse Desktop_0.3.1_amd64.AppImage");
     expect(result.code).toBe(0);
-    const packaged = extract(f.appimage, f.root);
+    const packaged = extract(f.appimage, f.root, f.env);
     expect(statSync(join(packaged, "AppRun.wrapped")).mode & 0o777).toBe(0o775);
     expect(statSync(join(packaged, "usr/share/resource.txt")).mode & 0o777).toBe(0o644);
     expect(run("verify-appimage-permissions.sh", packaged).code).toBe(0);
     expect(() => statSync(join(packaged, "usr/lib/libwayland-client.so.0"))).toThrow();
   });
 
-  test("rejects permissions reintroduced by the output tool and keeps the original image", () => {
+  function checkStoredPermissions(native: boolean): void {
+    const f = fixture(native);
+    const result = run("finalize-appimage.sh", f.bundle, f.env);
+    expect(result.code).toBe(0);
+    const runtimeDir = join(f.root, "runtime-extraction");
+    mkdirSync(runtimeDir);
+    const runtimeResult = Bun.spawnSync([f.appimage, "--appimage-extract"], {
+      cwd: runtimeDir, env: f.env, stderr: "pipe",
+    });
+    expect(runtimeResult.exitCode).toBe(0);
+    expect(statSync(join(runtimeDir, "squashfs-root/usr")).mode & 0o777).toBe(0o700);
+    expect(run("verify-appimage-permissions.sh", join(runtimeDir, "squashfs-root")).code).toBe(1);
+    const packaged = extract(f.appimage, f.root, f.env);
+    expect(statSync(join(packaged, "usr")).mode & 0o777).toBe(0o755);
+    expect(run("verify-appimage-permissions.sh", packaged).code).toBe(0);
+  }
+
+  test("checks stored permissions despite runtime extraction using private directories", () => {
+    checkStoredPermissions(false);
+  });
+
+  test.skipIf(!Bun.which("mksquashfs") || !Bun.which("unsquashfs"))(
+    "checks permissions stored in a real SquashFS image", () => {
+      checkStoredPermissions(true);
+    },
+  );
+
+  test.each(["launcher", "directory"])("rejects %s permissions reintroduced by the output tool and keeps the original image", (entry) => {
     const f = fixture();
     const original = readFileSync(f.appimage);
-    const result = run("finalize-appimage.sh", f.bundle, { ...f.env, BREAK_PACKAGED_PERMISSIONS: "1" });
+    const corruption = entry === "launcher"
+      ? { BREAK_PACKAGED_PERMISSIONS: "1" }
+      : { BREAK_PACKAGED_DIRECTORY: "1" };
+    const result = run("finalize-appimage.sh", f.bundle, { ...f.env, ...corruption });
     expect(result.code).toBe(1);
-    expect(result.output).toContain("AppRun.wrapped");
+    expect(result.output).toContain(entry === "launcher" ? "AppRun.wrapped" : "squashfs-root/usr");
     expect(readFileSync(f.appimage)).toEqual(original);
   });
 });

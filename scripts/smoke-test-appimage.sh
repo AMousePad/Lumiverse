@@ -38,10 +38,19 @@ smoke_home="$(mktemp -d /tmp/lumiverse-appimage-home.XXXXXX)"
 trap 'rm -rf "$inspection_dir"; sudo -n rm -rf -- "$smoke_home"' EXIT
 chmod a+rx "$inspection_dir"
 
-(
-  cd "$inspection_dir"
-  "$appimage" --appimage-extract >/dev/null
-)
+# Preserve the SquashFS permission bits for the cross-user launch check.
+# The runtime's --appimage-extract creates private (0700) directories instead.
+if ! command -v unsquashfs >/dev/null 2>&1; then
+  echo "unsquashfs is required for the AppImage smoke test (install squashfs-tools)." >&2
+  exit 1
+fi
+runtime_size="$("$appimage" --appimage-offset)"
+if [[ ! "$runtime_size" =~ ^[0-9]+$ ]] || [[ "$runtime_size" -le 0 ]]; then
+  echo "Could not determine the AppImage runtime size" >&2
+  exit 1
+fi
+unsquashfs -no-progress -offset "$runtime_size" \
+  -dest "$inspection_dir/squashfs-root" "$appimage" >/dev/null
 bash "$script_dir/verify-appimage-permissions.sh" "$inspection_dir/squashfs-root"
 bundled_wayland=()
 while IFS= read -r -d '' candidate; do

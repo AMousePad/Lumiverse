@@ -300,7 +300,7 @@ Platform-specific build requirements:
   sudo apt install build-essential curl wget file libssl-dev \
     libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
     librsvg2-dev libxdo-dev gstreamer1.0-tools \
-    gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good squashfs-tools
   ```
 
   Fedora:
@@ -309,7 +309,7 @@ Platform-specific build requirements:
   sudo dnf install gcc gcc-c++ make curl wget file openssl-devel \
     webkit2gtk4.1-devel libappindicator-gtk3-devel \
     librsvg2-devel libxdo-devel gstreamer1 \
-    gstreamer1-plugins-base gstreamer1-plugins-good
+    gstreamer1-plugins-base gstreamer1-plugins-good squashfs-tools
   ```
 
   Arch Linux:
@@ -317,13 +317,16 @@ Platform-specific build requirements:
   ```bash
   sudo pacman -S --needed base-devel curl wget file openssl \
     webkit2gtk-4.1 libappindicator-gtk3 librsvg libxdo \
-    gstreamer gst-plugins-base gst-plugins-good
+    gstreamer gst-plugins-base gst-plugins-good squashfs-tools
   ```
 
   Package names vary by distribution. `libayatana-appindicator3-dev` may be
   substituted with the distribution's `libappindicator` development package.
   The GStreamer plugin sets are copied into AppImage builds so WebKit's audio
   support does not depend on host plugins hidden by the AppImage launcher.
+  `unsquashfs` from `squashfs-tools` verifies the finished AppImage's stored
+  permissions; the runtime's extraction command creates private directories
+  and does not preserve their packaged modes.
   The other packages are build dependencies; a machine running an unpackaged
   Linux binary also needs the matching AppIndicator runtime library.
 

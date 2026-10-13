@@ -115,11 +115,16 @@ fi
 verification_dir="$(mktemp -d "${TMPDIR:-/tmp}/lumiverse-appimage-verify.XXXXXX")"
 trap 'rm -rf "$work_dir" "$verification_dir"' EXIT
 
-(
-  cd "$verification_dir"
-  chmod a+x "$replacement"
-  "$replacement" --appimage-extract >/dev/null
-)
+# The AppImage runtime's extractor creates directories with mode 0700, even
+# when the SquashFS stores 0755. Use unsquashfs to inspect the packaged modes;
+# changing permissions after runtime extraction would conceal real defects.
+if ! command -v unsquashfs >/dev/null 2>&1; then
+  echo "unsquashfs is required to verify packaged permissions (install squashfs-tools)." >&2
+  exit 1
+fi
+chmod a+x "$replacement"
+unsquashfs -no-progress -offset "$runtime_size" \
+  -dest "$verification_dir/squashfs-root" "$replacement" >/dev/null
 assert_no_bundled_wayland_client "$verification_dir/squashfs-root"
 bash "$script_dir/verify-appimage-permissions.sh" "$verification_dir/squashfs-root"
 bash "$script_dir/verify-appimage-gstreamer.sh" "$verification_dir/squashfs-root"
