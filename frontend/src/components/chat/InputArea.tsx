@@ -26,7 +26,6 @@ import {
   resolveImpersonationPresetSelection,
   type ImpersonationPreference,
 } from '@/lib/impersonationPreset'
-import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import { unmarshalPreset } from '@/lib/loom/service'
 import {
   inspectPromptVariablesAvailability,
@@ -2030,7 +2029,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: effectivePersonaId || undefined,
         persona_addon_states: effectivePersonaId === activePersonaId ? activeGenerationAddonStates : undefined,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal' as const,
         user_input: sourceText || undefined,
       }
@@ -2380,7 +2378,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal',
         retain_council: retainCouncilForRegens || undefined,
       }
@@ -2437,7 +2434,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         message_id: lastAssistant?.id,
         target_character_id: targetCharacterId,
         retain_council: retainCouncilForRegens || undefined,
@@ -2480,8 +2476,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: presetSelection.forcePresetId
-          || shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        force_preset_id: presetSelection.forcePresetId,
         generation_type: 'impersonate',
         impersonate_mode: mode,
         impersonate_input: impersonateInput || undefined,
@@ -2711,7 +2706,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         user_input: text || undefined,
         target_character_id: isGroupChat ? focusedPreviewCharacterId || undefined : undefined,
       })

@@ -309,7 +309,7 @@ export interface AssemblyContext {
   skipPresetProfileBinding?: boolean;
   /** Whether macro handlers may commit side effects. Defaults to true. */
   macroCommit?: boolean;
-  /** When true, bypass preset-profile preset selection and use presetId directly. */
+  /** Explicit override: use presetId directly, bypassing profile block states and variable values too. */
   forcePresetId?: boolean;
   generationType: GenerationType;
   personaId?: string;
