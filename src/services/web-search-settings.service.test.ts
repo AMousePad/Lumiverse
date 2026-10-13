@@ -9,6 +9,15 @@ function scopedKey(userId: string, key: string): string {
 }
 
 mock.module("./settings.service", () => ({
+  async getSettingAsync(userId: string, key: string) {
+    const value = settings.get(scopedKey(userId, key));
+    return value === undefined ? null : { key, value, updated_at: 0 };
+  },
+  async putSettingAsync(userId: string, key: string, value: unknown) {
+    settings.set(scopedKey(userId, key), value);
+    settingWrites.push({ userId, key, value });
+    return { key, value, updated_at: 0 };
+  },
   getSetting(userId: string, key: string) {
     const value = settings.get(scopedKey(userId, key));
     return value === undefined ? null : { key, value, updated_at: 0 };

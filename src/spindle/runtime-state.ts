@@ -47,17 +47,16 @@ export function readRuntimeState(userId: string, chatId: string, characterId: st
 }
 
 export async function writeRuntimeState(userId: string, chatId: string, command: RuntimeStateCommand) {
-  const chat = chats.getChat(userId, chatId);
+  const chat = await chats.getChatAsync(userId, chatId);
   if (!chat) throw new Error('Runtime chat not found');
   let value: unknown;
   let patch: Record<string, unknown>;
   switch (command.kind) {
     case 'chat.metadata':
-      value = chats.updateChat(userId, chatId, { metadata: { ...chat.metadata, [command.key]: command.value } });
+      value = await chats.mergeChatMetadataAsync(userId, chatId, { [command.key]: command.value });
       patch = { chat: value }; break;
     case 'chat.variables':
-      value = chats.updateChat(userId, chatId, { metadata: { ...chat.metadata,
-        chat_variables: { ...chat.metadata.chat_variables, ...command.values } } });
+      value = await chats.mergeChatMetadataAsync(userId, chatId, { chat_variables: command.values }, { mergeObjectPaths: [["chat_variables"]] });
       patch = { chat: value }; break;
     case 'message.edit':
     case 'message.delete': {
@@ -82,13 +81,13 @@ export async function writeRuntimeState(userId: string, chatId: string, command:
     }
     case 'character.update': {
       const { name, description, first_mes } = command.patch;
-      const updated = characters.updateCharacter(userId, command.id, { name, description, first_mes });
+      const updated = await characters.updateCharacterAsync(userId, command.id, { name, description, first_mes });
       if (!updated) throw new Error('Runtime character not found');
       value = projectRuntimeCharacter(updated); patch = { character: value }; break;
     }
     case 'persona.update': {
       const { name, description } = command.patch;
-      value = personas.updatePersona(userId, command.id, { name, description });
+      value = (await personas.updatePersonaAsync(userId, command.id, { name, description }));
       if (!value) throw new Error('Runtime persona not found');
       patch = { persona: value }; break;
     }

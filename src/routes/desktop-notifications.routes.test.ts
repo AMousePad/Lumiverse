@@ -17,7 +17,11 @@ await Bun.write(
   ),
 );
 
-mock.module("../db/connection", () => ({ getDb: () => db }));
+mock.module("../db/connection", () => ({
+  getDb: () => db,
+  getDatabasePath: () => ":memory:",
+  onDbReset: () => {},
+}));
 mock.module("../crypto/vapid", () => ({
   getVapidPrivateJWK: () => ({}),
   getVapidPublicKey: () => "desktop-media-test-key",
@@ -32,6 +36,11 @@ mock.module("../services/characters.service", () => ({
 mock.module("../services/files.service", () => ({ getAvatarPath: async () => null }));
 mock.module("../services/images.service", () => ({
   getImage: (userId: string, id: string) => (
+    userId === "media-user" && id === "image-1"
+      ? { id: "image-1", mime_type: "image/png" }
+      : null
+  ),
+  getImageAsync: async (userId: string, id: string) => (
     userId === "media-user" && id === "image-1"
       ? { id: "image-1", mime_type: "image/png" }
       : null

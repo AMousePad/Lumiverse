@@ -993,7 +993,7 @@ async function resolveAttachmentBase64(
   attachment: Pick<MessageAttachment, "type" | "image_id">,
 ): Promise<string | null> {
   const filePath = attachment.type === "audio"
-    ? audioSvc.getAudioFilePath(userId, attachment.image_id)
+    ? (await audioSvc.getAudioFilePathAsync(userId, attachment.image_id))
     : await imagesSvc.getImageFilePath(userId, attachment.image_id);
   if (!filePath) return null;
   try {
@@ -1821,7 +1821,7 @@ export async function assemblePrompt(
   let phaseStartedAt = performance.now();
 
   // ---- Load data (use prefetched when available, fallback to DB) ----
-  const chat = pf?.chat ?? chatsSvc.getChat(ctx.userId, ctx.chatId);
+  const chat = pf?.chat ?? (await chatsSvc.getChatAsync(ctx.userId, ctx.chatId));
   if (!chat) throw new Error("Chat not found");
 
   const allMessages =
@@ -1895,7 +1895,7 @@ export async function assemblePrompt(
   const character =
     pf?.character ??
     (characterId
-      ? charactersSvc.getCharacter(ctx.userId, characterId)
+      ? (await charactersSvc.getCharacterAsync(ctx.userId, characterId))
       : makeAssistantCharacter());
   if (!character) throw new Error("Character not found");
 
@@ -1903,12 +1903,12 @@ export async function assemblePrompt(
     ? null
     : pf?.persona !== undefined
       ? pf.persona
-      : personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId);
+      : (await personasSvc.resolvePersonaOrDefaultAsync(ctx.userId, ctx.personaId));
   if (!pf) {
     // Prefetch already applies add-on states + resolves global add-ons; only do
     // it here for the non-prefetched path so {{persona}} includes global add-ons.
     persona = applyPersonaAddonStates(persona, ctx.personaAddonStates);
-    persona = globalAddonsSvc.resolvePersonaGlobalAddons(ctx.userId, persona);
+    persona = (await globalAddonsSvc.resolvePersonaGlobalAddonsAsync(ctx.userId, persona));
   }
 
   // Resolve connection
@@ -1956,7 +1956,7 @@ export async function assemblePrompt(
     preset =
       prefetchedPreset?.id === resolvedPresetId
         ? prefetchedPreset
-        : presetsSvc.getPreset(ctx.userId, resolvedPresetId);
+        : (await presetsSvc.getPresetAsync(ctx.userId, resolvedPresetId));
   } else {
     preset = prefetchedPreset;
   }
@@ -1980,7 +1980,7 @@ export async function assemblePrompt(
     presetProfilesSvc.applyProfileToBlocks(blocks, resolvedProfile.binding);
   }
   const activationScripts = preset && blocks.length
-    ? regexScriptsSvc.getPresetActivationScripts(ctx.userId, preset.id, { chatId: chat.id, characterId }) : [];
+    ? (await regexScriptsSvc.getPresetActivationScriptsAsync(ctx.userId, preset.id, { chatId: chat.id, characterId })) : [];
   const activationInputs = createActivationInputSnapshot({
     characterName: getEffectiveCharacterName(character),
     userName: persona?.name || "User",
@@ -2054,7 +2054,7 @@ export async function assemblePrompt(
   if (cortexEnabledForChat && !runningInAssemblyWorker()) {
     const cmRaw =
       pf?.allSettings.get("chatMemorySettings") ??
-      settingsSvc.getSetting(ctx.userId, "chatMemorySettings")?.value ??
+      (await settingsSvc.getSettingAsync(ctx.userId, "chatMemorySettings"))?.value ??
       null;
     cortexChatMemSettings = cmRaw
       ? embeddingsSvc.normalizeChatMemorySettings(cmRaw)
@@ -2286,7 +2286,7 @@ export async function assemblePrompt(
   phaseStartedAt = performance.now();
   const globalWorldBooks =
     pf?.allSettings.get("globalWorldBooks") ??
-    (settingsSvc.getSetting(ctx.userId, "globalWorldBooks")?.value as
+    ((await settingsSvc.getSettingAsync(ctx.userId, "globalWorldBooks"))?.value as
       | string[]
       | undefined) ??
     [];
@@ -2316,7 +2316,7 @@ export async function assemblePrompt(
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
   const configuredWorldInfoSettings =
     pf?.allSettings.get("worldInfoSettings") ??
-    (settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as
+    ((await settingsSvc.getSettingAsync(ctx.userId, "worldInfoSettings"))?.value as
       | Partial<WorldInfoSettings>
       | undefined) ??
     {};
@@ -2719,7 +2719,7 @@ export async function assemblePrompt(
   // Use prefetched settings or batch-load all needed settings in a single query
   const settingsMap =
     pf?.allSettings ??
-    settingsSvc.getSettingsByKeys(ctx.userId, [
+    (await settingsSvc.getSettingsByKeysAsync(ctx.userId, [
       "reasoningSettings",
       "selectedDefinition",
       "selectedBehaviors",
@@ -2743,7 +2743,7 @@ export async function assemblePrompt(
       "chatMemorySettings",
       "databankSettings",
       "council_settings",
-    ]);
+    ]));
 
   // A connection's reasoning binding is the effective source for all
   // reasoning settings, including its custom request body. Fall back to the
@@ -6099,21 +6099,21 @@ async function computeActivatedWorldInfoForChat(
   userId: string,
   chatId: string,
 ): Promise<MergedWorldInfoEntriesResult> {
-  const chat = chatsSvc.getChat(userId, chatId);
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
   if (!chat) throw new Error("Chat not found");
 
   const messages = chatsSvc.getMessages(userId, chatId);
   const character = chat.character_id
-    ? charactersSvc.getCharacter(userId, chat.character_id)
+    ? (await charactersSvc.getCharacterAsync(userId, chat.character_id))
     : makeAssistantCharacter();
   if (!character) throw new Error("Character not found");
 
   const persona = isTemporaryChatMetadata(chat.metadata)
     ? null
-    : personasSvc.resolvePersonaOrDefault(userId);
+    : (await personasSvc.resolvePersonaOrDefaultAsync(userId));
 
   const globalWorldBookIds =
-    (settingsSvc.getSetting(userId, "globalWorldBooks")?.value as
+    ((await settingsSvc.getSettingAsync(userId, "globalWorldBooks"))?.value as
       | string[]
       | undefined) ?? [];
   const chatWorldBookIds =
@@ -6128,7 +6128,7 @@ async function computeActivatedWorldInfoForChat(
   );
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
   const worldInfoSettings =
-    (settingsSvc.getSetting(userId, "worldInfoSettings")?.value as
+    ((await settingsSvc.getSettingAsync(userId, "worldInfoSettings"))?.value as
       | Partial<WorldInfoSettings>
       | undefined) ?? {};
 
@@ -8346,7 +8346,7 @@ async function legacyAssembly(
     });
     // Populate reasoning macros
     if (userId) {
-      const reasoningSetting = settingsSvc.getSetting(
+      const reasoningSetting = await settingsSvc.getSettingAsync(
         userId,
         "reasoningSettings",
       );
@@ -8359,7 +8359,7 @@ async function legacyAssembly(
         macroEnv.extra.reasoningSuffix = effectiveReasoning.suffix ?? "";
       }
       // Populate theme info for {{userColorMode}} macro (legacy path)
-      const themeSetting = settingsSvc.getSetting(userId, "theme");
+      const themeSetting = await settingsSvc.getSettingAsync(userId, "theme");
       if (themeSetting?.value) {
         macroEnv.extra.theme = { mode: themeSetting.value.mode ?? "dark" };
       }
@@ -8453,7 +8453,7 @@ async function legacyAssembly(
   // Skip messages marked as hidden drafts (extra.hidden === true)
   // Pre-resolve all attachment files in parallel (same pattern as main assembly)
   const legacyGeneratedImageContextPolicy = resolveGeneratedImageContextPolicy(
-    userId ? settingsSvc.getSetting(userId, "imageGeneration")?.value : null,
+    userId ? (await settingsSvc.getSettingAsync(userId, "imageGeneration"))?.value : null,
     messages,
   );
   const legacyAttachmentSources = new Map<string, MessageAttachment>();
@@ -8561,7 +8561,7 @@ async function legacyAssembly(
   // Strip reasoning from older chat history messages based on keepInHistory
   let reasoningVal: ReasoningParameterSettings | null = null;
   if (userId) {
-    const reasoningSetting = settingsSvc.getSetting(
+    const reasoningSetting = await settingsSvc.getSettingAsync(
       userId,
       "reasoningSettings",
     );
@@ -8580,7 +8580,7 @@ async function legacyAssembly(
     }
 
     // Apply context filters (details blocks, loom tags, HTML tags)
-    const contextFiltersSetting = settingsSvc.getSetting(
+    const contextFiltersSetting = await settingsSvc.getSettingAsync(
       userId,
       "contextFilters",
     );

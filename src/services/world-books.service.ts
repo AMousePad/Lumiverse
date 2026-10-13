@@ -1,3 +1,5 @@
+import { readDatabaseRows } from "../db/queries";
+import { executeDatabaseOperation, type DatabaseExecutionError } from "../db/execution";
 import { getDb } from "../db/connection";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { zipSync, strToU8 } from "fflate";
@@ -964,6 +966,11 @@ export function listWorldBooks(userId: string, pagination: PaginationParams): Pa
   );
 }
 
+export async function getWorldBookAsync(userId: string, id: string): Promise<WorldBook | null> {
+  const row = await executeDatabaseOperation<any>({ kind: "read", statement: { sql: "SELECT * FROM world_books WHERE id = ? AND user_id = ?", bindings: [id, userId], mode: "get" } });
+  return row ? rowToBook(row) : null;
+}
+
 export function getWorldBook(userId: string, id: string): WorldBook | null {
   const row = getDb().query("SELECT * FROM world_books WHERE id = ? AND user_id = ?").get(id, userId) as any;
   return row ? rowToBook(row) : null;
@@ -1174,13 +1181,18 @@ function getWorldBookEntryIdsForDelete(userId: string, worldBookIds: string[]): 
 }
 
 export async function deleteWorldBook(userId: string, id: string): Promise<boolean> {
-  if (!getWorldBook(userId, id)) return false;
-  const entryIds = getWorldBookEntryIdsForDelete(userId, [id]);
+  if (!(await getWorldBookAsync(userId, id))) return false;
+  const entryIds = await getWorldBookEntryIdsForDeleteAsync(userId, [id]);
   const deleted = await embeddingsSvc.deleteWorldBookEmbeddingsBeforeSourceDelete(
     userId,
     [id],
     entryIds,
-    () => getDb().query("DELETE FROM world_books WHERE id = ? AND user_id = ?").run(id, userId).changes > 0,
+    async () => {
+      const [result] = await executeDatabaseOperation<[{ changes: number }]>({
+        kind: "transaction", statements: [{ sql: "DELETE FROM world_books WHERE id = ? AND user_id = ?", bindings: [id, userId] }],
+      });
+      return result.changes > 0;
+    },
   );
   if (deleted) emitWorldBookDeleted(userId, id);
   return deleted;
@@ -1189,29 +1201,24 @@ export async function deleteWorldBook(userId: string, id: string): Promise<boole
 export async function bulkDeleteWorldBooks(userId: string, ids: string[]): Promise<{ deleted: string[] }> {
   const uniqueIds = dedupeWorldBookIds(ids);
   if (uniqueIds.length === 0) return { deleted: [] };
-  const db = getDb();
   const placeholders = uniqueIds.map(() => "?").join(", ");
-  const ownedIds = (db.query(
+  const ownedIds = (await readDatabaseRows<{ id: string }>(
     `SELECT id FROM world_books WHERE user_id = ? AND id IN (${placeholders})`
-  ).all(userId, ...uniqueIds) as Array<{ id: string }>).map((row) => row.id);
+  , [userId, ...uniqueIds])).map((row) => row.id);
   const ownedSet = new Set(ownedIds);
   const orderedOwnedIds = uniqueIds.filter((id) => ownedSet.has(id));
   if (orderedOwnedIds.length === 0) return { deleted: [] };
-  const entryIds = getWorldBookEntryIdsForDelete(userId, orderedOwnedIds);
+  const entryIds = await getWorldBookEntryIdsForDeleteAsync(userId, orderedOwnedIds);
 
   const deleted = await embeddingsSvc.deleteWorldBookEmbeddingsBeforeSourceDelete(
     userId,
     orderedOwnedIds,
     entryIds,
-    () => {
-      const removed: string[] = [];
-      db.transaction(() => {
-        const stmt = db.query("DELETE FROM world_books WHERE id = ? AND user_id = ?");
-        for (const id of orderedOwnedIds) {
-          if (stmt.run(id, userId).changes > 0) removed.push(id);
-        }
-      })();
-      return removed;
+    async () => {
+      const results = await executeDatabaseOperation<Array<{ changes: number }>>({
+        kind: "transaction", statements: orderedOwnedIds.map((id) => ({ sql: "DELETE FROM world_books WHERE id = ? AND user_id = ?", bindings: [id, userId] })),
+      });
+      return orderedOwnedIds.filter((_, index) => results[index].changes > 0);
     },
   );
 
@@ -1295,13 +1302,13 @@ function buildWorldBooksExportFilename(date: Date = new Date()): string {
 }
 
 export async function deleteAutoManagedCharacterWorldBooks(userId: string, characterId: string): Promise<number> {
-  const rows = getDb().query(
+  const rows = await readDatabaseRows<{ id: string }>(
     `SELECT id
        FROM world_books
       WHERE user_id = ?
         AND json_extract(metadata, '$.auto_managed_by_character') = 1
         AND json_extract(metadata, '$.source_character_id') = ?`
-  ).all(userId, characterId) as Array<{ id: string }>;
+  , [userId, characterId]);
 
   return (await bulkDeleteWorldBooks(userId, rows.map((row) => row.id))).deleted.length;
 }
@@ -1882,32 +1889,30 @@ export async function deleteEntry(
     expectedRevision !== undefined,
   );
   // Verify the entry belongs to a world book owned by this user
-  const entry = getEntry(userId, id);
+  const entry = await getEntryAsync(userId, id);
   if (!entry) return false;
   assertEntryExpectedRevision(entry, parsedExpectedRevision);
 
   const deleted = await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(
     userId,
     [id],
-    () => {
-      const result = parsedExpectedRevision !== undefined
-        ? getDb()
-          .query("DELETE FROM world_book_entries WHERE id = ? AND revision = ?")
-          .run(id, parsedExpectedRevision)
-        : getDb()
-          .query("DELETE FROM world_book_entries WHERE id = ?")
-          .run(id);
+    async () => {
+      const [result] = await executeDatabaseOperation<[{ changes: number }, unknown]>({
+        kind: "transaction", statements: [
+          { sql: "DELETE FROM world_book_entries WHERE id = ? AND (? IS NULL OR revision = ?) AND world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)", bindings: [id, parsedExpectedRevision ?? null, parsedExpectedRevision ?? null, userId] },
+          { sql: "UPDATE world_books SET updated_at = ? WHERE id = ? AND user_id = ? AND changes() > 0", bindings: [Math.floor(Date.now() / 1000), entry.world_book_id, userId] },
+        ],
+      });
       const removed = result.changes > 0;
       if (!removed) {
         if (parsedExpectedRevision !== undefined) {
-          const current = getEntry(userId, id);
+          const current = await getEntryAsync(userId, id);
           if (current) {
             throwEntryRevisionConflict(id, parsedExpectedRevision, current);
           }
         }
         return false;
       }
-      touchWorldBook(entry.world_book_id);
       return true;
     },
   );
@@ -2037,7 +2042,7 @@ export async function bulkOperateEntries(
   input: WorldBookEntryBulkActionInput,
 ): Promise<WorldBookEntryBulkActionResult | null> {
   const expectedRevisions = readExpectedRevisions(input);
-  const book = getWorldBook(userId, worldBookId);
+  const book = await getWorldBookAsync(userId, worldBookId);
   if (!book) return null;
 
   const uniqueIds = [...new Set(input.entry_ids || [])];
@@ -2045,7 +2050,7 @@ export async function bulkOperateEntries(
     throw new Error("entry_ids is required");
   }
 
-  const entries = getEntriesForBook(userId, worldBookId, uniqueIds);
+  const entries = await getEntriesForBookAsync(userId, worldBookId, uniqueIds);
   if (entries.length !== uniqueIds.length) {
     throw new Error("One or more entries were not found in this world book");
   }
@@ -2056,6 +2061,36 @@ export async function bulkOperateEntries(
   }
 
   const now = Math.floor(Date.now() / 1000);
+  if (input.action === "delete") {
+    await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(userId, uniqueIds, async () => {
+      try {
+        await executeDatabaseOperation({ kind: "transaction", statements: [
+          ...uniqueIds.map((entryId) => {
+            const expected = expectedRevisionFor(expectedRevisions, entryId);
+            return {
+              sql: "DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ? AND (? IS NULL OR revision = ?) AND world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)",
+              bindings: [entryId, worldBookId, expected ?? null, expected ?? null, userId],
+              expectedChanges: expected === undefined ? undefined : 1,
+            };
+          }),
+          { sql: "UPDATE world_books SET updated_at = ? WHERE id = ? AND user_id = ?", bindings: [now, worldBookId, userId] },
+        ] });
+      } catch (error) {
+        const failure = error as DatabaseExecutionError;
+        if (failure?.code === "DATABASE_COMPARE_FAILED" && failure.statementIndex !== undefined) {
+          const entryId = uniqueIds[failure.statementIndex];
+          const expected = expectedRevisionFor(expectedRevisions, entryId);
+          const current = await getEntryAsync(userId, entryId);
+          if (current && expected !== undefined) throwEntryRevisionConflict(entryId, expected, current);
+          throw new Error("One or more entries were not found in this world book");
+        }
+        throw error;
+      }
+    });
+    await emitWorldBookChangedAsync(userId, worldBookId);
+    return { action: input.action, affected: uniqueIds.length };
+  }
+
   const db = getDb();
 
   const runConditionalMutation = (
@@ -2079,30 +2114,6 @@ export async function bulkOperateEntries(
       throw new Error("One or more entries were not found in this world book");
     }
   };
-
-  if (input.action === "delete") {
-    await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(userId, uniqueIds, () => {
-      db.transaction(() => {
-        for (const entryId of uniqueIds) {
-          const expected = expectedRevisionFor(expectedRevisions, entryId);
-          const result = expected === undefined
-            ? db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?").run(entryId, worldBookId)
-            : db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ? AND revision = ?")
-              .run(entryId, worldBookId, expected);
-          if (result.changes === 0 && expected !== undefined) {
-            const current = readEntryById(userId, entryId);
-            if (current !== null) {
-              throwEntryRevisionConflict(entryId, expected, current);
-            }
-            throw new Error("One or more entries were not found in this world book");
-          }
-        }
-        touchWorldBook(worldBookId, now);
-      })();
-    });
-    emitWorldBookChanged(userId, worldBookId);
-    return { action: input.action, affected: uniqueIds.length };
-  }
 
   if (input.action === "add_tags" || input.action === "remove_tags") {
     validateOrganizationInput({ tags: input.tags });
@@ -2885,4 +2896,31 @@ function exportSillyTavern(book: WorldBook, entries: WorldBookEntry[]): Record<s
       ])
     ),
   };
+}
+
+export async function getEntryAsync(userId: string, id: string): Promise<WorldBookEntry | null> {
+  const row = await executeDatabaseOperation<any>({ kind: "read", statement: { sql: "SELECT e.* FROM world_book_entries e JOIN world_books w ON e.world_book_id = w.id WHERE e.id = ? AND w.user_id = ?", bindings: [id, userId], mode: "get" } });
+  return row ? rowToEntry(row) : null;
+}
+async function getWorldBookEntryIdsForDeleteAsync(userId: string, worldBookIds: string[]): Promise<string[]> {
+  const ids: string[] = [];
+  for (let i = 0; i < worldBookIds.length; i += 400) {
+    const chunk = worldBookIds.slice(i, i + 400);
+    const rows = await readDatabaseRows<{ id: string }>(`SELECT e.id FROM world_book_entries e JOIN world_books wb ON wb.id = e.world_book_id WHERE wb.user_id = ? AND e.world_book_id IN (${chunk.map(() => "?").join(",")})`, [userId, ...chunk]);
+    ids.push(...rows.map((row) => row.id));
+  }
+  return ids;
+}
+async function getEntriesForBookAsync(userId: string, worldBookId: string, entryIds: string[]): Promise<WorldBookEntry[]> {
+  const entries: WorldBookEntry[] = [];
+  for (let i = 0; i < entryIds.length; i += 400) {
+    const chunk = entryIds.slice(i, i + 400);
+    const rows = await readDatabaseRows<any>(`SELECT e.* FROM world_book_entries e JOIN world_books w ON e.world_book_id = w.id WHERE w.user_id = ? AND e.world_book_id = ? AND e.id IN (${chunk.map(() => "?").join(",")})`, [userId, worldBookId, ...chunk]);
+    entries.push(...rows.map(rowToEntry));
+  }
+  return entries;
+}
+async function emitWorldBookChangedAsync(userId: string, id: string): Promise<void> {
+  const worldBook = await getWorldBookAsync(userId, id);
+  if (worldBook) eventBus.emit(EventType.WORLD_BOOK_CHANGED, { id, worldBook }, userId);
 }

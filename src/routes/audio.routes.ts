@@ -34,10 +34,11 @@ app.get("/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
 
-  const filepath = svc.getAudioFilePath(userId, id);
+  const filepath = await svc.getAudioFilePathAsync(userId, id);
   if (!filepath) return c.json({ error: "Not found" }, 404);
 
-  const row = svc.getAudio(userId, id)!;
+  const row = await svc.getAudioAsync(userId, id);
+  if (!row) return c.json({ error: "Not found" }, 404);
   const file = Bun.file(filepath);
   const totalSize = file.size;
 
@@ -92,10 +93,10 @@ app.get("/:id", async (c) => {
   });
 });
 
-app.delete("/:id", (c) => {
+app.delete("/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
-  const deleted = svc.deleteAudio(userId, id);
+  const deleted = await svc.deleteAudioAsync(userId, id);
   if (!deleted) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true, deleted: true });
 });

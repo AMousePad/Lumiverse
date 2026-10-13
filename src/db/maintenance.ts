@@ -104,6 +104,7 @@ export interface DatabaseMaintenanceState {
 }
 
 export class InsufficientDiskSpaceError extends Error {
+  readonly code = "INSUFFICIENT_DISK_SPACE";
   constructor(
     public readonly freeBytes: number | null,
     public readonly requiredBytes: number,
@@ -319,15 +320,26 @@ function mmapEnabled(): boolean {
   return env.sqliteMmapEnabled && isMainThread && process.platform !== "win32";
 }
 
-export function applyBaseDatabasePragmas(db: Database): void {
+export interface DatabasePragmaOptions {
+  busyTimeoutMs?: number;
+  automaticCheckpoint?: boolean;
+  allowMmap?: boolean;
+}
+
+const mmapDisabledConnections = new WeakSet<Database>();
+
+export function applyBaseDatabasePragmas(db: Database, options: DatabasePragmaOptions = {}): void {
+  if (options.allowMmap === false) mmapDisabledConnections.add(db);
+  // WAL setup can itself need a lock. Install the busy handler first. Short
+  // waits protect legacy synchronous callers; the executor retries off-thread.
+  db.run(`PRAGMA busy_timeout = ${options.busyTimeoutMs ?? 100}`);
   db.run("PRAGMA journal_mode = WAL");
   db.run("PRAGMA foreign_keys = ON");
-  db.run("PRAGMA busy_timeout = 5000");
   db.run("PRAGMA synchronous = NORMAL");
   db.run(`PRAGMA cache_size = ${-Math.floor(DEFAULT_CACHE_BYTES / 1024)}`);
   db.run("PRAGMA temp_store = MEMORY");
-  db.run(`PRAGMA mmap_size = ${mmapEnabled() ? MIN_MMAP_BYTES : 0}`);
-  db.run("PRAGMA wal_autocheckpoint = 500");
+  db.run(`PRAGMA mmap_size = ${options.allowMmap !== false && mmapEnabled() ? MIN_MMAP_BYTES : 0}`);
+  db.run(`PRAGMA wal_autocheckpoint = ${options.automaticCheckpoint === false ? 0 : 500}`);
   db.run(`PRAGMA journal_size_limit = ${DEFAULT_JOURNAL_SIZE_LIMIT_BYTES}`);
 }
 
@@ -482,7 +494,9 @@ export function resolveDatabaseTuning(
 ): AppliedDatabaseTuning {
   const settings = readDatabaseTuningSettings(db, userId);
   const cache = computeCacheBytes(stats, settings);
-  const mmap = computeMmapBytes(stats, settings);
+  const mmap = mmapDisabledConnections.has(db)
+    ? { bytes: 0, source: "disabled" as const }
+    : computeMmapBytes(stats, settings);
 
   return {
     settingsKey: DB_TUNING_SETTINGS_KEY,

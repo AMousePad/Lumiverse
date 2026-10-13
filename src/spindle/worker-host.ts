@@ -5063,7 +5063,7 @@ export class WorkerHost {
       let env;
 
       if (chatId) {
-        const chat = chatsSvc.getChat(resolvedUserId, chatId);
+        const chat = await chatsSvc.getChatAsync(resolvedUserId, chatId);
         if (chat) {
           const charId = characterId || chat.character_id;
           const { makeAssistantCharacter } = await import("../types/character");

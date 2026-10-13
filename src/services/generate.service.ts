@@ -142,7 +142,7 @@ import {
   resolveReasoningDelimiters,
 } from "../utils/reasoning-strip";
 import {
-  persistMacroVariableState,
+  persistMacroVariableStateAsync,
   reconcileChatMessageMacros,
   resolveMessageMacroContent,
 } from "./chat-macro-render.service";
@@ -1242,7 +1242,7 @@ async function runPromptPipeline(opts: {
   }
 
   // Apply promptPostProcessing
-  const postProcessing = settingsSvc.getSetting(
+  const postProcessing = await settingsSvc.getSettingAsync(
     opts.userId,
     "promptPostProcessing",
   );
@@ -1257,7 +1257,7 @@ async function runPromptPipeline(opts: {
   // would double-apply (non-idempotent rules compound). Mirror the assembly
   // pass's skip in prompt-assembly.service.ts (applyPromptRegexScriptsBeforeClipping).
   if (opts.inputMessages && !isPromptRegexChatOwned(opts.chatId, isExtensionRunning)) {
-    const chatForRegex = chatsSvc.getChat(opts.userId, opts.chatId);
+    const chatForRegex = await chatsSvc.getChatAsync(opts.userId, opts.chatId);
     const characterId = opts.targetCharacterId || chatForRegex?.character_id || undefined;
     const promptScripts = regexScriptsSvc.getActiveScripts(opts.userId, {
       characterId,
@@ -1706,7 +1706,7 @@ export async function startGeneration(
 
     // Loaded before preset resolution: no-preset temp chats bypass the preset
     // requirement entirely (assertUsablePreset would otherwise reject them).
-    const chat = chatsSvc.getChat(input.userId, input.chat_id);
+    const chat = await chatsSvc.getChatAsync(input.userId, input.chat_id);
     const connection = resolveChatGenerationConnection(
       input.userId,
       chat?.metadata,
@@ -1745,20 +1745,20 @@ export async function startGeneration(
         (input.impersonate_mode === "oneliner" ||
           input.impersonate_mode === "preset") &&
         input.preset_id &&
-        !presetsSvc.getPreset(input.userId, input.preset_id)
+        !(await presetsSvc.getPresetAsync(input.userId, input.preset_id))
       ) {
         console.warn(
           "[generate] Clearing stale chat impersonation preset override %s for chat %s",
           input.preset_id,
           input.chat_id,
         );
-        chatsSvc.mergeChatMetadata(input.userId, input.chat_id, {
+        await chatsSvc.mergeChatMetadataAsync(input.userId, input.chat_id, {
           impersonation_preset_id: undefined,
         });
         input.preset_id = undefined;
         input.force_preset_id = false;
       }
-      presetsSvc.assertUsablePreset(
+      await presetsSvc.assertUsablePresetAsync(
         input.userId,
         input.preset_id,
         connection.preset_id,
@@ -1830,7 +1830,7 @@ export async function startGeneration(
     const targetCharId = resolvedTargetCharId || chat?.character_id || undefined;
     const pipelineTargetCharId = resolvedTargetCharId;
     if (targetCharId) {
-      const character = charactersSvc.getCharacter(input.userId, targetCharId);
+      const character = await charactersSvc.getCharacterAsync(input.userId, targetCharId);
       if (character) characterName = getEffectiveCharacterName(character);
     }
 
@@ -1841,7 +1841,7 @@ export async function startGeneration(
     // Resolve persona_id from settings if not provided by the frontend, so the
     // persona's attached world book is always included regardless of UI state.
     if (!input.persona_id && !isTemporaryChat) {
-      const activePersonaSetting = settingsSvc.getSetting(
+      const activePersonaSetting = await settingsSvc.getSettingAsync(
         input.userId,
         "activePersonaId",
       );
@@ -1857,7 +1857,7 @@ export async function startGeneration(
     // message on the frontend before council tools start executing.
     let resolvedPersona = isTemporaryChat
       ? null
-      : personasSvc.resolvePersonaOrDefault(input.userId, input.persona_id);
+      : (await personasSvc.resolvePersonaOrDefaultAsync(input.userId, input.persona_id));
     if (!input.persona_addon_states) {
       input.persona_addon_states = getChatPersonaAddonStates(
         chat?.metadata,
@@ -1948,7 +1948,7 @@ export async function startGeneration(
         // be inserted between original content and generated text when saving.
         const cpPresetId = input.preset_id || connection.preset_id;
         const cpPreset = cpPresetId
-          ? presetsSvc.getPreset(input.userId, cpPresetId)
+          ? (await presetsSvc.getPresetAsync(input.userId, cpPresetId))
           : null;
         lifecycle.continuePostfix = resolveContinuePostfix(
           lastMsg.content,
@@ -2080,7 +2080,7 @@ export async function startGeneration(
             // primary LLM. Sidecar mode has no such requirement.
             const presetId = input.preset_id || connection.preset_id;
             const preset = presetId
-              ? presetsSvc.getPreset(input.userId, presetId)
+              ? (await presetsSvc.getPresetAsync(input.userId, presetId))
               : null;
             const completionSettings = preset?.prompts?.completionSettings;
             if (completionSettings?.enableFunctionCalling === false) {
@@ -2141,7 +2141,7 @@ export async function startGeneration(
             // invalidates a stale cached deliberation block.
             const fullCharacterId = targetCharId || chat?.character_id;
             const fullCharacter = chat && fullCharacterId
-              ? charactersSvc.getCharacter(input.userId, fullCharacterId)
+              ? (await charactersSvc.getCharacterAsync(input.userId, fullCharacterId))
               : null;
             const councilMessages = chatsSvc
               .getMessages(input.userId, input.chat_id)
@@ -2277,7 +2277,7 @@ export async function startGeneration(
                   input.chat_id,
                 );
               const councilWorldInfoSettings =
-                (settingsSvc.getSetting(input.userId, "worldInfoSettings")?.value as
+                ((await settingsSvc.getSettingAsync(input.userId, "worldInfoSettings"))?.value as
                   | Partial<WorldInfoSettings>
                   | undefined) ?? {};
               let councilWiActivated =
@@ -2495,7 +2495,7 @@ export async function startGeneration(
         if (extensionInlineTools.length > 0) {
           const presetId = input.preset_id || connection.preset_id;
           const preset = presetId
-            ? presetsSvc.getPreset(input.userId, presetId)
+            ? (await presetsSvc.getPresetAsync(input.userId, presetId))
             : null;
           const completionSettings = preset?.prompts?.completionSettings;
           if (completionSettings?.enableFunctionCalling !== false) {
@@ -2544,7 +2544,7 @@ export async function startGeneration(
         if (genType !== "impersonate") {
           const presetId = input.preset_id || connection.preset_id;
           const preset = presetId
-            ? presetsSvc.getPreset(input.userId, presetId)
+            ? (await presetsSvc.getPresetAsync(input.userId, presetId))
             : null;
           const completionSettings = preset?.prompts?.completionSettings;
           const webSearchSettings = await getWebSearchSettings(input.userId);
@@ -2645,7 +2645,7 @@ export async function startGeneration(
               // Atomic merge so we don't clobber concurrent user edits to chat
               // metadata (alternate field selections, world book attachments, etc.)
               // that landed while the council was running.
-              chatsSvc.mergeChatMetadata(input.userId, input.chat_id, {
+              await chatsSvc.mergeChatMetadataAsync(input.userId, input.chat_id, {
                 last_council_results: cachedResult,
               });
             } catch (err) {
@@ -2680,7 +2680,7 @@ export async function startGeneration(
             ),
           };
           try {
-            chatsSvc.mergeChatMetadata(input.userId, input.chat_id, {
+            await chatsSvc.mergeChatMetadataAsync(input.userId, input.chat_id, {
               last_council_results: emptyRollCache,
             });
           } catch (err) {
@@ -2778,7 +2778,7 @@ export async function startGeneration(
             );
           }
           if (Object.keys(partial).length > 0) {
-            chatsSvc.mergeChatMetadata(
+            await chatsSvc.mergeChatMetadataAsync(
               input.userId,
               pipeline.deferredWiState?.chatId ?? input.chat_id,
               partial,
@@ -2867,7 +2867,7 @@ export async function startGeneration(
           ?? (input.messages ? input.preset_id || connection.preset_id : undefined);
         if (presetId) {
           const presetName = pipeline.resolvedPreset?.name
-            ?? presetsSvc.getPreset(input.userId, presetId)?.name;
+            ?? (await presetsSvc.getPresetAsync(input.userId, presetId))?.name;
           lifecycle.presetId = presetId;
           if (presetName) lifecycle.presetName = presetName;
         }
@@ -3006,11 +3006,11 @@ export async function dryRunGeneration(
     sourceMessages.map((message) => [message.id, message] as const),
   );
   const dryRunReasoningSettings =
-    settingsSvc.getSetting(input.userId, "reasoningSettings")?.value ?? null;
+    (await settingsSvc.getSettingAsync(input.userId, "reasoningSettings"))?.value ?? null;
 
   // No-preset temp chats bypass preset resolution/assertion (same as
   // startGeneration); assembly falls back to raw message mapping.
-  const dryRunChat = chatsSvc.getChat(input.userId, input.chat_id);
+  const dryRunChat = await chatsSvc.getChatAsync(input.userId, input.chat_id);
   const dryRunIsGroupChat = dryRunChat?.metadata?.group === true;
   const dryRunGroupCharacterIds =
     dryRunIsGroupChat && Array.isArray(dryRunChat?.metadata?.character_ids)
@@ -3032,7 +3032,7 @@ export async function dryRunGeneration(
 
   // Resolve persona_id from settings if not provided (same as startGeneration)
   if (!input.persona_id) {
-    const activePersonaSetting = settingsSvc.getSetting(
+    const activePersonaSetting = await settingsSvc.getSettingAsync(
       input.userId,
       "activePersonaId",
     );
@@ -3051,7 +3051,7 @@ export async function dryRunGeneration(
   );
   input.connection_id = connection.id;
   if (!isNoPresetChat) {
-    presetsSvc.assertUsablePreset(
+    await presetsSvc.assertUsablePresetAsync(
       input.userId,
       input.preset_id,
       connection.preset_id,
@@ -3067,7 +3067,7 @@ export async function dryRunGeneration(
       : null;
   const dryRunPresetId = input.preset_id || connection.preset_id;
   const dryRunContinueConfiguredPostfix = dryRunPresetId
-    ? presetsSvc.getPreset(input.userId, dryRunPresetId)?.prompts
+    ? (await presetsSvc.getPresetAsync(input.userId, dryRunPresetId))?.prompts
         ?.completionSettings?.continuePostfix || ""
     : "";
   const dryRunContinuePostfix = dryRunContinueTarget
@@ -3371,7 +3371,7 @@ async function runGeneration(
   // engineered reasoning tags) into fullReasoning + reasoning WS events,
   // keeping fullContent clean. Native provider reasoning (chunk.reasoning)
   // bypasses this — it's already separated at the provider level.
-  const reasoningSetting = settingsSvc.getSetting(userId, "reasoningSettings");
+  const reasoningSetting = await settingsSvc.getSettingAsync(userId, "reasoningSettings");
   const cotAutoParse = reasoningSetting?.value?.autoParse === true;
   const cotDelimiters = resolveReasoningDelimiters(reasoningSetting?.value);
   const cotParser = new GuidedReasoningStreamParser(
@@ -3945,9 +3945,9 @@ async function runGeneration(
       }
 
       // Capture the complete, combined source before response regex can hide control blocks.
-      const preserveActivationSource = lifecycle.presetId && regexScriptsSvc.getPresetActivationScripts(
+      const preserveActivationSource = lifecycle.presetId && (await regexScriptsSvc.getPresetActivationScriptsAsync(
         userId, lifecycle.presetId, { chatId, characterId: lifecycle.targetCharacterId },
-      ).some((script) => readPromptActivation(script.metadata)?.source === "ai_output");
+      )).some((script) => readPromptActivation(script.metadata)?.source === "ai_output");
       const activationSource = preserveActivationSource
         ? (lifecycle.continueMessageId
           ? (lifecycle.continueOriginalContent ?? "") + (lifecycle.continuePostfix ?? "") + fullContent
@@ -4101,7 +4101,7 @@ async function runGeneration(
           if (savedMessage) {
             resolvedExtra = withMessageLiteralExtra(savedMessage.extra, rendered);
           }
-          persistMacroVariableState(userId, chatId, assistantEnv);
+          await persistMacroVariableStateAsync(userId, chatId, assistantEnv);
         }
         if (savedMessage && (baseContent !== resolvedMessage || JSON.stringify(resolvedExtra) !== JSON.stringify(savedMessage.extra))) {
           chatsSvc.updateMessage(userId, messageId, {
@@ -4461,7 +4461,7 @@ async function fireExpressionDetection(
   chatId: string,
   lifecycle: GenerationLifecycle,
 ): Promise<void> {
-  const chat = chatsSvc.getChat(userId, chatId);
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
   if (!chat) return;
 
   const characterId = lifecycle.targetCharacterId || chat.character_id;
@@ -4743,7 +4743,7 @@ export async function summarizeGenerate(
     // Merge: preset defaults < sidecar overrides
     let mergedParams: GenerationParameters = {};
     if (connection.preset_id) {
-      const preset = presetsSvc.getPreset(userId, connection.preset_id);
+      const preset = await presetsSvc.getPresetAsync(userId, connection.preset_id);
       if (preset) {
         mergedParams = { ...preset.parameters };
       }
@@ -5017,9 +5017,9 @@ export async function rebuildSummary(
     : defaults.userPrompt;
 
   // Get chat for character/user names
-  const chat = chatsSvc.getChat(userId, chatId);
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
   const characterId = chat?.character_id;
-  const character = characterId ? charactersSvc.getCharacter(userId, characterId) : null;
+  const character = characterId ? (await charactersSvc.getCharacterAsync(userId, characterId)) : null;
   const characterName = character?.name || 'Character';
   const userName = input.userName || 'User';
 
@@ -5034,7 +5034,7 @@ export async function rebuildSummary(
   // Get preset params
   let presetParams: Record<string, unknown> = {};
   if (connection.preset_id) {
-    const preset = presetsSvc.getPreset(userId, connection.preset_id);
+    const preset = await presetsSvc.getPresetAsync(userId, connection.preset_id);
     if (preset) {
       presetParams = { ...preset.parameters };
     }
@@ -5107,9 +5107,9 @@ export async function startRebuildSummary(
     : defaults.userPrompt;
 
   // Get chat for character/user names
-  const chat = chatsSvc.getChat(userId, chatId);
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
   const characterId = chat?.character_id;
-  const character = characterId ? charactersSvc.getCharacter(userId, characterId) : null;
+  const character = characterId ? (await charactersSvc.getCharacterAsync(userId, characterId)) : null;
   const characterName = character?.name || 'Character';
   const userName = input.userName || 'User';
 
@@ -5125,7 +5125,7 @@ export async function startRebuildSummary(
   // Get preset params
   let presetParams: Record<string, unknown> = {};
   if (connection.preset_id) {
-    const preset = presetsSvc.getPreset(userId, connection.preset_id);
+    const preset = await presetsSvc.getPresetAsync(userId, connection.preset_id);
     if (preset) {
       presetParams = { ...preset.parameters };
     }
@@ -5207,7 +5207,7 @@ export async function startRebuildSummary(
       console.log(
         `[rebuild] All ${batches.length} batches succeeded, committing summary (len=${currentSummary.length})`,
       );
-      await chatsSvc.mergeChatMetadata(userId, chatId, {
+      await chatsSvc.mergeChatMetadataAsync(userId, chatId, {
         loom_summary: currentSummary,
         loom_last_summarized_at: {
           messageCount: visibleMessages.length,

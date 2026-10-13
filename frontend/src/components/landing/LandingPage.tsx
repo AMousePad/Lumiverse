@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProper
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
-import { useVirtualizer, type VirtualItem, type Virtualizer } from '@tanstack/react-virtual'
+import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
 import {
   MessageSquarePlus,
   MessageSquare,
@@ -35,9 +35,11 @@ import useIsMobile from '@/hooks/useIsMobile'
 import { resolveGlobalWallpaper } from '@/lib/wallpaper'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import { warmCharacterPalette } from '@/hooks/useCharacterTheme'
-import { holdImagesForTransition, prefetchImages } from '@/lib/imageDecodeCache'
+import { holdImagesForTransition } from '@/lib/imageDecodeCache'
+import { useImagePrefetch } from '@/hooks/useImagePrefetch'
 import { measureLayoutHeight, renderedPxToLayoutPx } from '@/lib/uiScale'
 import LazyImage from '@/components/shared/LazyImage'
+import VirtualGrid from '@/components/shared/VirtualGrid'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { GuideViewer } from '@/components/shared/GuideViewer'
 import type { GuideDefinition } from '@/lib/guides/types'
@@ -811,116 +813,6 @@ const ChatListItem = memo(function ChatListItem({ item, animateEntry, eagerImage
   )
 })
 
-interface VirtualRowProps {
-  virtualRow: VirtualItem
-  virtualColumns: number
-  virtualGap: number
-  virtualScrollMargin: number
-  rowItems: GroupedRecentChat[]
-  layoutMode: 'cards' | 'compact'
-  initialPageSize: number
-  animateInitialEntries: boolean
-  eagerImages: boolean
-  shiftPressed: boolean
-  measureElement: (el: Element | null) => void
-  onChatClick: (item: GroupedRecentChat) => void
-  onDeleteChat: (item: GroupedRecentChat) => void
-  onDeleteAllChats: (item: GroupedRecentChat) => void
-  onRemoveFromRecent: (item: GroupedRecentChat) => void
-  onOpenContextMenu: (item: GroupedRecentChat, position: ContextMenuPos) => void
-}
-
-function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boolean {
-  if (prev.virtualRow.key !== next.virtualRow.key) return false
-  if (prev.virtualRow.index !== next.virtualRow.index) return false
-  if (prev.virtualRow.start !== next.virtualRow.start) return false
-  if (prev.virtualColumns !== next.virtualColumns) return false
-  if (prev.virtualGap !== next.virtualGap) return false
-  if (prev.virtualScrollMargin !== next.virtualScrollMargin) return false
-  if (prev.layoutMode !== next.layoutMode) return false
-  if (prev.initialPageSize !== next.initialPageSize) return false
-  if (prev.animateInitialEntries !== next.animateInitialEntries) return false
-  if (prev.eagerImages !== next.eagerImages) return false
-  if (prev.shiftPressed !== next.shiftPressed) return false
-  if (prev.measureElement !== next.measureElement) return false
-  if (prev.onChatClick !== next.onChatClick) return false
-  if (prev.onDeleteChat !== next.onDeleteChat) return false
-  if (prev.onDeleteAllChats !== next.onDeleteAllChats) return false
-  if (prev.onRemoveFromRecent !== next.onRemoveFromRecent) return false
-  if (prev.onOpenContextMenu !== next.onOpenContextMenu) return false
-  if (prev.rowItems.length !== next.rowItems.length) return false
-  for (let i = 0; i < prev.rowItems.length; i += 1) {
-    if (prev.rowItems[i] !== next.rowItems[i]) return false
-  }
-  return true
-}
-
-const VirtualRow = memo(function VirtualRow({
-  virtualRow,
-  virtualColumns,
-  virtualGap,
-  virtualScrollMargin,
-  rowItems,
-  layoutMode,
-  initialPageSize,
-  animateInitialEntries,
-  eagerImages,
-  shiftPressed,
-  measureElement,
-  onChatClick,
-  onDeleteChat,
-  onDeleteAllChats,
-  onRemoveFromRecent,
-  onOpenContextMenu,
-}: VirtualRowProps) {
-  const animateEntry = animateInitialEntries
-    && virtualRow.index * virtualColumns < initialPageSize
-  return (
-    <div
-      ref={measureElement}
-      data-index={virtualRow.index}
-      className={styles.virtualRow}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${virtualColumns}, minmax(0, 1fr))`,
-        gap: virtualGap,
-        paddingBottom: virtualGap,
-        transform: `translateY(${virtualRow.start - virtualScrollMargin}px)`,
-      }}
-    >
-      {rowItems.map((item) =>
-        layoutMode === 'compact' ? (
-          <ChatListItem
-            key={getRecentChatKey(item)}
-            item={item}
-            animateEntry={animateEntry}
-            eagerImages={eagerImages}
-            shiftPressed={shiftPressed}
-            onClick={onChatClick}
-            onDeleteChat={onDeleteChat}
-            onDeleteAllChats={onDeleteAllChats}
-            onRemoveFromRecent={onRemoveFromRecent}
-            onOpenContextMenu={onOpenContextMenu}
-          />
-        ) : (
-          <ChatCard
-            key={getRecentChatKey(item)}
-            item={item}
-            animateEntry={animateEntry}
-            eagerImages={eagerImages}
-            shiftPressed={shiftPressed}
-            onClick={onChatClick}
-            onDeleteChat={onDeleteChat}
-            onDeleteAllChats={onDeleteAllChats}
-            onRemoveFromRecent={onRemoveFromRecent}
-            onOpenContextMenu={onOpenContextMenu}
-          />
-        ),
-      )}
-    </div>
-  )
-}, virtualRowPropsEqual)
-
 interface VirtualizedChatRowsProps {
   items: GroupedRecentChat[]
   layoutMode: 'cards' | 'compact'
@@ -942,9 +834,9 @@ interface VirtualizedChatRowsProps {
 }
 
 /**
- * Owns one virtualizer lifecycle for a single row topology. The parent keys
- * this component by layout + column count so card/list switches cannot reuse
- * direct-DOM range and measurement caches from an incompatible arrangement.
+ * Owns the row measurements while VirtualGrid preserves entry identity across
+ * responsive column changes. Card/list switches use separate lifecycles because
+ * their image tiers and height measurements differ.
  */
 function VirtualizedChatRows({
   items,
@@ -965,6 +857,7 @@ function VirtualizedChatRows({
   onRemoveFromRecent,
   onOpenContextMenu,
 }: VirtualizedChatRowsProps) {
+  const prefetchImages = useImagePrefetch()
   const virtualRowCount = Math.ceil(items.length / virtualColumns)
   const characters = useStore((state) => state.characters)
   const compactRowHeightsRef = useRef(new Map<string | number | bigint, number>())
@@ -993,7 +886,6 @@ function VirtualizedChatRows({
     anchorTo: 'start',
     scrollMargin: virtualScrollMargin,
     ...(layoutMode === 'compact' ? { measureElement: measureCompactRow } : {}),
-    directDomUpdates: true,
     useFlushSync: false,
     getItemKey: (index) => {
       const start = index * virtualColumns
@@ -1005,14 +897,17 @@ function VirtualizedChatRows({
     // Card rows depend on their responsive column width. Compact rows keep
     // their initial measured height and must not be reset to an estimate.
     if (layoutMode === 'cards') chatVirtualizer.measure()
-  }, [chatVirtualizer, items, layoutMode, virtualRowEstimate])
+  }, [chatVirtualizer, layoutMode, virtualColumns, virtualRowEstimate])
 
   const virtualItems = chatVirtualizer.getVirtualItems()
   const visibleStart = virtualItems.length > 0 ? virtualItems[0].index : -1
   const visibleEnd = virtualItems.length > 0 ? virtualItems[virtualItems.length - 1].index : -1
 
   useEffect(() => {
-    if (visibleStart < 0 || visibleEnd < 0 || items.length === 0) return
+    if (visibleStart < 0 || visibleEnd < 0 || items.length === 0) {
+      prefetchImages([])
+      return
+    }
     const startRow = Math.max(0, visibleStart - PREFETCH_ROWS)
     const endRow = Math.min(virtualRowCount - 1, visibleEnd + PREFETCH_ROWS)
     const startItem = startRow * virtualColumns
@@ -1022,13 +917,10 @@ function VirtualizedChatRows({
       characters,
       layoutMode === 'compact' ? 'compact' : 'card',
     )
-    if (urls.length > 0) prefetchImages(urls)
-  }, [characters, items, layoutMode, visibleEnd, visibleStart, virtualColumns, virtualRowCount])
+    prefetchImages(urls)
+  }, [characters, items, layoutMode, visibleEnd, visibleStart, virtualColumns, virtualRowCount, prefetchImages])
 
-  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
-    chatVirtualizer.containerRef(node)
-    onContainerChange(node)
-  }, [chatVirtualizer, onContainerChange])
+  const Entry = layoutMode === 'compact' ? ChatListItem : ChatCard
 
   return (
     <motion.div
@@ -1037,37 +929,36 @@ function VirtualizedChatRows({
       data-layout-columns={virtualColumns}
       data-spindle-mount="landing_recent_chats"
       data-spindle-scope="landing:recent-chats"
-      ref={setContainerRef}
+      ref={onContainerChange}
       style={{ height: chatVirtualizer.getTotalSize() }}
       variants={containerVariants}
       initial={animateInitialEntries ? 'hidden' : false}
       animate="visible"
       exit="exit"
     >
-      {virtualItems.map((virtualRow) => {
-        const start = virtualRow.index * virtualColumns
-        return (
-          <VirtualRow
-            key={virtualRow.key}
-            virtualRow={virtualRow}
-            virtualColumns={virtualColumns}
-            virtualGap={virtualGap}
-            virtualScrollMargin={virtualScrollMargin}
-            rowItems={items.slice(start, start + virtualColumns)}
-            layoutMode={layoutMode}
-            initialPageSize={initialPageSize}
-            animateInitialEntries={animateInitialEntries}
+      <VirtualGrid
+        items={items}
+        rows={virtualItems}
+        columns={virtualColumns}
+        gap={virtualGap}
+        scrollMargin={virtualScrollMargin}
+        className={styles.virtualRow}
+        measureElement={chatVirtualizer.measureElement}
+        getItemKey={getRecentChatKey}
+        renderItem={(item, index) => (
+          <Entry
+            item={item}
+            animateEntry={animateInitialEntries && index < initialPageSize}
             eagerImages={eagerImages}
             shiftPressed={shiftPressed}
-            measureElement={chatVirtualizer.measureElement}
-            onChatClick={onChatClick}
+            onClick={onChatClick}
             onDeleteChat={onDeleteChat}
             onDeleteAllChats={onDeleteAllChats}
             onRemoveFromRecent={onRemoveFromRecent}
             onOpenContextMenu={onOpenContextMenu}
           />
-        )
-      })}
+        )}
+      />
     </motion.div>
   )
 }
@@ -2283,7 +2174,7 @@ function LandingPageNative() {
               <EmptyState key="empty" filtered={Boolean(debouncedSearchQuery)} />
             ) : (
               <VirtualizedChatRows
-                key={`${virtualLayout}-${virtualColumns}`}
+                key={virtualLayout}
                 items={items}
                 layoutMode={virtualLayout}
                 virtualColumns={virtualColumns}

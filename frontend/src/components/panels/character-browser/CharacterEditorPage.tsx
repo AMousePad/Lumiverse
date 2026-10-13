@@ -42,11 +42,13 @@ import {
 import { IconNotebook } from '@tabler/icons-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Spinner } from '@/components/shared/Spinner'
+import VirtualGrid from '@/components/shared/VirtualGrid'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import TokenCountButton from '@/components/shared/TokenCountButton'
 import { charactersApi, type CharacterPerspectiveLayerInput } from '@/api/characters'
 import { ApiError } from '@/api/client'
 import { characterGalleryApi } from '@/api/character-gallery'
+import { isImageDeleted, onImageDeleted, isGalleryItemRemoved, onGalleryItemRemoved } from '@/lib/deletion-events'
 import { imagesApi } from '@/api/images'
 import { personasApi } from '@/api/personas'
 import { worldBooksApi } from '@/api/world-books'
@@ -137,11 +139,12 @@ type TabId = BuiltInTabId | string
 interface GalleryGridItemProps {
   item: CharacterGalleryItem
   onRemove: (itemId: string) => void
+  deleting: boolean
   onOpenMenu: (item: CharacterGalleryItem, pos: ContextMenuPos) => void
   onPreview: (item: CharacterGalleryItem) => void
 }
 
-function GalleryGridItem({ item, onRemove, onOpenMenu, onPreview }: GalleryGridItemProps) {
+function GalleryGridItem({ item, onRemove, deleting, onOpenMenu, onPreview }: GalleryGridItemProps) {
   const { t } = useTranslation('panels')
   const longPress = useLongPress({
     onLongPress: (pos) => onOpenMenu(item, pos),
@@ -175,13 +178,15 @@ function GalleryGridItem({ item, onRemove, onOpenMenu, onPreview }: GalleryGridI
       <button
         type="button"
         className={styles.galleryRemoveBtn}
+        disabled={deleting}
+        aria-busy={deleting}
         onClick={(e) => {
           e.stopPropagation()
           onRemove(item.id)
         }}
         title={t('characterEditor.removeFromGallery')}
       >
-        <X size={12} />
+        {deleting ? <Spinner size={12} /> : <X size={12} />}
       </button>
     </div>
   )
@@ -508,6 +513,8 @@ export default function CharacterEditorPage() {
   const [lorebookResult, setLorebookResult] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [galleryItems, setGalleryItems] = useState<CharacterGalleryItem[]>([])
+  const [galleryDeletingIds, setGalleryDeletingIds] = useState<Set<string>>(new Set())
+  const galleryPendingRemovals = useRef(new Set<string>())
   const [galleryLightboxSrc, setGalleryLightboxSrc] = useState<string | null>(null)
   const [worldBooks, setWorldBooks] = useState<Array<Pick<WorldBook, 'id' | 'name' | 'folder' | 'metadata'>>>([])
   const [galleryUploading, setGalleryUploading] = useState(false)
@@ -656,12 +663,20 @@ export default function CharacterEditorPage() {
   // Gallery
   const fetchGallery = useCallback(() => {
     if (!editingCharacterId) return
-    characterGalleryApi.list(editingCharacterId).then(setGalleryItems).catch(() => {})
+    characterGalleryApi.list(editingCharacterId).then((items) => setGalleryItems(items.filter((item) => !isImageDeleted(item.image_id) && !isGalleryItemRemoved(editingCharacterId, item.id)))).catch(() => {})
   }, [editingCharacterId])
 
   useEffect(() => {
     fetchGallery()
   }, [fetchGallery])
+
+  useEffect(() => onImageDeleted((id) => {
+    setGalleryItems((prev) => prev.filter((item) => item.image_id !== id))
+  }), [])
+
+  useEffect(() => onGalleryItemRemoved((item) => {
+    if (item.characterId === editingCharacterId) setGalleryItems((prev) => prev.filter((entry) => entry.id !== item.id))
+  }), [editingCharacterId])
 
   // Gallery virtualization: the grid can grow very large for image-heavy
   // characters, so render only the viewport rows via TanStack Virtual.
@@ -681,6 +696,11 @@ export default function CharacterEditorPage() {
   }, [galleryGridWidth, galleryColumns])
 
   const galleryRowEstimate = useMemo(() => galleryItemWidth + GALLERY_GAP, [galleryItemWidth])
+
+  const galleryCells = useMemo(() => [
+    ...galleryItems.map((item) => ({ id: item.id, item })),
+    { id: '__add__', item: null },
+  ], [galleryItems])
 
   const galleryVirtualizer = useVirtualizer({
     count: galleryRowCount,
@@ -803,9 +823,18 @@ export default function CharacterEditorPage() {
 
   const handleGalleryRemove = useCallback(
     async (itemId: string) => {
-      if (!editingCharacterId) return
-      await characterGalleryApi.remove(editingCharacterId, itemId)
-      setGalleryItems((prev) => prev.filter((i) => i.id !== itemId))
+      if (!editingCharacterId || galleryPendingRemovals.current.has(itemId)) return
+      galleryPendingRemovals.current.add(itemId)
+      setGalleryDeletingIds(new Set(galleryPendingRemovals.current))
+      try {
+        await characterGalleryApi.remove(editingCharacterId, itemId)
+        setGalleryItems((prev) => prev.filter((i) => i.id !== itemId))
+      } catch (error: any) {
+        toast.error(error?.body?.error || error?.message || 'Gallery removal could not be confirmed')
+      } finally {
+        galleryPendingRemovals.current.delete(itemId)
+        setGalleryDeletingIds(new Set(galleryPendingRemovals.current))
+      }
     },
     [editingCharacterId]
   )
@@ -2522,62 +2551,34 @@ export default function CharacterEditorPage() {
                           className={styles.galleryVirtualContainer}
                           style={{ height: galleryVirtualizer.getTotalSize() }}
                         >
-                          {galleryVirtualizer.getVirtualItems().map((virtualRow) => {
-                            const rowStart = virtualRow.index * galleryColumns
-                            const rowEnd = rowStart + galleryColumns
-                            const cells: Array<{ type: 'item'; item: CharacterGalleryItem } | { type: 'add' }> = []
-                            for (let g = rowStart; g < rowEnd; g++) {
-                              if (g < galleryItems.length) {
-                                cells.push({ type: 'item', item: galleryItems[g] })
-                              } else if (g === galleryItems.length) {
-                                cells.push({ type: 'add' })
-                              }
-                            }
-
-                            return (
-                              <div
-                                key={virtualRow.key}
-                                ref={galleryVirtualizer.measureElement}
-                                data-index={virtualRow.index}
-                                className={styles.galleryGridRow}
-                                style={{
-                                  position: 'absolute',
-                                  top: virtualRow.start,
-                                  left: 0,
-                                  width: '100%',
-                                  gridTemplateColumns: `repeat(${galleryColumns}, minmax(0, 1fr))`,
-                                  gap: GALLERY_GAP,
-                                  paddingBottom: GALLERY_GAP,
-                                }}
+                          <VirtualGrid
+                            items={galleryCells}
+                            rows={galleryVirtualizer.getVirtualItems()}
+                            columns={galleryColumns}
+                            gap={GALLERY_GAP}
+                            className={styles.galleryGridRow}
+                            measureElement={galleryVirtualizer.measureElement}
+                            getItemKey={(cell) => cell.id}
+                            renderItem={({ item }) => item ? (
+                              <GalleryGridItem
+                                item={item}
+                                onRemove={handleGalleryRemove}
+                                deleting={galleryDeletingIds.has(item.id)}
+                                onOpenMenu={(menuItem, pos) => setGalleryContextMenu({ item: menuItem, pos })}
+                                onPreview={(previewItem) => setGalleryLightboxSrc(characterGalleryApi.imageUrl(previewItem.image_id))}
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                className={styles.galleryAddBtn}
+                                onClick={() => galleryFileRef.current?.click()}
+                                disabled={galleryUploading}
                               >
-                                {cells.map((cell) => {
-                                  if (cell.type === 'add') {
-                                    return (
-                                      <button
-                                        key="__add__"
-                                        type="button"
-                                        className={styles.galleryAddBtn}
-                                        onClick={() => galleryFileRef.current?.click()}
-                                        disabled={galleryUploading}
-                                      >
-                                        <ImagePlus size={20} />
-                                        <span>{galleryUploading ? t('characterEditor.uploading') : t('characterEditor.addImages')}</span>
-                                      </button>
-                                    )
-                                  }
-                                  return (
-                                    <GalleryGridItem
-                                      key={cell.item.id}
-                                      item={cell.item}
-                                      onRemove={handleGalleryRemove}
-                                      onOpenMenu={(menuItem, pos) => setGalleryContextMenu({ item: menuItem, pos })}
-                                      onPreview={(previewItem) => setGalleryLightboxSrc(characterGalleryApi.imageUrl(previewItem.image_id))}
-                                    />
-                                  )
-                                })}
-                              </div>
-                            )
-                          })}
+                                <ImagePlus size={20} />
+                                <span>{galleryUploading ? t('characterEditor.uploading') : t('characterEditor.addImages')}</span>
+                              </button>
+                            )}
+                          />
                         </div>
                       </div>
 

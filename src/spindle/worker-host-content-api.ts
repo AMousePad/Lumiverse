@@ -821,7 +821,7 @@ export class WorkerHostContentApi {
       case "image": {
         const imageId = typeof source.image_id === "string" ? source.image_id.trim() : "";
         if (!imageId) throw new Error("image media source requires image_id");
-        const image = imagesSvc.getImage(resolvedUserId, imageId);
+        const image = await imagesSvc.getImageAsync(resolvedUserId, imageId);
         if (!image) throw new Error("image media source not found");
         const path = await imagesSvc.getImageFilePath(resolvedUserId, imageId);
         if (!path) throw new Error("image media source file not found");
@@ -834,9 +834,9 @@ export class WorkerHostContentApi {
       case "audio": {
         const audioId = typeof source.audio_id === "string" ? source.audio_id.trim() : "";
         if (!audioId) throw new Error("audio media source requires audio_id");
-        const audio = audioSvc.getAudio(resolvedUserId, audioId);
+        const audio = await audioSvc.getAudioAsync(resolvedUserId, audioId);
         if (!audio) throw new Error("audio media source not found");
-        const path = audioSvc.getAudioFilePath(resolvedUserId, audioId);
+        const path = await audioSvc.getAudioFilePathAsync(resolvedUserId, audioId);
         if (!path) throw new Error("audio media source file not found");
         return {
           path,

@@ -346,7 +346,7 @@ app.post("/save-message-audio", async (c) => {
 
   if (!updated) {
     // Race: message vanished between validation and append. Roll back the file.
-    audioSvc.deleteAudio(userId, audioRow.id);
+    await audioSvc.deleteAudioAsync(userId, audioRow.id);
     return c.json({ error: "Message no longer exists" }, 404);
   }
 

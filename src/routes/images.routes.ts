@@ -144,13 +144,13 @@ async function fetchRemoteImageAsset(
   };
 }
 
-app.get("/wallpapers", (c) => {
+app.get("/wallpapers", async (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
-  return c.json(svc.listImages(userId, {
+  return c.json((await svc.listImagesAsync(userId, {
     ...pagination,
     owner_extension_identifier: svc.WALLPAPER_LIBRARY_OWNER,
-  }));
+  })));
 });
 
 app.post("/wallpapers", async (c) => {
@@ -194,12 +194,12 @@ app.post("/wallpapers", async (c) => {
   return c.json(image, 201);
 });
 
-app.delete("/wallpapers/:id", (c) => {
+app.delete("/wallpapers/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
-  const deleted = svc.deleteWallpaperLibraryImage(userId, id);
+  const deleted = await svc.deleteWallpaperLibraryImageAsync(userId, id);
   if (!deleted) return c.json({ error: "Not found" }, 404);
-  return c.json({ success: true, deleted: true });
+  return c.json({ success: true, deleted: true, id, status: "completed" });
 });
 
 app.post("/", async (c) => {
@@ -279,7 +279,7 @@ app.get("/:id", async (c) => {
     return c.json({ error: "Unsupported video codec. Use h264 or hevc." }, 400);
   }
 
-  const row = svc.getImage(userId, id);
+  const row = await svc.getImageAsync(userId, id);
   if (!row) return c.json({ error: "Not found" }, 404);
 
   const filepath = await svc.getImageFilePath(userId, id, tier, requestedCodec ?? undefined);
@@ -401,17 +401,24 @@ app.post("/rebuild-thumbnails", async (c) => {
   return c.json({ success: true, ...result });
 });
 
-app.delete("/:id", (c) => {
+app.get("/:id/deletion-status", async (c) => {
+  c.header("Cache-Control", "no-store");
+  const id = c.req.param("id");
+  const image = await svc.getImageAsync(c.get("userId"), id);
+  return c.json({ id, deleted: !image, status: image ? "present" : "completed" });
+});
+
+app.delete("/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
   const deleted = c.req.query("unused") === "true"
-    ? svc.deleteImageIfUnreferenced(userId, id)
-    : svc.deleteImage(userId, id);
+    ? await svc.deleteImageIfUnreferencedAsync(userId, id)
+    : await svc.deleteImageAsync(userId, id);
   if (!deleted && c.req.query("unused") === "true") {
-    return c.json({ success: true, deleted: false });
+    return c.json({ success: true, deleted: false, id, status: "retained" });
   }
   if (!deleted) return c.json({ error: "Not found" }, 404);
-  return c.json({ success: true, deleted: true });
+  return c.json({ success: true, deleted: true, id, status: "completed" });
 });
 
 export { app as imagesRoutes };

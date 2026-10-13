@@ -1,3 +1,6 @@
+import { readDatabaseRow, readDatabaseRows, runDatabaseStatement } from "../db/queries";
+import { executeDatabaseOperation } from "../db/execution";
+import { mutatePresetWithDb, type PresetMutationResult } from "../db/preset-operations";
 import { createHash } from "node:crypto";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
@@ -6,7 +9,7 @@ import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock, PromptB
 import { PresetRevisionConflictError } from "../types/preset";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
-import { paginatedQuery } from "./pagination";
+import { paginatedQuery, paginatedQueryAsync } from "./pagination";
 import { deleteRegexScriptsByPresetId } from "./regex-scripts.service";
 import { sanitizePromptBlockCharacterTagTrigger } from "../utils/prompt-block-character-tags";
 import { getIllarinPresetWorkId } from "../illarin/preset-metadata";
@@ -200,25 +203,12 @@ const ACTIVE_LOOM_PRESET_SETTING = "activeLoomPresetId";
  * back with the next generation request.
  */
 export function reconcileActiveLoomPreset(userId: string): string | null {
-  const setting = settingsSvc.getSetting(userId, ACTIVE_LOOM_PRESET_SETTING);
-  const selectedId = typeof setting?.value === "string" && setting.value.trim()
-    ? setting.value
-    : null;
+  return finishPresetMutation(mutatePresetWithDb(getDb(), { action: "reconcileActiveLoomPreset", args: [userId] }), userId);
+}
 
-  if (selectedId && getPreset(userId, selectedId)) return selectedId;
-  if (!selectedId) return null;
-
-  const replacement = getDb()
-    .query(
-      `SELECT id FROM presets
-       WHERE user_id = ? AND provider = 'loom'
-       ORDER BY updated_at DESC, created_at DESC, id ASC
-       LIMIT 1`,
-    )
-    .get(userId) as { id: string } | null;
-  const replacementId = replacement?.id ?? null;
-  settingsSvc.putSetting(userId, ACTIVE_LOOM_PRESET_SETTING, replacementId);
-  return replacementId;
+export async function reconcileActiveLoomPresetAsync(userId: string): Promise<string | null> {
+  const result = await executeDatabaseOperation<PresetMutationResult>({ kind: "preset-mutation", mutation: { action: "reconcileActiveLoomPreset", args: [userId] } });
+  return finishPresetMutation(result, userId);
 }
 
 /**
@@ -349,182 +339,30 @@ export function assertUsablePreset(
 }
 
 export function createPreset(userId: string, input: CreatePresetInput): Preset {
-  const id = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
+  return finishPresetMutation(mutatePresetWithDb(getDb(), { action: "createPreset", args: [userId, input] }), userId);
+}
 
-  const cleanedMetadata = prunePromptVariableOrphans(input.prompt_order, input.metadata) || {};
-
-  getDb()
-    .query(
-      "INSERT INTO presets (id, name, provider, engine, parameters, prompt_order, prompts, metadata, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .run(
-      id, input.name, input.provider, input.engine || "classic",
-      JSON.stringify(input.parameters || {}),
-      JSON.stringify(input.prompt_order || []),
-      JSON.stringify(input.prompts || {}),
-      JSON.stringify(cleanedMetadata),
-      userId, now, now
-    );
-
-  return getPreset(userId, id)!;
+export async function createPresetAsync(userId: string, input: CreatePresetInput): Promise<Preset> {
+  const result = await executeDatabaseOperation<PresetMutationResult>({ kind: "preset-mutation", mutation: { action: "createPreset", args: [userId, input] } });
+  return finishPresetMutation(result, userId);
 }
 
 export function updatePreset(userId: string, id: string, input: UpdatePresetInput): Preset | null {
-  const existing = getPreset(userId, id);
-  if (!existing) return null;
-  // Avoid mutating shared stash state for a request we already know is stale.
-  // The conditional UPDATE below remains the authoritative race-safe check.
-  if (input.expected_cache_revision !== undefined && input.expected_cache_revision !== (existing.cache_revision ?? 0)) {
-    throw new PresetRevisionConflictError(id, input.expected_cache_revision, existing.cache_revision ?? 0);
-  }
+  return finishPresetMutation(mutatePresetWithDb(getDb(), { action: "updatePreset", args: [userId, id, input] }), userId);
+}
 
-  // A stashed block has global content/configuration but local visibility and
-  // list placement. Reconcile before validating prompt variables so the
-  // response and persisted row both contain the canonical stash fields.
-  let reconciledPromptOrder = input.prompt_order;
-  let changedStashIds: string[] = [];
-  let commitStashReconciliation: (() => void) | undefined;
-  if (Array.isArray(input.prompt_order) && input.prompt_order.some(
-    (block) => block && typeof block === "object" && typeof (block as PromptBlock).stashId === "string",
-  )) {
-    const reconciliation = reconcileStashedPromptBlocks(
-      userId,
-      (existing.prompt_order || []) as PromptBlock[],
-      input.prompt_order as PromptBlock[],
-    );
-    reconciledPromptOrder = reconciliation.blocks;
-    changedStashIds = reconciliation.changedStashIds;
-    commitStashReconciliation = reconciliation.commit;
-  }
-
-  const fields: string[] = [];
-  const values: any[] = [];
-
-  // Orphan-GC: if prompt_order or metadata is being written, re-derive a cleaned
-  // metadata.promptVariables so stale values (orphaned by a removed def) don't stick.
-  // When prompt_order changes alone, persist the cleaned metadata even if the
-  // caller didn't touch it — otherwise the orphans would live forever.
-  let writeMetadata: Record<string, any> | undefined;
-  if (input.metadata !== undefined) {
-    const resolvedOrder = reconciledPromptOrder !== undefined ? reconciledPromptOrder : existing.prompt_order;
-    writeMetadata = (prunePromptVariableOrphans(resolvedOrder, input.metadata) as Record<string, any>) ?? input.metadata;
-  } else if (reconciledPromptOrder !== undefined) {
-    const cleaned = prunePromptVariableOrphans(reconciledPromptOrder, existing.metadata as Record<string, unknown>);
-    if (cleaned && JSON.stringify(cleaned) !== JSON.stringify(existing.metadata)) {
-      writeMetadata = cleaned as Record<string, any>;
-    }
-  }
-
-  if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
-  if (input.provider !== undefined) { fields.push("provider = ?"); values.push(input.provider); }
-  if (input.engine !== undefined) { fields.push("engine = ?"); values.push(input.engine); }
-  if (input.parameters !== undefined) { fields.push("parameters = ?"); values.push(JSON.stringify(input.parameters)); }
-  if (reconciledPromptOrder !== undefined) { fields.push("prompt_order = ?"); values.push(JSON.stringify(reconciledPromptOrder)); }
-  if (input.prompts !== undefined) { fields.push("prompts = ?"); values.push(JSON.stringify(input.prompts)); }
-  if (writeMetadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(writeMetadata)); }
-
-  const expectedCacheRevision = input.expected_cache_revision;
-  if (fields.length === 0) {
-    if (expectedCacheRevision !== undefined && expectedCacheRevision !== (existing.cache_revision ?? 0)) {
-      throw new PresetRevisionConflictError(id, expectedCacheRevision, existing.cache_revision ?? 0);
-    }
-    return existing;
-  }
-
-  fields.push("updated_at = ?", "cache_revision = cache_revision + 1");
-  values.push(Math.floor(Date.now() / 1000));
-
-  const where = ["id = ?", "user_id = ?"];
-  values.push(id, userId);
-  if (expectedCacheRevision !== undefined) {
-    where.push("cache_revision = ?");
-    values.push(expectedCacheRevision);
-  }
-
-  const changes = getDb()
-    .query(`UPDATE presets SET ${fields.join(", ")} WHERE ${where.join(" AND ")}`)
-    .run(...values)
-    .changes;
-  if (changes === 0) {
-    // A conditional miss is either a deleted row (the normal not-found result)
-    // or a stale writer. Read the current revision only after the atomic update
-    // has failed so the distinction cannot race the mutation itself.
-    const current = getPreset(userId, id);
-    if (!current) return null;
-    if (expectedCacheRevision !== undefined) {
-      throw new PresetRevisionConflictError(id, expectedCacheRevision, current.cache_revision ?? 0);
-    }
-    return null;
-  }
-
-  const updated = getPreset(userId, id);
-  if (!updated) return null;
-  commitStashReconciliation?.();
-  syncStashedBlocksAcrossPresets(userId, id, changedStashIds);
-  eventBus.emit(EventType.PRESET_CHANGED, { id, preset: updated }, userId);
-  return updated;
+export async function updatePresetAsync(userId: string, id: string, input: UpdatePresetInput): Promise<Preset | null> {
+  const result = await executeDatabaseOperation<PresetMutationResult>({ kind: "preset-mutation", mutation: { action: "updatePreset", args: [userId, id, input] } });
+  return finishPresetMutation(result, userId);
 }
 
 export function deletePreset(userId: string, id: string): boolean {
-  const db = getDb();
-  const illarinWorkId = getIllarinPresetWorkId(getPreset(userId, id)?.metadata);
+  return finishPresetMutation(mutatePresetWithDb(getDb(), { action: "deletePreset", args: [userId, id] }), userId);
+}
 
-  // Capture connection profiles that reference this preset. The FK on
-  // connection_profiles.preset_id (ON DELETE SET NULL) will clear the
-  // references when the preset row is removed, but we need the list up front
-  // so we can broadcast refreshed profiles to subscribers afterwards.
-  const affectedConnectionIds = (
-    db
-      .query("SELECT id FROM connection_profiles WHERE user_id = ? AND preset_id = ?")
-      .all(userId, id) as Array<{ id: string }>
-  ).map((r) => r.id);
-
-  // Cascade-delete any regex scripts that were imported from this preset so
-  // they don't linger as orphaned "preset regexes" in the user's list.
-  deleteRegexScriptsByPresetId(userId, id);
-
-  const deleted = db.query("DELETE FROM presets WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
-  if (!deleted) return false;
-
-  // Preserve a usable active selection for the next page load. This also
-  // repairs stale selections left behind by older versions that did not
-  // update the setting when a preset was removed.
-  reconcileActiveLoomPreset(userId);
-
-  // Clean up preset_profile bindings (setting-keyed, no FK) that referenced
-  // the now-deleted preset. Covers defaults, per-character, per-chat, and
-  // per-connection profile bindings.
-  for (const s of settingsSvc.getAllSettings(userId)) {
-    if (s.key !== "presetProfileDefaults"
-      && !s.key.startsWith("presetProfileDefaults:")
-      && !s.key.startsWith("presetProfile:character:")
-      && !s.key.startsWith("presetProfile:chat:")
-      && !s.key.startsWith("presetProfile:connection:")) continue;
-    if (s.value && typeof s.value === "object" && (s.value as any).preset_id === id) {
-      settingsSvc.deleteSetting(userId, s.key);
-    }
-  }
-
-  // Broadcast refreshed connection profiles so frontends drop stale preset_id
-  // references from their in-memory stores.
-  for (const connId of affectedConnectionIds) {
-    const row = db
-      .query("SELECT * FROM connection_profiles WHERE id = ? AND user_id = ?")
-      .get(connId, userId) as any;
-    if (!row) continue;
-    const profile: ConnectionProfile = {
-      ...row,
-      preset_id: row.preset_id || null,
-      is_default: !!row.is_default,
-      has_api_key: !!row.has_api_key,
-      metadata: JSON.parse(row.metadata),
-    };
-    eventBus.emit(EventType.CONNECTION_PROFILE_LOADED, { id: connId, profile }, userId);
-  }
-
-  eventBus.emit(EventType.PRESET_DELETED, { id, ...(illarinWorkId ? { illarinWorkId } : {}) }, userId);
-  return true;
+export async function deletePresetAsync(userId: string, id: string): Promise<boolean> {
+  const result = await executeDatabaseOperation<PresetMutationResult>({ kind: "preset-mutation", mutation: { action: "deletePreset", args: [userId, id] } });
+  return finishPresetMutation(result, userId);
 }
 
 function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
@@ -659,6 +497,255 @@ export function deletePromptBlock(userId: string, presetId: string, blockId: str
 
 export function listPromptBlockCategories(userId: string, presetId: string): PromptBlockCategoryGroup[] | null {
   const blocks = listPromptBlocks(userId, presetId);
+  if (!blocks) return null;
+
+  const groups: PromptBlockCategoryGroup[] = [];
+  let current: PromptBlockCategoryGroup = { categoryBlock: null, children: [] };
+  for (const block of blocks) {
+    if (block.marker === "category") {
+      if (current.categoryBlock || current.children.length > 0) groups.push(current);
+      current = { categoryBlock: block, children: [] };
+    } else {
+      current.children.push(block);
+    }
+  }
+  if (current.categoryBlock || current.children.length > 0) groups.push(current);
+  return groups;
+}
+
+function finishPresetMutation<T>(result: PresetMutationResult, userId: string): T {
+  if (result.conflict) throw new PresetRevisionConflictError(result.conflict.id, result.conflict.expected, result.conflict.actual);
+  for (const event of result.events) eventBus.emit(event.type, event.payload, userId);
+  return result.value as T;
+}
+
+export async function listPresetsAsync(userId: string, pagination: PaginationParams): Promise<PaginatedResult<Preset>> {
+  return paginatedQueryAsync(
+    "SELECT * FROM presets WHERE user_id = ? ORDER BY updated_at DESC",
+    "SELECT COUNT(*) as count FROM presets WHERE user_id = ?",
+    [userId],
+    pagination,
+    rowToPreset
+  );
+}
+
+export async function listPresetRegistryAsync(
+  userId: string,
+  pagination: PaginationParams,
+  provider?: string,
+  engine?: string
+): Promise<PaginatedResult<PresetRegistryRow>> {
+  const filters: string[] = [];
+  const params: any[] = [userId];
+
+  if (provider) {
+    filters.push("provider = ?");
+    params.push(provider);
+  }
+  if (engine) {
+    filters.push("engine = ?");
+    params.push(engine);
+  }
+
+  const filterSQL = filters.length > 0 ? " AND " + filters.join(" AND ") : "";
+
+  return paginatedQueryAsync<any, PresetRegistryRow>(
+    `SELECT id, name, provider, updated_at,
+            COALESCE(json_array_length(prompt_order), 0) as block_count,
+            COALESCE(json_extract(metadata, '$.coverUrl'), json_extract(metadata, '$.cover_url')) as cover_url
+     FROM presets
+     WHERE user_id = ?${filterSQL}
+     ORDER BY updated_at DESC`,
+    `SELECT COUNT(*) as count FROM presets WHERE user_id = ?${filterSQL}`,
+    params,
+    pagination,
+    (row) => ({
+      id: row.id,
+      name: row.name,
+      provider: row.provider,
+      updated_at: row.updated_at,
+      block_count: row.block_count ?? 0,
+      cover_url: typeof row.cover_url === "string" && row.cover_url.trim() ? row.cover_url : null,
+    })
+  );
+}
+
+export async function getPresetRegistrySignatureAsync(
+  userId: string,
+  provider?: string,
+  engine?: string,
+): Promise<string> {
+  const filters: string[] = [];
+  const params: any[] = [userId];
+  if (provider) {
+    filters.push("provider = ?");
+    params.push(provider);
+  }
+  if (engine) {
+    filters.push("engine = ?");
+    params.push(engine);
+  }
+  const filterSQL = filters.length > 0 ? " AND " + filters.join(" AND ") : "";
+  const rows = await readDatabaseRows<{ id: string; cache_revision: number }>(`SELECT id, cache_revision FROM presets WHERE user_id = ?${filterSQL} ORDER BY id`, params);
+  const digest = createHash("sha256");
+  digest.update(userId).update("\0").update(provider ?? "").update("\0").update(engine ?? "").update("\0");
+  for (const row of rows) {
+    digest.update(row.id).update("\0").update(String(row.cache_revision)).update("\0");
+  }
+  return digest.digest("base64url");
+}
+
+
+export async function getPresetAsync(userId: string, id: string): Promise<Preset | null> {
+  const row = await readDatabaseRow<any>("SELECT * FROM presets WHERE id = ? AND user_id = ?", [id, userId]);
+  return row ? rowToPreset(row) : null;
+}
+
+export async function getPresetsByIdsAsync(userId: string, ids: readonly string[]): Promise<Preset[]> {
+  const found = new Map<string, Preset>();
+  for (let i = 0; i < ids.length; i += 400) {
+    const chunk = ids.slice(i, i + 400);
+    const rows = await readDatabaseRows<any>(`SELECT * FROM presets WHERE user_id = ? AND id IN (${chunk.map(() => "?").join(",")})`, [userId, ...chunk]);
+    for (const row of rows) found.set(row.id, rowToPreset(row));
+  }
+  return ids.flatMap((id) => found.has(id) ? [found.get(id)!] : []);
+}
+export async function getPresetCacheRevisionAsync(userId: string, id: string): Promise<number | null> {
+  const row = await readDatabaseRow<{ cache_revision: number }>("SELECT cache_revision FROM presets WHERE id = ? AND user_id = ?", [id, userId]);
+  return row?.cache_revision ?? null;
+}
+
+export async function countPresetsAsync(userId: string): Promise<number> {
+  const row = (await readDatabaseRow<any>("SELECT COUNT(*) as count FROM presets WHERE user_id = ?", [userId])) as any;
+  return row?.count ?? 0;
+}
+
+export async function findPresetByLumihubIdAsync(userId: string, lumihubId: string): Promise<Preset | null> {
+  const row = (await readDatabaseRow<any>(`SELECT * FROM presets
+       WHERE user_id = ?
+         AND json_extract(metadata, '$._lumiverse_lumihub_id') = ?
+         AND (
+           json_extract(metadata, '$._lumiverse_install_source') = 'lumihub'
+           OR (
+             json_extract(metadata, '$._lumiverse_install_source') IS NULL
+             AND json_extract(metadata, '$._lumiverse_preset_version') IS NOT NULL
+           )
+         )
+       LIMIT 1`, [userId, lumihubId])) as any;
+  return row ? rowToPreset(row) : null;
+}
+
+export async function findLumihubPresetBySlugAsync(userId: string, slug: string): Promise<Preset | null> {
+  const row = (await readDatabaseRow<any>(`SELECT * FROM presets
+       WHERE user_id = ?
+         AND json_extract(metadata, '$._lumiverse_install_source') = 'lumihub'
+         AND json_extract(metadata, '$._lumiverse_preset_slug') = ?
+       LIMIT 1`, [userId, slug])) as any;
+  return row ? rowToPreset(row) : null;
+}
+
+export async function findPresetBySlugAsync(userId: string, slug: string): Promise<Preset | null> {
+  const row = (await readDatabaseRow<any>("SELECT * FROM presets WHERE user_id = ? AND json_extract(metadata, '$._lumiverse_preset_slug') = ? LIMIT 1", [userId, slug])) as any;
+  return row ? rowToPreset(row) : null;
+}
+
+export async function listPresetsForManifestAsync(userId: string): Promise<PresetManifestRow[]> {
+  const rows = (await readDatabaseRows<any>("SELECT name, metadata, created_at FROM presets WHERE user_id = ?", [userId])) as Array<{ name: string; metadata: string; created_at: number }>;
+  return rows.map((r) => {
+    let metadata: Record<string, any> = {};
+    try {
+      metadata = JSON.parse(r.metadata) || {};
+    } catch {
+      metadata = {};
+    }
+    return { name: r.name, created_at: r.created_at, metadata };
+  });
+}
+
+export async function assertUsablePresetAsync(
+  userId: string,
+  requestedPresetId: string | undefined | null,
+  connectionPresetId: string | undefined | null,
+): Promise<void> {
+  const resolvedId = requestedPresetId || connectionPresetId || null;
+  if (resolvedId) {
+    if (!(await getPresetAsync(userId, resolvedId))) {
+      throw new Error("The selected preset was deleted. Pick a different preset before generating.");
+    }
+    return;
+  }
+  if ((await countPresetsAsync(userId)) === 0) {
+    throw new Error("No presets available. Create a preset before generating.");
+  }
+  throw new Error("No preset selected. Choose a preset before generating.");
+}
+
+export async function listPromptBlocksAsync(userId: string, presetId: string): Promise<PromptBlock[] | null> {
+  const preset = await getPresetAsync(userId, presetId);
+  if (!preset) return null;
+  return normalizePromptBlocks((preset.prompt_order || []) as PromptBlock[]);
+}
+
+export async function getPromptBlockAsync(userId: string, presetId: string, blockId: string): Promise<PromptBlock | null> {
+  const blocks = await listPromptBlocksAsync(userId, presetId);
+  if (!blocks) return null;
+  return blocks.find((block) => block.id === blockId) || null;
+}
+
+export async function createPromptBlockAsync(
+  userId: string,
+  presetId: string,
+  input: CreatePromptBlockInput,
+  index?: number
+): Promise<PromptBlock | null> {
+  const preset = await getPresetAsync(userId, presetId);
+  if (!preset) return null;
+
+  const blocks = normalizePromptBlocks((preset.prompt_order || []) as PromptBlock[]);
+  const block = normalizePromptBlock(input || {});
+  const insertAt = typeof index === "number" && Number.isFinite(index)
+    ? Math.max(0, Math.min(blocks.length, Math.floor(index)))
+    : blocks.length;
+  blocks.splice(insertAt, 0, block);
+
+  await updatePresetAsync(userId, presetId, { prompt_order: blocks, expected_cache_revision: preset.cache_revision });
+  return block;
+}
+
+export async function updatePromptBlockAsync(
+  userId: string,
+  presetId: string,
+  blockId: string,
+  input: UpdatePromptBlockInput
+): Promise<PromptBlock | null> {
+  const preset = await getPresetAsync(userId, presetId);
+  if (!preset) return null;
+
+  const blocks = normalizePromptBlocks((preset.prompt_order || []) as PromptBlock[]);
+  const index = blocks.findIndex((block) => block.id === blockId);
+  if (index === -1) return null;
+
+  const updated = normalizePromptBlock({ ...blocks[index], ...(input || {}), id: blockId });
+  blocks[index] = updated;
+  await updatePresetAsync(userId, presetId, { prompt_order: blocks, expected_cache_revision: preset.cache_revision });
+  return updated;
+}
+
+export async function deletePromptBlockAsync(userId: string, presetId: string, blockId: string): Promise<boolean> {
+  const preset = await getPresetAsync(userId, presetId);
+  if (!preset) return false;
+
+  const blocks = normalizePromptBlocks((preset.prompt_order || []) as PromptBlock[]);
+  const index = blocks.findIndex((block) => block.id === blockId);
+  if (index === -1) return false;
+
+  blocks.splice(index, 1);
+  await updatePresetAsync(userId, presetId, { prompt_order: blocks, expected_cache_revision: preset.cache_revision });
+  return true;
+}
+
+export async function listPromptBlockCategoriesAsync(userId: string, presetId: string): Promise<PromptBlockCategoryGroup[] | null> {
+  const blocks = await listPromptBlocksAsync(userId, presetId);
   if (!blocks) return null;
 
   const groups: PromptBlockCategoryGroup[] = [];

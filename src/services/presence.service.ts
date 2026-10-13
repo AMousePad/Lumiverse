@@ -71,7 +71,7 @@ const PRESENCE_SQL = `
  * naturally get fresh values.
  */
 export async function getPresenceChatSnapshot(userId: string): Promise<PresenceChatSnapshot | null> {
-  const activeChatId = settingsSvc.getSetting(userId, "activeChatId")?.value;
+  const activeChatId = (await settingsSvc.getSettingAsync(userId, "activeChatId"))?.value;
   if (typeof activeChatId !== "string" || activeChatId.length === 0) return null;
 
   const row = getDb().query(PRESENCE_SQL).get(activeChatId, userId) as

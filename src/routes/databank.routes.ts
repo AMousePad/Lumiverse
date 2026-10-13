@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import * as databank from "../services/databank";
-import { getChat } from "../services/chats.service";
+import { getChat, getChatAsync } from "../services/chats.service";
 import { parsePagination } from "../services/pagination";
 import * as filesSvc from "../services/files.service";
 import type { DatabankScope } from "../services/databank/types";
@@ -374,7 +374,7 @@ app.post("/attach-to-chat", async (c) => {
 
   if (!file) return c.json({ error: "No file provided" }, 400);
   if (!chatId) return c.json({ error: "chat_id is required" }, 400);
-  if (!getChat(userId, chatId)) return c.json({ error: "Chat not found" }, 404);
+  if (!(await getChatAsync(userId, chatId))) return c.json({ error: "Chat not found" }, 404);
 
   if (!databank.isSupportedFormat(file.name)) {
     return c.json({ error: `Unsupported file format. Supported: ${databank.getSupportedExtensions().join(", ")}` }, 400);

@@ -398,7 +398,7 @@ export async function generateSceneBackground(
 
   const connection = imageGenConnSvc.getConnection(userId, connectionId);
   if (!connection) throw new Error("Image generation connection not found");
-  if (!chatsSvc.getChat(userId, chatId)) throw new Error("Chat not found");
+  if (!(await chatsSvc.getChatAsync(userId, chatId))) throw new Error("Chat not found");
   if (opts?.outputMediaType === "video" && connection.provider !== "comfyui") {
     throw new Error("Video output selection currently requires a ComfyUI connection");
   }
@@ -554,7 +554,7 @@ export async function generateSceneBackground(
     ) {
       const sources = await resolveSourceImages(userId, chatId, params);
       if (opts?.sourceImageId) {
-        const image = imagesSvc.getImage(userId, opts.sourceImageId);
+        const image = await imagesSvc.getImageAsync(userId, opts.sourceImageId);
         const path = await imagesSvc.getImageFilePath(userId, opts.sourceImageId);
         if (!image || !path) throw new Error("Source image not found");
         if (!image.mime_type.startsWith("image/")) throw new Error("Source asset must be a still image");
@@ -694,7 +694,7 @@ export async function generateSceneBackground(
       // re-render that follows from MESSAGE_EDITED) lands sooner.
       const shouldAddToGallery = opts?.addToGallery ?? (settings.addToGallery !== false);
       if (shouldAddToGallery) {
-        const characterId = chatsSvc.getChat(userId, chatId)?.character_id;
+        const characterId = (await chatsSvc.getChatAsync(userId, chatId))?.character_id;
         if (characterId) {
           scheduleLowPriorityTask(() => {
             try {
@@ -1207,7 +1207,7 @@ async function loadAvatarImageBase64(
   const path = await imagesSvc.getImageFilePath(userId, imageId);
   if (!path) return null;
   const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-  const mimeType = imagesSvc.getImage(userId, imageId)?.mime_type || "image/png";
+  const mimeType = (await imagesSvc.getImageAsync(userId, imageId))?.mime_type || "image/png";
   return { data: uint8ToBase64(bytes), mimeType };
 }
 
@@ -1281,8 +1281,8 @@ async function resolveAvatarAppearanceReferences(
   };
 
   if (wantCharacter) {
-    const chat = chatsSvc.getChat(userId, chatId);
-    const character = chat?.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
+    const chat = await chatsSvc.getChatAsync(userId, chatId);
+    const character = chat?.character_id ? (await charactersSvc.getCharacterAsync(userId, chat.character_id)) : null;
     if (character) {
       const cropId = typeof character.extensions?.avatar_crop_image_id === "string"
         ? character.extensions.avatar_crop_image_id
@@ -1296,10 +1296,10 @@ async function resolveAvatarAppearanceReferences(
   }
 
   if (wantPersona) {
-    const chat = chatsSvc.getChat(userId, chatId);
+    const chat = await chatsSvc.getChatAsync(userId, chatId);
     const personaId = resolveActivePersonaId(userId, chatId);
     if (personaId) {
-      const info = personasSvc.getPersonaAvatarInfo(userId, personaId, {
+      const info = await personasSvc.getPersonaAvatarInfoAsync(userId, personaId, {
         addonStates: getChatPersonaAddonStates(chat?.metadata, personaId),
         addonToggleOrder: getChatPersonaAddonToggleOrder(chat?.metadata, personaId),
       });
@@ -1801,9 +1801,9 @@ export async function buildContextMessages(userId: string, chatId: string, setti
     }
   };
 
-  const chat = chatsSvc.getChat(userId, chatId);
-  const char = chat?.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
-  const persona = includePersona ? personasSvc.resolvePersonaOrDefault(userId) : null;
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
+  const char = chat?.character_id ? (await charactersSvc.getCharacterAsync(userId, chat.character_id)) : null;
+  const persona = includePersona ? (await personasSvc.resolvePersonaOrDefaultAsync(userId)) : null;
   const recentMessages = chatsSvc.getMessages(userId, chatId).slice(-resolveContextMessageLimit(settings));
 
   // {{outlet::name}} only resolves after world-info activation. Mirror the
@@ -2055,21 +2055,21 @@ async function loadConfiguredAvatarImages(
     const path = await imagesSvc.getImageFilePath(userId, imageId);
     if (!path) return;
     const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-    const mimeType = imagesSvc.getImage(userId, imageId)?.mime_type || "image/png";
+    const mimeType = (await imagesSvc.getImageAsync(userId, imageId))?.mime_type || "image/png";
     out.push({ data: uint8ToBase64(bytes), mimeType });
   };
 
   if (params.includeCharacterAvatar) {
-    const chat = chatsSvc.getChat(userId, chatId);
-    const character = chat?.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
+    const chat = await chatsSvc.getChatAsync(userId, chatId);
+    const character = chat?.character_id ? (await charactersSvc.getCharacterAsync(userId, chat.character_id)) : null;
     if (character?.image_id) await loadById(character.image_id);
   }
 
   if (params.includePersonaAvatar) {
-    const chat = chatsSvc.getChat(userId, chatId);
+    const chat = await chatsSvc.getChatAsync(userId, chatId);
     const personaId = resolveActivePersonaId(userId, chatId);
     if (personaId) {
-      const info = personasSvc.getPersonaAvatarInfo(userId, personaId, {
+      const info = await personasSvc.getPersonaAvatarInfoAsync(userId, personaId, {
         addonStates: getChatPersonaAddonStates(chat?.metadata, personaId),
         addonToggleOrder: getChatPersonaAddonToggleOrder(chat?.metadata, personaId),
       });
@@ -2255,8 +2255,8 @@ async function maybeAutoMigrate(userId: string, settings: ImageGenSettings): Pro
 
   // Set the active connection ID
   if (defaultConnectionId) {
-    const currentSettings = settingsSvc.getSetting(userId, IMAGE_SETTINGS_KEY)?.value || {};
-    settingsSvc.putSetting(userId, IMAGE_SETTINGS_KEY, {
+    const currentSettings = (await settingsSvc.getSettingAsync(userId, IMAGE_SETTINGS_KEY))?.value || {};
+    await settingsSvc.putSettingAsync(userId, IMAGE_SETTINGS_KEY, {
       ...currentSettings,
       activeImageGenConnectionId: defaultConnectionId,
     });
@@ -2561,7 +2561,7 @@ export async function importImageGenConfig(
   }
 
   if (importedSettings || importedPresets > 0) {
-    settingsSvc.putSetting(userId, IMAGE_SETTINGS_KEY, next);
+    await settingsSvc.putSettingAsync(userId, IMAGE_SETTINGS_KEY, next);
   }
 
   let importedConnections = 0;

@@ -5,6 +5,7 @@ import { CloseButton } from '@/components/shared/CloseButton'
 import { useStore } from '@/store'
 import { charactersApi } from '@/api/characters'
 import { characterGalleryApi } from '@/api/character-gallery'
+import { isImageDeleted, onImageDeleted, isGalleryItemRemoved, onGalleryItemRemoved } from '@/lib/deletion-events'
 import { chatsApi } from '@/api/chats'
 import { getCharacterAvatarLargeUrl } from '@/lib/avatarUrls'
 import { imagesApi } from '@/api/images'
@@ -72,6 +73,14 @@ function PortraitPanelNative({ side = 'right', mobileDrawer = false, open = fals
     : null
   const [character, setCharacter] = useState<Character | null>(null)
   const [gallery, setGallery] = useState<CharacterGalleryItem[]>([])
+
+  useEffect(() => onImageDeleted((id) => {
+    setGallery((prev) => prev.filter((item) => item.image_id !== id))
+  }), [])
+
+  useEffect(() => onGalleryItemRemoved((item) => {
+    if (item.characterId === activeCharacterId) setGallery((prev) => prev.filter((entry) => entry.id !== item.id))
+  }), [activeCharacterId])
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ pos: ContextMenuPos; item: CharacterGalleryItem } | null>(null)
 
@@ -87,7 +96,7 @@ function PortraitPanelNative({ side = 'right', mobileDrawer = false, open = fals
       .catch(() => setCharacter(null))
     characterGalleryApi
       .list(activeCharacterId)
-      .then(setGallery)
+      .then((items) => setGallery(items.filter((item) => !isImageDeleted(item.image_id) && !isGalleryItemRemoved(activeCharacterId, item.id))))
       .catch(() => setGallery([]))
   }, [activeCharacterId])
 

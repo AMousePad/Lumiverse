@@ -101,13 +101,25 @@ app.post("/extract", async (c) => {
   return c.json(items, 201);
 });
 
+// GET /:itemId/deletion-status — reconcile a missed removal confirmation
+app.get('/:itemId/deletion-status', async (c) => {
+  c.header('Cache-Control', 'no-store');
+  const characterId = c.req.param('characterId');
+  if (!characterId) return c.json({ error: 'characterId is required' }, 400);
+  const status = await svc.getGalleryRemovalStatusAsync(c.get('userId'), characterId, c.req.param('itemId'));
+  if (!status) return c.json({ error: 'Not found' }, 404);
+  return c.json(status);
+});
+
 // DELETE /:itemId — remove gallery item
-app.delete("/:itemId", (c) => {
+app.delete("/:itemId", async (c) => {
   const userId = c.get("userId");
+  const characterId = c.req.param('characterId');
+  if (!characterId) return c.json({ error: 'characterId is required' }, 400);
   const itemId = c.req.param("itemId");
-  const deleted = svc.removeFromGallery(userId, itemId);
+  const deleted = await svc.removeFromGalleryAsync(userId, characterId, itemId);
   if (!deleted) return c.json({ error: "Not found" }, 404);
-  return c.json({ success: true });
+  return c.json({ success: true, ...deleted });
 });
 
 // PATCH /:itemId — update caption

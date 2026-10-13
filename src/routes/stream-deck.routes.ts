@@ -104,11 +104,11 @@ integration.get("/characters/:id/avatar", requireScope("characters:read"), async
   const userId = c.get("userId");
   const characterId = c.req.param("id");
   if (!characterId) return c.json({ error: "Not found" }, 404);
-  const character = characters.getCharacter(userId, characterId);
+  const character = await characters.getCharacterAsync(userId, characterId);
   if (!character?.image_id) return c.json({ error: "Not found" }, 404);
   const imageId = character.image_id;
 
-  const image = images.getImage(userId, imageId);
+  const image = await images.getImageAsync(userId, imageId);
   if (!image || !image.mime_type.startsWith("image/")) return c.json({ error: "Not found" }, 404);
   const filepath = await images.getImageFilePath(userId, imageId, "sm");
   if (!filepath) return c.json({ error: "Not found" }, 404);

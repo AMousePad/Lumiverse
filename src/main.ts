@@ -3,7 +3,8 @@ import { join, resolve } from "node:path";
 import { env } from "./env";
 import { getDatabasePath, initDatabase } from "./db/connection";
 import { runMigrations } from "./db/migrate";
-import { runStartupDatabaseMaintenance, startDatabaseMonitor, stopDatabaseMonitor } from "./db/maintenance";
+import { runStartupDatabaseMaintenance } from "./db/maintenance";
+import { startDatabaseExecution, stopDatabaseExecution } from "./db/execution";
 import { startAutomaticDatabaseMaintenance, stopAutomaticDatabaseMaintenance } from "./db/maintenance-scheduler";
 import { startAllExtensions } from "./spindle/lifecycle";
 import { initIdentity } from "./crypto/init";
@@ -61,7 +62,7 @@ await initIdentity();
 await initVapidKeys();
 
 // Initialize database and run migrations synchronously
-const db = initDatabase();
+const db = initDatabase(undefined, { busyTimeoutMs: 5000 });
 await runMigrations(db);
 
 const {
@@ -170,7 +171,8 @@ if (getApprovedBrokerOrigins().length === 0) {
 }
 
 runStartupDatabaseMaintenance(db, getDatabasePath(), getFirstUserId());
-startDatabaseMonitor(() => db, getDatabasePath());
+db.run("PRAGMA busy_timeout = 100");
+await startDatabaseExecution();
 startAutomaticDatabaseMaintenance(
   () => db,
   () => getFirstUserId(),
@@ -487,9 +489,9 @@ async function gracefulShutdown(signal: string) {
   // 7. Cleanup operator service
   operatorService.cleanup();
 
-  // 7.5 Stop DB stats monitor
-  stopDatabaseMonitor();
+  // 7.5 Stop maintenance and its subprocess before closing SQLite.
   stopAutomaticDatabaseMaintenance();
+  await stopDatabaseExecution();
   const { stopDiskMonitor } = await import("./services/disk-monitor.service");
   stopDiskMonitor();
   const { stopSmartctlMonitor } = await import("./services/smartctl.service");

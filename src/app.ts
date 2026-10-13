@@ -1,3 +1,4 @@
+import { DatabaseExecutionError, isDatabaseUnavailable } from "./db/execution";
 import { Hono, type Handler } from "hono";
 import { cors } from "hono/cors";
 import { compress } from "./middleware/compress";
@@ -513,6 +514,11 @@ app.notFound((c) => c.json({ error: "Not found" }, 404));
 
 app.onError((err, c) => {
   const path = `${c.req.method} ${c.req.path}`;
+  if (isDatabaseUnavailable(err)) {
+    const outcome = err instanceof DatabaseExecutionError ? err.outcome : "unknown";
+    console.warn(`[db] ${path}: ${err.message} (${err.code}, ${outcome})`);
+    return c.json({ error: "Database temporarily unavailable", code: err.code, outcome }, 503);
+  }
   // DOMException has an empty stack, so a raw console.error(err) prints a
   // contextless object dump. Demote client-disconnect aborts to a warn line
   // tagged with the route so they're traceable, and surface real errors with

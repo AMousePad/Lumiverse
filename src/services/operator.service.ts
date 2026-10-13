@@ -5,17 +5,13 @@ import { env } from "../env";
 import type { LogEntry, OperatorStatus, IPCMessage, OperatorIpcReason } from "../types/operator";
 import { getDatabasePath, getDb } from "../db/connection";
 import {
-  collectDatabaseStats,
   getDatabaseMaintenanceSettingKey,
   getDatabaseMaintenanceStateSettingKey,
   getDatabaseTuningSettingKey,
-  readDatabaseMaintenanceSettings,
-  readDatabaseMaintenanceState,
-  readDatabaseTuningSettings,
-  resolveDatabaseTuning,
-  runDatabaseMaintenance,
   type WalCheckpointMode,
 } from "../db/maintenance";
+import { executeDatabaseOperation, getDatabaseExecutionStatus, runDatabaseMaintenanceAsync } from "../db/execution";
+import type { DatabaseSnapshot } from "../db/execution-protocol";
 import { getAutomaticDatabaseMaintenanceStatus } from "../db/maintenance-scheduler";
 import { getGitMetadata } from "../utils/git-metadata";
 import {
@@ -185,12 +181,9 @@ class OperatorService {
   async getDatabaseStatus(userId: string) {
     const db = getDb();
     const dbPath = getDatabasePath();
-    const stats = collectDatabaseStats(db, dbPath);
-    const configuredSettings = readDatabaseTuningSettings(db, userId);
-    const maintenanceSettings = readDatabaseMaintenanceSettings(db, userId);
-    const maintenanceState = readDatabaseMaintenanceState(db, userId);
-    const effectiveTuning = resolveDatabaseTuning(stats, db, userId);
-    const automaticMaintenance = await getAutomaticDatabaseMaintenanceStatus(db, userId, dbPath, this.busy);
+    const snapshot = await executeDatabaseOperation<DatabaseSnapshot>({ kind: "snapshot", userId });
+    const { stats, configuredSettings, maintenanceSettings, maintenanceState, effectiveTuning } = snapshot;
+    const automaticMaintenance = await getAutomaticDatabaseMaintenanceStatus(db, userId, dbPath, this.busy, snapshot);
 
     return {
       settingsKey: getDatabaseTuningSettingKey(),
@@ -207,6 +200,7 @@ class OperatorService {
         mmapSizeBytes: effectiveTuning.mmapSizeBytes,
       },
       automaticMaintenance,
+      execution: getDatabaseExecutionStatus(),
     };
   }
 
@@ -221,8 +215,7 @@ class OperatorService {
     }
   ) {
     return this.runOperation("database-maintenance", async () => {
-      return runDatabaseMaintenance(getDb(), {
-        dbPath: getDatabasePath(),
+      return runDatabaseMaintenanceAsync({
         userId,
         optimize: options.optimize,
         analyze: options.analyze,

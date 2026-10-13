@@ -1,13 +1,11 @@
 import type { Database } from "bun:sqlite";
 import {
-  collectDatabaseStats,
   getLatestDatabaseWriteAt,
-  readDatabaseMaintenanceSettings,
-  readDatabaseMaintenanceState,
-  runDatabaseMaintenance,
   type DatabaseMaintenanceSettings,
   type DatabaseMaintenanceState,
 } from "./maintenance";
+import { executeDatabaseOperation, runDatabaseMaintenanceAsync } from "./execution";
+import type { DatabaseSnapshot } from "./execution-protocol";
 import { eventBus } from "../ws/bus";
 
 const CHECK_INTERVAL_MS = 60 * 1000;
@@ -55,11 +53,11 @@ export async function getAutomaticDatabaseMaintenanceStatus(
   userId: string,
   dbPath: string,
   operatorBusy: string | null,
+  snapshot?: DatabaseSnapshot,
 ): Promise<AutomaticDatabaseMaintenanceStatus> {
   const now = Date.now();
-  const settings = readDatabaseMaintenanceSettings(db, userId);
-  const state = readDatabaseMaintenanceState(db, userId);
-  const stats = collectDatabaseStats(db, dbPath);
+  const data = snapshot ?? await executeDatabaseOperation<DatabaseSnapshot>({ kind: "snapshot", userId });
+  const { maintenanceSettings: settings, maintenanceState: state, stats } = data;
   const visibility = eventBus.getUserVisibilitySnapshot(userId);
   const hiddenIdleMinutes = visibility.allHiddenSince == null ? null : Math.floor((now - visibility.allHiddenSince) / 60000);
   const lastWriteAt = getLatestDatabaseWriteAt(dbPath);
@@ -154,8 +152,7 @@ async function tick(
 
     if (status.vacuum.eligible) {
       await runOperation("database-auto-vacuum", async () => {
-        return runDatabaseMaintenance(db, {
-          dbPath,
+        return runDatabaseMaintenanceAsync({
           userId,
           refreshTuning: true,
           checkpointMode: status.settings.vacuumCheckpointMode ?? "TRUNCATE",
@@ -169,8 +166,7 @@ async function tick(
 
     if (status.analyze.isDue && !status.visibility.isVisible && status.activeGenerationCount === 0 && !getBusy()) {
       await runOperation("database-auto-analyze", async () => {
-        return runDatabaseMaintenance(db, {
-          dbPath,
+        return runDatabaseMaintenanceAsync({
           userId,
           analyze: true,
           optimize: true,
@@ -181,8 +177,7 @@ async function tick(
 
     if (status.optimize.isDue && !getBusy()) {
       await runOperation("database-auto-optimize", async () => {
-        return runDatabaseMaintenance(db, {
-          dbPath,
+        return runDatabaseMaintenanceAsync({
           userId,
           optimize: true,
         });

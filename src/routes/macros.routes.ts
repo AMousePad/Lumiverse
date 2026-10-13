@@ -172,7 +172,7 @@ async function buildEnvFromIds(userId: string, body: {
 }): Promise<MacroEnv> {
   // Try to load from chat context first
   if (body.chat_id) {
-    const chat = chatsSvc.getChat(userId, body.chat_id);
+    const chat = await chatsSvc.getChatAsync(userId, body.chat_id);
     if (chat) {
       const messages = chatsSvc.getMessages(userId, body.chat_id);
       const isGroup = !!chat.metadata?.group;
@@ -187,10 +187,10 @@ async function buildEnvFromIds(userId: string, body: {
           ? body.character_id
           : undefined;
       const defaultCharacter = chat.character_id
-        ? charactersSvc.getCharacter(userId, chat.character_id)
+        ? (await charactersSvc.getCharacterAsync(userId, chat.character_id))
         : makeAssistantCharacter();
       const focusedCharacter = targetCharacterId
-        ? charactersSvc.getCharacter(userId, targetCharacterId) ?? defaultCharacter
+        ? (await charactersSvc.getCharacterAsync(userId, targetCharacterId)) ?? defaultCharacter
         : defaultCharacter;
       const character = focusedCharacter;
       if (character) {
@@ -198,7 +198,7 @@ async function buildEnvFromIds(userId: string, body: {
           ? null
           : resolvePersonaForChatMacros(
               userId,
-              personasSvc.resolvePersonaOrDefault(userId, body.persona_id),
+              (await personasSvc.resolvePersonaOrDefaultAsync(userId, body.persona_id)),
               chat.metadata,
             );
 
@@ -231,12 +231,12 @@ async function buildEnvFromIds(userId: string, body: {
 
   // Try character-only context
   if (body.character_id) {
-    const character = charactersSvc.getCharacter(userId, body.character_id);
+    const character = await charactersSvc.getCharacterAsync(userId, body.character_id);
     if (character) {
       // No chat context here, so there are no per-chat add-on bindings to apply.
       const persona = resolvePersonaForChatMacros(
         userId,
-        personasSvc.resolvePersonaOrDefault(userId, body.persona_id),
+        (await personasSvc.resolvePersonaOrDefaultAsync(userId, body.persona_id)),
         null,
       );
 
@@ -267,7 +267,7 @@ async function buildEnvFromIds(userId: string, body: {
 
   const persona = resolvePersonaForChatMacros(
     userId,
-    personasSvc.resolvePersonaOrDefault(userId, body.persona_id),
+    (await personasSvc.resolvePersonaOrDefaultAsync(userId, body.persona_id)),
     null,
   );
   const connection = connectionsSvc.resolveConnection(userId);

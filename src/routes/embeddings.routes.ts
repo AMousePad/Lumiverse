@@ -309,7 +309,7 @@ app.post("/vector-store/switch", requireOwnerStrict, async (c) => {
 app.post("/chats/:chatId/recompile", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
-  const chat = chatsSvc.getChat(userId, chatId);
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);

@@ -21,7 +21,7 @@ async function isToolGateEnabled(userId: string, tool: RuntimeCouncilToolDefinit
       return cfg.enabled && !!cfg.apiUrl && (cfg.provider === "searxng" || cfg.hasApiKey);
     }
     case "imageGeneration": {
-      const imageSettings = settingsSvc.getSetting(userId, "imageGeneration")?.value as { enabled?: boolean } | undefined;
+      const imageSettings = (await settingsSvc.getSettingAsync(userId, "imageGeneration"))?.value as { enabled?: boolean } | undefined;
       return imageSettings?.enabled === true;
     }
     default:

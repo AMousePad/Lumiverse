@@ -1,5 +1,6 @@
 import { env } from "../env";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
+import { unlink } from "node:fs/promises";
 import { join, extname, resolve, sep } from "path";
 
 function ensureDir(dir: string): void {
@@ -45,9 +46,8 @@ export async function deleteAvatar(filename: string): Promise<boolean> {
   const base = resolve(env.dataDir, "avatars");
   const filepath = resolve(base, filename);
   if (!filepath.startsWith(base + sep) && filepath !== base) return false;
-  if (!(await Bun.file(filepath).exists())) return false;
-  unlinkSync(filepath);
-  return true;
+  try { await unlink(filepath); return true; }
+  catch (error: any) { if (error?.code === "ENOENT") return false; throw error; }
 }
 
 export async function getFilePath(userId: string, filename: string, subdir: string = "uploads"): Promise<string | null> {

@@ -102,6 +102,8 @@ beforeEach(() => {
     spyOn(secretsSvc, "getSecretForStatus").mockImplementation(async (userId: string, key: string) => {
       return secrets.get(sk(userId, key)) ?? null;
     }),
+    spyOn(settingsSvc, "getSettingAsync").mockImplementation(async (...args) => settingsSvc.getSetting(...args)),
+    spyOn(settingsSvc, "putSettingAsync").mockImplementation(async (...args) => settingsSvc.putSetting(...args)),
     spyOn(secretsSvc, "putSecret").mockImplementation(async (userId: string, key: string, value: string) => {
       secrets.set(sk(userId, key), value);
     }),

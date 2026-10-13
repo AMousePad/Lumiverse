@@ -542,7 +542,14 @@ export function useCharacterBrowser() {
         const result = await charactersApi.batchDelete(ids, keepChats)
         removeCharacters(result.deleted)
         setBrowserTotal((t) => Math.max(0, t - result.deleted.length))
-      } catch {
+      } catch (error: any) {
+        // Only an unsupported endpoint permits falling back to new DELETEs.
+        // A timeout may follow a commit, so refresh rather than replaying it.
+        if (error?.status !== 404 && error?.status !== 405) {
+          setBatchDeleteProgress(null)
+          setFetchVersion((v) => v + 1)
+          throw error
+        }
         let done = 0
         const deleted: string[] = []
         for (const id of ids) {

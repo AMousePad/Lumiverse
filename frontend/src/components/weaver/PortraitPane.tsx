@@ -4,6 +4,7 @@ import { wsClient } from '@/ws/client'
 import { EventType } from '@/types/ws-events'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { imagesApi } from '@/api/images'
+import { isImageDeleted, onImageDeleted } from '@/lib/deletion-events'
 import * as weaverApi from '@/api/weaver'
 import type { WeaverVisualCandidate, WeaverVisualJob, WeaverVisualJobProgress } from '@/api/weaver'
 import type { Character, ImageGenConnectionProfile, ImageGenParameterSchema, ImageGenProviderInfo } from '@/types/api'
@@ -58,6 +59,11 @@ export function PortraitPane({ sessionId, character, onCharacterUpdate, onCount 
   const [error, setError] = useState<string | null>(null)
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const jobIdRef = useRef<string | null>(null)
+
+  useEffect(() => onImageDeleted((id) => {
+    setCandidates((prev) => prev.filter((candidate) => candidate.id !== id))
+    setFocusedId((prev) => prev === id ? null : prev)
+  }), [])
 
   const committedId = character.image_id
   const avatarUrl = useMemo(
@@ -126,7 +132,7 @@ export function PortraitPane({ sessionId, character, onCharacterUpdate, onCount 
   const refreshCandidates = useCallback(async () => {
     try {
       const res = await weaverApi.listVisualCandidates(sessionId, KIND)
-      setCandidates(res.data)
+      setCandidates(res.data.filter((candidate) => !isImageDeleted(candidate.id)))
     } catch {
       /* non-fatal */
     }

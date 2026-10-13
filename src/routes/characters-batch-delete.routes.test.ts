@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { charactersRoutes } from "./characters.routes";
+import { deleteCharacterAsync } from "../services/characters.service";
 
 const USER_ID = "batch-delete-user";
 const TARGET_ID = "00000000-0000-4000-8000-000000000001";
@@ -53,6 +54,24 @@ beforeEach(async () => {
 afterEach(() => closeDatabase());
 
 describe("POST /batch-delete", () => {
+  test("DELETE acknowledges acceptance and exposes owner-scoped durable completion", async () => {
+    const response = await app.request(`/${TARGET_ID}?operation_id=route-operation`, { method: "DELETE" });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ success: true, operationId: "route-operation", entityId: TARGET_ID, status: "accepted" });
+    await deleteCharacterAsync(USER_ID, TARGET_ID);
+    const status = await app.request("/deletions/route-operation");
+    expect(status.headers.get("Cache-Control")).toBe("no-store");
+    expect(await status.json()).toMatchObject({ operationId: "route-operation", status: "completed" });
+    const replay = await app.request(`/${TARGET_ID}?operation_id=route-operation`, { method: "DELETE" });
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({ status: "completed" });
+    expect((await app.request(`/${MEMBER_ID}?operation_id=route-operation`, { method: "DELETE" })).status).toBe(409);
+    expect((await app.request("/deletions/missing-operation")).status).toBe(404);
+    getDb().query(`INSERT INTO "user" (id, name, email) VALUES ('other', 'Other', 'other@example.com')`).run();
+    getDb().query("UPDATE deletion_operations SET user_id = 'other' WHERE id = 'route-operation'").run();
+    expect((await app.request("/deletions/route-operation")).status).toBe(404);
+  });
+
   test("deletes owned characters and cleans dependent records without removing shared images", async () => {
     const response = await app.request("http://localhost/batch-delete", {
       method: "POST",

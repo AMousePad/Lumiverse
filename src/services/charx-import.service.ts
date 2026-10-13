@@ -256,7 +256,7 @@ export async function applyCharxModulesAndAssets(
       }
     }
 
-    svc.updateCharacter(userId, character.id, { extensions });
+    await svc.updateCharacterAsync(userId, character.id, { extensions });
 
     // Bundled regex scripts — rebound to the new character on import
     let regexScriptCount = 0;
@@ -339,7 +339,7 @@ export async function applyCharxModulesAndAssets(
       assetImageMap,
     );
     if (Object.keys(resolvedFields).length > 0) {
-      svc.updateCharacter(userId, character.id, resolvedFields);
+      await svc.updateCharacterAsync(userId, character.id, resolvedFields);
     }
 
     const portableToLocal = new Map<string, string>();
@@ -350,7 +350,7 @@ export async function applyCharxModulesAndAssets(
       if (galleryReference) portableToLocal.set(galleryReference, imageId);
     }
     if (Object.keys(risuAssetMap).length > 0) {
-      const char = svc.getCharacter(userId, character.id);
+      const char = await svc.getCharacterAsync(userId, character.id);
       if (char) {
         const extensions: Record<string, any> = {
           ...(char.extensions || {}),
@@ -363,7 +363,7 @@ export async function applyCharxModulesAndAssets(
         if (greetingBackgrounds !== extensions.greeting_backgrounds) {
           extensions.greeting_backgrounds = greetingBackgrounds;
         }
-        svc.updateCharacter(userId, character.id, {
+        await svc.updateCharacterAsync(userId, character.id, {
           extensions,
         });
       }
@@ -376,7 +376,7 @@ export async function applyCharxModulesAndAssets(
   // characters (detected by prefix grouping), store structured expression_groups
   // instead of a flat expression mapping. Skip if Lumiverse modules already
   // imported expression_groups.
-  const charForExprCheck = svc.getCharacter(userId, character.id);
+  const charForExprCheck = await svc.getCharacterAsync(userId, character.id);
   const hasLumiverseGroups = !!charForExprCheck?.extensions?.expression_groups;
   if (!hasLumiverseGroups && expressionGroupAnalysis?.isMultiCharacter && Object.keys(risuAssetMap).length > 0) {
     const expressionGroups: Record<string, Record<string, string>> = {};
@@ -397,9 +397,9 @@ export async function applyCharxModulesAndAssets(
     }
 
     if (Object.keys(expressionGroups).length > 0) {
-      const char = svc.getCharacter(userId, character.id);
+      const char = await svc.getCharacterAsync(userId, character.id);
       if (char) {
-        svc.updateCharacter(userId, character.id, {
+        await svc.updateCharacterAsync(userId, character.id, {
           extensions: { ...(char.extensions || {}), expression_groups: expressionGroups },
         });
       }

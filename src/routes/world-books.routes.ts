@@ -472,16 +472,16 @@ app.post("/:id/diagnostics", async (c) => {
   const book = svc.getWorldBook(userId, bookId);
   if (!book) return c.json({ error: "World book not found" }, 404);
 
-  const chat = chatsSvc.getChat(userId, body.chatId);
+  const chat = await chatsSvc.getChatAsync(userId, body.chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   const character = chat.character_id
-    ? charSvc.getCharacter(userId, chat.character_id)
+    ? (await charSvc.getCharacterAsync(userId, chat.character_id))
     : makeAssistantCharacter();
   if (!character) return c.json({ error: "Character not found" }, 404);
 
-  const persona = personasSvc.resolvePersonaOrDefault(userId);
-  const globalWorldBooks = (settingsSvc.getSetting(userId, "globalWorldBooks")?.value as string[] | undefined) ?? [];
+  const persona = await personasSvc.resolvePersonaOrDefaultAsync(userId);
+  const globalWorldBooks = ((await settingsSvc.getSettingAsync(userId, "globalWorldBooks"))?.value as string[] | undefined) ?? [];
   const chatWorldBookIds = (chat.metadata?.chat_world_book_ids as string[] | undefined) ?? [];
   const messages = chatsSvc.getMessages(userId, chat.id);
   const vectorSummary = svc.getWorldBookVectorSummary(userId, bookId)!;
@@ -500,7 +500,7 @@ app.post("/:id/diagnostics", async (c) => {
   const worldBookVectorSettings = loadWorldBookVectorSettings(userId, {
     retrievalTopK: embeddings.retrieval_top_k,
   });
-  const worldInfoSettings = (settingsSvc.getSetting(userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
+  const worldInfoSettings = ((await settingsSvc.getSettingAsync(userId, "worldInfoSettings"))?.value as Partial<WorldInfoSettings> | undefined) ?? {};
   const queryDetails = await getWorldInfoVectorQueryDetails(
     userId,
     messages,
@@ -868,7 +868,7 @@ app.post("/import-character-book", async (c) => {
   const { characterId } = body;
   if (!characterId) return c.json({ error: "characterId is required" }, 400);
 
-  const character = charSvc.getCharacter(userId, characterId);
+  const character = await charSvc.getCharacterAsync(userId, characterId);
   if (!character) return c.json({ error: "Character not found" }, 404);
 
   const characterBook = character.extensions?.character_book;
@@ -884,7 +884,7 @@ app.post("/import-character-book", async (c) => {
         { ...(character.extensions || {}) },
         [...currentIds, existing.id],
       );
-      await charSvc.updateCharacter(userId, characterId, { extensions: nextExtensions });
+      await charSvc.updateCharacterAsync(userId, characterId, { extensions: nextExtensions });
     }
     return c.json({ world_book: existing, entry_count: svc.listEntries(userId, existing.id).length });
   }
@@ -896,7 +896,7 @@ app.post("/import-character-book", async (c) => {
     { ...(character.extensions || {}) },
     [...currentIds, result.worldBook.id],
   );
-  await charSvc.updateCharacter(userId, characterId, { extensions: nextExtensions });
+  await charSvc.updateCharacterAsync(userId, characterId, { extensions: nextExtensions });
   return c.json({ world_book: result.worldBook, entry_count: result.entryCount }, 201);
 });
 

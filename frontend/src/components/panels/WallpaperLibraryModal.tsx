@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, Film, Image as ImageIcon, Loader2, Trash2 } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { imagesApi } from '@/api/images'
+import { isImageDeleted, onImageDeleted } from '@/lib/deletion-events'
 import type { Image } from '@/types/api'
 import type { WallpaperRef } from '@/types/store'
 import styles from './WallpaperLibraryModal.module.css'
@@ -55,6 +56,7 @@ export default function WallpaperLibraryModal({
 }: WallpaperLibraryModalProps) {
   const { t, i18n } = useTranslation('panels')
   const [items, setItems] = useState<Image[]>([])
+  const itemsRef = useRef<Image[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -69,12 +71,11 @@ export default function WallpaperLibraryModal({
     setError(null)
     try {
       const result = await imagesApi.listWallpapers({ limit: PAGE_SIZE, offset })
-      setItems((prev) => {
-        if (!append) return result.data
-        const seen = new Set(prev.map((item) => item.id))
-        return [...prev, ...result.data.filter((item) => !seen.has(item.id))]
-      })
-      setTotal(result.total)
+      const data = result.data.filter((item) => !isImageDeleted(item.id))
+      const seen = new Set(itemsRef.current.map((item) => item.id))
+      itemsRef.current = append ? [...itemsRef.current, ...data.filter((item) => !seen.has(item.id))] : data
+      setItems(itemsRef.current)
+      setTotal(Math.max(0, result.total - (result.data.length - data.length)))
     } catch (err: any) {
       setError(err?.message || t('wallpaperLibrary.loadFailed'))
     } finally {
@@ -85,6 +86,7 @@ export default function WallpaperLibraryModal({
 
   useEffect(() => {
     if (!isOpen) return
+    itemsRef.current = []
     setItems([])
     setTotal(0)
     setApplyingId(null)
@@ -92,6 +94,20 @@ export default function WallpaperLibraryModal({
     setDeleteCandidate(null)
     void loadPage(0, false)
   }, [isOpen, loadPage])
+
+  const removeConfirmedImage = useCallback((id: string) => {
+    if (!itemsRef.current.some((item) => item.id === id)) return
+    itemsRef.current = itemsRef.current.filter((item) => item.id !== id)
+    setItems(itemsRef.current)
+    setTotal((prev) => Math.max(0, prev - 1))
+    setDeleteCandidate((prev) => prev?.id === id ? null : prev)
+    onDelete?.(id)
+  }, [onDelete])
+
+  useEffect(() => {
+    if (!isOpen) return
+    return onImageDeleted(removeConfirmedImage)
+  }, [isOpen, removeConfirmedImage])
 
   const handleApply = useCallback(async (item: Image) => {
     setApplyingId(item.id)
@@ -110,16 +126,13 @@ export default function WallpaperLibraryModal({
     setError(null)
     try {
       await imagesApi.deleteWallpaper(item.id)
-      setItems((prev) => prev.filter((entry) => entry.id !== item.id))
-      setTotal((prev) => Math.max(0, prev - 1))
-      setDeleteCandidate(null)
-      onDelete?.(item.id)
+      removeConfirmedImage(item.id)
     } catch (err: any) {
       setError(err?.body?.error || err?.message || t('wallpaperLibrary.deleteFailed'))
     } finally {
       setDeletingId(null)
     }
-  }, [onDelete, t])
+  }, [removeConfirmedImage, t])
 
   const canLoadMore = items.length < total
   const scopeLabel = t(target === 'chat-mobile' ? 'wallpaperPanel.chatMobileWallpaper' : target === 'chat' ? 'wallpaperPanel.chatWallpaper' : target === 'mobile' ? 'wallpaperPanel.mobileWallpaper' : 'wallpaperPanel.globalWallpaper')

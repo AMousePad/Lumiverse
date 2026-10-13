@@ -247,7 +247,7 @@ export async function harvestPeople(
   const existing = readRows(userId, session.id);
   const material = getWorldMaterial(userId, session);
   const subjectName = session.character_id
-    ? charactersSvc.getCharacter(userId, session.character_id)?.name ?? ""
+    ? (await charactersSvc.getCharacterAsync(userId, session.character_id))?.name ?? ""
     : "";
   const takenNames = [...existing.map((p) => p.name), ...(subjectName ? [subjectName] : [])];
 
@@ -275,7 +275,7 @@ export async function proposePeople(
   const existing = readRows(userId, session.id);
   const material = getWorldMaterial(userId, session);
   const subjectName = session.character_id
-    ? charactersSvc.getCharacter(userId, session.character_id)?.name ?? ""
+    ? (await charactersSvc.getCharacterAsync(userId, session.character_id))?.name ?? ""
     : "";
   const takenNames = [...existing.map((p) => p.name), ...(subjectName ? [subjectName] : [])];
   const proposeCount = getWeaverTuning(userId).propose_count ?? reg.people.proposeCount;

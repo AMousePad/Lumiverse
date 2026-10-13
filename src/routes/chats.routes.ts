@@ -246,7 +246,7 @@ app.post("/bulk-delete", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!Array.isArray(body?.ids)) return c.json({ error: "ids must be an array" }, 400);
   const ids = body.ids.filter((value: unknown): value is string => typeof value === "string" && value.length > 0);
-  const deleted = svc.deleteChats(userId, ids);
+  const deleted = await svc.deleteChatsAsync(userId, ids);
   return c.json({ deleted, count: deleted.length });
 });
 
@@ -286,9 +286,9 @@ app.post("/temporary", async (c) => {
   return c.json(chat, 201);
 });
 
-app.delete("/temporary", (c) => {
+app.delete("/temporary", async (c) => {
   const userId = c.get("userId");
-  const deleted = svc.deleteTemporaryChats(userId);
+  const deleted = await svc.deleteTemporaryChatsAsync(userId);
   return c.json({ success: true, deleted });
 });
 
@@ -342,9 +342,9 @@ app.post("/:id/members/:characterId", async (c) => {
   return c.json(updated);
 });
 
-app.delete("/:id/members/:characterId", (c) => {
+app.delete("/:id/members/:characterId", async (c) => {
   const userId = c.get("userId");
-  const updated = svc.removeGroupMember(userId, c.req.param("id"), c.req.param("characterId"));
+  const updated = await svc.removeGroupMemberAsync(userId, c.req.param("id"), c.req.param("characterId"));
   if (!updated) return c.json({ error: "Not found, not a group chat, not a member, or cannot remove (minimum 2 members)" }, 400);
   return c.json(updated);
 });
@@ -404,7 +404,7 @@ app.patch("/:id/appearance", async (c) => {
  */
 app.put("/:id/persona-addons/:personaId/:addonId", async (c) => {
   const userId = c.get("userId");
-  const chat = svc.getChat(userId, c.req.param("id"));
+  const chat = await svc.getChatAsync(userId, c.req.param("id"));
   if (!chat) return c.json({ error: "Not found" }, 404);
 
   const body = await c.req.json().catch(() => null);
@@ -412,7 +412,7 @@ app.put("/:id/persona-addons/:personaId/:addonId", async (c) => {
     return c.json({ error: "enabled must be a boolean" }, 400);
   }
 
-  const persona = personasSvc.getPersona(userId, c.req.param("personaId"));
+  const persona = await personasSvc.getPersonaAsync(userId, c.req.param("personaId"));
   if (!persona) return c.json({ error: "Persona not found" }, 404);
   if (!personaHasAddon(persona, c.req.param("addonId"))) {
     return c.json({ error: "Add-on is not attached to this persona" }, 404);
@@ -424,14 +424,14 @@ app.put("/:id/persona-addons/:personaId/:addonId", async (c) => {
     c.req.param("addonId"),
     body.enabled,
   );
-  const updated = svc.updateChat(userId, chat.id, { metadata });
+  const updated = await svc.updateChatAsync(userId, chat.id, { metadata });
   if (!updated) return c.json({ error: "Not found" }, 404);
   return c.json(updated);
 });
 
-app.get("/:id", (c) => {
+app.get("/:id", async (c) => {
   const userId = c.get("userId");
-  const chat = svc.getChat(userId, c.req.param("id"));
+  const chat = await svc.getChatAsync(userId, c.req.param("id"));
   if (!chat) return c.json({ error: "Not found" }, 404);
   const ownerCandidates = managerSvc.getEnabledExtensionIdentifiers();
   const character_display_owner = chat.character_id
@@ -444,10 +444,10 @@ app.get("/:id", (c) => {
 
 app.put("/:id", async (c) => {
   const userId = c.get("userId");
-  const chat = svc.getChat(userId, c.req.param("id"));
+  const chat = await svc.getChatAsync(userId, c.req.param("id"));
   if (!chat) return c.json({ error: "Not found" }, 404);
   const body = await c.req.json();
-  let updated = svc.updateChat(userId, chat.id, body);
+  let updated = await svc.updateChatAsync(userId, chat.id, body);
   // PUT replaces metadata wholesale, so book attachments can change (or
   // vanish) on any metadata write.
   if (updated && body?.metadata !== undefined) {
@@ -473,7 +473,7 @@ app.put("/:id", async (c) => {
 app.patch("/:id/metadata", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("id");
-  const chat = svc.getChat(userId, chatId);
+  const chat = await svc.getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Not found" }, 404);
   const body = await c.req.json();
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -499,7 +499,7 @@ app.patch("/:id/metadata", async (c) => {
     }
     partial[key] = value;
   }
-  let updated = svc.mergeChatMetadata(userId, chatId, partial);
+  let updated = await svc.mergeChatMetadataAsync(userId, chatId, partial);
   if (!updated) return c.json({ error: "Not found" }, 404);
 
   if ("chat_world_book_ids" in body) {
@@ -509,9 +509,9 @@ app.patch("/:id/metadata", async (c) => {
   return c.json(updated);
 });
 
-app.delete("/:id", (c) => {
+app.delete("/:id", async (c) => {
   const userId = c.get("userId");
-  const deleted = svc.deleteChat(userId, c.req.param("id"));
+  const deleted = await svc.deleteChatAsync(userId, c.req.param("id"));
   if (!deleted) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });
@@ -648,7 +648,7 @@ app.post("/import-st-group", async (c) => {
     if (sourceFilename.toLowerCase().endsWith(".png")) addKey(sourceFilename.slice(0, -4));
   }
 
-  const personas = personasSvc.listPersonas(userId, { limit: 10000, offset: 0 });
+  const personas = await personasSvc.listPersonasAsync(userId, { limit: 10000, offset: 0 });
   const personaNameToId = new Map<string, string>();
   for (const persona of personas.data) {
     if (persona.name) personaNameToId.set(persona.name, persona.id);
@@ -748,7 +748,7 @@ app.post("/:chatId/edit-and-send", async (c) => {
 
 app.post("/reattribute-all", async (c) => {
   const userId = c.get("userId");
-  const personas = personasSvc.listPersonas(userId, { limit: 10000, offset: 0 });
+  const personas = await personasSvc.listPersonasAsync(userId, { limit: 10000, offset: 0 });
 
   const nameMap = new Map<string, { id: string; name: string }>();
   for (const p of personas.data) {
@@ -770,7 +770,7 @@ app.post("/:id/reattribute-user-messages", async (c) => {
 
   if (!body.persona_id) return c.json({ error: "persona_id is required" }, 400);
 
-  const persona = personasSvc.getPersona(userId, body.persona_id);
+  const persona = await personasSvc.getPersonaAsync(userId, body.persona_id);
   if (!persona) return c.json({ error: "Persona not found" }, 404);
 
   const updated = svc.reattributeUserMessages(userId, chatId, persona.id, persona.name);
@@ -781,10 +781,10 @@ app.post("/:id/reattribute-user-messages", async (c) => {
 
 // --- Message endpoints (nested under chats) ---
 
-app.get("/:chatId/messages", (c) => {
+app.get("/:chatId/messages", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
-  const chat = svc.getChat(userId, chatId);
+  const chat = await svc.getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   // Lists ship the light projection (active swipe only, no per-swipe extra
@@ -803,10 +803,10 @@ app.get("/:chatId/messages", (c) => {
   return c.json(svc.listMessages(userId, chatId, pagination, { light }));
 });
 
-app.get("/:chatId/messages/search", (c) => {
+app.get("/:chatId/messages/search", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
-  const chat = svc.getChat(userId, chatId);
+  const chat = await svc.getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   const query = c.req.query("q")?.trim() ?? "";
@@ -860,7 +860,7 @@ app.post("/:chatId/messages/bulk-delete", async (c) => {
 app.post("/:chatId/messages", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
-  const chat = svc.getChat(userId, chatId);
+  const chat = await svc.getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   const body = await c.req.json();
@@ -917,7 +917,7 @@ app.post("/:chatId/messages/regex-actions/claim", async (c) => {
       !/^\d+:\d+$/.test(instanceId.slice(scriptId.length + 1))) {
       return c.json({ error: "invalid regex action selection" }, 400);
     }
-    const script = regexScriptsSvc.getRegexScript(userId, scriptId);
+    const script = await regexScriptsSvc.getRegexScriptAsync(userId, scriptId);
     const action = script?.actions.find((candidate) => candidate.id === actionId);
     if (!script || script.disabled || !script.target.includes("display") || !action) {
       return c.json({ error: "regex action is no longer available" }, 404);
@@ -972,7 +972,7 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
     return c.json({ error: "invalid regex action instance" }, 400);
   }
 
-  const script = regexScriptsSvc.getRegexScript(userId, scriptId);
+  const script = await regexScriptsSvc.getRegexScriptAsync(userId, scriptId);
   const action = script?.actions.find((candidate) => candidate.id === actionId);
   if (!script || script.disabled || !script.target.includes("display") || !action) {
     return c.json({ error: "regex action is no longer available" }, 404);
@@ -1045,7 +1045,7 @@ app.put("/:chatId/messages/:id", async (c) => {
     body.content = processed.content;
     if (processed.extra !== undefined) body.extra = processed.extra;
 
-    const chat = svc.getChat(userId, chatId);
+    const chat = await svc.getChatAsync(userId, chatId);
     if (chat) {
       const editScripts = regexScriptsSvc.getRunOnEditScripts(userId, {
         characterId: chat.character_id ?? undefined,
@@ -1155,7 +1155,7 @@ app.put("/:chatId/messages/:id/swipe/:idx", async (c) => {
   );
 
   let finalContent = processed.content;
-  const chat = svc.getChat(userId, chatId);
+  const chat = await svc.getChatAsync(userId, chatId);
   if (chat) {
     const editScripts = regexScriptsSvc.getRunOnEditScripts(userId, {
       characterId: chat.character_id ?? undefined,
