@@ -171,6 +171,19 @@ if (getApprovedBrokerOrigins().length === 0) {
 }
 
 runStartupDatabaseMaintenance(db, getDatabasePath(), getFirstUserId());
+
+// One-time SillyTavern migration for Docker environments
+if (env.stMigrate) {
+  const { runDockerSTMigration } = await import("./migration/docker-st-migrate");
+  await runDockerSTMigration();
+}
+
+// Seed built-in tokenizers after migrations are applied
+const { seedTokenizersAsync } = await import("./services/tokenizer-seed");
+await seedTokenizersAsync();
+
+// Finish bootstrap writes before enabling background indexing/maintenance or
+// shortening the main connection's startup lock budget.
 db.run("PRAGMA busy_timeout = 100");
 await startDatabaseExecution();
 startAutomaticDatabaseMaintenance(
@@ -180,16 +193,6 @@ startAutomaticDatabaseMaintenance(
   () => operatorService.busy,
   (name, fn) => operatorService.runOperation(name, fn),
 );
-
-// One-time SillyTavern migration for Docker environments
-if (env.stMigrate) {
-  const { runDockerSTMigration } = await import("./migration/docker-st-migrate");
-  await runDockerSTMigration();
-}
-
-// Seed built-in tokenizers after migrations are applied
-const { seedTokenizers } = await import("./services/tokenizer-seed");
-seedTokenizers();
 
 // Apply operator-configured sharp runtime settings before image work starts.
 const { initSharpSettings } = await import("./services/sharp-settings.service");

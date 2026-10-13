@@ -11,12 +11,21 @@ if (!path || path === ":memory:") throw new Error("Database subprocess requires 
 function send(message: DatabaseChildMessage): void { channel.send(message); }
 let db: ReturnType<typeof initDatabase>;
 let stopIndexer: (() => void) | undefined;
+function startBackgroundWork(): void {
+  if (stopIndexer) return;
+  startDatabaseMonitor(() => db, path);
+  stopIndexer = startImageReferenceIndexer(db);
+}
 
 const channel = createDatabaseSubprocessChannel((message: DatabaseHostMessage) => {
     if (message.type === "shutdown") {
       stopIndexer?.();
       closeDatabase();
       process.exit(0);
+    }
+    if (message.type === "start-background") {
+      startBackgroundWork();
+      return;
     }
     if (message.type !== "execute") return;
     const started = performance.now();
@@ -43,8 +52,7 @@ const channel = createDatabaseSubprocessChannel((message: DatabaseHostMessage) =
 
 try {
   db = initDatabase(path, { busyTimeoutMs: 100, automaticCheckpoint: false, allowMmap: false });
-  startDatabaseMonitor(() => db, path);
-  stopIndexer = startImageReferenceIndexer(db);
+  if (!process.argv.includes("--defer-background")) startBackgroundWork();
   send({ type: "ready" });
 } catch (err) {
   const error = err as Error;
