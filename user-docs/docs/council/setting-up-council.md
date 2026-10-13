@@ -100,4 +100,11 @@ Lumiverse labels historical deliberations as continuity context only. They are n
 
 After a generation completes, you can view the council's deliberation in the message metadata. This shows what each member analyzed, what tools they ran, and what guidance they provided.
 
-The `{{lumiaCouncilDeliberation}}` macro contains the full deliberation results, which are injected into the prompt for the main generation.
+---
+
+## Injecting Council results into your prompt
+
+To inject the results for the main generation you need to add the macro `{{lumiaCouncilDeliberation}}` to your preset by either copy pasting the macro into your existing preset or adding a prompt block template. 
+Inside the Preset tab -> *+ Add Prompt* -> *Lumiverse Council* -> click *Council Deliberation* 
+
+Without this step your main LLM will not "see" the results and can't use them for generating a response. 
