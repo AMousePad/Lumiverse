@@ -10,6 +10,8 @@ on:
     paths:
       - "desktop/**"
       - "scripts/finalize-appimage.sh"
+      - "scripts/verify-appimage-permissions.sh"
+      - "scripts/appimage-packaging.test.ts"
       - "scripts/smoke-test-appimage.sh"
       - "scripts/tauri-finalized.ts"
       - "scripts/verify-appimage-gstreamer.sh"
@@ -129,6 +131,10 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
+      - name: Test Linux AppImage packaging
+        if: runner.os == 'Linux'
+        run: bun test scripts/appimage-packaging.test.ts scripts/tauri-finalized.test.ts
+
       - name: Build desktop installers
         uses: tauri-apps/tauri-action@v1
         env:
@@ -146,7 +152,7 @@ jobs:
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: desktop-[platform]-[arch]-[bundle]
 
-      - name: Smoke-test Linux AppImage startup
+      - name: Smoke-test Linux AppImage offline as another user
         if: runner.os == 'Linux'
         run: >-
           bash scripts/smoke-test-appimage.sh
@@ -200,11 +206,17 @@ jobs:
               ({ data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag }));
             } catch (error) {
               if (error.status !== 404) throw error;
+              const releaseNotes = await fs.readFile(`desktop/releases/${version}.md`, 'utf8').catch(error => {
+                if (error.code === 'ENOENT') return '';
+                throw error;
+              });
               ({ data: release } = await github.rest.repos.createRelease({
                 owner, repo, tag_name: tag, name: process.env.RELEASE_TITLE,
                 target_commitish: process.env.DESKTOP_SHA,
                 draft: false, prerelease: version.includes('-'),
-                body: `Lumiverse Desktop ${version}, built from the staging→main merge (${process.env.DESKTOP_SHA}).\n\nInstallers are unsigned (macOS uses ad-hoc signing without notarization). Windows SmartScreen and macOS Gatekeeper may block installation or launch. The desktop client still requires Bun and a Lumiverse checkout; it does not bundle the server.\n\nLinux AppImages are precompiled and do not require Cargo, a system WebKitGTK package, or system GStreamer plugins. Choose the asset matching your CPU architecture and see the [Linux AppImage instructions](https://github.com/${owner}/${repo}/blob/${process.env.DESKTOP_SHA}/desktop/README.md#run-a-prebuilt-linux-appimage) for FUSE and Wayland troubleshooting.`
+                body: releaseNotes
+                  ? `${releaseNotes.trim()}\n\nBuilt from the staging→main merge (${process.env.DESKTOP_SHA}).`
+                  : `Lumiverse Desktop ${version}, built from the staging→main merge (${process.env.DESKTOP_SHA}).\n\nInstallers are unsigned (macOS uses ad-hoc signing without notarization). Windows SmartScreen and macOS Gatekeeper may block installation or launch. The desktop client still requires Bun and a Lumiverse checkout; it does not bundle the server.\n\nLinux AppImages are precompiled and do not require Cargo, a system WebKitGTK package, or system GStreamer plugins. Choose the asset matching your CPU architecture and see the [Linux AppImage instructions](https://github.com/${owner}/${repo}/blob/${process.env.DESKTOP_SHA}/desktop/README.md#run-a-prebuilt-linux-appimage) for FUSE and Wayland troubleshooting.`
               }));
             }
             const existing = await github.paginate(github.rest.repos.listReleaseAssets, {

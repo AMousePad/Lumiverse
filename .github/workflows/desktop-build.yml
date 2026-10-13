@@ -24,6 +24,8 @@ on:
       - "desktop/src-tauri/permissions.test.ts"
       - "desktop/src-tauri/build.rs"
       - "scripts/finalize-appimage.sh"
+      - "scripts/verify-appimage-permissions.sh"
+      - "scripts/appimage-packaging.test.ts"
       - "scripts/smoke-test-appimage.sh"
       - "scripts/tauri-finalized.ts"
       - "scripts/tauri-finalized.test.ts"
@@ -132,6 +134,10 @@ jobs:
             dbus-x11 xauth xvfb gstreamer1.0-tools gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good
 
+      - name: Test Linux AppImage packaging
+        if: runner.os == 'Linux'
+        run: bun test scripts/appimage-packaging.test.ts scripts/tauri-finalized.test.ts
+
       - name: Install desktop dependencies
         working-directory: desktop
         run: bun install --frozen-lockfile
@@ -175,7 +181,7 @@ jobs:
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: desktop-[platform]-[arch]-[bundle]
 
-      - name: Smoke-test Linux AppImage startup
+      - name: Smoke-test Linux AppImage offline as another user
         if: runner.os == 'Linux'
         run: >-
           bash scripts/smoke-test-appimage.sh

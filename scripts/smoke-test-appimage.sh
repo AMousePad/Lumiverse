@@ -31,13 +31,18 @@ chmod +x "$appimage"
 
 log_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 log_file="$log_root/lumiverse-appimage-smoke.log"
-inspection_dir="$(mktemp -d "$log_root/lumiverse-appimage-inspect.XXXXXX")"
-trap 'rm -rf "$inspection_dir"' EXIT
+# Use /tmp so the test user can traverse the parent directories independently
+# of permissions on the checkout or the runner's home directory.
+inspection_dir="$(mktemp -d /tmp/lumiverse-appimage-inspect.XXXXXX)"
+smoke_home="$(mktemp -d /tmp/lumiverse-appimage-home.XXXXXX)"
+trap 'rm -rf "$inspection_dir"; sudo -n rm -rf -- "$smoke_home"' EXIT
+chmod a+rx "$inspection_dir"
 
 (
   cd "$inspection_dir"
   "$appimage" --appimage-extract >/dev/null
 )
+bash "$script_dir/verify-appimage-permissions.sh" "$inspection_dir/squashfs-root"
 bundled_wayland=()
 while IFS= read -r -d '' candidate; do
   bundled_wayland+=("$candidate")
@@ -49,9 +54,25 @@ if [[ ${#bundled_wayland[@]} -gt 0 ]]; then
 fi
 bash "$script_dir/verify-appimage-gstreamer.sh" "$inspection_dir/squashfs-root"
 
+mkdir -p "$smoke_home/config" "$smoke_home/cache" "$smoke_home/data" "$smoke_home/runtime"
+sudo -n chown -R "nobody:$(id -gn nobody)" "$smoke_home"
+sudo -n chmod 700 "$smoke_home/runtime"
+
 set +e
-timeout 15s dbus-run-session -- xvfb-run -a \
-  env APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" >"$log_file" 2>&1
+(
+  cd /
+  # A separate network namespace has no external connectivity. Execute the
+  # extracted launcher as a different user to preserve the mounted-image
+  # ownership boundary: extract-and-run as the owner would hide mode 0770.
+  # A fresh HOME and system-only PATH also exercise first launch without Bun,
+  # a checkout, saved authorization, or the build user's settings.
+  sudo -n unshare --net -- runuser -u nobody -- env -i \
+    HOME="$smoke_home" PATH=/usr/bin:/bin LANG=C.UTF-8 TMPDIR="$smoke_home" \
+    XDG_CONFIG_HOME="$smoke_home/config" XDG_CACHE_HOME="$smoke_home/cache" \
+    XDG_DATA_HOME="$smoke_home/data" XDG_RUNTIME_DIR="$smoke_home/runtime" \
+    timeout --kill-after=5s 15s dbus-run-session -- xvfb-run -a \
+    "$inspection_dir/squashfs-root/AppRun"
+) >"$log_file" 2>&1
 status=$?
 set -e
 
@@ -63,4 +84,4 @@ if [[ $status -ne 124 ]] || ! grep -Fq '[desktop-startup] tray ready' "$log_file
   exit 1
 fi
 
-echo "AppImage remained healthy through the 15-second startup smoke test."
+echo "AppImage reached a healthy tray startup offline as another user without Bun or a checkout."
