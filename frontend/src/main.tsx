@@ -6,7 +6,7 @@ import { registerSW } from 'virtual:pwa-register'
 import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
 import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
-import { usesNativeWidgetTouchScroll } from './lib/spindle/widget-touch-scroll'
+import { installIOSTouchScrollGuard, preventPageTouchZoom } from './lib/iosTouchScroll'
 import { installKeyboardFocusReveal } from './lib/keyboardFocusReveal'
 import { installIOSKeyboardScrollGuard } from './lib/iosKeyboardScroll'
 import { installIOSEditableFocusScrollPrevention } from './lib/iosEditableFocus'
@@ -215,23 +215,6 @@ document.addEventListener('focusout', () => {
   }, 120)
 }, { passive: true })
 
-// Utility: walk up the DOM to find the nearest ancestor that is currently
-// scrollable (has overflow AND content exceeds container). Used by the
-// overscroll prevention touch handler. Returns the element and whether it
-// scrolls horizontally (so the touch handler can let horizontal swipes through).
-function findScrollableAncestor(el: HTMLElement | null): { el: HTMLElement; horizontal: boolean } | null {
-  while (el && el !== document.body && el !== document.documentElement) {
-    const style = getComputedStyle(el)
-    const scrollableY = (style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight
-    const scrollableX = (style.overflowX === 'auto' || style.overflowX === 'scroll') && el.scrollWidth > el.clientWidth
-    if (scrollableY || scrollableX) {
-      return { el, horizontal: scrollableX && !scrollableY }
-    }
-    el = el.parentElement
-  }
-  return null
-}
-
 // Composers and editors prevent native focus from panning the whole shell.
 // Fields retain native caret placement; their scroll containers own revealing.
 // Recover only real document scrolling, without resetting stale viewport offsets.
@@ -315,9 +298,7 @@ if (!isWebKit) {
 // handles these same events when enabled; native page zoom breaks app layout.
 document.addEventListener('gesturestart', (event) => event.preventDefault(), { passive: false })
 document.addEventListener('gesturechange', (event) => event.preventDefault(), { passive: false })
-document.addEventListener('touchmove', (event) => {
-  if (event.touches.length > 1) event.preventDefault()
-}, { passive: false })
+document.addEventListener('touchmove', preventPageTouchZoom, { passive: false })
 
 // Keep native desktop page zoom suppressed, including when the optional
 // viewport zoom setting is off. The controller handles ctrl-wheel when on.
@@ -333,49 +314,11 @@ document.addEventListener('wheel', (e) => {
 // 2. Bug #240860 — body with overflow:hidden becomes scrollable when the
 //    visual viewport is smaller than the layout viewport (keyboard open),
 //    causing scroll containers to fight with body scroll.
-// Fix: intercept single-finger touchmove at document level. Allow scrolling
-// within scrollable containers, but prevent the default (which triggers
-// page-level overscroll) at scroll boundaries and outside scroll containers.
-if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 0) {
-  let touchStartY = 0
-  let touchStartX = 0
-  let scrollTarget: { el: HTMLElement; horizontal: boolean } | null = null
-
-  document.addEventListener('touchstart', (e) => {
-    if (e.touches.length === 1) {
-      touchStartY = e.touches[0].clientY
-      touchStartX = e.touches[0].clientX
-      scrollTarget = findScrollableAncestor(e.target as HTMLElement)
-    }
-  }, { passive: true })
-
-  document.addEventListener('touchmove', (e) => {
-    if (e.touches.length !== 1) return
-    // Only an explicitly opted-in live widget owns its single-finger scrolling.
-    if (usesNativeWidgetTouchScroll(e)) return
-    // Let the browser pan the magnified page.
-    if (Math.abs((window.visualViewport?.scale ?? 1) - 1) > 0.01) return
-
-    const deltaY = touchStartY - e.touches[0].clientY
-    const deltaX = touchStartX - e.touches[0].clientX
-
-    // Don't interfere with horizontal scrolling (carousels, tab bars, sliders)
-    if (Math.abs(deltaX) > Math.abs(deltaY) + 5) return
-
-    // Touch started inside a horizontal-only scroll container — let it through
-    if (scrollTarget?.horizontal) return
-
-    if (scrollTarget) {
-      const { el } = scrollTarget
-      const atTop = el.scrollTop <= 0 && deltaY < 0
-      const atBottom =
-        el.scrollTop + el.clientHeight >=
-        el.scrollHeight - 1 && deltaY > 0
-      if (atTop || atBottom) e.preventDefault()
-    } else {
-      e.preventDefault()
-    }
-  }, { passive: false })
+// Fix: intercept finger swipes at document level, allowing scrolling inside
+// containers but preventing page overscroll at their boundaries. Pencil input
+// and small tap movements must retain native click/focus behavior.
+if (isIOSStandalonePwa) {
+  installIOSTouchScrollGuard()
 
   // Ordinary fields need ancestor scrolling because PWA viewport panning is
   // suppressed. Bounded editors retain native caret/scroll ownership.
