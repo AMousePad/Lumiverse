@@ -339,6 +339,8 @@ export interface AssemblyContext {
   councilNamedResults?: Record<string, string>;
   /** Prior retained council deliberations formatted as a historical baseline block. */
   councilHistoricalDeliberationBlock?: string;
+  /** Snapshot of MCP function definitions for preset macros, including in workers. */
+  mcpTools?: ToolDefinition[];
   /** Pre-computed vector-activated world info entries from the generation pipeline.
    *  When provided, assembly reuses these instead of re-running vector retrieval. */
   precomputedVectorEntries?: import("../services/prompt-assembly.service").VectorActivatedEntry[];

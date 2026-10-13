@@ -1435,6 +1435,13 @@ export function getAvailableMacros(): MacroGroup[] {
       ],
     },
     {
+      category: 'MCP',
+      macros: [
+        { name: 'MCP Tools', syntax: '{{mcpTools}}', description: 'Available MCP function names and descriptions at this block’s role and position' },
+        { name: 'MCP Tools Active', syntax: '{{mcpToolsActive}}', description: 'MCP tools available for this generation (yes/no)' },
+      ],
+    },
+    {
       category: 'Lumiverse — Utility',
       macros: [
         { name: 'Message Count', syntax: '{{lumiaMessageCount}}', description: 'Current chat message count' },
