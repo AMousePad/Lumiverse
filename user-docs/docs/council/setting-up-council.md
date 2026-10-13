@@ -18,7 +18,8 @@ This guide walks you through configuring the council for AI-assisted tool feedba
 
 ## Adding Members
 
-Each council member is based on a **Lumia item** from an installed pack.
+Each council member is based on a **Lumia item** from an installed pack. 
+You can download these packs in the Pack Browser tab. 
 
 1. Click **Add Member**
 2. Select a Lumia from your installed packs
