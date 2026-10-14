@@ -3047,7 +3047,8 @@
     "deleteFailed": "배경화면을 삭제하지 못했습니다.",
     "thumbnailAlt": "배경화면 섬네일",
     "noPreview": "미리보기 없음",
-    "untitled": "제목 없는 배경화면"
+    "untitled": "제목 없는 배경화면",
+    "unknownValue": "—"
   },
   "personaToolbar": {
     "searchPersonas": "페르소나 검색...",
