@@ -52,6 +52,13 @@ bun run diagnose
   with no server or login required. Install the frontend dependencies and run
   `bun x playwright install chromium firefox webkit` here first. Set
   `UI_SCALE_BROWSERS=chromium` to run one engine. See [UI scaling](../../developer-docs/docs/frontend-api/ui-scaling.md).
+- `node check-expanded-editor-caret.mjs`
+  Checks the real expanded editor with font scales 0.85–2, combined UI scaling,
+  desktop/mobile widths, highlighted/plain text, and inline/modal layouts in
+  Chromium, Firefox and WebKit. Verifies matching wrapping widths, native caret
+  placement and typing after scrolling, including live scale and content changes.
+  No server or login required. Set `EDITOR_BROWSERS=webkit` or pass
+  `--browsers=webkit` to focus on the macOS desktop engine.
 - `bun run diagnose`
   Captures general chat scroll and virtualization stats on the busiest recent chat.
 - `bun run diagnose:spindle`
