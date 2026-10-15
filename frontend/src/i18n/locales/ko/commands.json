@@ -52,7 +52,7 @@
     },
     "action-dry-run": {
       "label": "프롬프트 미리보기",
-      "description": "시험 실행하여 조합된 프롬프트와 토큰 수를 확인합니다"
+      "description": "모의 실행으로 조합된 프롬프트와 토큰 수를 확인합니다"
     },
     "action-edit-character": {
       "label": "캐릭터 편집",
@@ -83,6 +83,7 @@
       "description": "서사 구조와 이야기의 주요 전개를 설정합니다"
     },
     "panel-dream-weaver": {
+      "label": "Dream Weaver",
       "description": "상상력을 바탕으로 캐릭터를 생성합니다"
     },
     "panel-connections": {
@@ -106,6 +107,7 @@
       "description": "월드북 및 로어북 항목을 편집합니다"
     },
     "panel-cortex": {
+      "label": "Memory Cortex",
       "description": "Memory Cortex 항목을 확인하고 관리합니다"
     },
     "panel-databank": {
@@ -117,6 +119,7 @@
       "description": "Lumia 아이템 및 Loom 프리셋을 생성하고 편집합니다"
     },
     "panel-ooc": {
+      "label": "OOC",
       "description": "캐릭터 역할 밖에서 하는 코멘트의 표시를 설정합니다"
     },
     "panel-prompt": {
@@ -124,6 +127,7 @@
       "description": "Lumia 및 Loom 콘텐츠, Sovereign Hand, 컨텍스트 필터를 선택합니다"
     },
     "panel-council": {
+      "label": "Council",
       "description": "Lumia Council 및 도구 기능을 설정합니다"
     },
     "panel-summary": {
@@ -179,8 +183,8 @@
       "description": "Spindle 확장 기능 구성을 관리합니다"
     },
     "settings-guided": {
-      "label": "가이드 생성",
-      "description": "가이드 생성 시퀀스 및 프롬프트 바이어스를 설정합니다"
+      "label": "유도 생성",
+      "description": "유도 생성 시퀀스 및 프롬프트 바이어스를 설정합니다"
     },
     "settings-quickReplies": {
       "label": "빠른 답장",
@@ -219,6 +223,7 @@
       "description": "고급 구성 및 디버그 옵션"
     },
     "settings-lumihub": {
+      "label": "LumiHub",
       "description": "LumiHub 클라우드 동기화 및 공유 설정"
     },
     "settings-dataPortability": {
@@ -280,7 +285,7 @@
     "messageHidden": "메시지를 AI 컨텍스트에서 숨겼습니다",
     "messageVisible": "메시지를 AI 컨텍스트에 다시 포함했습니다",
     "failedUpdateMessage": "메시지를 수정하지 못했습니다",
-    "dryRunFailed": "시험 실행에 실패했습니다",
+    "dryRunFailed": "모의 실행에 실패했습니다",
     "duplicatedCharacter": "{{name}}을(를) 복제했습니다",
     "failedDuplicateCharacter": "캐릭터를 복제하지 못했습니다",
     "chatDeleted": "채팅이 삭제되었습니다",

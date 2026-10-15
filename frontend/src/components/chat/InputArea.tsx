@@ -79,7 +79,7 @@ import { isWhistleAvailable } from '@/lib/whistle/config'
 import { whistleClient } from '@/lib/whistle/client'
 import { composeChatSafeZones } from '@/lib/chatSurfaceLayout'
 import { createComposerTouchFocusHandlers } from '@/lib/iosKeyboardScroll'
-import { observeComposerMotion } from '@/lib/composerMotion'
+import { measureComposerHeight, observeComposerMotion } from '@/lib/composerMotion'
 import { renderedPxToLayoutPx } from '@/lib/uiScale'
 import { applyChatAppearance } from '@/lib/chatAppearance'
 import {
@@ -1499,6 +1499,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     if (!parent) return
     const root = document.documentElement
     const loreMount = el.querySelector<HTMLElement>('[data-spindle-mount="chat_composer_above"]')
+    const popoverSlot = el.querySelector<HTMLElement>('[data-composer-popover]')
 
     const measureLoreHeight = () => {
       if (!loreMount) return 0
@@ -1512,7 +1513,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     const update = () => {
       const loreHeight = measureLoreHeight()
-      const h = el.offsetHeight
+      const h = measureComposerHeight(el, popoverSlot)
       const composerHeight = Math.max(0, h - loreHeight) + 8
       // Use the animated position, so list padding and composer move together.
       // Zero is valid for edge-to-edge PWA composers.
@@ -3598,7 +3599,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         />
       )}
 
-      <div className={clsx(styles.popoverSlot, openPopover && styles.popoverSlotOpen)}>
+      <div data-composer-popover className={clsx(styles.popoverSlot, openPopover && styles.popoverSlotOpen)}>
         <div className={styles.popoverSlotInner}>
           {renderPopover === 'guides' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>

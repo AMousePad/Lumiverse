@@ -1,4 +1,5 @@
 {
+  "title": "Weaver",
   "subtitle": "아이디어로 캐릭터를 제작합니다",
   "advisories": {
     "hide": "품질 경고 숨기기",
@@ -150,6 +151,7 @@
     "formats": {
       "png": "PNG 카드",
       "json": "JSON 카드",
+      "charx": "CHARX",
       "worldbook": "월드북 JSON"
     },
     "kinds": {
@@ -588,6 +590,7 @@
       "suggesting": "추천 중",
       "suggestFailed": "태그를 추천하지 못했습니다. 텍스트 연결을 확인하고 다시 시도하십시오.",
       "negativeLabel": "네거티브",
+      "negativePlaceholder": "worst quality, blurry, bad hands, ...",
       "adapter": "어댑터",
       "connection": "연결",
       "noConnections": "먼저 설정에서 이미지 연결을 추가하십시오.",

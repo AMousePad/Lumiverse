@@ -67,6 +67,33 @@ mkdir -p "$smoke_home/config" "$smoke_home/cache" "$smoke_home/data" "$smoke_hom
 sudo -n chown -R "nobody:$(id -gn nobody)" "$smoke_home"
 sudo -n chmod 700 "$smoke_home/runtime"
 
+# linuxdeploy must retain the exact tested Bun executable. Its ARM64 RPATH
+# rewrite can break the server even when the desktop itself still starts.
+server="$inspection_dir/squashfs-root/usr/bin/lumiverse-server"
+if [[ -f "$server" ]]; then
+  case "$(uname -m)" in
+    x86_64) server_arch=x64 ;;
+    aarch64) server_arch=arm64 ;;
+    *) echo "Unsupported bundled server architecture" >&2; exit 1 ;;
+  esac
+  original_server="$script_dir/../dist/server/lumiverse-server-linux-$server_arch"
+  if ! cmp -s "$original_server" "$server"; then
+    echo "AppImage changed the tested Bun server executable" >&2
+    exit 1
+  fi
+  server_log="$log_root/lumiverse-appimage-server-smoke.log"
+  if ! sudo -n unshare --net -- runuser -u nobody -- env -i \
+    HOME="$smoke_home" PATH=/usr/bin:/bin LANG=C.UTF-8 TMPDIR="$smoke_home" \
+    XDG_CONFIG_HOME="$smoke_home/config" XDG_CACHE_HOME="$smoke_home/cache" \
+    XDG_DATA_HOME="$smoke_home/data" \
+    timeout --kill-after=5s 180s "$server" --check >"$server_log" 2>&1; then
+    cat "$server_log" >&2
+    echo "Packaged server failed its offline native and subprocess checks" >&2
+    exit 1
+  fi
+  echo "Packaged Bun server is unchanged and passes offline checks as another user."
+fi
+
 set +e
 (
   cd /

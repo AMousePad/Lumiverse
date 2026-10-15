@@ -1,5 +1,6 @@
 {
   "comfyWorkflowEditor": {
+    "eyebrow": "COMFYUI",
     "title": "워크플로 설정",
     "replace": "바꾸기",
     "importLead": "ComfyUI 워크플로를 한 번 가져온 후, 각 역할을 어떤 노드 필드가 담당할지 매핑합니다. 설정은 이 연결에 저장되어 생성할 때마다 재사용됩니다.",
@@ -51,10 +52,12 @@
       "width": "너비",
       "height": "높이",
       "steps": "스텝 수",
+      "cfg": "CFG",
       "denoise": "디노이즈",
       "sampler_name": "샘플러",
       "scheduler": "스케줄러",
-      "checkpoint": "체크포인트"
+      "checkpoint": "체크포인트",
+      "unet": "UNet"
     }
   },
   "drawer": {
@@ -73,11 +76,14 @@
     "loom": {
       "shortName": "프리셋",
       "tabName": "프리셋",
-      "tabDescription": "서사 구조와 스토리 전개를 설정합니다."
+      "tabDescription": "서사 구조와 스토리 전개를 설정합니다.",
+      "tabHeaderTitle": "Loom"
     },
     "dream-weaver": {
       "shortName": "구상",
-      "tabDescription": "상상력을 바탕으로 캐릭터를 생성합니다."
+      "tabName": "Dream Weaver",
+      "tabDescription": "상상력을 바탕으로 캐릭터를 생성합니다.",
+      "tabHeaderTitle": "Dream Weaver"
     },
     "connections": {
       "shortName": "연결",
@@ -111,6 +117,7 @@
     },
     "cortex": {
       "shortName": "기억",
+      "tabName": "Memory Cortex",
       "tabDescription": "Memory Cortex 항목을 확인하고 관리합니다.",
       "tabHeaderTitle": "기억"
     },
@@ -127,7 +134,10 @@
       "tabHeaderTitle": "제작"
     },
     "ooc": {
-      "tabDescription": "캐릭터 밖 발언(OOC) 표시 설정입니다."
+      "shortName": "OOC",
+      "tabName": "OOC",
+      "tabDescription": "캐릭터 밖 발언(OOC) 표시 설정입니다.",
+      "tabHeaderTitle": "OOC"
     },
     "prompt": {
       "shortName": "구성",
@@ -136,7 +146,10 @@
       "tabHeaderTitle": "구성"
     },
     "council": {
-      "tabDescription": "Lumia Council 및 도구 기능을 구성합니다."
+      "shortName": "Council",
+      "tabName": "Council",
+      "tabDescription": "Lumia Council 및 도구 기능을 구성합니다.",
+      "tabHeaderTitle": "Council"
     },
     "summary": {
       "shortName": "요약",
@@ -151,6 +164,7 @@
       "tabHeaderTitle": "피드백"
     },
     "worldinfo": {
+      "shortName": "WI",
       "tabName": "월드 인포",
       "tabDescription": "현재 활성화된 월드 인포 항목을 확인합니다.",
       "tabHeaderTitle": "월드 인포"
@@ -192,7 +206,10 @@
       "tabHeaderTitle": "확장 기능"
     },
     "weaver": {
-      "tabDescription": "아이디어를 바탕으로 캐릭터를 제작합니다"
+      "shortName": "Weaver",
+      "tabName": "Weaver",
+      "tabDescription": "아이디어를 바탕으로 캐릭터를 제작합니다",
+      "tabHeaderTitle": "Weaver"
     },
     "multiplayer": {
       "shortName": "파티",
@@ -274,6 +291,7 @@
     "narrativeStyles": "서사 스타일",
     "loomUtilities": "Loom 유틸리티",
     "retrofits": "개조",
+    "sovereignHandTitle": "Sovereign Hand",
     "sovereignHandDesc": "고급 프롬프트 조작 기능을 사용하려면 Sovereign Hand 연동을 활성화하십시오.",
     "useSovereignHand": "Sovereign Hand 기능 사용",
     "useSovereignHandHint": "고급 프롬프트 제어를 위한 Sovereign Hand 매크로를 활성화합니다",
@@ -357,7 +375,12 @@
     "promptBehaviorTitle": "프롬프트 동작",
     "startReplyWith": "답변 시작 문구",
     "startReplyPlaceholder": "앞에 덧붙일 어시스턴트 메시지 일부...",
-    "clear": "지우기"
+    "clear": "지우기",
+    "reasoningPresets": {
+      "deepseek": "DeepSeek",
+      "claude": "Claude",
+      "o1": "o1"
+    }
   },
   "personaManager": {
     "loading": "페르소나를 불러오는 중...",
@@ -523,12 +546,14 @@
     "uploadServiceAccount": "Google Cloud 서비스 계정 키 JSON 파일 업로드",
     "fileLoaded": "파일을 불러왔습니다",
     "chooseFile": "파일 선택",
+    "serviceAccountFilename": "service-account.json",
     "region": "리전",
     "vertexRegionHint": "Vertex AI용 Google Cloud 리전",
     "bedrockRegionHint": "Amazon Bedrock용 AWS 리전",
     "bedrockEndpoint": "엔드포인트",
     "bedrockEndpointHint": "Mantle을 권장합니다 (가장 폭넓은 모델 카탈로그 제공). us.anthropic.claude-*와 같은 교차 리전 추론 프로필에는 Runtime을 사용하십시오.",
     "bedrockApiKeyHint": "Amazon Bedrock 콘솔에서 장기 또는 단기 API 키를 생성하십시오. Bearer 토큰으로 사용되므로 AWS SigV4 서명이 필요하지 않습니다.",
+    "pollinationsByop": "Pollinations BYOP",
     "pollinationsByopHint": "\"Pollinations로 로그인\"을 사용하여 BYOP 키를 자동으로 가져오거나 아래에 키를 직접 붙여 넣으십시오.",
     "nanoGptOAuth": "NanoGPT 로그인",
     "nanoGptOAuthHint": "\"NanoGPT로 로그인\"을 사용하여 앱 전용 API 키를 자동으로 생성하거나 아래에 키를 직접 붙여 넣으십시오.",
@@ -538,6 +563,7 @@
     "apiKey": "API 키",
     "keyAlreadySet": "키가 설정되어 있습니다. 교체하려면 새 값을 입력하십시오.",
     "enterApiKey": "API 키 입력",
+    "apiUrl": "API URL",
     "vertexApiUrlHint": "선택한 리전의 기본 Vertex AI 엔드포인트를 사용하려면 비워 두십시오",
     "defaultApiUrlHint": "기본 프로바이더 URL을 사용하려면 비워 두십시오",
     "model": "모델",
@@ -601,9 +627,11 @@
     "apiKey": "API 키",
     "keySetHint": "키가 설정되어 있습니다. 교체하려면 새 값을 입력하십시오.",
     "enterApiKey": "API 키 입력",
+    "apiUrl": "API URL",
     "apiUrlHint": "기본 프로바이더 URL을 사용하려면 비워 두십시오",
     "model": "모델",
     "modelHint": "새로고침 시 연결을 저장하기 전이라도 현재 양식의 값을 사용합니다.",
+    "modelPlaceholder": "gpt-4o-transcribe",
     "noModels": "음성 인식 모델을 찾을 수 없습니다. 직접 입력하십시오.",
     "setDefault": "기본 STT 연결로 설정",
     "cancel": "취소",
@@ -617,9 +645,11 @@
     "apiKey": "API 키",
     "keySetHint": "키가 설정되어 있습니다. 교체하려면 새 값을 입력하십시오.",
     "enterApiKey": "API 키 입력",
+    "apiUrl": "API URL",
     "apiUrlHint": "기본 프로바이더 URL을 사용하려면 비워 두십시오",
     "model": "모델",
     "refreshHint": "새로고침 시 연결을 저장하기 전이라도 현재 양식의 값을 사용합니다.",
+    "modelPlaceholder": "gpt-4o-mini-tts",
     "noTtsModels": "TTS 모델을 찾을 수 없습니다. 직접 입력하십시오.",
     "voice": "음성",
     "voicePlaceholder": "alloy 또는 voice_...",
@@ -826,6 +856,7 @@
     "selectedToggleSkipped_other": "비활성 프리셋에 속해 있어 선택한 스크립트 {{count}}개를 건너뛰었습니다",
     "selectedAlreadyEnabled": "선택한 모든 스크립트가 이미 활성화되어 있습니다",
     "selectedAlreadyDisabled": "선택한 모든 스크립트가 이미 비활성화되어 있습니다",
+    "selectedExportFilename": "selected-regex-scripts.json",
     "deleteSelectedTitle": "선택한 정규식 스크립트 삭제",
     "deleteSelectedConfirm": "선택한 정규식 스크립트 {{count}}개를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
     "selectFolder": "{{folder}} 내 모든 스크립트 선택",
@@ -857,6 +888,7 @@
     "selectPresetFirstFolder": "정규식 폴더를 연결하기 전에 Loom 프리셋을 선택하십시오",
     "boundFolderToPreset": "활성 프리셋에 \"{{folder}}\"을(를) 연결했습니다",
     "unboundFolderFromPreset": "활성 프리셋에서 \"{{folder}}\" 연결을 해제했습니다",
+    "exportFilename": "regex-scripts.json",
     "unbindFolderFromPreset": "활성 프리셋에서 \"{{folder}}\" 연결 해제",
     "bindFolderToPreset": "활성 프리셋에 \"{{folder}}\" 연결",
     "unbindFolderFromPresetAria": "활성 프리셋에서 {{folder}} 연결 해제",
@@ -920,6 +952,9 @@
     "flagSticky": "고정 (Sticky)",
     "appliesTo": "적용 대상",
     "targetUser": "사용자",
+    "targetAi": "AI",
+    "targetWi": "WI",
+    "targetCot": "CoT",
     "targetMemory": "기억",
     "allOptions": "모든 옵션..."
   },
@@ -990,7 +1025,12 @@
       "objective": "목적격",
       "possessive": "소유격",
       "reflexive": "재귀대명사",
-      "possessiveStandalone": "소유대명사"
+      "possessiveStandalone": "소유대명사",
+      "subjectivePlaceholder": "she",
+      "objectivePlaceholder": "her",
+      "possessivePlaceholder": "her",
+      "reflexivePlaceholder": "herself",
+      "possessiveStandalonePlaceholder": "hers"
     },
     "position": {
       "inPrompt": "프롬프트 내",
@@ -1009,6 +1049,7 @@
     "progress": {
       "generating": "이미지 생성 중…",
       "starting": "시작 중…",
+      "step": "{{step}}/{{total}} ({{pct}}%)",
       "previewAlt": "생성 미리보기",
       "finalizing": "마무리 중…"
     },
@@ -1215,6 +1256,7 @@
     "noLorasFound": "활성 연결에서 LoRA를 찾을 수 없음",
     "loraDiscoveryReady_one": "{{count}}개 LoRA 불러옴",
     "loraDiscoveryReady_other": "{{count}}개 LoRA 불러옴",
+    "loraRowFallback": "LoRA {{position}}",
     "loraDragHandle": "LoRA {{position}} 순서 변경: {{name}}",
     "loraReorderHint": "드래그 핸들을 잡고 드래그하십시오. 키보드: 스페이스바로 선택, 방향키로 이동, 스페이스바로 배치, Esc로 취소합니다.",
     "loraReorderInstructions": "스페이스바를 눌러 LoRA 행을 선택하십시오. 방향키로 이동하고, 스페이스바를 눌러 배치하거나, Esc를 눌러 취소하십시오.",
@@ -1222,6 +1264,7 @@
     "loraReorderMoving": "{{name}}을(를) 전체 {{total}}개 중 {{position}}번째 위치로 이동 중입니다.",
     "loraReorderDropped": "{{name}}을(를) 전체 {{total}}개 중 {{position}}번째 위치에 배치했습니다.",
     "loraReorderCancelled": "순서 변경이 취소되었습니다. {{name}}이(가) 전체 {{total}}개 중 {{position}}번째 원래 위치로 돌아갔습니다.",
+    "loraEntry": "LoRA",
     "loraFilename": "파일명",
     "loraFilenamePlaceholder": "LoRA 선택… 또는 파일명 입력",
     "weightModel": "가중치 (모델)",
@@ -1333,7 +1376,8 @@
       "addVariant": "변형 추가",
       "default": "기본",
       "deleteVariant": "변형 삭제",
-      "addVariantTitle": "변형 추가"
+      "addVariantTitle": "변형 추가",
+      "fieldPlaceholder": "{{label}}..."
     },
     "alternateName": "대체 캐릭터 이름",
     "alternateNameHelper": "프롬프트의 {{char}} 및 채팅 표시 이름으로 사용됩니다. 카드의 제목은 변경되지 않습니다.",
@@ -1341,6 +1385,7 @@
     "creatorHelper": "이 캐릭터를 만든 제작자입니다.",
     "originalSource": "원본 출처",
     "originalSourceHelper": "Chub, CharacterHub, LumiHub 또는 Illarin URL이나 Chub 제작자/캐릭터 경로를 붙여넣으십시오.",
+    "originalSourcePlaceholder": "https://chub.ai/characters/creator/character",
     "originalSourceInvalid": "유효한 Chub, CharacterHub, LumiHub 또는 Illarin 출처 URL을 입력하십시오.",
     "openOriginalSource": "원본 출처 열기",
     "creatorNotes": "제작자 메모",
@@ -1368,6 +1413,7 @@
     "renameImageReference": "이미지 참조 이름 변경",
     "renameImageReferenceHelper": "이 이미지에 기억하기 쉬운 이름을 지정하십시오. 공백은 하이픈으로 변환되며, 이 캐릭터에서 이미 사용된 참조는 자동으로 업데이트됩니다.",
     "galleryReferenceName": "참조 이름",
+    "galleryReferenceNamePlaceholder": "opening-scene",
     "renamingImageReference": "이름 변경 중…",
     "galleryReferenceRenamed": "참조가 {{reference}}(으)로 변경되었습니다",
     "galleryReferenceRenameFailed": "이미지 참조 이름 변경에 실패했습니다",
@@ -1491,6 +1537,8 @@
       "activeConnection": "활성 이미지 생성 연결",
       "activeConnectionHelper": "아래 LoRA 목록은 이 연결에서 가져옵니다. 변경하려면 이미지 생성 패널에서 활성 연결을 전환하십시오.",
       "noConnectionSelected": "선택된 이미지 생성 연결이 없습니다.",
+      "connectionSummary": "{{name}} ({{provider}})",
+      "lora": "LoRA",
       "loraHelper": "활성 ComfyUI 워크플로의 LoraLoader 노드에 삽입되거나, SwarmUI의 loras/loraweights 매개변수로 전송되거나, SD API에 LoRA 경로 및 모델 강도 배수로 전송됩니다. 다른 프로바이더는 이 필드를 무시하지만 아래의 기본 태그는 계속 인식합니다.",
       "discoveryHint": "LoRA 자동 검색은 ComfyUI, SwarmUI 및 SD API 연결에서 지원됩니다. 아래에 파일명을 직접 입력할 수도 있습니다.",
       "loadingLoras": "LoRA 불러오는 중…",
@@ -1508,8 +1556,10 @@
       "clipStrengthPlaceholder": "CLIP 강도",
       "baseTags": "기본 태그",
       "baseTagsHelper": "캐릭터 LoRA 레이어가 활성화되어 있고 우회되지 않은 동안 이 캐릭터의 이미지 프롬프트 앞에 추가됩니다. Booru 스타일 태그(소문자, 밑줄)를 사용하는 것이 가장 좋습니다.",
+      "baseTagsPlaceholder": "1girl, long brown hair, pink dress, green eyes",
       "sourceUrl": "소스 URL (선택 사항)",
       "sourceUrlHelper": "PNG 내보내기 시 표시 전용 힌트로 함께 저장됩니다. Lumiverse는 이 URL에서 자동으로 다운로드하지 않습니다.",
+      "sourceUrlPlaceholder": "https://civitai.com/models/…",
       "update": "업데이트",
       "save": "저장",
       "clear": "지우기",
@@ -1593,11 +1643,15 @@
     "chubBackfillProgress": "Chub 확인 중… {{total}}개 중 {{done}}개",
     "chubBackfillNothingFound": "해당 캐릭터들의 표정 팩을 찾지 못했습니다.",
     "chubBackfillSummaryHead": "{{characters}}명의 캐릭터에 표정을 추가했습니다 (이미지 {{count}}개):",
+    "chubBackfillSummaryItem": "  {{name}} — {{count}}",
     "chubBackfillSummaryMore": "  외 {{count}}명",
     "chubBackfillSummaryFailed": "{{count}}명의 캐릭터를 확인하지 못했습니다.",
+    "chubBackfillSummaryFailedItem": "  {{name}}",
     "importFromUrlHint": "Chub, JannyAI, BotBooru 또는 기타 지원 소스의 캐릭터 URL을 한 줄에 하나씩 붙여넣으십시오.",
+    "importUrlPlaceholder": "https://chub.ai/characters/...\nhttps://chub.ai/characters/...",
     "cancel": "취소",
     "dropToImport": "캐릭터 파일을 끌어다 놓아 가져오기",
+    "dropFileTypes": ".json, .png, .charx, .jpg",
     "tagFilter": {
       "label": "태그",
       "labelWithCount": "태그 ({{count}})",
@@ -1808,6 +1862,7 @@
         "delay": "지연",
         "groupName": "그룹 이름",
         "weight": "가중치",
+        "uid": "UID",
         "automationId": "자동화 ID"
       },
       "outletPlaceholder": "{{outlet::name}}와(과) 함께 사용",
@@ -1864,6 +1919,9 @@
     },
     "importBook": "월드북 가져오기",
     "exportBook": "월드북 내보내기",
+    "exportLumiverse": "Lumiverse (.json)",
+    "exportCharacterBook": "캐릭터북 (.json)",
+    "exportSillyTavern": "SillyTavern (.json)",
     "popOut": "모달로 분리",
     "bookDetails": "월드북 세부 정보",
     "name": "이름",
@@ -1890,6 +1948,7 @@
     "doneStatus": "완료: {{status}}",
     "convertedReindexing": "{{count}}개 항목을 업데이트했습니다. 벡터 다시 색인 중...",
     "reindexStatus": {
+      "progress": "{{current}}/{{total}}",
       "eligible": "{{count}}개 대상",
       "indexed": "{{count}}개 색인됨",
       "skipped": "{{count}}개 건너뜀",
@@ -2211,14 +2270,17 @@
       "right": "오른쪽",
       "dockHint": "측면 장착 확장 기능 독 패널은 이 데스크톱 설정을 따릅니다. 모바일에서는 채팅 입력 영역을 가리지 않도록 동일한 독 패널이 항상 상단 시트로 접힙니다.",
       "toastTimeout": "확장 기능 인터셉터 대기 제한 시간이 {{seconds}}초로 설정되었습니다",
-      "toastDock": "확장 기능 독 패널이 {{side}}에 열립니다"
+      "toastDock": "확장 기능 독 패널이 {{side}}에 열립니다",
+      "brand": "Spindle"
     },
     "addExtension": "확장 기능 추가",
     "installed": "설치됨 ({{count}})",
     "sortBy": "{{field}} 기준으로 확장 기능 정렬",
     "sort": {
       "dateInstalled": "설치 날짜",
-      "dateUpdated": "업데이트 날짜"
+      "dateUpdated": "업데이트 날짜",
+      "alphabeticalAsc": "A-Z",
+      "alphabeticalDesc": "Z-A"
     },
     "bulkUpdateInProgress": "일괄 업데이트 진행 중",
     "updateAllHint": "관리 가능한 모든 확장 기능을 초기화하고 다시 빌드합니다",
@@ -2235,6 +2297,7 @@
     "enabled": "활성화됨",
     "disabled": "비활성화됨",
     "permissionsLabel": "권한",
+    "permissionStatus": "{{name}} ({{status}})",
     "enableAllPermissions": "모두 활성화",
     "enableAllPermissionsHint": "이 확장 기능의 비활성화된 모든 권한을 활성화합니다",
     "allPermissionsEnabled": "모든 권한이 이미 활성화되어 있습니다",
@@ -2315,6 +2378,7 @@
     "variableFallback": "변수 {{position}}",
     "type": "유형",
     "name": "이름",
+    "namePlaceholder": "tone",
     "duplicateTitle": "둘 이상의 변수에서 사용 중인 이름입니다. 프롬프트 조합 시 활성화된 블록 중 순서상 마지막 블록이 적용됩니다.",
     "shadowed": "가려짐",
     "removeVariable": "변수 제거",
@@ -2435,6 +2499,7 @@
       "browseHintWithConnection": "입력란을 클릭하여 선택한 연결의 모델을 탐색하거나, 모델을 직접 입력하십시오.",
       "browseHintNoConnection": "먼저 연결 프로필을 선택한 후 입력란을 클릭하여 모델을 탐색하십시오.",
       "temperature": "온도",
+      "topP": "Top P",
       "maxTokens": "최대 토큰"
     },
     "tools": {
@@ -2503,6 +2568,7 @@
     }
   },
   "openRouterSettings": {
+    "brand": "OpenRouter",
     "signIn": "OpenRouter로 로그인",
     "oauthHintExisting": "권한을 부여하여 API 키를 자동으로 받습니다",
     "oauthHintCreate": "OpenRouter 계정으로 로그인하여 이 연결을 생성합니다",
@@ -2530,8 +2596,15 @@
     "requireParameters": "매개변수 지원 필수",
     "requireParametersHint": "모든 요청 매개변수를 지원하는 프로바이더로만 라우팅합니다",
     "preferredProviders": "선호 프로바이더",
-    "preferredProvidersHint": "우선순위에 따라 먼저 시도할 프로바이더입니다. 수동 지정 순서는 OpenRouter의 자동 캐시 고정 라우팅보다 우선 적용됩니다.",
+    "preferredProvidersHint": "우선순위에 따라 먼저 시도할 프로바이더입니다. 대체 프로바이더를 허용하면 Flex 대신 표준 요금이 적용될 수 있습니다. 수동 지정 순서는 OpenRouter의 자동 캐시 고정 라우팅보다 우선 적용됩니다.",
     "preferPlaceholder": "선호할 프로바이더 선택...",
+    "onlyProviders": "허용할 프로바이더",
+    "onlyProvidersHint": "요청 및 대체 라우팅을 이 항목들로 제한합니다. Flex만 사용하려면 Flex 엔드포인트만 선택하십시오. 비워 두면 다른 프로바이더도 허용됩니다.",
+    "onlyPlaceholder": "허용할 프로바이더 선택...",
+    "endpointChoicesHint": "선택 목록에는 현재 모델의 엔드포인트가 포함됩니다. Flex는 요금이 더 저렴하지만 지연 시간이 더 길고 가용성이 더 낮습니다. 기본 프로바이더 이름을 선택하는 것만으로는 Flex가 활성화되지 않습니다.",
+    "saveForEndpointsHint": "Flex 및 기타 엔드포인트 선택 목록을 불러오려면 API 키를 포함하여 이 연결을 저장하고 모델을 선택하십시오.",
+    "endpointsError": "모델 엔드포인트를 불러올 수 없습니다. 저장된 라우팅 선택은 유지됩니다.",
+    "retryEndpoints": "엔드포인트 다시 불러오기",
     "ignoreProviders": "제외할 프로바이더",
     "ignoreProvidersHint": "라우팅에서 완전히 제외할 프로바이더",
     "ignorePlaceholder": "제외할 프로바이더 선택...",
@@ -2544,7 +2617,8 @@
     "responseHealingHint": "응답 내 잘못된 형식의 JSON 자동 수정 (비스트리밍)",
     "contextCompression": "컨텍스트 압축",
     "contextCompressionHint": "컨텍스트가 한도를 초과할 때 미들아웃 방식으로 압축합니다",
-    "attributionPrefix": "Lumiverse:"
+    "attributionPrefix": "Lumiverse:",
+    "attributionLink": "OpenRouter Apps"
   },
   "memoryCortexPanel": {
     "noChat": "기억 그래프를 보려면 채팅을 여십시오",
@@ -2736,6 +2810,7 @@
       },
       "relation": {
         "title": "관계 편집",
+        "endpoints": "{{source}} → {{target}}",
         "evidenceChunks_one": "근거 청크 {{count}}개",
         "evidenceChunks_other": "근거 청크 {{count}}개",
         "type": "유형",
@@ -2763,9 +2838,11 @@
         "helper": "이 색상이 속한 캐릭터를 다시 할당하거나, 사용 유형을 변경하거나, 잘못 감지된 16진수 색상 코드를 수정합니다. 수동 편집 내용은 유지되며 Cortex 수집 과정에서 덮어쓰지 않습니다.",
         "attributedTo": "할당 대상",
         "noAttribution": "(할당 없음)",
+        "entityOption": "{{name}} — {{type}}",
         "noEntitiesHint": "이 채팅에 아직 개체가 없습니다. 먼저 기억을 생성하거나 재구축한 뒤 돌아와서 할당하십시오.",
         "usageType": "사용 유형",
         "hexColor": "16진수 색상",
+        "hexPlaceholder": "#aabbcc",
         "confidence": "신뢰도: {{value}}",
         "confidenceHint": "신뢰도가 높을수록 더 약한 자동 감지 매핑보다 이 할당이 우선 적용됩니다.",
         "invalidHex": "16진수 색상은 #RRGGBB 형식이어야 합니다",
@@ -2824,7 +2901,8 @@
       "removeLinkFailed": "연결을 제거하지 못했습니다",
       "vaultDeleted": "기억 보관소 삭제됨",
       "vaultDeleteFailed": "기억 보관소를 삭제하지 못했습니다",
-      "vaultRenameFailed": "기억 보관소 이름을 변경하지 못했습니다"
+      "vaultRenameFailed": "기억 보관소 이름을 변경하지 못했습니다",
+      "defaultVaultName": "{{chat}} — {{date}}"
     },
     "confirm": {
       "entityTitle": "개체 삭제",
@@ -2944,8 +3022,20 @@
     },
     "reset": "초기화",
     "presets": "프리셋",
+    "presetNames": {
+      "lumiverse-purple": "Lumiverse 퍼플",
+      "midnight-blue": "미드나이트 블루",
+      "emerald": "에메랄드",
+      "rose": "로즈",
+      "amber": "앰버",
+      "slate": "슬레이트",
+      "lumiverse-light": "Lumiverse 라이트",
+      "auto-purple": "자동 퍼플",
+      "character-aware": "캐릭터 맞춤"
+    },
     "accentColor": "강조 색상",
     "baseColors": "기본 색상",
+    "inputHex": "16진수",
     "controls": "컨트롤",
     "advanced": "고급",
     "customCssEditor": "사용자 지정 CSS 편집기",
@@ -3208,7 +3298,9 @@
     "workshop": {
       "loading": "불러오는 중...",
       "quickCreate": "빠른 생성",
+      "lumia": "Lumia",
       "lumiaSub": "캐릭터",
+      "loom": "Loom",
       "loomSub": "스타일 / 유틸리티",
       "tool": "도구",
       "toolSub": "Council 도구",
@@ -3240,6 +3332,7 @@
       "editTitle": "Lumia 편집",
       "createTitle": "Lumia 생성",
       "avatarUrl": "아바타 URL",
+      "avatarPlaceholder": "https://...",
       "characterNamePlaceholder": "캐릭터 이름",
       "authorPlaceholder": "제작자 이름",
       "genderIdentity": "성별 정체성",
@@ -3282,6 +3375,7 @@
       "toolDetails": "도구 세부 정보",
       "toolName": "도구 이름",
       "toolNameHint": "팩 내에서 일반적으로 고유한 내부 식별자입니다. snake_case를 사용하십시오.",
+      "toolNamePlaceholder": "my_tool",
       "displayName": "표시 이름",
       "displayNameHint": "Council 편집기에서 표시될 레이블입니다.",
       "displayNamePlaceholder": "내 도구",
@@ -3297,6 +3391,7 @@
       "structuredOutput": "구조화된 출력 필드",
       "structuredWhatTitle": "의미",
       "structuredWhatText": "도구에서 반환받으려는 각 정보에 대한 필드를 추가하십시오. 일반 텍스트는 `string`, 예/아니오는 `boolean`, 정수는 `integer`, 소수는 `number`를 사용합니다. 도구가 자유 형식의 줄글로 응답하도록 하려면 비워 두십시오.",
+      "fieldNamePlaceholder": "field_name",
       "fieldDescPlaceholder": "이 필드에 어떤 내용이 들어가야 합니까?",
       "requiredField": "필수 필드",
       "addField": "필드 추가",
@@ -3306,12 +3401,14 @@
       "resultRoutingText": "전체 Council이 이 도구의 출력을 읽을 수 있도록 심의에 저장합니다. 원본 출력을 {{macroExample}}을(를) 통해 프롬프트와 프리셋에서도 사용하려면 결과 변수를 추가하십시오.",
       "resultVariable": "결과 변수",
       "resultVariableHint": "선택 사항입니다. scene_data나 continuity_notes처럼 매크로에 쓰기 편한 이름으로 도구 출력을 저장합니다.",
+      "resultVariablePlaceholder": "result_var",
       "storeInDeliberation": "심의에 저장",
       "storeInDeliberationHint": "출력이 공유 Council 심의 블록에 표시되지 않고 매크로나 다른 로직에서 사용되어야 하는 변수 전용 도구의 경우 이 설정을 끄십시오.",
       "promptGuideEmpty": "구성된 구조화 필드가 없습니다.",
       "promptGuideFreeform": "자유 형식의 Council 응답을 원하시면 이 섹션을 비워 두십시오.",
       "promptGuideIntro": "프롬프트에 추가할 추천 지침:",
       "promptGuideReturn": "다음 필드를 사용하여 간결한 응답을 반환하십시오:",
+      "promptGuideField": "- {{name}} ({{type}}, {{status}}){{description}}",
       "promptGuideFooter": "Council이 쉽게 사용할 수 있도록 각 필드를 명료하게 작성하십시오."
     }
   },
@@ -3360,7 +3457,8 @@
       "namePlaceholder": "내 팩",
       "author": "제작자",
       "authorPlaceholder": "본인 이름",
-      "coverUrl": "표지 이미지 URL"
+      "coverUrl": "표지 이미지 URL",
+      "coverPlaceholder": "https://..."
     },
     "lumiaItemEditor": {
       "editTitle": "캐릭터 편집",
@@ -3379,10 +3477,12 @@
       "title": "팩 가져오기",
       "tabFile": "파일 업로드",
       "tabUrl": "URL에서 가져오기",
+      "tabLucid": "Lucid Cards",
       "dropZone": "JSON 파일을 여기에 끌어다 놓거나 클릭하여 찾아보기",
       "dropZoneSub": "기본 팩 형식 및 확장 형식 지원",
       "importing": "가져오는 중...",
       "packUrl": "팩 URL",
+      "urlPlaceholder": "https://example.com/pack.json",
       "import": "가져오기",
       "importFromUrlFailed": "URL에서 가져오지 못했습니다",
       "importFileFailed": "파일을 가져오지 못했습니다",
@@ -3475,6 +3575,7 @@
       "sealedBlockHint": "고급 배포 옵션입니다. 이 프리셋을 LumiHub에 업로드할 때 공개 JSON에서 블록 내용이 제거되고 Hub 측 비공개 블록으로 저장됩니다. 로컬 사본에는 업로드 전까지 텍스트가 유지됩니다.",
       "sealedBlockInstalledHint": "보호된 블록으로 설치되었습니다. 로컬에서 확인하고 편집할 수 있지만, Lumiverse는 내보내기 및 공유 페이로드에서 항상 해당 내용을 제외합니다.",
       "sealedBlockKey": "봉인된 블록 키",
+      "sealedBlockKeyPlaceholder": "dialogue.frame",
       "sealedBlockKeyHint": "블록 참조에 사용하는 고정 키입니다. 영문자, 숫자, 마침표, 대시, 밑줄 또는 콜론을 사용하십시오.",
       "sealedBlockEnable": "LumiHub 배포용임을 이해했으며 업로드 시 이 블록을 봉인하기를 원합니다.",
       "sealedBlockInstalledEnable": "이 블록은 보호된 콘텐츠로 설치되었으므로 내보내기 시 항상 봉인됩니다.",
@@ -3487,6 +3588,7 @@
       "triggersNone": "선택된 트리거 없음 — 블록이 모든 생성 유형에서 실행됩니다",
       "triggersActive": "다음 생성 유형에서만 블록 실행: {{list}}",
       "characterTagTrigger": "캐릭터 태그 트리거",
+      "characterTagTriggerPlaceholder": "anthro, demihuman, furry",
       "characterTagTriggerHint": "하나 이상의 캐릭터 태그가 여기에 입력된 항목 중 하나와 유사하게 일치할 때만 블록이 활성화됩니다. 일치 여부 확인 시 대소문자와 공백, 대시, 밑줄 등의 구분자는 무시됩니다.",
       "characterTagTriggerNone": "캐릭터 태그 제한 없음 — 모든 캐릭터에서 블록이 활성화될 수 있습니다",
       "characterTagTriggerActive": "다음과 일치하는 캐릭터 태그에서만 블록 활성화: {{list}}",
@@ -3507,7 +3609,7 @@
       "injectionTriggers": {
         "normal": "일반",
         "continue": "이어쓰기",
-        "impersonate": "사용자 대행",
+        "impersonate": "대리 작성",
         "quiet": "조용한 실행",
         "swipe": "스와이프",
         "regenerate": "재생성"
@@ -3583,6 +3685,7 @@
       "renameAction": "이름 바꾸기",
       "lumihubBadge": "LumiHub 프리셋",
       "illarinBadge": "Illarin 프리셋",
+      "version": "v{{version}}",
       "blocks_one": "블록 {{count}}개",
       "blocks_other": "블록 {{count}}개",
       "coverAria": "{{name}} 커버 이미지",
@@ -3642,8 +3745,8 @@
       "continueNudgeHint": "응답을 이어갈 때 주입됩니다",
       "emptySendNudge": "빈 메시지 전송 유도 문구",
       "emptySendNudgeHint": "어시스턴트 메시지로 끝난 채팅에서 새로운 답변을 유도할 때 주입됩니다",
-      "impersonationPrompt": "사용자 모방 프롬프트",
-      "impersonationPromptHint": "사용자를 모방할 때 주입됩니다",
+      "impersonationPrompt": "대리 작성 프롬프트",
+      "impersonationPromptHint": "사용자 메시지를 대리 작성할 때 주입됩니다",
       "groupNudge": "그룹 유도 문구",
       "groupNudgeHint": "그룹 채팅에 주입됩니다",
       "newChatPrompt": "새 채팅 구분자",
@@ -3815,8 +3918,12 @@
       "empty": "아직 에셋이 없습니다. 배경, 텍스처, SVG 아이콘 또는 사용자 지정 글꼴을 업로드하여 상대 경로 CSS 참조를 구성해 보십시오.",
       "slug": "슬러그",
       "tags": "태그",
+      "tagsPlaceholder": "배경, 아이콘, 텍스처",
       "path": "경로",
+      "url": "URL",
       "insert": "삽입",
+      "fontFace": "@font-face",
+      "webp": "WebP",
       "save": "저장",
       "delete": "삭제",
       "toast": {
@@ -3853,6 +3960,7 @@
     "apiKey": "API 키",
     "keySetHint": "키가 설정되어 있습니다. 교체하려면 새 값을 입력하십시오.",
     "enterApiKey": "API 키 입력",
+    "apiUrl": "API URL",
     "apiUrlHint": "버전이 지정된 API 기본 URL입니다. 프로바이더나 엔드포인트를 변경하면 새 API 키가 필요합니다.",
     "model": "모델",
     "modelHint": "의사결정 모델을 선택하거나 정확한 ID를 입력하십시오.",

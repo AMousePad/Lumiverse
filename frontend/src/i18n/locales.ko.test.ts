@@ -32,9 +32,10 @@ describe('ko locale', () => {
     expect(readdirSync(`${I18N}/locales/ko`).filter(file => file.endsWith('.json')).sort()).toEqual(files)
   })
 
-  test.each(files)('%s: keys are a subset of en and preserve interpolation tokens and tags', file => {
+  test.each(files)('%s: covers every en key and preserves interpolation tokens and tags', file => {
     const en = load('en', file)
     const ko = load('ko', file)
+    expect(Object.keys(ko).sort(), `${file}: full Korean key coverage`).toEqual(Object.keys(en).sort())
     for (const [key, value] of Object.entries(ko)) {
       expect(en[key], `extra key ${file}:${key}`).toBeDefined()
       expect(value.trim(), `empty value ${file}:${key}`).not.toBe('')

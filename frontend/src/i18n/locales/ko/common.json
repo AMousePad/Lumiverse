@@ -1,4 +1,5 @@
 {
+  "appName": "Lumiverse",
   "home": "홈",
   "safeTheme": {
     "url": "이 브라우저 세션에 안전 테마 모드가 활성화되어 있습니다. 사용자 지정 CSS 및 컴포넌트 재정의가 일시적으로 적용되지 않습니다. 이를 복원하려면 ?safe-theme=1 없이 새로고침하십시오.",
@@ -43,6 +44,14 @@
   },
   "language": {
     "label": "인터페이스 언어",
+    "en": "English",
+    "zh": "简体中文",
+    "zh-TW": "繁體中文",
+    "ja": "日本語",
+    "fr": "Français",
+    "it": "Italiano",
+    "de": "Deutsch",
+    "ko": "한국어",
     "helper": "앱의 메뉴, 버튼, 라벨에 표시될 언어를 선택합니다."
   },
   "time": {
@@ -55,7 +64,8 @@
     "chars": "{{count}}자",
     "lines": "{{count}}줄",
     "tokens": "{{count}} 토큰",
-    "bytes": "{{count}}바이트"
+    "bytes": "{{count}}바이트",
+    "px": "{{count}}px"
   },
   "toast": {
     "desktopDownloadTitle": "다운로드 저장 중",
@@ -76,11 +86,13 @@
     "extensionsAllFailed": "확장 기능 업데이트 {{count}}건이 모두 실패했습니다. 자세한 내용은 콘솔을 확인하십시오.",
     "extensionsAllFailed_plural": "확장 기능 업데이트 {{count}}건이 모두 실패했습니다. 자세한 내용은 콘솔을 확인하십시오.",
     "extensionsPartial": "{{updated}}개 업데이트 완료, {{failed}}개 실패. 자세한 내용은 콘솔을 확인하십시오.",
+    "lumiHubTitle": "LumiHub",
     "lumiHubInstalling": "LumiHub에서 \"{{name}}\" 설치 중...",
     "lumiHubInstalled": "\"{{name}}\" 설치 완료",
     "lumiHubInstallFailed": "\"{{name}}\" 설치 실패: {{error}}",
     "mcpConnected": "연결됨 — 도구 {{count}}개 발견됨",
     "mcpConnected_plural": "연결됨 — 도구 {{count}}개 발견됨",
+    "mcpServerTitle": "MCP: {{name}}",
     "generationFailedTitle": "생성 실패",
     "partialResponseSaved": "{{error}} — 부분 응답이 저장되었습니다.",
     "contextBudgetInvalid": "컨텍스트 크기({{max}})가 예약된 응답 토큰보다 작아 대화 기록을 포함할 수 없습니다. 컨텍스트 크기를 늘리거나 최대 토큰을 줄이십시오.",
