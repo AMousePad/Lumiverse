@@ -1,3 +1,18 @@
+import { renderedPxToLayoutPx } from './uiScale'
+
+/** Reserve a popover's content once, including while its closing content is retained. */
+export function measureComposerHeight(composer: HTMLElement, popover: HTMLElement | null): number {
+  const content = popover?.firstElementChild as HTMLElement | null | undefined
+  if (!popover || !content) return composer.offsetHeight
+  // The grid clips its inner wrapper, whose scroll height still describes the
+  // whole panel. Publishing each interpolated grid height forces the virtual
+  // message list to synchronously render on every expansion frame.
+  const baseHeight = renderedPxToLayoutPx(
+    composer.getBoundingClientRect().height - popover.getBoundingClientRect().height,
+  )
+  return baseHeight + content.scrollHeight
+}
+
 /** Measure keyboard clearance throughout the composer's CSS movement. */
 export function observeComposerMotion(element: HTMLElement, measure: () => void): () => void {
   const view = element.ownerDocument.defaultView!

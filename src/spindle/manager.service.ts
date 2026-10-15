@@ -28,6 +28,7 @@ import { getUserExtensionPath } from "../auth/provision";
 import { spawnAsync, type SpawnAsyncResult } from "./spawn-async";
 import { normalizeSpindleHttpsUrl } from "./url-safety";
 import { bunCmd } from "../utils/bun-cmd";
+import { configuredBunExecutable } from "../runtime/bun-runtime";
 import {
   assertOwnGitRepositoryPath,
   resetGitRepositoryToRemoteHead,
@@ -1056,9 +1057,15 @@ function applyStorageSeeds(identifier: string, manifest: SpindleManifest, allowO
  * filter blocks certain syscalls) and `--backend=copyfile` (no hardlinks).
  * Mirrors start.sh's `_proot_bun()` + install_deps().
  */
-export function bunInstallCmd(): string[] {
+export function bunInstallCmd(platform: NodeJS.Platform = process.platform): string[] {
   const isTermux = process.env.LUMIVERSE_IS_TERMUX === "true";
   const isProot = process.env.LUMIVERSE_IS_PROOT === "true";
+
+  if (platform === "android" && !isTermux && !isProot) {
+    // APK installations execute Bun from nativeLibraryDir and cannot create
+    // hard links in app-private storage. No Termux/proot wrapper is involved.
+    return [configuredBunExecutable(), "install", "--ignore-scripts", "--backend=copyfile"];
+  }
 
   if (!isTermux && !isProot) return ["bun", "install", "--ignore-scripts"];
 
@@ -1093,6 +1100,17 @@ export function bunInstallCmd(): string[] {
   ];
 }
 
+/** Only the APK's dependency installer needs Bun's temporary seccomp fallback. */
+export function bunInstallEnv(
+  platform: NodeJS.Platform = process.platform,
+  environment: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> {
+  const compat = environment.LUMIVERSE_ANDROID_INSTALL_COMPAT;
+  if (platform !== "android" || environment.LUMIVERSE_IS_TERMUX === "true" ||
+      environment.LUMIVERSE_IS_PROOT === "true" || !compat) return environment;
+  return { ...environment, LD_PRELOAD: [compat, environment.LD_PRELOAD].filter(Boolean).join(":") };
+}
+
 /**
  * Bun-on-Bun subprocesses that pipe stdout/stderr have been prone to host-process
  * assertion failures on Windows during long-running extension installs/builds.
@@ -1120,16 +1138,17 @@ function warnWindowsSpindleBunSyncFallback(context: string): void {
 
 async function runSpindleBunSubprocess(
   cmd: string[],
-  opts: { cwd: string; context: string },
+  opts: { cwd: string; context: string; env?: Record<string, string | undefined> },
 ): Promise<SpawnAsyncResult> {
   if (!shouldUseWindowsSpindleBunSyncFallback()) {
-    return spawnAsync(cmd, { cwd: opts.cwd });
+    return spawnAsync(cmd, { cwd: opts.cwd, env: opts.env });
   }
 
   warnWindowsSpindleBunSyncFallback(opts.context);
   const proc = Bun.spawnSync({
     cmd,
     cwd: opts.cwd,
+    env: opts.env,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -1140,18 +1159,19 @@ async function runSpindleBunSubprocess(
     stdout: proc.stdout.toString(),
     stderr: proc.stderr.toString(),
     timedOut: false,
+    ...(proc.signalCode ? { signalCode: proc.signalCode } : {}),
   };
 }
 
 function formatCommandFailure(
-  result: Pick<SpawnAsyncResult, "exitCode" | "stdout" | "stderr">,
+  result: Pick<SpawnAsyncResult, "exitCode" | "stdout" | "stderr" | "signalCode">,
   label: string,
 ): string {
-  const stderr = result.stderr.trim();
-  if (stderr) return stderr;
-  const stdout = result.stdout.trim();
-  if (stdout) return stdout;
-  return `${label} exited with code ${result.exitCode}`;
+  const output = result.stderr.trim() || result.stdout.trim();
+  const termination = result.signalCode
+    ? `signal ${result.signalCode} (exit code ${result.exitCode})`
+    : `code ${result.exitCode}`;
+  return `${output ? output + "\n" : ""}${label} exited with ${termination}`;
 }
 
 // ─── Build ───────────────────────────────────────────────────────────────
@@ -1169,28 +1189,39 @@ export async function buildExtension(identifier: string): Promise<void> {
     ? resolveWithin(repo, widgetFrontendEntry, "entry_frontend_widget")
     : null;
 
-  // Always install dependencies first if package.json exists
+  // Published dist files can run without the author's development toolchain.
+  // Keep runtime dependencies when declared; source builds still need all deps.
+  const distDir = join(repo, "dist");
+  let prebuilt = false;
+  if (existsSync(distDir)) {
+    const lsFiles = await spawnAsync(["git", "ls-files", "dist"], { cwd: repo });
+    prebuilt = lsFiles.exitCode === 0 && lsFiles.stdout.trim().length > 0;
+  }
+
   const pkgJson = join(repo, "package.json");
   if (existsSync(pkgJson)) {
-    const install = await runSpindleBunSubprocess(bunInstallCmd(), {
-      cwd: repo,
-      context: `dependency install for ${identifier}`,
-    });
-    if (install.exitCode !== 0) {
-      throw new Error(`Dependency install failed: ${formatCommandFailure(install, "bun install")}`);
+    const pkg = await Bun.file(pkgJson).json();
+    const hasRuntimeDependencies = [pkg.dependencies, pkg.optionalDependencies, pkg.peerDependencies]
+      .some(deps => deps && Object.keys(deps).length > 0);
+    if (!prebuilt || hasRuntimeDependencies) {
+      const cmd = bunInstallCmd();
+      if (prebuilt) cmd.push("--production");
+      const install = await runSpindleBunSubprocess(cmd, {
+        cwd: repo,
+        context: `dependency install for ${identifier}`,
+        env: bunInstallEnv(),
+      });
+      if (install.exitCode !== 0) {
+        throw new Error(`Dependency install failed: ${formatCommandFailure(install, "bun install")}`);
+      }
     }
   }
 
   const declaredCaps = declaredCapabilitiesFromManifest(manifest);
 
-  // If the repo ships pre-built dist/ (files tracked in git), skip build entirely
-  const distDir = join(repo, "dist");
-  if (existsSync(distDir)) {
-    const lsFiles = await spawnAsync(["git", "ls-files", "dist"], { cwd: repo });
-    if (lsFiles.exitCode === 0 && lsFiles.stdout.trim().length > 0) {
-      await assertSafeBackendBundle(identifier, backendOut, declaredCaps);
-      return;
-    }
+  if (prebuilt) {
+    await assertSafeBackendBundle(identifier, backendOut, declaredCaps);
+    return;
   }
 
   // Look for src/ to build from

@@ -2,12 +2,30 @@ import { describe, expect, test } from "bun:test";
 
 import {
   bunInstallCmd,
+  bunInstallEnv,
   declaredCapabilitiesFromManifest,
   detectDangerousBackendCapabilities,
   PRIVILEGED_PERMISSIONS,
   shouldUseWindowsSpindleBunSyncFallback,
 } from "./manager.service";
 import type { SpindleCapability, SpindleManifest } from "lumiverse-spindle-types";
+
+describe("Android dependency install environment", () => {
+  const environment = { LUMIVERSE_ANDROID_INSTALL_COMPAT: "/data/app/native/libbuninstallcompat.so", LD_PRELOAD: "/existing.so" };
+  test("loads the APK compatibility library before existing preload entries", () => {
+    expect(bunInstallEnv("android", environment).LD_PRELOAD).toBe("/data/app/native/libbuninstallcompat.so:/existing.so");
+    expect(environment.LD_PRELOAD).toBe("/existing.so");
+  });
+  test("keeps desktop, Termux, proot, and older APK environments unchanged", () => {
+    expect(bunInstallEnv("darwin", environment)).toBe(environment);
+    for (const key of ["LUMIVERSE_IS_TERMUX", "LUMIVERSE_IS_PROOT"]) {
+      const wrapped = { ...environment, [key]: "true" };
+      expect(bunInstallEnv("android", wrapped)).toBe(wrapped);
+    }
+    const older = { PATH: "/system/bin" };
+    expect(bunInstallEnv("android", older)).toBe(older);
+  });
+});
 
 function withEnv(overrides: Record<string, string | undefined>, fn: () => void): void {
   const previous = new Map<string, string | undefined>();
@@ -329,6 +347,14 @@ describe("PRIVILEGED_PERMISSIONS", () => {
 });
 
 describe("bunInstallCmd", () => {
+  test("APK installs use the installed Bun executable and copy dependencies", () => {
+    withEnv({ LUMIVERSE_IS_TERMUX: undefined, LUMIVERSE_IS_PROOT: undefined,
+      LUMIVERSE_BUN_EXECUTABLE: "/data/app/example/lib/arm64/libbun.so" }, () => {
+      expect(bunInstallCmd("android")).toEqual([
+        "/data/app/example/lib/arm64/libbun.so", "install", "--ignore-scripts", "--backend=copyfile",
+      ]);
+    });
+  });
   test("disables dependency lifecycle scripts for normal installs", () => {
     withEnv(
       {

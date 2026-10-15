@@ -138,6 +138,7 @@ const BASELINE_MIGRATIONS: readonly string[] = [
   "124_decision_connections.sql",
   "125_deletion_operations.sql",
   "126_image_references.sql",
+  "127_ios_push_destinations.sql",
 ];
 
 const BASELINE_SET = new Set(BASELINE_MIGRATIONS);
