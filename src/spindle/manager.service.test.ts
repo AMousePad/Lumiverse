@@ -90,6 +90,58 @@ describe("detectDangerousBackendCapabilities", () => {
     expect(detectDangerousBackendCapabilities(code)).toEqual([]);
   });
 
+  test("hard-blocks native fetch and common aliases even with all capabilities declared", () => {
+    const declared = new Set<SpindleCapability>(["dynamic_code_execution", "base64_decode"]);
+    const samples = [
+      'await fetch("https://example.com/script.js");',
+      'await fetch?.("https://example.com/script.js");',
+      'const request = fetch; await request(url);',
+      'fetch.call(globalThis, url);',
+      'const request = fetch.bind(globalThis);',
+      'globalThis.fetch(url);',
+      'global.fetch(url);',
+      'self.fetch(url);',
+      'globalThis["fetch"](url);',
+      'globalThis["fet" + "ch"](url);',
+      'globalThis[String.fromCharCode(102, 101, 116, 99, 104)](url);',
+      'const root = globalThis; root.fetch(url);',
+      'const { fetch: request } = globalThis; request(url);',
+      'const { fetch } = self; fetch(url);',
+      String.raw`globalThis.\u0066etch(url);`,
+      'const value = `result: ${fetch(url)}`;',
+      'import request from "node-fetch"; request(url);',
+      'const { fetch: request } = require("undici"); request(url);',
+      'const client = await import("cross-fetch"); client.fetch(url);',
+    ];
+
+    for (const code of samples) {
+      expect(detectDangerousBackendCapabilities(code, declared)).toContain("direct fetch API usage");
+    }
+
+    for (const code of [
+      'Bun.fetch(url);',
+      'Bun["fetch"](url);',
+      'const runtime = Bun; runtime.fetch(url);',
+      'const { fetch: request } = Bun; request(url);',
+      'import { fetch as request } from "bun"; request(url);',
+    ]) {
+      expect(detectDangerousBackendCapabilities(code, declared)).toContain("dangerous Bun system API usage");
+    }
+  });
+
+  test("allows the Spindle fetch bridge and unrelated fetch names", () => {
+    const code = String.raw`
+      const result = await spindle.cors(url, { responseType: "arraybuffer" });
+      const body = await client.fetch(url);
+      const options = { fetch: request };
+      const docs = "globalThis.fetch(url); Bun.fetch(url);";
+      const forbidden = /fetch\s*\(/;
+      // fetch(url);
+      /* const request = fetch; */
+    `;
+    expect(detectDangerousBackendCapabilities(code)).toEqual([]);
+  });
+
   test("flags common evasions for native backend capabilities", () => {
     const samples: Array<[string, string]> = [
       [`Bun["file"]("/etc/passwd")`, "dangerous Bun system API usage"],

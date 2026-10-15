@@ -1,4 +1,5 @@
 import { createRuntimeChannel } from "./runtime-channel";
+import { blockNativeFetch } from "./worker-runtime-sandbox";
 
 type BackendProcessInit = {
   processId: string;
@@ -91,6 +92,7 @@ function shutdown(kind: "complete" | "fail" | "stopped", error?: string): void {
 
 async function handleInit(msg: Extract<HostToBackendProcess, { type: "init" }>): Promise<void> {
   try {
+    blockNativeFetch();
     const mod = await import(msg.process.entryPath);
     const handler = typeof mod.default === "function"
       ? (mod.default as BackendProcessHandler)

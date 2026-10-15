@@ -4546,7 +4546,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       }
 
       // Initialize runtime sandbox before loading untrusted extension code.
-      // This patches eval, the Function constructor, and sensitive Bun/process
+      // This patches native fetch, eval, the Function constructor, and sensitive Bun/process
       // APIs (real property overrides that take effect). It CANNOT block the
       // native `import()` operator or `node:` builtins — those resolve through
       // Bun internals that neither a global override nor a loader plugin can

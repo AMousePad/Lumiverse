@@ -83,10 +83,16 @@ const DANGEROUS_MODULE_LABELS = new Map<string, string>([
   ["node:cluster", "worker or cluster module access"],
   ["bun:sqlite", "direct SQLite module access"],
   ["node:sqlite", "direct SQLite module access"],
+  ["bun", "dangerous Bun system API usage"],
+  ["node-fetch", "direct fetch API usage"],
+  ["undici", "direct fetch API usage"],
+  ["cross-fetch", "direct fetch API usage"],
 ]);
 
-const DANGEROUS_BUN_PROPERTIES = new Set(["file", "write", "spawn", "spawnSync", "serve", "connect", "listen"]);
+const DANGEROUS_BUN_PROPERTIES = new Set(["file", "write", "spawn", "spawnSync", "serve", "connect", "listen", "fetch"]);
 const DANGEROUS_PROCESS_PROPERTIES = new Set(["env", "exit", "kill", "chdir", "dlopen"]);
+const FETCH_PROPERTIES = new Set(["fetch"]);
+const FETCH_GLOBALS = ["globalThis", "global", "self"] as const;
 const WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE = "LUMIVERSE_FORCE_SPINDLE_ASYNC_BUN";
 const warnedWindowsSpindleBunFallback = new Set<string>();
 const backendSafetyScanCache = new Map<string, {
@@ -122,6 +128,20 @@ const DANGEROUS_BACKEND_CHECKS: BackendSafetyCheck[] = [
   {
     label: "dangerous process API usage",
     regex: /\bprocess\.(?:env|exit|kill|chdir|dlopen)\b/,
+  },
+  {
+    label: "direct fetch API usage",
+    regex: /(?<![.\w$])fetch\s*(?:\?\.\s*)?\(|\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*fetch\b|(?<![.\w$])fetch\s*\.\s*(?:call|apply|bind)\s*\(/,
+  },
+  {
+    label: "direct fetch API usage",
+    regex: /(?:from\s*["'`](?:node-fetch|undici|cross-fetch)["'`]|import\s*["'`](?:node-fetch|undici|cross-fetch)["'`])/,
+  },
+  {
+    // Importing Bun exposes its immutable native fetch export, bypassing the
+    // global fetch override installed by the runtime sandbox.
+    label: "dangerous Bun system API usage",
+    regex: /(?:from\s*["'`]bun["'`]|import\s*["'`]bun["'`])/,
   },
 ];
 
@@ -516,13 +536,30 @@ function addDestructuringHits(source: ScannableSource, hits: Set<string>): void 
   }
 }
 
+function addNativeFetchHits(source: ScannableSource, hits: Set<string>): void {
+  for (const objectName of FETCH_GLOBALS) {
+    addPropertyAccessHits(source, objectName, FETCH_PROPERTIES, "direct fetch API usage", hits);
+  }
+
+  for (const match of matchOutsideIgnored(source, /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(globalThis|global|self)\b/)) {
+    addPropertyAccessHits(source, match[1], FETCH_PROPERTIES, "direct fetch API usage", hits);
+  }
+
+  for (const match of matchOutsideIgnored(source, /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(?:globalThis|global|self)\b/)) {
+    for (const prop of match[1].split(",")) {
+      const name = prop.trim().split(/\s*:/, 1)[0]?.trim();
+      if (name === "fetch") hits.add("direct fetch API usage");
+    }
+  }
+}
+
 /**
  * Maps a scanner label to the manifest-declared capability that, when
  * present, suppresses that label. Capabilities are install-time opt-ins
  * declared in `spindle.json`'s `requested_capabilities` field; the user
  * grants them on install just like `permissions`. Only labels with a
  * meaningful false-positive rate get a capability mapping — filesystem,
- * subprocess, sockets, sqlite, workers, Bun system APIs, and process APIs
+ * subprocess, sockets, fetch, sqlite, workers, Bun system APIs, and process APIs
  * remain hard-blocked with no opt-in available.
  */
 const LABEL_TO_CAPABILITY: ReadonlyMap<string, SpindleCapability> = new Map([
@@ -571,6 +608,7 @@ export function detectDangerousBackendCapabilities(
     addPropertyAccessHits(source, "process", DANGEROUS_PROCESS_PROPERTIES, "dangerous process API usage", hits);
     addAliasPropertyHits(source, hits);
     addDestructuringHits(source, hits);
+    addNativeFetchHits(source, hits);
     if (matchOutsideIgnored(source, /\bObject\.getOwnPropertyDescriptor\s*\(\s*process\s*,\s*["'`]env["'`]/).length > 0) {
       hits.add("dangerous process API usage");
     }
