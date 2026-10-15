@@ -58,7 +58,10 @@ export async function publishDesktopRelease(api: ReleaseAPI, build: ReleaseBuild
   if (!feeds) {
     try {
       feeds = await api.request("/releases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-        tag_name: "desktop-updates", target_commitish: build.sha, name: "Lumiverse Desktop update channels", draft: false, prerelease: true, make_latest: "false",
+        // This tag hosts metadata only. Let GitHub use the default branch:
+        // GITHUB_TOKEN cannot create a tag at an older workflow-changing SHA.
+        // The feed and immutable installer URLs still identify the tested build.
+        tag_name: "desktop-updates", name: "Lumiverse Desktop update channels", draft: false, prerelease: true, make_latest: "false",
         body: "Small stable/nightly update feeds. Installers live on their versioned desktop releases.",
       }) });
     } catch (error) { feeds = await api.release("desktop-updates"); if (!feeds) throw error; }

@@ -102,6 +102,13 @@ generic `releases/latest`, which may point to a server-only release. The private
 key stays in CI secrets and updater IPC is restricted to the trusted tray.
 Remote frontends and extension windows cannot select or install an update.
 
+The `desktop-updates` tag is a metadata container created from the repository's
+default branch. Each feed still records the tested staging/main source SHA and
+points to its immutable versioned payloads. Using the default branch for this
+container lets `GITHUB_TOKEN` bootstrap the feed even when staging advances
+during a long build; GitHub restricts release creation at workflow-changing
+commits that need additional workflow permissions.
+
 Rerunning failed platform jobs can replace assets only in their matching
 unpublished draft. Published payloads are immutable. If publication succeeds
 but uploading the small channel feed fails, rerun the failed publication job;

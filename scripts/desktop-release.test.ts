@@ -90,8 +90,8 @@ test("finalized AppImages replace their original signatures; unsigned developmen
   await resignFinalizedAppImages(fixture.folder, async () => { throw new Error("Unsigned builds must not request a signing key"); });
 });
 
-function githubFixture() {
-  type Release = { id: number; draft: boolean; body: string; upload_url: string; tag_name: string };
+function githubFixture(options: { restrictFeedTarget?: boolean } = {}) {
+  type Release = { id: number; draft: boolean; body: string; upload_url: string; tag_name: string; target_commitish?: string };
   type Asset = { id: number; name: string; browser_download_url: string; bytes: Uint8Array };
   const releases: Release[] = [], assets = new Map<number, Asset[]>(), calls: string[] = [];
   let failFeed = false;
@@ -110,6 +110,9 @@ function githubFixture() {
     }
     if (path === "/releases" && method === "POST") {
       const body = JSON.parse(String(init.body));
+      if (options.restrictFeedTarget && body.tag_name === "desktop-updates" && body.target_commitish === build.sha) {
+        return json({ message: "Resource not accessible by integration" }, 403);
+      }
       const release = { ...body, id: releases.length + 1, upload_url: `https://uploads.github.com/repos/test/Lumiverse/releases/${releases.length + 1}/assets{?name}` };
       releases.push(release); assets.set(release.id, []); return json(release);
     }
@@ -171,6 +174,22 @@ test("a failed channel upload can retry without replacing published payloads", a
   expect(fixture.releases[0]!.draft).toBe(false);
   await publishDesktopRelease(fixture.api, build);
   expect(fixture.releases.find((release) => release.tag_name === "desktop-updates")).toBeDefined();
+  expect(fixture.calls.filter((call) => call.startsWith("PATCH"))).toHaveLength(1);
+});
+test("a channel can bootstrap with a restricted workflow token after the source branch advances", async () => {
+  const fixture = githubFixture({ restrictFeedTarget: true });
+  await createDesktopRelease(fixture.api, build);
+  for (const platform of UPDATE_PLATFORMS) await uploadDesktopPlatform(fixture.api, build, platform, bundle(platform).root);
+  await publishDesktopRelease(fixture.api, build);
+  const channel = fixture.releases.find((release) => release.tag_name === "desktop-updates")!;
+  expect(channel.target_commitish).toBeUndefined();
+  expect(fixture.releases[0]!.target_commitish).toBe(build.sha);
+  const asset = fixture.assets.get(channel.id)!.find((asset) => asset.name === "nightly.json")!;
+  const published = validateFeed(JSON.parse(new TextDecoder().decode(asset.bytes)), "nightly");
+  expect(published.commit).toBe(build.sha);
+  expect(published.bundle_source).toBe(build.fingerprint);
+  expect(Object.values(published.platforms).every((entry) => entry.url.includes(`/releases/download/${build.tag}/`))).toBe(true);
+  await publishDesktopRelease(fixture.api, build);
   expect(fixture.calls.filter((call) => call.startsWith("PATCH"))).toHaveLength(1);
 });
 test("rerunning an old publication cannot move a channel backward", async () => {
