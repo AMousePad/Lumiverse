@@ -24,6 +24,9 @@ bun run diagnose
 
 ## Scripts
 
+- `node check-drawer-width.mjs`
+  Exercises the real sidebar width settings controls in the settings layout with controlled persisted state. Checks Default/Custom selection, clearing drag overrides, pointer and keyboard slider input, range boundaries, close/reopen and reload persistence, and containment below the canonical safe-top area. Runs desktop and notched-iPhone-sized viewports at UI scales 1 and 1.25 in Chromium, Firefox and WebKit. No server or personal settings are used. Set `DRAWER_WIDTH_BROWSERS=chromium` for one engine; `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. This checks the settings surface; it does not run the full drawer or emulate a physical installed PWA.
+
 - `node check-spindle-touch-scroll.mjs`
   Audits the real installed-iOS document guard and Spindle widget policy with synthetic touch events in Chromium, Firefox and WebKit, at desktop and notched-iPhone viewport sizes. Checks default guarding, opt-in, isolation from core and nested widgets, shadow content, reversal and root teardown. No server, credentials or user data. `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. This tests cancellation decisions, not physical installed-PWA scrolling.
 

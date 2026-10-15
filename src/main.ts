@@ -182,9 +182,9 @@ if (env.stMigrate) {
 const { seedTokenizersAsync } = await import("./services/tokenizer-seed");
 await seedTokenizersAsync();
 
-// Finish bootstrap writes before enabling background indexing/maintenance or
-// shortening the main connection's startup lock budget.
-db.run("PRAGMA busy_timeout = 100");
+// Finish bootstrap writes before enabling background indexing/maintenance.
+// Keep the main connection's lock budget for synchronous auth/legacy writes;
+// only the supervised subprocess uses short waits with asynchronous retries.
 await startDatabaseExecution();
 startAutomaticDatabaseMaintenance(
   () => db,
@@ -292,7 +292,7 @@ if (tlsConfig) {
 // of 0 (disabled) left the server exposed to connection exhaustion.
 const server = Bun.serve({
   port: env.port,
-  hostname: "::",
+  hostname: process.env.LUMIVERSE_HOST || "::",
   fetch: app.fetch,
   websocket,
   // Bun 1.4.1+ negotiates HTTP/2 and HTTP/1.1 on the same TLS listener.
@@ -510,3 +510,13 @@ async function gracefulShutdown(signal: string) {
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+if (process.env.LUMIVERSE_BUNDLE_READY_TOKEN && typeof process.send === "function") {
+  process.on("message", (message: unknown) => {
+    const request = message as { type?: string; token?: string } | null;
+    if (request?.type === "bundle-shutdown" && request.token === process.env.LUMIVERSE_BUNDLE_READY_TOKEN) {
+      void gracefulShutdown("launcher requested shutdown");
+    }
+  });
+  process.send({ type: "bundle-ready", token: process.env.LUMIVERSE_BUNDLE_READY_TOKEN });
+  process.on("disconnect", () => gracefulShutdown("launcher disconnected"));
+}

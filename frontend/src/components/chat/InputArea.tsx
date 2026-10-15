@@ -79,7 +79,7 @@ import { isWhistleAvailable } from '@/lib/whistle/config'
 import { whistleClient } from '@/lib/whistle/client'
 import { composeChatSafeZones } from '@/lib/chatSurfaceLayout'
 import { createComposerTouchFocusHandlers } from '@/lib/iosKeyboardScroll'
-import { observeComposerMotion } from '@/lib/composerMotion'
+import { measureComposerHeight, observeComposerMotion } from '@/lib/composerMotion'
 import { renderedPxToLayoutPx } from '@/lib/uiScale'
 import { applyChatAppearance } from '@/lib/chatAppearance'
 import {
@@ -1499,6 +1499,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     if (!parent) return
     const root = document.documentElement
     const loreMount = el.querySelector<HTMLElement>('[data-spindle-mount="chat_composer_above"]')
+    const popoverSlot = el.querySelector<HTMLElement>('[data-composer-popover]')
 
     const measureLoreHeight = () => {
       if (!loreMount) return 0
@@ -1512,7 +1513,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     const update = () => {
       const loreHeight = measureLoreHeight()
-      const h = el.offsetHeight
+      const h = measureComposerHeight(el, popoverSlot)
       const composerHeight = Math.max(0, h - loreHeight) + 8
       // Use the animated position, so list padding and composer move together.
       // Zero is valid for edge-to-edge PWA composers.
@@ -2149,7 +2150,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, activeCharacterId, t, te])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t, te])
 
   useEffect(() => {
     const handleRegexAction = async (event: Event) => {
@@ -2402,7 +2403,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.regenerationFailed') })
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, regenFeedback.format, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, regenFeedback.format, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleRegenerate = useCallback(() => {
     if (isGeneratingInChat) return
@@ -2448,7 +2449,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.continueFailed') })
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleImpersonate = useCallback(async (mode: import('@/api/generate').ImpersonateMode) => {
     if (isGeneratingInChat) return
@@ -2493,7 +2494,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.impersonationFailed') })
     }
-  }, [chatId, isGeneratingInChat, text, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea, t, te])
+  }, [chatId, isGeneratingInChat, text, activeProfileId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea, t, te])
 
   const handleStop = useCallback(async () => {
     if (!isGeneratingInChat) return
@@ -2717,7 +2718,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     } finally {
       setDryRunning(false)
     }
-  }, [text, chatId, dryRunning, isGeneratingInChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat, t])
+  }, [text, chatId, dryRunning, isGeneratingInChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat, t])
 
   const handleResolveMacros = useCallback(async () => {
     if (resolvingMacros) return
@@ -3598,7 +3599,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         />
       )}
 
-      <div className={clsx(styles.popoverSlot, openPopover && styles.popoverSlotOpen)}>
+      <div data-composer-popover className={clsx(styles.popoverSlot, openPopover && styles.popoverSlotOpen)}>
         <div className={styles.popoverSlotInner}>
           {renderPopover === 'guides' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>

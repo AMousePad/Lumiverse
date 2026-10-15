@@ -32,6 +32,20 @@ afterEach(async () => {
 });
 
 describe("supervised SQLite execution", () => {
+  test("runtime keeps the legacy lock budget while the subprocess uses short waits", async () => {
+    const main = initDatabase(path);
+    try {
+      await startDatabaseExecution();
+      expect(main.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
+      expect(await executeDatabaseOperation<{ timeout: number }>({
+        kind: "read", statement: { sql: "PRAGMA busy_timeout", mode: "get" },
+      })).toEqual({ timeout: 100 });
+    } finally {
+      await stopDatabaseExecution();
+      closeDatabase();
+    }
+  });
+
   test("periodic checkpoints defer under load but eventually join behind foreground requests", async () => {
     initDatabase(path);
     let tick: (() => Promise<void>) | undefined;

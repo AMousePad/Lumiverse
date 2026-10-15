@@ -107,6 +107,28 @@ function extract(appimage: string, root: string, env: NodeJS.ProcessEnv) {
 }
 
 describe.skipIf(process.platform === "win32")("AppImage packaging permissions", () => {
+  test("preserves Bun ELF bytes while forwarding other patchelf operations and errors", () => {
+    const f = fixture();
+    const server = join(f.appdir, "usr/bin/lumiverse-server");
+    const tray = join(f.appdir, "usr/bin/lumiverse-tray");
+    const patchelf = join(f.root, "fake-patchelf");
+    const log = join(f.root, "patchelf.log");
+    const original = Buffer.from("compiled Bun with embedded application\n");
+    write(server, original, 0o755);
+    write(patchelf, '#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$@" > "$LUMIVERSE_PATCHELF_TEST_LOG"\nif [[ "$1" == --set-rpath ]]; then printf rewritten > "$3"; fi\nexit "${LUMIVERSE_PATCHELF_TEST_EXIT:-0}"\n', 0o755);
+    const patch = (args: string[], exit = "0") => Bun.spawnSync(["bash", join(scriptDir, "appimage-patchelf.sh"), ...args], {
+      env: { ...f.env, LUMIVERSE_REAL_PATCHELF: patchelf, LUMIVERSE_PATCHELF_TEST_LOG: log, LUMIVERSE_PATCHELF_TEST_EXIT: exit },
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(patch(["--set-rpath", "$ORIGIN/../lib", server]).exitCode).toBe(0);
+    expect(readFileSync(server)).toEqual(original);
+    expect(() => statSync(log)).toThrow();
+    expect(patch(["--set-rpath", "$ORIGIN/../lib", tray]).exitCode).toBe(0);
+    expect(readFileSync(tray, "utf8")).toBe("rewritten");
+    expect(patch(["--print-rpath", server], "9").exitCode).toBe(9);
+    expect(readFileSync(log, "utf8")).toBe(`--print-rpath\n${server}\n`);
+  });
+
   test("rejects a launcher that is executable only for its owner and group", () => {
     const f = fixture();
     chmodSync(join(f.appdir, "AppRun.wrapped"), 0o770);
