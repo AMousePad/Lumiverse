@@ -154,6 +154,8 @@ function isInsideGitRepo(startPath: string): boolean {
 }
 
 function shouldAllowCleanup(migrationsDir: string): boolean {
+  // The extracted application is shared by every instance of this build.
+  if (process.env.LUMIVERSE_BUNDLE_ID) return false;
   // Never prune if the app is running from a git checkout — developers
   // need the files, and a dirty worktree is dangerous.
   if (isInsideGitRepo(migrationsDir)) {

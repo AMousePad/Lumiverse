@@ -44,6 +44,7 @@ data/
 .env.local
 .env.production
 .env.*.local
+/.signing/
 
 # Keep the example for reference
 !.env.example
@@ -62,6 +63,10 @@ Thumbs.db
 # =============================================================================
 # Generated
 # =============================================================================
+/dist/server/
+/dist/native/
+/desktop/src-tauri/tauri.release-updater.conf.json
+/desktop/src-tauri/binaries/lumiverse-server*
 frontend/src/lib/generatedComponentProps.ts
 frontend/src/lib/generatedCssVariables.ts
 frontend/src/lib/generatedComponentCss.ts

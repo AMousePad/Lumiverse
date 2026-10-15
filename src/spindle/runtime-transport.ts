@@ -128,6 +128,7 @@ function buildRestrictedEnv(): Record<string, string | undefined> {
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "GOOGLE_APPLICATION_CREDENTIALS",
+    "LUMIVERSE_BUNDLE_READY_TOKEN",
     // SSH agent socket (could be used for key exfil)
     "SSH_AUTH_SOCK",
     "SSH_AGENT_LAUNCHER",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
@@ -108,7 +108,7 @@ export async function forwardTauriBuildStderr(
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  const lines = createInterface({ input: Readable.fromWeb(stream), crlfDelay: Infinity });
+  const lines = createInterface({ input: Readable.from(stream), crlfDelay: Infinity });
   for await (const line of lines) write(`${tauriBuildLogLine(line, platform, env)}\n`);
 }
 
@@ -152,6 +152,21 @@ async function main(): Promise<void> {
     ["bash", join(PROJECT_ROOT, "scripts", "finalize-appimage.sh"), appImageBundleDirectory(args)],
     PROJECT_ROOT,
   );
+  // Tauri signed the original image. Repacking changes its bytes, so only the
+  // signature of the finalized AppImage is suitable for the update feed.
+  await resignFinalizedAppImages(appImageBundleDirectory(args), async (path) => {
+    if (!process.env.TAURI_SIGNING_PRIVATE_KEY && !process.env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
+      throw new Error("The finalized AppImage needs its updater signing key to replace the original signature.");
+    }
+    await run([process.execPath, "run", "tauri", "signer", "sign", path], DESKTOP_DIR);
+  });
+}
+
+export async function resignFinalizedAppImages(directory: string, sign: (path: string) => Promise<void>): Promise<void> {
+  for (const file of readdirSync(directory).filter((file) => file.endsWith(".AppImage"))) {
+    const path = join(directory, file);
+    if (existsSync(path + ".sig")) await sign(path);
+  }
 }
 
 if (import.meta.main) {
