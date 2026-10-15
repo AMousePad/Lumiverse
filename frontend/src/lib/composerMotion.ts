@@ -1,16 +1,14 @@
 import { renderedPxToLayoutPx } from './uiScale'
 
-/** Reserve a popover's content once, including while its closing content is retained. */
+/** Reserve the resting composer; its expanding controls overlay the chat. */
 export function measureComposerHeight(composer: HTMLElement, popover: HTMLElement | null): number {
-  const content = popover?.firstElementChild as HTMLElement | null | undefined
-  if (!popover || !content) return composer.offsetHeight
-  // The grid clips its inner wrapper, whose scroll height still describes the
-  // whole panel. Publishing each interpolated grid height forces the virtual
-  // message list to synchronously render on every expansion frame.
-  const baseHeight = renderedPxToLayoutPx(
+  if (!popover) return composer.offsetHeight
+  // Subtract the currently visible grid slot, including during closing. Use
+  // fractional bounds so independent offsetHeight rounding cannot make the
+  // reserved space oscillate by a pixel during the transition.
+  return Math.max(0, renderedPxToLayoutPx(
     composer.getBoundingClientRect().height - popover.getBoundingClientRect().height,
-  )
-  return baseHeight + content.scrollHeight
+  ))
 }
 
 /** Measure keyboard clearance throughout the composer's CSS movement. */
