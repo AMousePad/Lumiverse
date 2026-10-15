@@ -153,7 +153,26 @@ jobs:
         run: bun run build:lancedb:macos --prepare-only
       - name: Build and test Intel LanceDB native engine
         if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
-        run: bun run build:lancedb:macos
+        shell: bash
+        env:
+          CARGO_TERM_PROGRESS_WHEN: always
+          CARGO_TERM_PROGRESS_WIDTH: '100'
+        run: |
+          set -euo pipefail
+          # Cargo's last "Compiling" line may belong to a small crate while
+          # another parallel rustc process spends minutes on a large dependency.
+          # Report executable names only; process arguments can contain secrets.
+          (
+            while sleep 60; do
+              echo "[Intel LanceDB] $(date -u '+%Y-%m-%dT%H:%M:%SZ'): CPU %, RSS in KiB, and elapsed time"
+              ps -axo pid,ppid,pcpu,rss,etime,comm | awk 'NR == 1 || $NF ~ /(^|\/)(cargo|rustc|clang|clang\+\+|cc1|ld|cmake)$/'
+              /usr/sbin/sysctl vm.swapusage
+              df -h "$RUNNER_TEMP"
+            done
+          ) &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
+          bun run build:lancedb:macos
       - name: Revalidate cached Intel LanceDB checksum and native operations
         if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit == 'true'
         run: bun --no-env-file scripts/check-lancedb-macos.ts --artifact-dir dist/native/lancedb-darwin-x64
