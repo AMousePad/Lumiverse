@@ -1,5 +1,7 @@
 import { get, del, post, upload, patch, BASE_URL } from './client'
 import type { CharacterGalleryItem } from '@/types/api'
+import { completeGalleryRemoval } from '@/lib/gallery-removal'
+import type { GalleryItemRemoved } from '@/lib/deletion-events'
 
 export interface BulkGallerySkippedFile {
   name: string
@@ -45,7 +47,12 @@ export const characterGalleryApi = {
   },
 
   remove(characterId: string, itemId: string) {
-    return del<void>(`/characters/${characterId}/gallery/${itemId}`)
+    const path = `/characters/${encodeURIComponent(characterId)}/gallery/${encodeURIComponent(itemId)}`
+    return completeGalleryRemoval({
+      characterId, itemId,
+      request: () => del<GalleryItemRemoved>(path),
+      readStatus: (signal) => get<{ deleted: boolean }>(`${path}/deletion-status`, undefined, { signal }),
+    })
   },
 
   updateCaption(characterId: string, itemId: string, caption: string) {

@@ -1,16 +1,14 @@
+import { executeDatabaseOperation } from "../db/execution";
+import { readDatabaseRow, readDatabaseRows } from "../db/queries";
+import { mutateGlobalAddonWithDb, rowToGlobalAddon, type GlobalAddonEvent } from "../db/global-addon-operations";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { GlobalAddon, CreateGlobalAddonInput, UpdateGlobalAddonInput, Persona } from "../types/persona";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
-import { paginatedQuery } from "./pagination";
+import { paginatedQuery, paginatedQueryAsync } from "./pagination";
 
-function rowToGlobalAddon(row: any): GlobalAddon {
-  return {
-    ...row,
-    metadata: JSON.parse(row.metadata),
-  };
-}
+
 
 export function listGlobalAddons(userId: string, pagination: PaginationParams): PaginatedResult<GlobalAddon> {
   return paginatedQuery(
@@ -71,110 +69,77 @@ export function resolvePersonaGlobalAddons(
 }
 
 export function createGlobalAddon(userId: string, input: CreateGlobalAddonInput): GlobalAddon {
-  const id = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
+  return finishGlobalAddonMutation(mutateGlobalAddonWithDb(getDb(), { action: "createGlobalAddon", args: [userId, input] }), userId);
+}
 
-  getDb()
-    .query(
-      `INSERT INTO global_addons (id, user_id, label, content, sort_order, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      id, userId, input.label, input.content || "",
-      input.sort_order ?? 0, JSON.stringify(input.metadata || {}),
-      now, now
-    );
-
-  const addon = getGlobalAddon(userId, id)!;
-  eventBus.emit(EventType.GLOBAL_ADDON_CHANGED, { id, addon }, userId);
-  return addon;
+export async function createGlobalAddonAsync(userId: string, input: CreateGlobalAddonInput): Promise<GlobalAddon> {
+  const result = await executeDatabaseOperation<GlobalAddonMutationResult>({ kind: "global-addon-mutation", mutation: { action: "createGlobalAddon", args: [userId, input] } });
+  return finishGlobalAddonMutation(result, userId);
 }
 
 export function updateGlobalAddon(userId: string, id: string, input: UpdateGlobalAddonInput): GlobalAddon | null {
-  const existing = getGlobalAddon(userId, id);
-  if (!existing) return null;
+  return finishGlobalAddonMutation(mutateGlobalAddonWithDb(getDb(), { action: "updateGlobalAddon", args: [userId, id, input] }), userId);
+}
 
-  const now = Math.floor(Date.now() / 1000);
-  const fields: string[] = [];
-  const values: any[] = [];
-
-  if (input.label !== undefined) { fields.push("label = ?"); values.push(input.label); }
-  if (input.content !== undefined) { fields.push("content = ?"); values.push(input.content); }
-  if (input.sort_order !== undefined) { fields.push("sort_order = ?"); values.push(input.sort_order); }
-  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
-
-  if (fields.length === 0) return existing;
-
-  fields.push("updated_at = ?");
-  values.push(now);
-  values.push(id);
-  values.push(userId);
-
-  getDb().query(`UPDATE global_addons SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
-  const updated = getGlobalAddon(userId, id)!;
-  eventBus.emit(EventType.GLOBAL_ADDON_CHANGED, { id, addon: updated }, userId);
-  return updated;
+export async function updateGlobalAddonAsync(userId: string, id: string, input: UpdateGlobalAddonInput): Promise<GlobalAddon | null> {
+  const result = await executeDatabaseOperation<GlobalAddonMutationResult>({ kind: "global-addon-mutation", mutation: { action: "updateGlobalAddon", args: [userId, id, input] } });
+  return finishGlobalAddonMutation(result, userId);
 }
 
 export function deleteGlobalAddon(userId: string, id: string): boolean {
-  const result = getDb().query("DELETE FROM global_addons WHERE id = ? AND user_id = ?").run(id, userId);
-  if (result.changes > 0) {
-    // Scrub from all personas' attached_global_addons
-    scrubGlobalAddonFromPersonas(userId, id);
-    eventBus.emit(EventType.GLOBAL_ADDON_DELETED, { id }, userId);
-  }
-  return result.changes > 0;
+  return finishGlobalAddonMutation(mutateGlobalAddonWithDb(getDb(), { action: "deleteGlobalAddon", args: [userId, id] }), userId);
+}
+
+export async function deleteGlobalAddonAsync(userId: string, id: string): Promise<boolean> {
+  const result = await executeDatabaseOperation<GlobalAddonMutationResult>({ kind: "global-addon-mutation", mutation: { action: "deleteGlobalAddon", args: [userId, id] } });
+  return finishGlobalAddonMutation(result, userId);
 }
 
 export function duplicateGlobalAddon(userId: string, id: string): GlobalAddon | null {
-  const existing = getGlobalAddon(userId, id);
-  if (!existing) return null;
+  return finishGlobalAddonMutation(mutateGlobalAddonWithDb(getDb(), { action: "duplicateGlobalAddon", args: [userId, id] }), userId);
+}
 
-  const newId = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
-
-  getDb()
-    .query(
-      `INSERT INTO global_addons (id, user_id, label, content, sort_order, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      newId, userId, `${existing.label} (Copy)`, existing.content,
-      existing.sort_order, JSON.stringify(existing.metadata),
-      now, now
-    );
-
-  const addon = getGlobalAddon(userId, newId)!;
-  eventBus.emit(EventType.GLOBAL_ADDON_CHANGED, { id: newId, addon }, userId);
-  return addon;
+export async function duplicateGlobalAddonAsync(userId: string, id: string): Promise<GlobalAddon | null> {
+  const result = await executeDatabaseOperation<GlobalAddonMutationResult>({ kind: "global-addon-mutation", mutation: { action: "duplicateGlobalAddon", args: [userId, id] } });
+  return finishGlobalAddonMutation(result, userId);
 }
 
 export function reorderGlobalAddons(userId: string, ids: string[]): void {
-  const db = getDb();
-  const stmt = db.query("UPDATE global_addons SET sort_order = ?, updated_at = ? WHERE id = ? AND user_id = ?");
-  const now = Math.floor(Date.now() / 1000);
-  for (let i = 0; i < ids.length; i++) {
-    stmt.run(i, now, ids[i], userId);
-  }
+  return finishGlobalAddonMutation(mutateGlobalAddonWithDb(getDb(), { action: "reorderGlobalAddons", args: [userId, ids] }), userId);
 }
 
-function scrubGlobalAddonFromPersonas(userId: string, addonId: string): void {
-  const db = getDb();
-  const rows = db
-    .query("SELECT id, metadata FROM personas WHERE user_id = ?")
-    .all(userId) as any[];
+export async function reorderGlobalAddonsAsync(userId: string, ids: string[]): Promise<void> {
+  const result = await executeDatabaseOperation<GlobalAddonMutationResult>({ kind: "global-addon-mutation", mutation: { action: "reorderGlobalAddons", args: [userId, ids] } });
+  return finishGlobalAddonMutation(result, userId);
+}
 
-  const now = Math.floor(Date.now() / 1000);
-  const updateStmt = db.query("UPDATE personas SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?");
 
-  for (const row of rows) {
-    const meta = JSON.parse(row.metadata);
-    const attached = meta?.attached_global_addons;
-    if (!Array.isArray(attached)) continue;
-    const filtered = attached.filter((a: any) => a.id !== addonId);
-    if (filtered.length === attached.length) continue;
-    meta.attached_global_addons = filtered;
-    updateStmt.run(JSON.stringify(meta), now, row.id, userId);
-    eventBus.emit(EventType.PERSONA_CHANGED, { id: row.id }, userId);
+
+type GlobalAddonMutationResult = { value: unknown; events: GlobalAddonEvent[] };
+function finishGlobalAddonMutation<T>(result: GlobalAddonMutationResult, userId: string): T {
+  for (const event of result.events) {
+    if (event.type === "addon-changed") eventBus.emit(EventType.GLOBAL_ADDON_CHANGED, { id: event.id, addon: event.addon }, userId);
+    else if (event.type === "addon-deleted") eventBus.emit(EventType.GLOBAL_ADDON_DELETED, { id: event.id }, userId);
+    else eventBus.emit(EventType.PERSONA_CHANGED, { id: event.id }, userId);
   }
+  return result.value as T;
+}
+export async function listGlobalAddonsAsync(userId: string, pagination: PaginationParams): Promise<PaginatedResult<GlobalAddon>> {
+  return paginatedQueryAsync("SELECT * FROM global_addons WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC", "SELECT COUNT(*) as count FROM global_addons WHERE user_id = ?", [userId], pagination, rowToGlobalAddon);
+}
+export async function getGlobalAddonAsync(userId: string, id: string): Promise<GlobalAddon | null> {
+  const row = await readDatabaseRow<any>("SELECT * FROM global_addons WHERE id = ? AND user_id = ?", [id, userId]);
+  return row ? rowToGlobalAddon(row) : null;
+}
+export async function getGlobalAddonsByIdsAsync(userId: string, ids: string[]): Promise<GlobalAddon[]> {
+  if (ids.length === 0) return [];
+  const rows = await readDatabaseRows<any>(`SELECT * FROM global_addons WHERE id IN (${ids.map(() => "?").join(",")}) AND user_id = ? ORDER BY sort_order ASC`, [...ids, userId]);
+  return rows.map(rowToGlobalAddon);
+}
+export async function resolvePersonaGlobalAddonsAsync(userId: string, persona: Persona | null): Promise<Persona | null> {
+  if (!persona) return persona;
+  const refs = (persona.metadata?.attached_global_addons as Array<{ id: string; enabled: boolean }>) ?? [];
+  const ids = refs.filter((ref) => ref.enabled).map((ref) => ref.id);
+  if (ids.length === 0) return persona;
+  return { ...persona, metadata: { ...persona.metadata, _resolvedGlobalAddons: await getGlobalAddonsByIdsAsync(userId, ids) } };
 }

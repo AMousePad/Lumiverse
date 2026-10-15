@@ -1,4 +1,13 @@
 import { getDb } from "../db/connection";
+import { executeDatabaseOperation } from "../db/execution";
+import { readDatabaseRow, readDatabaseRows } from "../db/queries";
+import {
+  InvalidCharacterLibraryScopeError, normalizeCharacterLibraryScope,
+  explicitCharacterInputScope, canonicalCharacterExtensions,
+  updateCharacterTagsWithDb, updateCharacterRowWithDb,
+  type CharacterTagBulkInput, type CharacterTagBulkResult,
+} from "../db/character-operations";
+export { InvalidCharacterLibraryScopeError, normalizeCharacterLibraryScope } from "../db/character-operations";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { Character, CharacterLibraryScope, CharacterPreview, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
@@ -6,32 +15,10 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as filesSvc from "./files.service";
 import * as imagesSvc from "./images.service";
-import { deleteRegexScriptsByCharacterId } from "./regex-scripts.service";
 import { deleteAutoManagedCharacterWorldBooks } from "./world-books.service";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
-
-export class InvalidCharacterLibraryScopeError extends Error {
-  readonly code = "INVALID_CHARACTER_LIBRARY_SCOPE" as const;
-  constructor(readonly value: unknown) { super('Character library scope must be exactly "mine" or "shared"'); this.name = "InvalidCharacterLibraryScopeError"; }
-}
-
-export function normalizeCharacterLibraryScope(scope: unknown): CharacterLibraryScope {
-  if (scope === undefined) return "mine";
-  if (scope === "mine" || scope === "shared") return scope;
-  throw new InvalidCharacterLibraryScopeError(scope);
-}
-
-function explicitCharacterInputScope(input: { library_scope?: unknown; extensions?: Record<string, any> }): CharacterLibraryScope | undefined {
-  const direct = input.library_scope === undefined ? undefined : normalizeCharacterLibraryScope(input.library_scope);
-  const mirrorValue = input.extensions && Object.prototype.hasOwnProperty.call(input.extensions, "_lumiverse_library_scope") ? input.extensions._lumiverse_library_scope : undefined;
-  const mirror = mirrorValue === undefined ? undefined : normalizeCharacterLibraryScope(mirrorValue);
-  if (direct !== undefined && mirror !== undefined && direct !== mirror) throw new InvalidCharacterLibraryScopeError({ library_scope: direct, _lumiverse_library_scope: mirror });
-  return direct ?? mirror;
-}
-
-function canonicalCharacterExtensions(extensions: Record<string, any> | undefined, scope: CharacterLibraryScope): Record<string, any> {
-  return { ...(extensions || {}), _lumiverse_library_scope: scope };
-}
+import { rowToDeletionOperation } from "../db/deletion-operations";
+import type { DeletionOperation } from "../types/deletion";
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
@@ -498,81 +485,14 @@ export function listCharacterTags(userId: string): { tag: string; count: number 
 
 // ─── Bulk tag update (batch-select bar) ───────────────────────────────────
 
-export type CharacterTagBulkOperation = "add" | "remove" | "replace";
+export type { CharacterTagBulkOperation, CharacterTagBulkInput, CharacterTagBulkResult } from "../db/character-operations";
 
-export interface CharacterTagBulkInput {
-  ids: string[];
-  operation: CharacterTagBulkOperation;
-  tags: string[];
-}
-
-export interface CharacterTagBulkResult {
-  updated: number;
-  unchanged: number;
-}
-
-function applyTagOperation(current: string[], operation: CharacterTagBulkOperation, tags: string[]): string[] {
-  if (operation === "add") {
-    const merged = [...current];
-    for (const t of tags) if (!merged.includes(t)) merged.push(t);
-    return merged;
-  }
-  if (operation === "remove") {
-    const remove = new Set(tags);
-    return current.filter((t) => !remove.has(t));
-  }
-  return [...tags]; // replace
-}
-
-function stringArraysEqual(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
-/**
- * Apply a tag operation to many characters in a single transaction.
- * Mirrors the transactional pattern in tag-library-import.service.ts.
- * Emits no per-character events; callers refresh the browser afterwards.
- */
 export function bulkUpdateCharacterTags(userId: string, input: CharacterTagBulkInput): CharacterTagBulkResult {
-  const ids = Array.from(new Set(input.ids.filter((id) => typeof id === "string" && id.length > 0)));
-  if (ids.length === 0) throw new Error("At least one character id is required");
-  const operation = input.operation;
-  if (operation !== "add" && operation !== "remove" && operation !== "replace") {
-    throw new Error("Invalid tag operation");
-  }
-  const tags = Array.from(new Set(input.tags.map((t) => (typeof t === "string" ? t.trim() : "")).filter((t) => t.length > 0)));
-  if (tags.length === 0) throw new Error("At least one tag is required");
+  return updateCharacterTagsWithDb(getDb(), userId, input);
+}
 
-  const db = getDb();
-  const placeholders = ids.map(() => "?").join(", ");
-  const rows = db
-    .query(`SELECT id, tags FROM characters WHERE id IN (${placeholders}) AND user_id = ?`)
-    .all(...ids, userId) as Array<{ id: string; tags: string | null }>;
-
-  const now = Math.floor(Date.now() / 1000);
-  const updateStmt = db.query("UPDATE characters SET tags = ?, updated_at = ? WHERE id = ? AND user_id = ?");
-  let updated = 0;
-  let unchanged = 0;
-  db.transaction(() => {
-    for (const row of rows) {
-      let current: string[] = [];
-      try {
-        const parsed = JSON.parse(row.tags || "[]");
-        if (Array.isArray(parsed)) current = parsed.filter((t) => typeof t === "string");
-      } catch {}
-      const next = applyTagOperation(current, operation, tags);
-      if (stringArraysEqual(current, next)) {
-        unchanged++;
-        continue;
-      }
-      updateStmt.run(JSON.stringify(next), now, row.id, userId);
-      updated++;
-    }
-  })();
-
-  return { updated, unchanged };
+export function bulkUpdateCharacterTagsAsync(userId: string, input: CharacterTagBulkInput): Promise<CharacterTagBulkResult> {
+  return executeDatabaseOperation({ kind: "character-tags", userId, input });
 }
 
 // ─── Avatar info (lightweight, no JSON parsing) ───────────────────────────
@@ -660,7 +580,7 @@ function sanitizePerspectiveLayerInputs(inputs: unknown): LandingPerspectiveLaye
   return normalizeLandingPerspectiveLayers(inputs).slice(0, MAX_LANDING_PERSPECTIVE_LAYERS);
 }
 
-function rowToCharacter(row: any): Character {
+export function rowToCharacter(row: any): Character {
   const { deleting: _deleting, ...rest } = row;
   const libraryScope = normalizeCharacterLibraryScope(row.library_scope);
   return {
@@ -692,7 +612,7 @@ function collectImageIdsFromValue(value: unknown, ids: Set<string>): void {
   }
 }
 
-function collectCharacterImageIds(character: Character): Set<string> {
+export function collectCharacterImageIds(character: Character): Set<string> {
   const ids = new Set<string>();
   if (character.image_id) ids.add(character.image_id);
   collectImageIdsFromValue(character.extensions, ids);
@@ -875,6 +795,11 @@ export function listCharactersDiscover(
 let _stmtCharById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtCharByIdGen = -1;
 
+export async function getCharacterAsync(userId: string, id: string): Promise<Character | null> {
+  const row = await readDatabaseRow<any>("SELECT * FROM characters WHERE id = ? AND user_id = ?", [id, userId]);
+  return row ? rowToCharacter(row) : null;
+}
+
 export function getCharacter(userId: string, id: string): Character | null {
   const gen = require("../db/connection").getDbGeneration() as number;
   if (!_stmtCharById || _stmtCharByIdGen !== gen) {
@@ -995,68 +920,50 @@ export interface UpdateCharacterOptions {
 }
 
 export function updateCharacter(
-  userId: string,
-  id: string,
-  input: UpdateCharacterInput,
-  options: UpdateCharacterOptions = {},
+  userId: string, id: string, input: UpdateCharacterInput, options: UpdateCharacterOptions = {},
 ): Character | null {
-  const existing = getCharacter(userId, id);
-  if (!existing) return null;
-  const oldImageIds = collectCharacterImageIds(existing);
+  return finishCharacterUpdate(userId, id, input, options, updateCharacterRowWithDb(getDb(), userId, id, input, options));
+}
 
-  const now = Math.floor(Date.now() / 1000);
-  const fields: string[] = [];
-  const values: any[] = [];
-
-  const stringFields = [
-    "name", "description", "personality", "scenario", "first_mes",
-    "mes_example", "creator", "creator_notes", "system_prompt", "post_history_instructions",
-  ] as const;
-
-  for (const field of stringFields) {
-    if (input[field] !== undefined) {
-      fields.push(`${field} = ?`);
-      values.push(input[field]);
-    }
-  }
-
-  if (input.folder !== undefined) {
-    fields.push("folder = ?");
-    values.push(input.folder.trim());
-  }
-
-  const explicitScope = explicitCharacterInputScope(input);
-  if (explicitScope !== undefined) { fields.push("library_scope = ?"); values.push(explicitScope); }
-  const jsonFields = ["tags", "alternate_greetings"] as const;
-  for (const field of jsonFields) {
-    if (input[field] !== undefined) {
-      fields.push(`${field} = ?`);
-      values.push(JSON.stringify(input[field]));
-    }
-  }
-  if (input.extensions !== undefined || explicitScope !== undefined) {
-    const scope = explicitScope ?? existing.library_scope ?? "mine";
-    fields.push("extensions = ?"); values.push(JSON.stringify(canonicalCharacterExtensions(input.extensions ?? existing.extensions, scope)));
-  }
-
-  if (fields.length === 0) return existing;
-
-  if (!options.preserveUpdatedAt) {
-    fields.push("updated_at = ?");
-    values.push(now);
-  }
-  values.push(id);
-  values.push(userId);
-
-  getDb().query(`UPDATE characters SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
-  const updated = getCharacter(userId, id)!;
+export async function updateCharacterAsync(
+  userId: string, id: string, input: UpdateCharacterInput, options: UpdateCharacterOptions = {},
+): Promise<Character | null> {
+  const rows = await executeDatabaseOperation<{ before: any; after: any; changed: boolean } | null>({
+    kind: "character-update", userId, id, input, preserveUpdatedAt: options.preserveUpdatedAt,
+  });
+  if (!rows) return null;
   if (input.extensions !== undefined) {
+    const oldIds = collectCharacterImageIds(rowToCharacter(rows.before));
+    const newIds = collectCharacterImageIds(rowToCharacter(rows.after));
+    const removed = [...oldIds].filter((imageId) => !newIds.has(imageId));
+    try {
+      const chats = await executeDatabaseOperation<any[]>({ kind: "chat-clear-avatars", userId, ids: removed });
+      for (const chat of chats) eventBus.emit(EventType.CHAT_CHANGED, { chat, changedFields: ["metadata.active_avatar_id", "metadata.group_active_avatar_ids"] }, userId);
+      await cleanupUnreferencedImageIdsAsync(userId, removed);
+    } catch (error) {
+      // The character update is already committed. Preserve its result and event.
+      console.error("[characters] image cleanup failed:", error instanceof Error ? error.message : error);
+    }
+  }
+  return finishCharacterUpdate(userId, id, input, options, rows, true);
+}
+
+function finishCharacterUpdate(
+  userId: string, id: string, input: UpdateCharacterInput, options: UpdateCharacterOptions,
+  rows: { before: any; after: any; changed: boolean } | null,
+  cleanupComplete = false,
+): Character | null {
+  if (!rows) return null;
+  const existing = rowToCharacter(rows.before);
+  const updated = rowToCharacter(rows.after);
+  if (input.extensions !== undefined && !cleanupComplete) {
+    const oldImageIds = collectCharacterImageIds(existing);
     const newImageIds = collectCharacterImageIds(updated);
     const removedImageIds = [...oldImageIds].filter((imageId) => !newImageIds.has(imageId));
     clearRemovedChatAvatarReferences(userId, removedImageIds);
     cleanupUnreferencedImageIds(userId, removedImageIds);
   }
-  if (options.emitEvent !== false) {
+  if (options.emitEvent !== false && rows.changed) {
     eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
   }
   return updated;
@@ -1116,6 +1023,43 @@ export function bulkUpdateCharacterFolders(userId: string, ids: string[], folder
     if (character) updated.push(character);
   }
   return updated;
+}
+
+async function changeCharacterFoldersAsync(userId: string, where: string, bindings: string[], target: string): Promise<Character[]> {
+  const now = Math.floor(Date.now() / 1000);
+  const [rows] = await executeDatabaseOperation<[any[], unknown]>({
+    kind: "transaction", statements: [
+      { sql: `SELECT * FROM characters WHERE user_id = ? AND ${where} AND deleting = 0`, bindings: [userId, ...bindings], mode: "all" },
+      { sql: `UPDATE characters SET folder = ?, updated_at = ? WHERE user_id = ? AND ${where} AND deleting = 0`, bindings: [target, now, userId, ...bindings] },
+    ],
+  });
+  const characters = rows.map((row) => rowToCharacter({ ...row, folder: target, updated_at: now }));
+  for (const character of characters) eventBus.emit(EventType.CHARACTER_EDITED, { id: character.id, character }, userId);
+  return characters;
+}
+
+export async function renameCharacterFolderAsync(userId: string, oldName: string, newName: string): Promise<Character[]> {
+  const source = oldName.trim();
+  const target = newName.trim();
+  if (!source || !target) return [];
+  if (source === target) {
+    const rows = await executeDatabaseOperation<any[]>({ kind: "read", statement: {
+      sql: "SELECT * FROM characters WHERE user_id = ? AND folder = ? AND deleting = 0", bindings: [userId, source], mode: "all",
+    } });
+    return rows.map(rowToCharacter);
+  }
+  return changeCharacterFoldersAsync(userId, "folder = ?", [source], target);
+}
+
+export function deleteCharacterFolderAsync(userId: string, name: string): Promise<Character[]> {
+  const source = name.trim();
+  return source ? changeCharacterFoldersAsync(userId, "folder = ?", [source], "") : Promise.resolve([]);
+}
+
+export function bulkUpdateCharacterFoldersAsync(userId: string, ids: string[], folder: string): Promise<Character[]> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  if (uniqueIds.length === 0) return Promise.resolve([]);
+  return changeCharacterFoldersAsync(userId, `id IN (${uniqueIds.map(() => "?").join(",")})`, uniqueIds, folder.trim());
 }
 
 export function setCharacterAvatar(userId: string, id: string, avatarPath: string): boolean {
@@ -1404,14 +1348,63 @@ export function setCharacterSourceFilename(userId: string, id: string, sourceFil
 export function deleteCharacter(userId: string, id: string): boolean {
   const existing = getCharacter(userId, id);
   if (!existing) return false;
-  const marked = getDb()
+  getDb()
     .query("UPDATE characters SET deleting = 1 WHERE id = ? AND user_id = ? AND deleting = 0")
     .run(id, userId);
-  if (marked.changes > 0) eventBus.emit(EventType.CHARACTER_DELETED, { id }, userId);
   void scheduleCharacterDeletionCascade(userId, id).catch((err) =>
     console.error(`[characters] deletion cascade failed for ${id}:`, err instanceof Error ? err.message : err)
   );
   return true;
+}
+
+export async function deleteCharacterAsync(userId: string, id: string): Promise<boolean> {
+  const [existing] = await executeDatabaseOperation<[{ id: string } | null, { changes: number }]>({
+    kind: "transaction", statements: [
+      { sql: "SELECT id FROM characters WHERE id = ? AND user_id = ?", bindings: [id, userId], mode: "get" },
+      { sql: "UPDATE characters SET deleting = 1 WHERE id = ? AND user_id = ? AND deleting = 0", bindings: [id, userId] },
+    ],
+  });
+  if (!existing) return false;
+  await scheduleCharacterDeletionCascade(userId, id);
+  return true;
+}
+
+export async function getDeletionOperationAsync(userId: string, operationId: string): Promise<DeletionOperation | null> {
+  return executeDatabaseOperation({ kind: "deletion-status", userId, operationId });
+}
+
+/** Acceptance hides the row; only the cleanup transaction confirms completion. */
+export async function requestCharacterDeletionAsync(userId: string, id: string, operationId: string): Promise<DeletionOperation | null> {
+  const result = await executeDatabaseOperation<{ operation: DeletionOperation; newlyMarked: boolean } | null>({
+    kind: "character-delete-start", userId, id, operationId,
+  });
+  if (!result) return null;
+  const operation = result.operation;
+  if (operation.status === "accepted") {
+    eventBus.emit(EventType.DELETION_OPERATION_CHANGED, operation, userId);
+    void scheduleCharacterDeletionCascade(userId, id).catch((error) =>
+      console.error(`[characters] deletion cascade failed for ${id}:`, error instanceof Error ? error.message : error));
+  }
+  return operation;
+}
+
+async function hasDeletionOperations(): Promise<boolean> {
+  return !!await readDatabaseRow("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deletion_operations'");
+}
+
+async function reportDeletionFailure(userId: string, id: string, error: any): Promise<void> {
+  if (!await hasDeletionOperations()) return;
+  const status = error?.outcome === "unknown" ? "unknown" : "failed";
+  const details = JSON.stringify({ code: error?.code || "DELETION_FAILED", message: status === "unknown" ? "Character deletion could not be confirmed" : "Character cleanup failed", ...(error?.outcome ? { outcome: error.outcome } : {}) });
+  const [, rows] = await executeDatabaseOperation<[unknown, any[]]>({ kind: "transaction", statements: [
+    { sql: `UPDATE deletion_operations SET
+        status = CASE WHEN EXISTS (SELECT 1 FROM characters WHERE id = ? AND user_id = ?) THEN ? ELSE 'completed' END,
+        error = CASE WHEN EXISTS (SELECT 1 FROM characters WHERE id = ? AND user_id = ?) THEN ? ELSE NULL END,
+        updated_at = ? WHERE user_id = ? AND entity = 'character' AND entity_id = ? AND status != 'completed'`,
+      bindings: [id, userId, status, id, userId, details, Date.now(), userId, id] },
+    { sql: "SELECT * FROM deletion_operations WHERE user_id = ? AND entity = 'character' AND entity_id = ?", bindings: [userId, id], mode: "all" },
+  ] });
+  for (const row of rows) eventBus.emit(EventType.DELETION_OPERATION_CHANGED, rowToDeletionOperation(row), userId);
 }
 
 export interface CharacterBatchDeleteResult {
@@ -1428,18 +1421,13 @@ export async function batchDeleteCharacters(userId: string, ids: string[]): Prom
   const uniqueIds = [...new Set(ids.filter((id) => typeof id === "string" && id.length > 0))];
   if (uniqueIds.length === 0) return { deleted: [], failed: [] };
 
-  const existing = getCharactersByIds(userId, uniqueIds);
-  const marked: string[] = [];
-  getDb().transaction(() => {
-    const statement = getDb().query(
-      "UPDATE characters SET deleting = 1 WHERE id = ? AND user_id = ? AND deleting = 0",
-    );
-    for (const id of uniqueIds) {
-      if (!existing.has(id)) continue;
-      if (statement.run(id, userId).changes > 0) marked.push(id);
-    }
-  })();
-  for (const id of marked) eventBus.emit(EventType.CHARACTER_DELETED, { id }, userId);
+  const [rows] = await executeDatabaseOperation<[Array<{ id: string }>, ...Array<{ changes: number }>]>({
+    kind: "transaction", statements: [
+      { sql: `SELECT id FROM characters WHERE user_id = ? AND id IN (${uniqueIds.map(() => "?").join(",")})`, bindings: [userId, ...uniqueIds], mode: "all" },
+      ...uniqueIds.map((id) => ({ sql: "UPDATE characters SET deleting = 1 WHERE id = ? AND user_id = ? AND deleting = 0", bindings: [id, userId] })),
+    ],
+  });
+  const existing = new Set(rows.map((row) => row.id));
 
   const deleted: string[] = [];
   const failed: string[] = [];
@@ -1450,7 +1438,7 @@ export async function batchDeleteCharacters(userId: string, ids: string[]): Prom
     }
     try {
       await scheduleCharacterDeletionCascade(userId, id);
-      if (getCharacter(userId, id)) failed.push(id);
+      if (await getCharacterAsync(userId, id)) failed.push(id);
       else deleted.push(id);
     } catch (err) {
       console.error(`[characters] batch deletion cascade failed for ${id}:`, err instanceof Error ? err.message : err);
@@ -1466,7 +1454,11 @@ function scheduleCharacterDeletionCascade(userId: string, id: string): Promise<v
   const key = `${userId}\0${id}`;
   const active = characterDeletionCascades.get(key);
   if (active) return active;
-  const cascade = runCharacterDeletionCascade(userId, id).finally(() => {
+  const cascade = runCharacterDeletionCascade(userId, id).catch(async (error) => {
+    try { await reportDeletionFailure(userId, id, error); }
+    catch (reportError) { console.error(`[characters] could not persist deletion failure for ${id}:`, reportError); }
+    throw error;
+  }).finally(() => {
     if (characterDeletionCascades.get(key) === cascade) characterDeletionCascades.delete(key);
   });
   characterDeletionCascades.set(key, cascade);
@@ -1474,7 +1466,7 @@ function scheduleCharacterDeletionCascade(userId: string, id: string): Promise<v
 }
 
 async function runCharacterDeletionCascade(userId: string, id: string): Promise<void> {
-  const existing = getCharacter(userId, id);
+  const existing = await getCharacterAsync(userId, id);
   if (!existing) return;
 
   // A character FK would cascade-delete its primary chats, bypassing the
@@ -1483,12 +1475,10 @@ async function runCharacterDeletionCascade(userId: string, id: string): Promise<
   // metadata where it is not the primary member, so no dead member IDs remain.
   try {
     const chatsSvc = await import("./chats.service");
-    const primaryChats = getDb()
-      .query("SELECT id FROM chats WHERE user_id = ? AND character_id = ?")
-      .all(userId, id) as Array<{ id: string }>;
-    chatsSvc.deleteChats(userId, primaryChats.map((row) => row.id));
+    const primaryChats = await readDatabaseRows<{ id: string }>("SELECT id FROM chats WHERE user_id = ? AND character_id = ?", [userId, id]);
+    await chatsSvc.deleteChatsAsync(userId, primaryChats.map((row) => row.id));
 
-    const groupRows = getDb().query(
+    const groupRows = await readDatabaseRows<{ id: string }>(
       `SELECT c.id
          FROM chats c
         WHERE c.user_id = ?
@@ -1498,12 +1488,13 @@ async function runCharacterDeletionCascade(userId: string, id: string): Promise<
             SELECT 1 FROM json_each(c.metadata, '$.character_ids') member
              WHERE member.value = ?
           )`,
-    ).all(userId, id, id) as Array<{ id: string }>;
+      [userId, id, id],
+    );
     for (const row of groupRows) {
-      const chat = chatsSvc.getChat(userId, row.id);
+      const chat = await chatsSvc.getChatAsync(userId, row.id);
       const members = Array.isArray(chat?.metadata?.character_ids) ? chat.metadata.character_ids : [];
-      if (members.length > 2) chatsSvc.removeGroupMember(userId, row.id, id);
-      else chatsSvc.deleteChat(userId, row.id);
+      if (members.length > 2) await chatsSvc.removeGroupMemberAsync(userId, row.id, id);
+      else await chatsSvc.deleteChatAsync(userId, row.id);
     }
   } catch (err: any) {
     // Focused tests may omit the chats table. Real cleanup failures must keep
@@ -1512,42 +1503,60 @@ async function runCharacterDeletionCascade(userId: string, id: string): Promise<
   }
 
   const imageIds = collectCharacterImageIds(existing);
-  for (const imageId of listCharacterGalleryImageIds(userId, id)) imageIds.add(imageId);
-  const plan = imagesSvc.imageDeletePlan(userId, unreferencedImageIds(userId, imageIds));
+  const galleryRows = await readDatabaseRows<{ image_id: string }>("SELECT image_id FROM character_gallery WHERE user_id = ? AND character_id = ?", [userId, id]);
+  for (const row of galleryRows) if (row.image_id) imageIds.add(row.image_id);
+  const referenced = await imagesSvc.findReferencedImageIdsAsync(userId, imageIds);
+  const plan = await imagesSvc.imageDeletePlanAsync(userId, [...imageIds].filter((imageId) => !referenced.has(imageId)));
 
   await imagesSvc.unlinkPaths(plan.paths);
   if (existing.avatar_path) {
-    const stillReferenced = (() => {
+    const stillReferenced = await (async () => {
       try {
-        return !!getDb().query(
+        return !!await readDatabaseRow(
           `SELECT 1 AS found FROM characters
             WHERE user_id = ? AND deleting = 0 AND avatar_path = ?
            UNION ALL
            SELECT 1 AS found FROM personas WHERE user_id = ? AND avatar_path = ?
            LIMIT 1`,
-        ).get(userId, existing.avatar_path, userId, existing.avatar_path);
-      } catch {
+          [userId, existing.avatar_path, userId, existing.avatar_path],
+        );
+      } catch (error) {
+        if (!/no such (table|column)/i.test(String((error as Error)?.message ?? error))) throw error;
         return false;
       }
     })();
-    if (!stillReferenced) await filesSvc.deleteAvatar(existing.avatar_path).catch(() => {});
+    if (!stillReferenced) await filesSvc.deleteAvatar(existing.avatar_path);
   }
   await deleteAutoManagedCharacterWorldBooks(userId, id);
 
-  getDb().transaction(() => {
-    imagesSvc.deleteImageRowsOnly(userId, plan.rowIds);
-    deleteRegexScriptsByCharacterId(userId, id);
-    getDb().query("DELETE FROM characters WHERE id = ? AND user_id = ?").run(id, userId);
-  })();
+  const tracked = await hasDeletionOperations();
+  const imageDeletes = imagesSvc.imageRowDeleteStatements(userId, plan.rowIds);
+  const results = await executeDatabaseOperation<[Array<{ id: string }>, ...any[]]>({
+    kind: "transaction", statements: [
+      { sql: "SELECT id FROM regex_scripts WHERE user_id = ? AND character_id = ?", bindings: [userId, id], mode: "all" },
+      ...imageDeletes,
+      { sql: "DELETE FROM regex_scripts WHERE user_id = ? AND character_id = ?", bindings: [userId, id] },
+      { sql: "DELETE FROM characters WHERE id = ? AND user_id = ?", bindings: [id, userId] },
+      ...(tracked ? [
+        { sql: "UPDATE deletion_operations SET status = 'completed', error = NULL, updated_at = ? WHERE user_id = ? AND entity = 'character' AND entity_id = ?", bindings: [Date.now(), userId, id] },
+        { sql: "SELECT * FROM deletion_operations WHERE user_id = ? AND entity = 'character' AND entity_id = ?", bindings: [userId, id], mode: "all" as const },
+      ] : []),
+    ],
+  });
+  for (const script of results[0]) eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id: script.id }, userId);
+  for (const rows of results.slice(1, 1 + imageDeletes.length)) {
+    for (const row of rows) eventBus.emit(EventType.IMAGE_DELETED, { id: row.id }, userId);
+  }
+  if (tracked) for (const row of results.at(-1)) eventBus.emit(EventType.DELETION_OPERATION_CHANGED, rowToDeletionOperation(row), userId);
+  eventBus.emit(EventType.CHARACTER_DELETED, { id, status: "completed" }, userId);
 }
 
 export async function resumePendingCharacterDeletions(): Promise<number> {
   let rows: Array<{ id: string; user_id: string }>;
   try {
-    rows = getDb()
-      .query("SELECT id, user_id FROM characters WHERE deleting = 1")
-      .all() as Array<{ id: string; user_id: string }>;
-  } catch {
+    rows = await readDatabaseRows<{ id: string; user_id: string }>("SELECT id, user_id FROM characters WHERE deleting = 1");
+  } catch (error) {
+    if (!/no such (table|column)/i.test(String((error as Error)?.message ?? error))) throw error;
     return 0;
   }
   for (const row of rows) {
@@ -1559,4 +1568,11 @@ export async function resumePendingCharacterDeletions(): Promise<number> {
   }
   if (rows.length > 0) console.log(`[characters] resumed ${rows.length} interrupted deletion(s)`);
   return rows.length;
+}
+
+async function cleanupUnreferencedImageIdsAsync(userId: string, ids: Iterable<string>): Promise<void> {
+  const candidates = new Set([...ids].filter(Boolean));
+  if (candidates.size === 0) return;
+  const referenced = await imagesSvc.findReferencedImageIdsAsync(userId, candidates);
+  await imagesSvc.deleteImagesBulk(userId, [...candidates].filter((id) => !referenced.has(id)));
 }

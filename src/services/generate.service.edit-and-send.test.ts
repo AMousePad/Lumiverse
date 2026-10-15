@@ -127,7 +127,9 @@ describe("startGeneration edit-and-send", () => {
     track(spyOn(connectionsSvc, "resolveConnection").mockReturnValue(connection));
     track(spyOn(secretsSvc, "getSecret").mockResolvedValue("sk-test"));
     track(spyOn(settingsSvc, "getSetting").mockReturnValue(null));
+    track(spyOn(settingsSvc, "getSettingAsync").mockResolvedValue(null));
     track(spyOn(personasSvc, "resolvePersonaOrDefault").mockReturnValue(null));
+    track(spyOn(personasSvc, "resolvePersonaOrDefaultAsync").mockResolvedValue(null));
     track(spyOn(llmRegistry, "getProvider").mockReturnValue(mockProvider));
     track(spyOn(eventBus, "emit").mockImplementation(() => {}));
     track(
@@ -136,6 +138,7 @@ describe("startGeneration edit-and-send", () => {
       }),
     );
     track(spyOn(chatsSvc, "getChat").mockReturnValue(chat));
+    track(spyOn(chatsSvc, "getChatAsync").mockResolvedValue(chat));
     track(spyOn(chatsSvc, "getTrailingVisibleUserMessageIds").mockReturnValue([USER_MSG_ID]));
     track(spyOn(chatsSvc, "getLastMessage").mockImplementation(() =>
       assistant.swipes.length > 1 ? assistant : baseMessage(),

@@ -5,7 +5,13 @@ import { MemoryRouter } from 'react-router'
 import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
 import en from '@/i18n/locales/en/auth.json'
+import de from '@/i18n/locales/de/auth.json'
 import fr from '@/i18n/locales/fr/auth.json'
+import it from '@/i18n/locales/it/auth.json'
+import ja from '@/i18n/locales/ja/auth.json'
+import ko from '@/i18n/locales/ko/auth.json'
+import zh from '@/i18n/locales/zh/auth.json'
+import zhTW from '@/i18n/locales/zh-TW/auth.json'
 
 const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/login' })
 Object.assign(globalThis, {
@@ -37,7 +43,11 @@ mock.module('@/lib/ssoPopup', () => ({ startSsoPopup: async () => ({ ok: true })
 const { default: LoginPage } = await import('./LoginPage')
 const { createRoot } = await import('react-dom/client')
 const i18n = createInstance()
-await i18n.init({ lng: 'en', fallbackLng: 'en', resources: { en: { auth: en }, fr: { auth: fr } } })
+const translatedLocales = { de, fr, it, ja, ko, zh, 'zh-TW': zhTW }
+const resources = Object.fromEntries(
+  Object.entries({ en, ...translatedLocales }).map(([lng, auth]) => [lng, { auth }]),
+)
+await i18n.init({ lng: 'en', fallbackLng: 'en', resources })
 
 beforeEach(async () => {
   login.mockClear()
@@ -84,13 +94,18 @@ test('recovery opens and closes without submitting the login form', async () => 
   }
 })
 
-test('recovery instructions fall back to English for untranslated locales', async () => {
-  await i18n.changeLanguage('fr')
+test.each(Object.entries(translatedLocales))('recovery instructions use %s translations', async (lng, auth) => {
+  await i18n.changeLanguage(lng)
   const testRoot = await renderLogin()
   try {
-    expect(document.querySelector('summary')!.textContent).toBe(en.forgotPassword)
-    expect(document.querySelector('details')!.textContent).toContain(en.passwordRecovery.ownerOnly)
-    expect(document.querySelector('details')!.textContent).not.toContain('passwordRecovery.')
+    const details = document.querySelector('details')!
+    expect(details.querySelector('summary')!.textContent).toBe(auth.forgotPassword)
+    for (const translation of Object.values(auth.passwordRecovery)) {
+      expect(details.textContent).toContain(translation)
+    }
+    expect(details.textContent).not.toContain(en.passwordRecovery.ownerOnly)
+    expect(details.textContent).not.toContain('passwordRecovery.')
+    expect(details.querySelector('code')!.textContent).toBe('bun run reset-password')
   } finally {
     await act(async () => testRoot.unmount())
   }

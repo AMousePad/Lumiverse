@@ -48,13 +48,13 @@ export class WorkerHostMemoryApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const chat = chatsSvc.getChat(resolvedUserId, chatId);
+      const chat = await chatsSvc.getChatAsync(resolvedUserId, chatId);
       if (!chat) throw new Error("Chat not found");
 
       const messages = chatsSvc.getMessages(resolvedUserId, chatId);
 
       // Load chat memory settings the same way prompt-assembly does
-      const chatMemSettingsRaw = settingsSvc.getSetting(resolvedUserId, "chatMemorySettings")?.value;
+      const chatMemSettingsRaw = (await settingsSvc.getSettingAsync(resolvedUserId, "chatMemorySettings"))?.value;
       const chatMemSettings = chatMemSettingsRaw
         ? embeddingsSvc.normalizeChatMemorySettings(chatMemSettingsRaw)
         : null;
@@ -176,7 +176,7 @@ export class WorkerHostMemoryApi {
         const resolvedUserId = this.resolveEffectiveUserId(query.userId);
         if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
         this.enforceScopedUser(resolvedUserId);
-        const chat = chatsSvc.getChat(resolvedUserId, query.chatId);
+        const chat = await chatsSvc.getChatAsync(resolvedUserId, query.chatId);
         if (!chat) throw new Error("Chat not found");
         if (!memoryCortexSvc.isCortexEnabledForChat(
           memoryCortexSvc.getCortexConfig(resolvedUserId),
@@ -215,7 +215,7 @@ export class WorkerHostMemoryApi {
     (async () => {
       try {
         const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
-        const chat = chatsSvc.getChat(resolvedUserId, chatId);
+        const chat = await chatsSvc.getChatAsync(resolvedUserId, chatId);
         if (!memoryCortexSvc.isCortexEnabledForChat(
           memoryCortexSvc.getCortexConfig(resolvedUserId),
           chat?.metadata,
@@ -577,7 +577,7 @@ export class WorkerHostMemoryApi {
       try {
         const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
         const cortexConfig = memoryCortexSvc.getCortexConfig(resolvedUserId);
-        const chat = chatsSvc.getChat(resolvedUserId, chatId);
+        const chat = await chatsSvc.getChatAsync(resolvedUserId, chatId);
         if (!memoryCortexSvc.isCortexEnabledForChat(cortexConfig, chat?.metadata)) {
           throw new Error("Memory Cortex is disabled for this chat");
         }
@@ -603,6 +603,7 @@ export class WorkerHostMemoryApi {
         });
         const samplingParameters: Record<string, unknown> = {
           temperature: cortexConfig.sidecar.temperature,
+          max_tokens: cortexConfig.sidecar.maxTokens,
         };
         if (cortexConfig.sidecar.topP > 0 && cortexConfig.sidecar.topP < 1) {
           samplingParameters.top_p = cortexConfig.sidecar.topP;
@@ -895,11 +896,11 @@ export class WorkerHostMemoryApi {
   ): Promise<void> {
     try {
       const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
-      const chat = chatsSvc.getChat(resolvedUserId, chatId);
+      const chat = await chatsSvc.getChatAsync(resolvedUserId, chatId);
       if (!chat) throw new Error("Chat not found");
 
       const messages = chatsSvc.getMessages(resolvedUserId, chatId);
-      const chatMemSettingsRaw = settingsSvc.getSetting(resolvedUserId, "chatMemorySettings")?.value;
+      const chatMemSettingsRaw = (await settingsSvc.getSettingAsync(resolvedUserId, "chatMemorySettings"))?.value;
       const chatMemSettings = chatMemSettingsRaw
         ? embeddingsSvc.normalizeChatMemorySettings(chatMemSettingsRaw)
         : null;

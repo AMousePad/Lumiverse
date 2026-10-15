@@ -156,7 +156,7 @@ const moduleClassNames = new Proxy<Record<string, string>>({} as Record<string, 
 mock.module('@tanstack/react-virtual', () => ({ useVirtualizer }))
 mock.module('@/hooks/useScrollGate', () => ({ useScrollGate }))
 mock.module('@/lib/avatarUrls', () => ({
-  getCharacterAvatarLargeUrl: (character: CharacterSummary) => `large:${character.id}`,
+  getCharacterAvatarLargeUrl: (character: CharacterSummary) => `large:${character.id}:${character.image_id}`,
   getCharacterAvatarThumbUrl: (character: CharacterSummary) => `thumb:${character.id}`,
 }))
 mock.module('@/lib/imageDecodeCache', () => ({
@@ -229,8 +229,14 @@ async function mountGrid(characters: CharacterSummary[]) {
   const mounted = { root, host }
   mountedRoots.push(mounted)
 
+  await renderGrid(mounted, characters)
+
+  return mounted
+}
+
+async function renderGrid(mounted: { root: Root }, characters: CharacterSummary[]) {
   await act(async () => {
-    root.render(
+    mounted.root.render(
       <I18nextProvider i18n={englishI18n}>
         <CharacterGrid
           characters={characters}
@@ -246,8 +252,6 @@ async function mountGrid(characters: CharacterSummary[]) {
     )
     await Promise.resolve()
   })
-
-  return mounted
 }
 
 async function unmountGrid(mounted: { root: Root; host: HTMLDivElement }) {
@@ -305,12 +309,11 @@ describe('CharacterGrid responsive geometry', () => {
 
     await resize([entry(scrollContainer, 900)])
 
-    const renderedRow = mounted.host.querySelector('[data-index="0"]') as HTMLElement
+    const renderedRow = mounted.host.querySelector('[data-virtual-grid]') as HTMLElement
     expect(renderedRow.style.gridTemplateColumns).toBe('repeat(3, minmax(0, 1fr))')
-    expect(renderedRow.style.gap).toBe('28px')
-    expect(renderedRow.style.paddingLeft).toBe('14px')
-    expect(renderedRow.style.paddingRight).toBe('14px')
-    expect(renderedRow.style.paddingBottom).toBe('28px')
+    expect(renderedRow.style.columnGap).toBe('28px')
+    expect(renderedRow.style.paddingInline).toBe('14px')
+    expect(renderedRow.firstElementChild?.getAttribute('style')).toContain('padding-bottom: 28px')
     expect(currentOptions().count).toBe(3)
     expect(currentOptions().paddingStart).toBe(28)
     expect(currentOptions().estimateSize(0)).toBe(388)
@@ -324,17 +327,17 @@ describe('CharacterGrid responsive geometry', () => {
     const scrollContainer = mounted.host.querySelector('.scrollContainer') as HTMLElement
 
     await resize([entry(scrollContainer, 500)])
-    let renderedRow = mounted.host.querySelector('[data-index="0"]') as HTMLElement
+    let renderedRow = mounted.host.querySelector('[data-virtual-grid]') as HTMLElement
     expect(renderedRow.style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))')
-    expect(renderedRow.style.gap).toBe('12px')
-    expect(renderedRow.style.paddingLeft).toBe('6px')
+    expect(renderedRow.style.columnGap).toBe('12px')
+    expect(renderedRow.style.paddingInline).toBe('6px')
     expect(currentOptions().count).toBe(5)
     expect(currentOptions().paddingStart).toBe(12)
 
     await resize([entry(scrollContainer, 280)])
-    renderedRow = mounted.host.querySelector('[data-index="0"]') as HTMLElement
+    renderedRow = mounted.host.querySelector('[data-virtual-grid]') as HTMLElement
     expect(renderedRow.style.gridTemplateColumns).toBe('repeat(1, minmax(0, 1fr))')
-    expect(renderedRow.style.gap).toBe('12px')
+    expect(renderedRow.style.columnGap).toBe('12px')
     expect(currentOptions().count).toBe(9)
   })
 
@@ -353,9 +356,9 @@ describe('CharacterGrid responsive geometry', () => {
     Object.assign(layoutVars, { minWidth: 280, gap: 32, height: 420 })
     await resize([entry(geometryProbe, 0)])
 
-    const renderedRow = mounted.host.querySelector('[data-index="0"]') as HTMLElement
+    const renderedRow = mounted.host.querySelector('[data-virtual-grid]') as HTMLElement
     expect(renderedRow.style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))')
-    expect(renderedRow.style.gap).toBe('32px')
+    expect(renderedRow.style.columnGap).toBe('32px')
     expect(currentOptions().paddingStart).toBe(32)
     expect(currentOptions().estimateSize(0)).toBe(452)
     expect(measure.mock.calls.length).toBeGreaterThan(beforeMeasure)
@@ -368,16 +371,15 @@ describe('CharacterGrid prefetch and cleanup', () => {
     Object.assign(layoutVars, { minWidth: 220, gap: 20, height: 0 })
     const mounted = await mountGrid(Array.from({ length: 60 }, (_, index) => character(index)))
     const scrollContainer = mounted.host.querySelector('.scrollContainer') as HTMLElement
-    prefetchImages.mockReset()
 
     await resize([entry(scrollContainer, 900)])
 
     const calls = prefetchImages.mock.calls
-    const urls = calls[calls.length - 1]?.[0] as string[] | undefined
+    const urls = [...new Set(calls.flatMap(([urls]) => urls as string[]))]
     expect(urls).toHaveLength(33)
-    expect(urls?.[0]).toBe('large:character-0')
-    expect(urls?.[32]).toBe('large:character-32')
-    expect(urls).not.toContain('large:character-33')
+    expect(urls?.[0]).toBe('large:character-0:image-0')
+    expect(urls?.[32]).toBe('large:character-32:image-32')
+    expect(urls).not.toContain('large:character-33:image-33')
   })
 
   test('disconnects its ResizeObserver when unmounted', async () => {
@@ -388,5 +390,76 @@ describe('CharacterGrid prefetch and cleanup', () => {
 
     expect(observers).toHaveLength(1)
     expect(observers[0].disconnect).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+describe('CharacterGrid image identity', () => {
+  test('keeps surviving images mounted when deletion moves them across rows', async () => {
+    visibleRows = [row(0), row(1), row(2)]
+    const entries = Array.from({ length: 9 }, (_, index) => character(index))
+    const mounted = await mountGrid(entries)
+    const container = mounted.host.querySelector('.scrollContainer') as HTMLElement
+    await resize([entry(container, 900)])
+    const images = [...mounted.host.querySelectorAll('img')]
+    expect(images).toHaveLength(9)
+
+    await renderGrid(mounted, entries.slice(1))
+
+    expect([...mounted.host.querySelectorAll('img')].every((image, index) => image === images[index + 1])).toBe(true)
+    expect(images[3].isConnected).toBe(true)
+    expect(images[6].isConnected).toBe(true)
+  })
+
+  test('updates only the changed avatar without resetting neighbors or row measurements', async () => {
+    visibleRows = [row(0), row(1)]
+    const entries = Array.from({ length: 6 }, (_, index) => character(index))
+    const mounted = await mountGrid(entries)
+    const container = mounted.host.querySelector('.scrollContainer') as HTMLElement
+    await resize([entry(container, 900)])
+    const images = [...mounted.host.querySelectorAll('img')]
+    await act(async () => {
+      for (const image of images) image.dispatchEvent(new domWindow.Event('load'))
+    })
+    const sources = images.map((image) => image.getAttribute('src'))
+    const changedSources: Node[] = []
+    const mutations = new domWindow.MutationObserver((records) => changedSources.push(...records.map((record) => record.target)))
+    mutations.observe(mounted.host, { attributes: true, attributeFilter: ['src'], subtree: true })
+    measure.mockClear()
+    measureElement.mockClear()
+    prefetchImages.mockClear()
+
+    await renderGrid(mounted, entries.map((item, index) => index === 1
+      ? { ...item, image_id: 'updated-image' }
+      : item))
+
+    expect([...mounted.host.querySelectorAll('img')].every((image, index) => image === images[index])).toBe(true)
+    expect(images[1].getAttribute('src')).toBe('large:character-1:updated-image')
+    changedSources.push(...mutations.takeRecords().map((record) => record.target))
+    expect(changedSources).toHaveLength(1)
+    expect(changedSources[0] === images[1]).toBe(true)
+    for (const index of [0, 2, 3, 4, 5]) {
+      expect(images[index].getAttribute('src')).toBe(sources[index])
+      expect(images[index].style.opacity).toBe('1')
+    }
+    expect(measure).not.toHaveBeenCalled()
+    expect(measureElement).not.toHaveBeenCalled()
+    expect(prefetchImages).toHaveBeenCalledTimes(1)
+    expect(prefetchImages).toHaveBeenCalledWith(['large:character-1:updated-image'])
+    mutations.disconnect()
+  })
+
+  test('keeps images mounted across responsive column changes', async () => {
+    visibleRows = [row(0), row(1), row(2)]
+    const mounted = await mountGrid(Array.from({ length: 6 }, (_, index) => character(index)))
+    const container = mounted.host.querySelector('.scrollContainer') as HTMLElement
+    await resize([entry(container, 900)])
+    const images = [...mounted.host.querySelectorAll('img')]
+
+    await resize([entry(container, 500)])
+
+    expect([...mounted.host.querySelectorAll('img')].every((image, index) => image === images[index])).toBe(true)
+    expect(mounted.host.querySelector<HTMLElement>('[data-virtual-grid]')?.style.gridTemplateColumns)
+      .toBe('repeat(2, minmax(0, 1fr))')
   })
 })

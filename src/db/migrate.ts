@@ -135,6 +135,10 @@ const BASELINE_MIGRATIONS: readonly string[] = [
   "120_illarin_receipts_per_installation.sql",
   "122_world_book_entry_organization.sql",
   "123_character_library_migration.sql",
+  "124_decision_connections.sql",
+  "125_deletion_operations.sql",
+  "126_image_references.sql",
+  "127_ios_push_destinations.sql",
 ];
 
 const BASELINE_SET = new Set(BASELINE_MIGRATIONS);
@@ -151,6 +155,8 @@ function isInsideGitRepo(startPath: string): boolean {
 }
 
 function shouldAllowCleanup(migrationsDir: string): boolean {
+  // The extracted application is shared by every instance of this build.
+  if (process.env.LUMIVERSE_BUNDLE_ID) return false;
   // Never prune if the app is running from a git checkout — developers
   // need the files, and a dirty worktree is dangerous.
   if (isInsideGitRepo(migrationsDir)) {

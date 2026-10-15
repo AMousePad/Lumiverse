@@ -1208,6 +1208,11 @@
   color: var(--lumiverse-primary-contrast, #fff);
 }
 
+.galleryRemoveBtn:disabled {
+  opacity: 1;
+  cursor: wait;
+}
+
 .galleryAddBtn {
   display: flex;
   flex-direction: column;

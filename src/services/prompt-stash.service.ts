@@ -1,3 +1,6 @@
+import { PresetRevisionConflictError } from "../types/preset";
+import { executeDatabaseOperation } from "../db/execution";
+import { mutatePresetWithDb, type PresetMutationResult } from "../db/preset-operations";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -56,7 +59,12 @@ function samePayload(left: StashBlockPayload, right: StashBlockPayload): boolean
 }
 
 export function listPromptStash(userId: string): StashedPromptBlock[] {
-  return readStash(userId).sort((a, b) => b.updatedAt - a.updatedAt);
+  return finishPresetMutation(mutatePresetWithDb(getDb(), { action: "listPromptStash", args: [userId] }), userId);
+}
+
+export async function listPromptStashAsync(userId: string): Promise<StashedPromptBlock[]> {
+  const result = await executeDatabaseOperation<PresetMutationResult>({ kind: "preset-mutation", mutation: { action: "listPromptStash", args: [userId] } });
+  return finishPresetMutation(result, userId);
 }
 
 export function addPromptBlockToStash(
@@ -64,20 +72,16 @@ export function addPromptBlockToStash(
   block: PromptBlock,
   sourcePreset?: { id: string; name: string },
 ): StashedPromptBlock {
-  if (block.marker) throw new Error("Only prompt blocks can be added to the stash");
-  const entries = readStash(userId);
-  if (entries.length >= MAX_STASH_ENTRIES) throw new Error(`Prompt stash is limited to ${MAX_STASH_ENTRIES} blocks`);
-  const now = Date.now();
-  const entry: StashedPromptBlock = {
-    id: crypto.randomUUID(),
-    block: payloadFromBlock(block),
-    ...(sourcePreset ? { sourcePreset } : {}),
-    createdAt: now,
-    updatedAt: now,
-  };
-  entries.push(entry);
-  settingsSvc.putSetting(userId, STASH_SETTING_KEY, entries);
-  return entry;
+  return finishPresetMutation(mutatePresetWithDb(getDb(), { action: "addPromptBlockToStash", args: [userId, block, sourcePreset] }), userId);
+}
+
+export async function addPromptBlockToStashAsync(
+  userId: string,
+  block: PromptBlock,
+  sourcePreset?: { id: string; name: string },
+): Promise<StashedPromptBlock> {
+  const result = await executeDatabaseOperation<PresetMutationResult>({ kind: "preset-mutation", mutation: { action: "addPromptBlockToStash", args: [userId, block, sourcePreset] } });
+  return finishPresetMutation(result, userId);
 }
 
 /**
@@ -86,37 +90,12 @@ export function addPromptBlockToStash(
  * and placement, so un-stashing never discards prompt content.
  */
 export function removePromptBlockFromStash(userId: string, stashId: string): boolean {
-  const entries = readStash(userId);
-  if (!entries.some((entry) => entry.id === stashId)) return false;
-  const remaining = entries.filter((entry) => entry.id !== stashId);
-  const db = getDb();
-  const rows = db.query("SELECT id, prompt_order FROM presets WHERE user_id = ?").all(userId) as Array<{ id: string; prompt_order: string }>;
-  const changedPresetIds: string[] = [];
-  const update = db.query(
-    "UPDATE presets SET prompt_order = ?, updated_at = ?, cache_revision = cache_revision + 1 WHERE id = ? AND user_id = ?",
-  );
-  const now = Math.floor(Date.now() / 1000);
-  const transaction = db.transaction(() => {
-    for (const row of rows) {
-      let blocks: PromptBlock[];
-      try { blocks = JSON.parse(row.prompt_order); } catch { continue; }
-      if (!Array.isArray(blocks)) continue;
-      let didChange = false;
-      const next = blocks.map((block) => {
-        if (block?.stashId !== stashId) return block;
-        didChange = true;
-        const { stashId: _stashId, ...unlinked } = block;
-        return unlinked;
-      });
-      if (!didChange) continue;
-      update.run(JSON.stringify(next), now, row.id, userId);
-      changedPresetIds.push(row.id);
-    }
-  });
-  transaction();
-  settingsSvc.putSetting(userId, STASH_SETTING_KEY, remaining);
-  emitPresetChanges(userId, changedPresetIds);
-  return true;
+  return finishPresetMutation(mutatePresetWithDb(getDb(), { action: "removePromptBlockFromStash", args: [userId, stashId] }), userId);
+}
+
+export async function removePromptBlockFromStashAsync(userId: string, stashId: string): Promise<boolean> {
+  const result = await executeDatabaseOperation<PresetMutationResult>({ kind: "preset-mutation", mutation: { action: "removePromptBlockFromStash", args: [userId, stashId] } });
+  return finishPresetMutation(result, userId);
 }
 
 function emitPresetChanges(userId: string, presetIds: string[]): void {
@@ -231,4 +210,10 @@ export function syncStashedBlocksAcrossPresets(userId: string, excludedPresetId:
   transaction();
 
   emitPresetChanges(userId, changedPresetIds);
+}
+
+function finishPresetMutation<T>(result: PresetMutationResult, userId: string): T {
+  if (result.conflict) throw new PresetRevisionConflictError(result.conflict.id, result.conflict.expected, result.conflict.actual);
+  for (const event of result.events) eventBus.emit(event.type, event.payload, userId);
+  return result.value as T;
 }

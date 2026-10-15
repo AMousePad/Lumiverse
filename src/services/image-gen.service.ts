@@ -11,6 +11,7 @@ import * as imageGenConnSvc from "./image-gen-connections.service";
 import { imageGenConnectionSecretKey } from "./image-gen-connections.service";
 import * as imageGenBindingsSvc from "./image-gen-preset-bindings.service";
 import * as characterLoraSvc from "./character-lora.service";
+import * as avatarCaptionSvc from "./image-gen-avatar-caption.service";
 import {
   getChatPersonaAddonStates,
   getChatPersonaAddonToggleOrder,
@@ -79,6 +80,9 @@ interface ImageGenSettings {
   activeImageGenConnectionId?: string | null;
   includeCharacters: boolean;
   includePersona: boolean;
+  describeCharacterAvatar?: boolean;
+  describePersonaAvatar?: boolean;
+  activeCaptioningPresetId?: string | null;
   promptMode?: ImageGenPromptMode;
   customPrompt?: string;
   customNegativePrompt?: string;
@@ -137,6 +141,9 @@ const DEFAULT_IMAGE_SETTINGS: ImageGenSettings = {
   activeImageGenConnectionId: null,
   includeCharacters: false,
   includePersona: false,
+  describeCharacterAvatar: false,
+  describePersonaAvatar: false,
+  activeCaptioningPresetId: null,
   promptMode: "scene",
   customPrompt: "",
   customNegativePrompt: "",
@@ -391,7 +398,7 @@ export async function generateSceneBackground(
 
   const connection = imageGenConnSvc.getConnection(userId, connectionId);
   if (!connection) throw new Error("Image generation connection not found");
-  if (!chatsSvc.getChat(userId, chatId)) throw new Error("Chat not found");
+  if (!(await chatsSvc.getChatAsync(userId, chatId))) throw new Error("Chat not found");
   if (opts?.outputMediaType === "video" && connection.provider !== "comfyui") {
     throw new Error("Video output selection currently requires a ComfyUI connection");
   }
@@ -547,7 +554,7 @@ export async function generateSceneBackground(
     ) {
       const sources = await resolveSourceImages(userId, chatId, params);
       if (opts?.sourceImageId) {
-        const image = imagesSvc.getImage(userId, opts.sourceImageId);
+        const image = await imagesSvc.getImageAsync(userId, opts.sourceImageId);
         const path = await imagesSvc.getImageFilePath(userId, opts.sourceImageId);
         if (!image || !path) throw new Error("Source image not found");
         if (!image.mime_type.startsWith("image/")) throw new Error("Source asset must be a still image");
@@ -687,7 +694,7 @@ export async function generateSceneBackground(
       // re-render that follows from MESSAGE_EDITED) lands sooner.
       const shouldAddToGallery = opts?.addToGallery ?? (settings.addToGallery !== false);
       if (shouldAddToGallery) {
-        const characterId = chatsSvc.getChat(userId, chatId)?.character_id;
+        const characterId = (await chatsSvc.getChatAsync(userId, chatId))?.character_id;
         if (characterId) {
           scheduleLowPriorityTask(() => {
             try {
@@ -850,14 +857,20 @@ export interface CaptionImageInput {
   parserModel?: string;
   parserParameters?: Record<string, any>;
   timeoutSeconds?: number;
+  signal?: AbortSignal;
 }
 
 export async function captionImage(
   userId: string,
   input: CaptionImageInput,
 ): Promise<{ caption: string }> {
+  input.signal?.throwIfAborted();
   const settings = getImageGenSettings(userId);
+  const request = await resolveCaptioningRequest(userId, settings, input);
+  return generateImageCaption(userId, input, request, settings.promptGenerationTimeoutSeconds ?? 60);
+}
 
+async function resolveCaptioningRequest(userId: string, settings: ImageGenSettings, input: Partial<CaptionImageInput>) {
   const promptText =
     input.prompt?.trim() ||
     (input.presetId
@@ -874,16 +887,24 @@ export async function captionImage(
     parserModel: input.parserModel || "",
     parserParameters: input.parserParameters || {},
   });
+  return { promptText, parser };
+}
 
-  const timeoutSecs = resolveTimeoutSeconds(input.timeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
-  const controller = new AbortController();
+async function generateImageCaption(
+  userId: string,
+  input: CaptionImageInput,
+  { promptText, parser }: Awaited<ReturnType<typeof resolveCaptioningRequest>>,
+  fallbackTimeoutSeconds: number,
+): Promise<{ caption: string }> {
+  const timeoutSecs = resolveTimeoutSeconds(input.timeoutSeconds, fallbackTimeoutSeconds);
   const timeout = createPhaseTimeoutSignal(
-    controller.signal,
+    input.signal ?? new AbortController().signal,
     timeoutSecs,
     `Image captioning timed out after ${timeoutSecs}s`,
   );
 
   try {
+    timeout.signal.throwIfAborted();
     const response = await rawGenerate(userId, {
       provider: parser.connection.provider,
       model: parser.model,
@@ -905,6 +926,7 @@ export async function captionImage(
       parameters: parser.parameters,
       signal: timeout.signal,
     }, { origin: { kind: "sidecar", name: "Image Generation", operation: "caption" } });
+    timeout.signal.throwIfAborted();
     return { caption: (response.content || "").trim() };
   } catch (err) {
     throw resolveAbortReason(timeout.signal) ?? err;
@@ -1147,6 +1169,149 @@ function composeWithBaseTags(baseTags: string, prompt: string): string {
   if (!trimmedTags) return prompt;
   if (!trimmedPrompt) return trimmedTags;
   return `${trimmedTags}, ${trimmedPrompt}`;
+}
+
+function resolveCaptioningSource(settings: ImageGenSettings): {
+  presetId: string | null;
+  prompt?: string;
+  parserConnectionId?: string | null;
+  parserModel?: string;
+  parserParameters?: Record<string, any>;
+} {
+  const presetId = settings.activeCaptioningPresetId || null;
+  const preset = presetId
+    ? (settings.promptPresets || []).find((p) => p.id === presetId && p.kind === "captioning")
+    : undefined;
+  if (preset) {
+    return {
+      presetId: preset.id,
+      prompt: preset.prompt,
+      parserConnectionId: preset.parserConnectionId ?? null,
+      parserModel: preset.parserModel || "",
+      parserParameters: preset.parserParameters || {},
+    };
+  }
+  return {
+    presetId: null,
+    prompt: settings.captionPrompt?.trim() || undefined,
+    parserConnectionId: settings.promptParserConnectionId ?? null,
+    parserModel: settings.promptParserModel || "",
+    parserParameters: settings.promptParserParameters || {},
+  };
+}
+
+async function loadAvatarImageBase64(
+  userId: string,
+  imageId: string,
+): Promise<{ data: string; mimeType: string } | null> {
+  const path = await imagesSvc.getImageFilePath(userId, imageId);
+  if (!path) return null;
+  const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+  const mimeType = (await imagesSvc.getImageAsync(userId, imageId))?.mime_type || "image/png";
+  return { data: uint8ToBase64(bytes), mimeType };
+}
+
+interface AvatarAppearanceReferences {
+  character?: string;
+  persona?: string;
+}
+
+async function resolveAvatarAppearanceReferences(
+  userId: string,
+  chatId: string,
+  settings: ImageGenSettings,
+  signal?: AbortSignal,
+): Promise<AvatarAppearanceReferences> {
+  signal?.throwIfAborted();
+  const wantCharacter = !!settings.describeCharacterAvatar;
+  const wantPersona = !!settings.describePersonaAvatar;
+  if (!wantCharacter && !wantPersona) return {};
+
+  const source = resolveCaptioningSource(settings);
+  let captioningRequest: ReturnType<typeof resolveCaptioningRequest> | undefined;
+  const out: AvatarAppearanceReferences = {};
+
+  const captionOne = async (
+    subject: avatarCaptionSvc.AvatarCaptionSubject,
+    entityId: string,
+    imageId: string,
+  ): Promise<string | undefined> => {
+    try {
+      signal?.throwIfAborted();
+      const request = await (captioningRequest ??= resolveCaptioningRequest(userId, settings, source));
+      signal?.throwIfAborted();
+      const { connection, model, parameters } = request.parser;
+      const fingerprint = avatarCaptionSvc.buildCaptionFingerprint({
+        presetId: source.presetId,
+        prompt: request.promptText,
+        parserConnectionId: connection.id,
+        parserProvider: connection.provider,
+        parserApiUrl: connection.api_url,
+        parserMetadata: connection.metadata,
+        parserModel: model,
+        parserParameters: parameters,
+      });
+      const cached = avatarCaptionSvc.lookupCachedCaption(userId, subject, entityId, imageId, fingerprint);
+      if (cached) return cached;
+      const image = await loadAvatarImageBase64(userId, imageId);
+      if (!image) return undefined;
+      const { caption } = await generateImageCaption(userId, {
+        image: image.data,
+        mimeType: image.mimeType,
+        timeoutSeconds: settings.promptGenerationTimeoutSeconds,
+        signal,
+      }, request, settings.promptGenerationTimeoutSeconds ?? 60);
+      signal?.throwIfAborted();
+      const trimmed = caption.trim();
+      if (!trimmed) return undefined;
+      avatarCaptionSvc.setCachedCaption(userId, subject, entityId, {
+        image_id: imageId,
+        caption: trimmed,
+        fingerprint,
+      });
+      return trimmed;
+    } catch (err) {
+      signal?.throwIfAborted();
+      console.warn(
+        `[image-gen] Failed to caption ${subject} avatar for ${entityId}:`,
+        err instanceof Error ? err.message : err,
+      );
+      return undefined;
+    }
+  };
+
+  if (wantCharacter) {
+    const chat = await chatsSvc.getChatAsync(userId, chatId);
+    const character = chat?.character_id ? (await charactersSvc.getCharacterAsync(userId, chat.character_id)) : null;
+    if (character) {
+      const cropId = typeof character.extensions?.avatar_crop_image_id === "string"
+        ? character.extensions.avatar_crop_image_id
+        : null;
+      const imageId = cropId || character.image_id;
+      if (imageId) {
+        const caption = await captionOne("character", character.id, imageId);
+        if (caption) out.character = caption;
+      }
+    }
+  }
+
+  if (wantPersona) {
+    const chat = await chatsSvc.getChatAsync(userId, chatId);
+    const personaId = resolveActivePersonaId(userId, chatId);
+    if (personaId) {
+      const info = await personasSvc.getPersonaAvatarInfoAsync(userId, personaId, {
+        addonStates: getChatPersonaAddonStates(chat?.metadata, personaId),
+        addonToggleOrder: getChatPersonaAddonToggleOrder(chat?.metadata, personaId),
+      });
+      const imageId = info?.avatar_crop_image_id || info?.image_id;
+      if (imageId) {
+        const caption = await captionOne("persona", personaId, imageId);
+        if (caption) out.persona = caption;
+      }
+    }
+  }
+
+  return out;
 }
 
 /**
@@ -1636,9 +1801,9 @@ export async function buildContextMessages(userId: string, chatId: string, setti
     }
   };
 
-  const chat = chatsSvc.getChat(userId, chatId);
-  const char = chat?.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
-  const persona = includePersona ? personasSvc.resolvePersonaOrDefault(userId) : null;
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
+  const char = chat?.character_id ? (await charactersSvc.getCharacterAsync(userId, chat.character_id)) : null;
+  const persona = includePersona ? (await personasSvc.resolvePersonaOrDefaultAsync(userId)) : null;
   const recentMessages = chatsSvc.getMessages(userId, chatId).slice(-resolveContextMessageLimit(settings));
 
   // {{outlet::name}} only resolves after world-info activation. Mirror the
@@ -1689,6 +1854,27 @@ export async function buildContextMessages(userId: string, chatId: string, setti
       .join("\n");
     if (personaInfo) msgs.push({ role: "system", content: `## User Persona\n${personaInfo}` });
   }
+
+  const avatarRefs = await resolveAvatarAppearanceReferences(userId, chatId, settings, signal);
+  if (avatarRefs.character || avatarRefs.persona) {
+    const blocks = [
+      avatarRefs.character && `### Character avatar appearance (from portrait)\n${avatarRefs.character}`,
+      avatarRefs.persona && `### Persona avatar appearance (from portrait)\n${avatarRefs.persona}`,
+    ].filter(Boolean);
+    msgs.push({
+      role: "system",
+      content:
+        `## Visual appearance reference\n` +
+        `The following was captioned from the active avatar image(s). Use it as a stable identity lock for ` +
+        `face, hair, eyes, skin, body type, and art style when writing the image prompt or character_appearances tags.\n` +
+        `Clothing, accessories, and carried items: prefer what the latest chat / scene shows the subject wearing or holding. ` +
+        `If roleplay changed their outfit, do NOT keep portrait clothing — scene-aware clothing wins. ` +
+        `Only fall back to portrait clothing when the chat does not specify attire.\n` +
+        `Blend identity into the current scene — do not paste this block as a standalone prompt prefix.\n\n` +
+        blocks.join("\n\n"),
+    });
+  }
+
   for (const m of recentMessages) {
     msgs.push({ role: m.is_user ? "user" : "assistant", content: await resolve(m.content) });
   }
@@ -1869,21 +2055,21 @@ async function loadConfiguredAvatarImages(
     const path = await imagesSvc.getImageFilePath(userId, imageId);
     if (!path) return;
     const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-    const mimeType = imagesSvc.getImage(userId, imageId)?.mime_type || "image/png";
+    const mimeType = (await imagesSvc.getImageAsync(userId, imageId))?.mime_type || "image/png";
     out.push({ data: uint8ToBase64(bytes), mimeType });
   };
 
   if (params.includeCharacterAvatar) {
-    const chat = chatsSvc.getChat(userId, chatId);
-    const character = chat?.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
+    const chat = await chatsSvc.getChatAsync(userId, chatId);
+    const character = chat?.character_id ? (await charactersSvc.getCharacterAsync(userId, chat.character_id)) : null;
     if (character?.image_id) await loadById(character.image_id);
   }
 
   if (params.includePersonaAvatar) {
-    const chat = chatsSvc.getChat(userId, chatId);
+    const chat = await chatsSvc.getChatAsync(userId, chatId);
     const personaId = resolveActivePersonaId(userId, chatId);
     if (personaId) {
-      const info = personasSvc.getPersonaAvatarInfo(userId, personaId, {
+      const info = await personasSvc.getPersonaAvatarInfoAsync(userId, personaId, {
         addonStates: getChatPersonaAddonStates(chat?.metadata, personaId),
         addonToggleOrder: getChatPersonaAddonToggleOrder(chat?.metadata, personaId),
       });
@@ -2069,8 +2255,8 @@ async function maybeAutoMigrate(userId: string, settings: ImageGenSettings): Pro
 
   // Set the active connection ID
   if (defaultConnectionId) {
-    const currentSettings = settingsSvc.getSetting(userId, IMAGE_SETTINGS_KEY)?.value || {};
-    settingsSvc.putSetting(userId, IMAGE_SETTINGS_KEY, {
+    const currentSettings = (await settingsSvc.getSettingAsync(userId, IMAGE_SETTINGS_KEY))?.value || {};
+    await settingsSvc.putSettingAsync(userId, IMAGE_SETTINGS_KEY, {
       ...currentSettings,
       activeImageGenConnectionId: defaultConnectionId,
     });
@@ -2093,6 +2279,8 @@ const IMAGE_GEN_EXPORT_VERSION = 1;
 const TRANSFERABLE_SETTING_TYPES: Record<string, "boolean" | "number" | "string" | "object"> = {
   includeCharacters: "boolean",
   includePersona: "boolean",
+  describeCharacterAvatar: "boolean",
+  describePersonaAvatar: "boolean",
   promptMode: "string",
   customPrompt: "string",
   customNegativePrompt: "string",
@@ -2185,6 +2373,12 @@ export function exportImageGenConfig(
     // The active preset reference only travels alongside the preset itself.
     if (settings.activePromptPresetId && out.presets?.some((p) => p.id === settings.activePromptPresetId)) {
       transferable.activePromptPresetId = settings.activePromptPresetId;
+    }
+    if (
+      settings.activeCaptioningPresetId === null
+      || out.presets?.some((p) => p.id === settings.activeCaptioningPresetId && p.kind === "captioning")
+    ) {
+      transferable.activeCaptioningPresetId = settings.activeCaptioningPresetId;
     }
     out.settings = transferable;
   }
@@ -2352,10 +2546,22 @@ export async function importImageGenConfig(
       next.activePromptPresetId = activeId;
       importedSettings = true;
     }
+    if ("activeCaptioningPresetId" in payload.settings) {
+      const captioningId = payload.settings.activeCaptioningPresetId;
+      if (
+        captioningId === null
+        || (typeof captioningId === "string" && presets.some((p) => p.id === captioningId && p.kind === "captioning"))
+      ) {
+        next.activeCaptioningPresetId = captioningId;
+        importedSettings = true;
+      } else {
+        errors.push('Setting "activeCaptioningPresetId" must be null or reference a captioning preset; it was skipped');
+      }
+    }
   }
 
   if (importedSettings || importedPresets > 0) {
-    settingsSvc.putSetting(userId, IMAGE_SETTINGS_KEY, next);
+    await settingsSvc.putSettingAsync(userId, IMAGE_SETTINGS_KEY, next);
   }
 
   let importedConnections = 0;

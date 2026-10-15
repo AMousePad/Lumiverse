@@ -1,7 +1,10 @@
 #!/usr/bin/env bun
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
+import { stripVTControlCharacters } from "node:util";
 
 const PROJECT_ROOT = join(import.meta.dir, "..");
 const DESKTOP_DIR = join(PROJECT_ROOT, "desktop");
@@ -71,6 +74,10 @@ export function tauriBuildEnvironment(
     // sections used by Arch/CachyOS libraries. Distribution libraries are
     // already stripped; skipping this optional pass is safe and portable.
     NO_STRIP: "1",
+    // linuxdeploy supports a PATCHELF override. Preserve Bun's embedded ELF
+    // application while retaining normal dependency deployment for the tray.
+    PATCHELF: join(PROJECT_ROOT, "scripts", "appimage-patchelf.sh"),
+    LUMIVERSE_REAL_PATCHELF: env.PATCHELF || Bun.which("patchelf") || "patchelf",
     // Tauri's GStreamer linuxdeploy plugin guesses Ubuntu's multiarch paths.
     // pkg-config makes the same finalized build work on Fedora and Arch and
     // ensures its AppRun hook points at the scanner copied into the image.
@@ -79,16 +86,54 @@ export function tauriBuildEnvironment(
   };
 }
 
-async function run(command: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+const NOTARIZATION_CREDENTIALS = [
+  "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID",
+  "APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_PATH",
+] as const;
+
+export function tauriBuildLogLine(
+  line: string,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): string {
+  // Ad hoc signing is intentional for these installers. Preserve diagnostics for any configured notarization.
+  if (platform !== "darwin" || env.APPLE_SIGNING_IDENTITY !== "-"
+    || NOTARIZATION_CREDENTIALS.some((key) => env[key])) return line;
+
+  const expected = "Warn skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH environment variables found";
+  return stripVTControlCharacters(line).trim() === expected
+    ? "        Info macOS installer uses ad hoc signing without notarization."
+    : line;
+}
+
+export async function forwardTauriBuildStderr(
+  stream: ReadableStream<Uint8Array>,
+  write: (line: string) => void,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const lines = createInterface({ input: Readable.from(stream), crlfDelay: Infinity });
+  for await (const line of lines) write(`${tauriBuildLogLine(line, platform, env)}\n`);
+}
+
+async function run(
+  command: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  formatMacOSBuildLogs = false,
+): Promise<void> {
   const child = Bun.spawn({
     cmd: command,
     cwd,
     env,
     stdin: "inherit",
     stdout: "inherit",
-    stderr: "inherit",
+    stderr: formatMacOSBuildLogs ? "pipe" : "inherit",
   });
-  const exitCode = await child.exited;
+  const logs = formatMacOSBuildLogs && child.stderr
+    ? forwardTauriBuildStderr(child.stderr, (line) => { process.stderr.write(line); }, process.platform, env)
+    : Promise.resolve();
+  const [exitCode] = await Promise.all([child.exited, logs]);
   if (exitCode !== 0) {
     throw new Error(`${command[0]} exited with code ${exitCode}`);
   }
@@ -100,6 +145,7 @@ async function main(): Promise<void> {
     [process.execPath, "run", "tauri", ...args],
     DESKTOP_DIR,
     tauriBuildEnvironment(args),
+    process.platform === "darwin" && args[0] === "build",
   );
 
   if (process.platform !== "linux" || args[0] !== "build" || !requestedAppImage(args)) {
@@ -110,6 +156,21 @@ async function main(): Promise<void> {
     ["bash", join(PROJECT_ROOT, "scripts", "finalize-appimage.sh"), appImageBundleDirectory(args)],
     PROJECT_ROOT,
   );
+  // Tauri signed the original image. Repacking changes its bytes, so only the
+  // signature of the finalized AppImage is suitable for the update feed.
+  await resignFinalizedAppImages(appImageBundleDirectory(args), async (path) => {
+    if (!process.env.TAURI_SIGNING_PRIVATE_KEY && !process.env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
+      throw new Error("The finalized AppImage needs its updater signing key to replace the original signature.");
+    }
+    await run([process.execPath, "run", "tauri", "signer", "sign", path], DESKTOP_DIR);
+  });
+}
+
+export async function resignFinalizedAppImages(directory: string, sign: (path: string) => Promise<void>): Promise<void> {
+  for (const file of readdirSync(directory).filter((file) => file.endsWith(".AppImage"))) {
+    const path = join(directory, file);
+    if (existsSync(path + ".sig")) await sign(path);
+  }
 }
 
 if (import.meta.main) {

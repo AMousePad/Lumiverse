@@ -3,7 +3,7 @@ import { mapWithConcurrency } from "../utils/concurrency";
 import { safeFetch } from "../utils/safe-fetch";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import { getCharacter } from "./characters.service";
+import { getCharacter, getCharacterAsync } from "./characters.service";
 import type { ChubExpressionAsset } from "./chub-api.service";
 import { importFromImageData, type ExpressionImageData } from "./expressions.service";
 
@@ -245,7 +245,7 @@ export function queueChubExpressionImport(
       // Keep open expression panels in sync once per pack, including partial
       // imports if a later batch fails. Read fresh so concurrent edits survive.
       if (changed) {
-        const character = getCharacter(userId, characterId);
+        const character = await getCharacterAsync(userId, characterId);
         if (character) eventBus.emit(EventType.CHARACTER_EDITED, { id: characterId, character }, userId);
       }
     }

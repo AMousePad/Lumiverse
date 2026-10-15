@@ -1,7 +1,11 @@
 import { getDb } from "../db/connection";
-import { deleteImageIfUnreferenced, uploadImageDeferred } from "./images.service";
-import { getCharacter, updateCharacter } from "./characters.service";
-import type { CharacterGalleryItem } from "../types/character-gallery";
+import { executeDatabaseOperation } from '../db/execution';
+import { readDatabaseRow } from '../db/queries';
+import { GALLERY_REFERENCE_NAMES_KEY } from '../db/gallery-operations';
+export { GALLERY_REFERENCE_NAMES_KEY } from '../db/gallery-operations';
+import { deleteImageIfUnreferenced, deleteImageIfUnreferencedAsync, uploadImageDeferred } from "./images.service";
+import { getCharacter, updateCharacter, getCharacterAsync, rowToCharacter, collectCharacterImageIds } from "./characters.service";
+import type { CharacterGalleryItem, GalleryItemRemoval } from "../types/character-gallery";
 import { safeFetch } from "../utils/safe-fetch";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -15,7 +19,6 @@ import {
 } from "../utils/gallery-image-reference";
 
 const GALLERY_REFERENCE_SEQUENCE_KEY = "gallery_reference_sequence";
-export const GALLERY_REFERENCE_NAMES_KEY = "gallery_reference_names";
 
 interface GalleryReferenceRegistration {
   assetMap: Record<string, string>;
@@ -335,6 +338,35 @@ export function removeFromGallery(userId: string, itemId: string): boolean {
   return result.changes > 0;
 }
 
+export async function getGalleryRemovalStatusAsync(userId: string, characterId: string, itemId: string): Promise<{ id: string; characterId: string; deleted: boolean } | null> {
+  const row = await readDatabaseRow<{ id: string; characterId: string; deleted: number }>(`SELECT ? AS id, c.id AS characterId,
+      NOT EXISTS (SELECT 1 FROM character_gallery g WHERE g.id = ? AND g.user_id = c.user_id AND g.character_id = c.id) AS deleted
+    FROM characters c WHERE c.id = ? AND c.user_id = ?`, [itemId, itemId, characterId, userId]);
+  return row ? { ...row, deleted: !!row.deleted } : null;
+}
+
+export async function removeFromGalleryAsync(userId: string, characterId: string, itemId: string): Promise<GalleryItemRemoval | null> {
+  const result = await executeDatabaseOperation<{ id: string; characterId: string; imageId: string; character: any | null } | null>({ kind: 'gallery-remove', userId, characterId, itemId });
+  if (!result) return null;
+  const { character: row, ...removed } = result;
+  const receipt: GalleryItemRemoval = { ...removed, status: 'completed' };
+  // Gallery membership is committed now, even if another surface retains the image.
+  eventBus.emit(EventType.CHARACTER_GALLERY_ITEM_REMOVED, receipt, userId);
+  const character = row ? rowToCharacter(row) : null;
+  if (character) eventBus.emit(EventType.CHARACTER_EDITED, { id: characterId, character }, userId);
+  try {
+    if (character && !collectCharacterImageIds(character).has(removed.imageId)) {
+      const chats = await executeDatabaseOperation<any[]>({ kind: 'chat-clear-avatars', userId, ids: [removed.imageId] });
+      for (const chat of chats) eventBus.emit(EventType.CHAT_CHANGED, { chat, changedFields: ['metadata.active_avatar_id', 'metadata.group_active_avatar_ids'] }, userId);
+    }
+    // One asynchronous reference scan replaces the old update + delete double scan.
+    await deleteImageIfUnreferencedAsync(userId, removed.imageId);
+  } catch (error) {
+    console.error('[gallery] unused image cleanup failed:', error instanceof Error ? error.message : error);
+  }
+  return receipt;
+}
+
 export function updateCaption(
   userId: string,
   itemId: string,
@@ -562,7 +594,7 @@ export async function extractImagesFromCharacter(
   userId: string,
   characterId: string
 ): Promise<CharacterGalleryItem[]> {
-  const character = getCharacter(userId, characterId);
+  const character = await getCharacterAsync(userId, characterId);
   if (!character) return [];
 
   const textFields = [

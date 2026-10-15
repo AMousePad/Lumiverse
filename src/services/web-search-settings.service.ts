@@ -199,7 +199,7 @@ export function normalizeWebSearchSettings(
 }
 
 export async function getWebSearchSettings(userId: string): Promise<WebSearchSettings> {
-  const row = settingsSvc.getSetting(userId, WEB_SEARCH_SETTINGS_KEY);
+  const row = await settingsSvc.getSettingAsync(userId, WEB_SEARCH_SETTINGS_KEY);
   const normalized = normalizeStoredWebSearchSettings((row?.value as Partial<WebSearchSettingsInput> | undefined) ?? undefined);
   const hasApiKey = await secretsSvc.validateSecret(userId, webSearchApiKeySecretForProvider(normalized.provider));
   const providerProfiles = Object.fromEntries(await Promise.all(
@@ -219,7 +219,7 @@ export async function getWebSearchApiKey(userId: string, provider: WebSearchProv
 }
 
 export async function putWebSearchSettings(userId: string, input: WebSearchSettingsInput): Promise<WebSearchSettings> {
-  const currentRaw = settingsSvc.getSetting(userId, WEB_SEARCH_SETTINGS_KEY)?.value as Partial<WebSearchSettingsInput> | undefined;
+  const currentRaw = (await settingsSvc.getSettingAsync(userId, WEB_SEARCH_SETTINGS_KEY))?.value as Partial<WebSearchSettingsInput> | undefined;
   const current = normalizeStoredWebSearchSettings(currentRaw);
   const requestedProvider = normalizeProvider(input.provider ?? current.provider);
   const suppliedProfiles = normalizeProviderProfiles(input.providerProfiles);
@@ -248,7 +248,7 @@ export async function putWebSearchSettings(userId: string, input: WebSearchSetti
     secretsSvc.deleteSecret(userId, webSearchApiKeySecretForProvider(persisted.provider));
   }
 
-  settingsSvc.putSetting(userId, WEB_SEARCH_SETTINGS_KEY, persisted);
+  await settingsSvc.putSettingAsync(userId, WEB_SEARCH_SETTINGS_KEY, persisted);
 
   return getWebSearchSettings(userId);
 }

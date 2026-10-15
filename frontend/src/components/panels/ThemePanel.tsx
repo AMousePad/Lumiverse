@@ -1,6 +1,7 @@
-import { useCallback } from 'react'
+import { hasTauriDesktopBridge } from '@/lib/desktopWebView'
+import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bookmark, Download, Upload, Code2 } from 'lucide-react'
+import { Bookmark, Download, Upload, Code2, Lock, Unlock } from 'lucide-react'
 import { useStore } from '@/store'
 import { useThemePackActions } from '@/hooks/useThemePackActions'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
@@ -17,6 +18,7 @@ import styles from './ThemePanel.module.css'
 
 export default function ThemePanel() {
   const { t } = useTranslation('panels')
+  const [slidersLocked, setSlidersLocked] = useState(() => window.matchMedia('(pointer: coarse)').matches)
   const theme = useStore((s) => s.theme) as ThemeConfig | null
   const setTheme = useStore((s) => s.setTheme)
   const hasExtensionOverrides = useStore((s) =>
@@ -27,7 +29,7 @@ export default function ThemePanel() {
   // Normalize so a malformed persisted theme (e.g. missing accent) can't throw
   // when the panel reads current.accent.* — falls back to DEFAULT_THEME.
   const current = normalizeTheme(theme) ?? DEFAULT_THEME
-  const isTauriDesktop = '__TAURI_INTERNALS__' in window
+  const isTauriDesktop = hasTauriDesktopBridge()
 
   // Always read the latest theme from the store to avoid stale closures
   // (e.g. useCharacterTheme may async-update accent/baseColors after render)
@@ -133,6 +135,18 @@ export default function ThemePanel() {
     })
   }, [getLatest, addSavedTheme])
 
+  const lockButton = (
+    <button
+      type="button"
+      className={`${styles.actionBtn} ${styles.sliderLockBtn}`}
+      aria-pressed={slidersLocked}
+      onClick={() => setSlidersLocked((locked) => !locked)}
+    >
+      {slidersLocked ? <Lock size={16} /> : <Unlock size={16} />}
+      {t(slidersLocked ? 'themePanel.unlockControls' : 'themePanel.lockControls')}
+    </button>
+  )
+
   return (
     <div className={styles.panel}>
       <section className={styles.section}>
@@ -151,7 +165,9 @@ export default function ThemePanel() {
 
       <section className={styles.section}>
         <h4 className={styles.sectionLabel}>{t('themePanel.accentColor')}</h4>
+        {lockButton}
         <AccentPicker
+          slidersLocked={slidersLocked}
           hue={current.accent.h}
           saturation={current.accent.s}
           luminance={current.accent.l}
@@ -161,15 +177,20 @@ export default function ThemePanel() {
 
       <section className={styles.section}>
         <h4 className={styles.sectionLabel}>{t('themePanel.baseColors')}</h4>
-        <BaseColorPicker
-          baseColors={current.baseColorsByMode?.[resolvedMode] ?? current.baseColors ?? {}}
-          onChange={handleBaseColorsChange}
-        />
+        {lockButton}
+        <fieldset disabled={slidersLocked} inert={slidersLocked} className={styles.colorControls}>
+          <BaseColorPicker
+            baseColors={current.baseColorsByMode?.[resolvedMode] ?? current.baseColors ?? {}}
+            onChange={handleBaseColorsChange}
+          />
+        </fieldset>
       </section>
 
       <section className={styles.section}>
         <h4 className={styles.sectionLabel}>{t('themePanel.controls')}</h4>
+        {lockButton}
         <DepthControls
+          slidersLocked={slidersLocked}
           radiusScale={current.radiusScale}
           enableGlass={current.enableGlass}
           fontScale={current.fontScale}

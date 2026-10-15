@@ -1,3 +1,4 @@
+import { DatabaseExecutionError, isDatabaseUnavailable } from "../db/execution";
 import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import { operatorService, OperationConflictError } from "../services/operator.service";
@@ -179,10 +180,11 @@ app.post("/database/maintenance", async (c) => {
     });
     return c.json(result);
   } catch (err) {
+    if (isDatabaseUnavailable(err)) throw err;
     if (err instanceof OperationConflictError) {
       return c.json({ error: err.message }, 409);
     }
-    if (err instanceof InsufficientDiskSpaceError) {
+    if (err instanceof InsufficientDiskSpaceError || (err instanceof DatabaseExecutionError && err.code === "INSUFFICIENT_DISK_SPACE")) {
       return c.json({ error: err.message }, 409);
     }
     return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);

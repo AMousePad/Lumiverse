@@ -133,7 +133,7 @@ fn configure_webview_runtime<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
 ) -> WebviewWindowBuilder<'a, R, M> {
     #[cfg(target_os = "windows")]
     let builder = builder.additional_browser_args(WINDOWS_WEBVIEW_BROWSER_ARGS);
-    builder
+    crate::profile::configure_webview(builder)
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -243,11 +243,9 @@ pub fn emit_frontend_presence<R: tauri::Runtime>(
     app: &AppHandle<R>,
     window: &tauri::WebviewWindow<R>,
 ) {
-    let _ = app.emit_to(
-        FRONTEND_LABEL,
-        "desktop-presence-changed",
-        frontend_presence_for_window(window),
-    );
+    let presence = frontend_presence_for_window(window);
+    crate::system_audio::frontend_visible(app, presence.visible && !presence.minimized);
+    let _ = app.emit_to(FRONTEND_LABEL, "desktop-presence-changed", presence);
 }
 
 /// A small, local-only cache written by the trusted frontend after it has
@@ -835,6 +833,7 @@ pub fn show_frontend(
                 }
             }
             WindowEvent::Destroyed => {
+                crate::system_audio::frontend_gone(&close_app);
                 #[cfg(target_os = "linux")]
                 if let Err(error) =
                     crate::wayland_background_effect::clear_background_effects(&close_window)
@@ -1491,9 +1490,9 @@ pub fn show_frontend_url_settings(app: AppHandle) -> Result<(), String> {
         WebviewUrl::App("custom-url.html".into()),
     ))
     .title("Instance Connection")
-    .inner_size(560.0, 480.0)
-    .min_inner_size(560.0, 480.0)
-    .max_inner_size(560.0, 480.0)
+    .inner_size(620.0, 680.0)
+    .min_inner_size(620.0, 680.0)
+    .max_inner_size(620.0, 680.0)
     .resizable(false)
     .center()
     .build()

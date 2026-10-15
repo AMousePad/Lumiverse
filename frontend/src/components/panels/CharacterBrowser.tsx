@@ -302,7 +302,9 @@ export default function CharacterBrowser() {
   }, [browser, ts])
 
   const handleConfirmDelete = useCallback(() => {
-    browser.batchDelete()
+    void browser.batchDelete().catch((error: any) => {
+      toast.error(error?.body?.error || error?.message || 'Deletion could not be confirmed')
+    })
     setConfirmDelete(false)
   }, [browser])
 

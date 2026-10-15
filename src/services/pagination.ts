@@ -1,4 +1,6 @@
 import { getDb } from "../db/connection";
+import { executeDatabaseOperation } from "../db/execution";
+import type { SQLQueryBindings } from "bun:sqlite";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { DEFAULT_LIMIT, MAX_LIMIT } from "../types/pagination";
 import { parseStrictInteger } from "../utils/strict-integer";
@@ -75,6 +77,28 @@ export function paginatedQuery<TRow, TEntity>(
     limit: pagination.limit,
     offset: pagination.offset,
   };
+}
+
+export async function paginatedQueryAsync<TRow, TEntity>(
+  dataSql: string, countSql: string, params: SQLQueryBindings[],
+  pagination: PaginationParams, rowMapper: (row: TRow) => TEntity,
+): Promise<PaginatedResult<TEntity>> {
+  const { rows, total } = await executeDatabaseOperation<{ rows: TRow[]; total: number }>({
+    kind: "pagination", dataSql, countSql, bindings: params, ...pagination,
+  });
+  return { data: rows.map(rowMapper), total, ...pagination };
+}
+
+export async function collectAllAsync<T>(fetchPage: (pagination: PaginationParams) => Promise<PaginatedResult<T>>, pageSize = 200): Promise<PaginatedResult<T>> {
+  const data: T[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await fetchPage({ limit: pageSize, offset });
+    data.push(...page.data);
+    offset += page.data.length;
+    if (page.data.length === 0 || offset >= page.total) break;
+  }
+  return { data, total: data.length, limit: data.length, offset: 0 };
 }
 
 /**

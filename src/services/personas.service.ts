@@ -1,10 +1,13 @@
+import { mutatePersonaWithDb, rowToPersona } from "../db/persona-operations";
+import { readDatabaseRow, readDatabaseRows } from "../db/queries";
+import { executeDatabaseOperation } from "../db/execution";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { Persona, CreatePersonaInput, UpdatePersonaInput } from "../types/persona";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
-import { paginatedQuery } from "./pagination";
-import { getSetting as getUserSetting } from "./settings.service";
+import { paginatedQuery, paginatedQueryAsync } from "./pagination";
+import { getSetting as getUserSetting, getSettingAsync as getUserSettingAsync } from "./settings.service";
 import {
   resolvePersonaAvatarInfo,
   type PersonaAddonStateMap,
@@ -12,24 +15,6 @@ import {
   type PersonaAvatarInfo,
 } from "./persona-addon-states";
 
-function rowToPersona(row: any): Persona {
-  return {
-    ...row,
-    title: row.title || '',
-    subjective_pronoun: row.subjective_pronoun || '',
-    objective_pronoun: row.objective_pronoun || '',
-    possessive_pronoun: row.possessive_pronoun || '',
-    reflexive_pronoun: row.reflexive_pronoun || '',
-    possessive_pronoun_standalone: row.possessive_pronoun_standalone || '',
-    folder: row.folder || '',
-    avatar_path: row.avatar_path || null,
-    image_id: row.image_id || null,
-    attached_world_book_id: row.attached_world_book_id || null,
-    is_default: !!row.is_default,
-    is_narrator: !!row.is_narrator,
-    metadata: JSON.parse(row.metadata),
-  };
-}
 
 export function listPersonas(userId: string, pagination: PaginationParams): PaginatedResult<Persona> {
   return paginatedQuery(
@@ -63,46 +48,12 @@ export function getPersonaAvatarInfo(
 }
 
 export function createPersona(userId: string, input: CreatePersonaInput): Persona {
-  const id = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
+  return finishPersonaMutation(mutatePersonaWithDb(getDb(), { action: "createPersona", args: [userId, input] }), userId);
+}
 
-  getDb().transaction(() => {
-    if (input.is_default) {
-      getDb().query("UPDATE personas SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
-    }
-    getDb()
-      .query(
-        `INSERT INTO personas (
-           id, user_id, name, title, description,
-           subjective_pronoun, objective_pronoun, possessive_pronoun, reflexive_pronoun, possessive_pronoun_standalone,
-           folder, is_default, is_narrator, attached_world_book_id, metadata, created_at, updated_at
-         )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        id,
-        userId,
-        input.name,
-        input.title || "",
-        input.description || "",
-        input.subjective_pronoun || "",
-        input.objective_pronoun || "",
-        input.possessive_pronoun || "",
-        input.reflexive_pronoun || "",
-        input.possessive_pronoun_standalone || "",
-        input.folder || "",
-        input.is_default ? 1 : 0,
-        input.is_narrator ? 1 : 0,
-        input.attached_world_book_id || null,
-        JSON.stringify(input.metadata || {}),
-        now,
-        now
-      );
-  })();
-
-  const persona = getPersona(userId, id)!;
-  eventBus.emit(EventType.PERSONA_CHANGED, { id, persona }, userId);
-  return persona;
+export async function createPersonaAsync(userId: string, input: CreatePersonaInput): Promise<Persona> {
+  const result = await executeDatabaseOperation<PersonaMutationResult>({ kind: "persona-mutation", mutation: { action: "createPersona", args: [userId, input] } });
+  return finishPersonaMutation(result, userId);
 }
 
 /** Load SillyTavern persona identities once so reruns stay linear. */
@@ -123,91 +74,30 @@ export function listPersonaSourceFilenameIds(userId: string): Map<string, { id: 
 }
 
 export function updatePersona(userId: string, id: string, input: UpdatePersonaInput): Persona | null {
-  const existing = getPersona(userId, id);
-  if (!existing) return null;
+  return finishPersonaMutation(mutatePersonaWithDb(getDb(), { action: "updatePersona", args: [userId, id, input] }), userId);
+}
 
-  const now = Math.floor(Date.now() / 1000);
-
-  const fields: string[] = [];
-  const values: any[] = [];
-
-  if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
-  if (input.title !== undefined) { fields.push("title = ?"); values.push(input.title); }
-  if (input.description !== undefined) { fields.push("description = ?"); values.push(input.description); }
-  if (input.subjective_pronoun !== undefined) { fields.push("subjective_pronoun = ?"); values.push(input.subjective_pronoun); }
-  if (input.objective_pronoun !== undefined) { fields.push("objective_pronoun = ?"); values.push(input.objective_pronoun); }
-  if (input.possessive_pronoun !== undefined) { fields.push("possessive_pronoun = ?"); values.push(input.possessive_pronoun); }
-  if (input.reflexive_pronoun !== undefined) { fields.push("reflexive_pronoun = ?"); values.push(input.reflexive_pronoun); }
-  if (input.possessive_pronoun_standalone !== undefined) { fields.push("possessive_pronoun_standalone = ?"); values.push(input.possessive_pronoun_standalone); }
-  if (input.folder !== undefined) { fields.push("folder = ?"); values.push(input.folder); }
-  if (input.is_default !== undefined) { fields.push("is_default = ?"); values.push(input.is_default ? 1 : 0); }
-  if (input.is_narrator !== undefined) { fields.push("is_narrator = ?"); values.push(input.is_narrator ? 1 : 0); }
-  if (input.attached_world_book_id !== undefined) { fields.push("attached_world_book_id = ?"); values.push(input.attached_world_book_id || null); }
-  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
-
-  if (fields.length === 0) return existing;
-
-  fields.push("updated_at = ?");
-  values.push(now);
-  values.push(id);
-  values.push(userId);
-
-  getDb().transaction(() => {
-    if (input.is_default) {
-      getDb().query("UPDATE personas SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
-    }
-    getDb().query(`UPDATE personas SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
-  })();
-  const updated = getPersona(userId, id)!;
-  eventBus.emit(EventType.PERSONA_CHANGED, { id, persona: updated }, userId);
-  return updated;
+export async function updatePersonaAsync(userId: string, id: string, input: UpdatePersonaInput): Promise<Persona | null> {
+  const result = await executeDatabaseOperation<PersonaMutationResult>({ kind: "persona-mutation", mutation: { action: "updatePersona", args: [userId, id, input] } });
+  return finishPersonaMutation(result, userId);
 }
 
 export function renamePersonaFolder(userId: string, oldName: string, newName: string): Persona[] {
-  const source = oldName.trim();
-  const target = newName.trim();
-  if (!source || !target) return [];
+  return finishPersonaMutation(mutatePersonaWithDb(getDb(), { action: "renamePersonaFolder", args: [userId, oldName, newName] }), userId);
+}
 
-  const rows = getDb()
-    .query("SELECT * FROM personas WHERE user_id = ? AND folder = ?")
-    .all(userId, source) as any[];
-  if (rows.length === 0) return [];
-
-  if (source === target) {
-    return rows.map(rowToPersona);
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  getDb()
-    .query("UPDATE personas SET folder = ?, updated_at = ? WHERE user_id = ? AND folder = ?")
-    .run(target, now, userId, source);
-
-  const updated = rows.map((row) => rowToPersona({ ...row, folder: target, updated_at: now }));
-  for (const persona of updated) {
-    eventBus.emit(EventType.PERSONA_CHANGED, { id: persona.id, persona }, userId);
-  }
-  return updated;
+export async function renamePersonaFolderAsync(userId: string, oldName: string, newName: string): Promise<Persona[]> {
+  const result = await executeDatabaseOperation<PersonaMutationResult>({ kind: "persona-mutation", mutation: { action: "renamePersonaFolder", args: [userId, oldName, newName] } });
+  return finishPersonaMutation(result, userId);
 }
 
 export function deletePersonaFolder(userId: string, name: string): Persona[] {
-  const folder = name.trim();
-  if (!folder) return [];
+  return finishPersonaMutation(mutatePersonaWithDb(getDb(), { action: "deletePersonaFolder", args: [userId, name] }), userId);
+}
 
-  const rows = getDb()
-    .query("SELECT * FROM personas WHERE user_id = ? AND folder = ?")
-    .all(userId, folder) as any[];
-  if (rows.length === 0) return [];
-
-  const now = Math.floor(Date.now() / 1000);
-  getDb()
-    .query("UPDATE personas SET folder = '', updated_at = ? WHERE user_id = ? AND folder = ?")
-    .run(now, userId, folder);
-
-  const updated = rows.map((row) => rowToPersona({ ...row, folder: '', updated_at: now }));
-  for (const persona of updated) {
-    eventBus.emit(EventType.PERSONA_CHANGED, { id: persona.id, persona }, userId);
-  }
-  return updated;
+export async function deletePersonaFolderAsync(userId: string, name: string): Promise<Persona[]> {
+  const result = await executeDatabaseOperation<PersonaMutationResult>({ kind: "persona-mutation", mutation: { action: "deletePersonaFolder", args: [userId, name] } });
+  return finishPersonaMutation(result, userId);
 }
 
 export function isPersonaAvatarPathReferenced(userId: string, avatarPath: string): boolean {
@@ -227,39 +117,34 @@ export function bulkUpdatePersonas(
   ids: string[],
   input: BulkPersonaUpdateInput
 ): Persona[] {
-  const uniqueIds = [...new Set(ids.filter(Boolean))];
-  const updated: Persona[] = [];
+  return finishPersonaMutation(mutatePersonaWithDb(getDb(), { action: "bulkUpdatePersonas", args: [userId, ids, input] }), userId);
+}
 
-  for (const id of uniqueIds) {
-    const existing = getPersona(userId, id);
-    if (!existing) continue;
-
-    const patch: UpdatePersonaInput = {};
-    if (input.folder !== undefined) patch.folder = input.folder.trim();
-    if (input.attached_world_book_id !== undefined) {
-      patch.attached_world_book_id = input.attached_world_book_id;
-    }
-    if (input.toggle_narrator) patch.is_narrator = !existing.is_narrator;
-
-    const persona = updatePersona(userId, id, patch);
-    if (persona) updated.push(persona);
-  }
-
-  return updated;
+export async function bulkUpdatePersonasAsync(
+  userId: string,
+  ids: string[],
+  input: BulkPersonaUpdateInput
+): Promise<Persona[]> {
+  const result = await executeDatabaseOperation<PersonaMutationResult>({ kind: "persona-mutation", mutation: { action: "bulkUpdatePersonas", args: [userId, ids, input] } });
+  return finishPersonaMutation(result, userId);
 }
 
 export function setPersonaAvatar(userId: string, id: string, avatarPath: string): boolean {
-  const result = getDb()
-    .query("UPDATE personas SET avatar_path = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-    .run(avatarPath, Math.floor(Date.now() / 1000), id, userId);
-  return result.changes > 0;
+  return finishPersonaMutation(mutatePersonaWithDb(getDb(), { action: "setPersonaAvatar", args: [userId, id, avatarPath] }), userId);
+}
+
+export async function setPersonaAvatarAsync(userId: string, id: string, avatarPath: string): Promise<boolean> {
+  const result = await executeDatabaseOperation<PersonaMutationResult>({ kind: "persona-mutation", mutation: { action: "setPersonaAvatar", args: [userId, id, avatarPath] } });
+  return finishPersonaMutation(result, userId);
 }
 
 export function setPersonaImage(userId: string, id: string, imageId: string): boolean {
-  const result = getDb()
-    .query("UPDATE personas SET image_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-    .run(imageId, Math.floor(Date.now() / 1000), id, userId);
-  return result.changes > 0;
+  return finishPersonaMutation(mutatePersonaWithDb(getDb(), { action: "setPersonaImage", args: [userId, id, imageId] }), userId);
+}
+
+export async function setPersonaImageAsync(userId: string, id: string, imageId: string): Promise<boolean> {
+  const result = await executeDatabaseOperation<PersonaMutationResult>({ kind: "persona-mutation", mutation: { action: "setPersonaImage", args: [userId, id, imageId] } });
+  return finishPersonaMutation(result, userId);
 }
 
 /**
@@ -273,76 +158,26 @@ export function setPersonaAddonAvatar(
   addonId: string,
   avatar: { image_id: string | null; avatar_crop_image_id?: string | null },
 ): Persona | null {
-  const existing = getPersona(userId, personaId);
-  if (!existing) return null;
+  return finishPersonaMutation(mutatePersonaWithDb(getDb(), { action: "setPersonaAddonAvatar", args: [userId, personaId, addonId, avatar] }), userId);
+}
 
-  const metadata = existing.metadata ?? {};
-  let found = false;
-  const updateAddons = (addons: unknown): unknown => {
-    if (!Array.isArray(addons)) return addons;
-    return addons.map((addon: any) => {
-      if (!addon || addon.id !== addonId) return addon;
-      found = true;
-      const next = { ...addon };
-      if (avatar.image_id) next.avatar_image_id = avatar.image_id;
-      else delete next.avatar_image_id;
-      if (avatar.avatar_crop_image_id) next.avatar_crop_image_id = avatar.avatar_crop_image_id;
-      else delete next.avatar_crop_image_id;
-      return next;
-    });
-  };
-
-  const nextMetadata = {
-    ...metadata,
-    ...(Array.isArray(metadata.addons) ? { addons: updateAddons(metadata.addons) } : {}),
-    ...(Array.isArray(metadata.attached_global_addons)
-      ? { attached_global_addons: updateAddons(metadata.attached_global_addons) }
-      : {}),
-  };
-  if (!found) return null;
-  return updatePersona(userId, personaId, { metadata: nextMetadata });
+export async function setPersonaAddonAvatarAsync(
+  userId: string,
+  personaId: string,
+  addonId: string,
+  avatar: { image_id: string | null; avatar_crop_image_id?: string | null },
+): Promise<Persona | null> {
+  const result = await executeDatabaseOperation<PersonaMutationResult>({ kind: "persona-mutation", mutation: { action: "setPersonaAddonAvatar", args: [userId, personaId, addonId, avatar] } });
+  return finishPersonaMutation(result, userId);
 }
 
 export function duplicatePersona(userId: string, id: string): Persona | null {
-  const existing = getPersona(userId, id);
-  if (!existing) return null;
+  return finishPersonaMutation(mutatePersonaWithDb(getDb(), { action: "duplicatePersona", args: [userId, id] }), userId);
+}
 
-  const newId = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
-
-  getDb()
-    .query(
-      `INSERT INTO personas (
-         id, user_id, name, title, description,
-         subjective_pronoun, objective_pronoun, possessive_pronoun, reflexive_pronoun, possessive_pronoun_standalone,
-         folder, avatar_path, image_id, is_default, is_narrator, attached_world_book_id, metadata, created_at, updated_at
-       )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      newId,
-      userId,
-      `${existing.name} (Copy)`,
-      existing.title,
-      existing.description,
-      existing.subjective_pronoun,
-      existing.objective_pronoun,
-      existing.possessive_pronoun,
-      existing.reflexive_pronoun,
-      existing.possessive_pronoun_standalone,
-      existing.folder,
-      existing.avatar_path,
-      existing.image_id,
-      existing.is_narrator ? 1 : 0,
-      existing.attached_world_book_id,
-      JSON.stringify(existing.metadata),
-      now,
-      now
-    );
-
-  const persona = getPersona(userId, newId)!;
-  eventBus.emit(EventType.PERSONA_CHANGED, { id: newId, persona }, userId);
-  return persona;
+export async function duplicatePersonaAsync(userId: string, id: string): Promise<Persona | null> {
+  const result = await executeDatabaseOperation<PersonaMutationResult>({ kind: "persona-mutation", mutation: { action: "duplicatePersona", args: [userId, id] } });
+  return finishPersonaMutation(result, userId);
 }
 
 export function getDefaultPersona(userId: string): Persona | null {
@@ -372,4 +207,52 @@ export function deletePersona(userId: string, id: string): boolean {
     eventBus.emit(EventType.PERSONA_CHANGED, { id, deleted: true }, userId);
   }
   return result.changes > 0;
+}
+
+export async function deletePersonaAsync(userId: string, id: string): Promise<boolean> {
+  const [result] = await executeDatabaseOperation<[{ changes: number }]>({
+    kind: "transaction", statements: [{ sql: "DELETE FROM personas WHERE id = ? AND user_id = ?", bindings: [id, userId] }],
+  });
+  if (result.changes > 0) eventBus.emit(EventType.PERSONA_CHANGED, { id, deleted: true }, userId);
+  return result.changes > 0;
+}
+
+type PersonaMutationResult = { value: unknown; changed: Persona[] };
+function finishPersonaMutation<T>(result: PersonaMutationResult, userId: string): T {
+  for (const persona of result.changed) eventBus.emit(EventType.PERSONA_CHANGED, { id: persona.id, persona }, userId);
+  return result.value as T;
+}
+
+export async function listPersonasAsync(userId: string, pagination: PaginationParams): Promise<PaginatedResult<Persona>> {
+  return paginatedQueryAsync("SELECT * FROM personas WHERE user_id = ? ORDER BY updated_at DESC", "SELECT COUNT(*) as count FROM personas WHERE user_id = ?", [userId], pagination, rowToPersona);
+}
+export async function getPersonaAsync(userId: string, id: string): Promise<Persona | null> {
+  const row = await readDatabaseRow<any>("SELECT * FROM personas WHERE id = ? AND user_id = ?", [id, userId]);
+  return row ? rowToPersona(row) : null;
+}
+export async function getPersonasByIdsAsync(userId: string, ids: string[]): Promise<Persona[]> {
+  const rows = new Map<string, Persona>();
+  const uniqueIds = [...new Set(ids)];
+  for (let i = 0; i < uniqueIds.length; i += 400) {
+    const chunk = uniqueIds.slice(i, i + 400);
+    const page = await readDatabaseRows<any>(`SELECT * FROM personas WHERE user_id = ? AND id IN (${chunk.map(() => "?").join(",")})`, [userId, ...chunk]);
+    for (const row of page) rows.set(row.id, rowToPersona(row));
+  }
+  return ids.flatMap((id) => rows.has(id) ? [rows.get(id)!] : []);
+}
+export async function getDefaultPersonaAsync(userId: string): Promise<Persona | null> {
+  const row = await readDatabaseRow<any>("SELECT * FROM personas WHERE is_default = 1 AND user_id = ? LIMIT 1", [userId]);
+  return row ? rowToPersona(row) : null;
+}
+export async function isPersonaAvatarPathReferencedAsync(userId: string, avatarPath: string): Promise<boolean> {
+  return !!await readDatabaseRow("SELECT 1 FROM personas WHERE user_id = ? AND avatar_path = ? LIMIT 1", [userId, avatarPath]);
+}
+export async function getPersonaAvatarInfoAsync(userId: string, id: string, options: { addonStates?: PersonaAddonStateMap; addonToggleOrder?: PersonaAddonToggleOrder } = {}): Promise<PersonaAvatarInfo | null> {
+  return resolvePersonaAvatarInfo(await getPersonaAsync(userId, id), options.addonStates, options.addonToggleOrder);
+}
+export async function resolvePersonaOrDefaultAsync(userId: string, personaId?: string | null): Promise<Persona | null> {
+  if (personaId) { const requested = await getPersonaAsync(userId, personaId); if (requested) return requested; }
+  const active = await getUserSettingAsync(userId, "activePersonaId");
+  if (typeof active?.value === "string" && active.value.length > 0) { const persona = await getPersonaAsync(userId, active.value); if (persona) return persona; }
+  return getDefaultPersonaAsync(userId);
 }

@@ -4,6 +4,7 @@ import { wsClient } from '@/ws/client'
 import { EventType } from '@/types/ws-events'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { imagesApi } from '@/api/images'
+import { isImageDeleted, onImageDeleted } from '@/lib/deletion-events'
 import { expressionsApi } from '@/api/expressions'
 import * as weaverApi from '@/api/weaver'
 import type {
@@ -46,6 +47,10 @@ export function ExpressionsPane({ sessionId, character, onCount }: ExpressionsPa
   const [variants, setVariants] = useState<WeaverVisualVariantDef[]>([])
   const [config, setConfig] = useState<weaverApi.WeaverExpressionConfig | null>(null)
   const [candidates, setCandidates] = useState<Record<string, WeaverVisualCandidate[]>>({})
+
+  useEffect(() => onImageDeleted((id) => {
+    setCandidates((prev) => Object.fromEntries(Object.entries(prev).map(([label, items]) => [label, items.filter((candidate) => candidate.id !== id)])))
+  }), [])
   const [basePrompt, setBasePrompt] = useState('')
   const [baseNegative, setBaseNegative] = useState('')
   const [params, setParams] = useState<Record<string, any>>({})
@@ -114,7 +119,7 @@ export function ExpressionsPane({ sessionId, character, onCount }: ExpressionsPa
   const refreshLabel = useCallback(async (label: string) => {
     try {
       const res = await weaverApi.listVisualCandidates(sessionId, KIND, label)
-      setCandidates((prev) => ({ ...prev, [label]: res.data }))
+      setCandidates((prev) => ({ ...prev, [label]: res.data.filter((candidate) => !isImageDeleted(candidate.id)) }))
     } catch {
       /* non-fatal */
     }

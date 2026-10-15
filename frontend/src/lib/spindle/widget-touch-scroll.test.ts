@@ -1,7 +1,6 @@
-import { afterAll, beforeEach, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
-import ts from 'typescript'
+import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
+import { installIOSTouchScrollGuard } from '../iosTouchScroll'
 import { registerLiveRoot } from './live-root-registry'
 import { setWidgetTouchScrollMode, usesNativeWidgetTouchScroll } from './widget-touch-scroll'
 
@@ -9,22 +8,21 @@ const dom = new JSDOM('<body></body>')
 const originals = { window: globalThis.window, document: globalThis.document, Element: globalThis.Element }
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, Element: dom.window.Element })
 afterAll(() => { Object.assign(globalThis, originals); dom.window.close() })
-beforeEach(() => document.body.replaceChildren())
-
 // Exercise the real document guard without booting the router/service worker.
-const main = readFileSync(new URL('../../main.tsx', import.meta.url), 'utf8')
-const start = main.indexOf('if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 0) {', main.indexOf('// Two WebKit bugs'))
-const end = main.indexOf('// ── Mobile layout recovery', start)
-if (start < 0 || end < start) throw new Error('Installed-iOS guard fixture anchors changed')
-const code = ts.transpile(main.slice(start, end), { target: ts.ScriptTarget.ESNext })
-Object.defineProperty(window.navigator, 'standalone', { value: true })
-Object.defineProperty(window.navigator, 'maxTouchPoints', { value: 1 })
-const install = new Function('window', 'document', 'navigator', 'findScrollableAncestor', 'usesNativeWidgetTouchScroll', 'installKeyboardFocusReveal', code)
-install(window, document, window.navigator, () => null, usesNativeWidgetTouchScroll, () => {})
+let stop: () => void
+beforeEach(() => { document.body.replaceChildren(); stop = installIOSTouchScrollGuard() })
+afterEach(() => stop())
 
 function touch(target: Element, type = 'touchmove', count = 1): Event {
+  const start = new dom.window.Event('touchstart', { bubbles: true, composed: true })
+  const points = Array.from({ length: count }, (_, identifier) => ({ identifier, clientX: 10, clientY: 10 }))
+  Object.defineProperty(start, 'touches', { value: points })
+  target.dispatchEvent(start)
   const event = new dom.window.Event(type, { bubbles: true, composed: true, cancelable: true })
-  Object.defineProperty(event, 'touches', { value: Array.from({ length: count }, () => ({ clientX: 10, clientY: 30 })) })
+  Object.defineProperties(event, {
+    touches: { value: points.map(touch => ({ ...touch, clientY: 30 })) },
+    changedTouches: { value: points.map(touch => ({ ...touch, clientY: 30 })) },
+  })
   target.dispatchEvent(event)
   return event
 }

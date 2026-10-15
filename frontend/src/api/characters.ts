@@ -1,5 +1,7 @@
 import { get, post, put, del, upload, uploadRaw, uploadWithProgress, getBlob, BASE_URL, type RequestOptions } from './client'
 import { triggerBlobDownload } from '@/lib/downloads'
+import { completeDeletion } from '@/lib/deletion-completion'
+import type { DeletionOperation } from '@/lib/deletion-events'
 
 /** Ceiling for calls that may download a full expression pack (~20 MB). */
 const EXPRESSION_FETCH_TIMEOUT_MS = 5 * 60 * 1000
@@ -72,7 +74,17 @@ export const charactersApi = {
   },
 
   delete(id: string) {
-    return del<void>(`/characters/${id}`)
+    const operationId = crypto.randomUUID()
+    return completeDeletion({
+      operationId, entityId: id,
+      request: (signal) => del<DeletionOperation>(`/characters/${encodeURIComponent(id)}?operation_id=${operationId}`, { signal }),
+      readStatus: (signal) => charactersApi.getDeletionOperation(operationId, signal),
+    })
+  },
+
+  async getDeletionOperation(operationId: string, signal?: AbortSignal) {
+    try { return await get<DeletionOperation>(`/characters/deletions/${encodeURIComponent(operationId)}`, undefined, { signal }) }
+    catch (error: any) { if (error?.status === 404) return null; throw error }
   },
 
   duplicate(id: string) {

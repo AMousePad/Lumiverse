@@ -2,7 +2,7 @@ import { useRef, useEffect } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
-import { prefetchImages } from '@/lib/imageDecodeCache'
+import { useImagePrefetch } from '@/hooks/useImagePrefetch'
 import CharacterRow from './CharacterRow'
 import type { Character, CharacterSummary } from '@/types/api'
 import styles from './CharacterList.module.css'
@@ -33,11 +33,13 @@ export default function CharacterList({
 }: CharacterListProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   useScrollGate(parentRef)
+  const prefetchImages = useImagePrefetch()
 
   const virtualizer = useVirtualizer({
     count: characters.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
+    getItemKey: (index) => characters[index].id,
     overscan: 10,
     paddingStart: 10,
     paddingEnd: 10,
@@ -51,7 +53,10 @@ export default function CharacterList({
   const visEnd = virtualItems.length > 0 ? virtualItems[virtualItems.length - 1].index : -1
   
   useEffect(() => {
-    if (visStart < 0 || characters.length === 0) return
+    if (visStart < 0 || characters.length === 0) {
+      prefetchImages([])
+      return
+    }
     const startIdx = Math.max(0, visStart - PREFETCH_ROWS)
     const endIdx = Math.min(characters.length, visEnd + PREFETCH_ROWS + 1)
     const urls: string[] = []
@@ -64,8 +69,8 @@ export default function CharacterList({
       if (url) urls.push(url)
     }
     
-    if (urls.length > 0) prefetchImages(urls)
-  }, [visStart, visEnd, characters])
+    prefetchImages(urls)
+  }, [visStart, visEnd, characters, prefetchImages])
 
   if (characters.length === 0) return null
 

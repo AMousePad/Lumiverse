@@ -308,7 +308,7 @@ export async function createThemeAsset(userId: string, input: CreateThemeAssetIn
         now
       );
   } catch (err) {
-    if (imageId) imagesSvc.deleteImage(userId, imageId);
+    if (imageId) await imagesSvc.deleteImageAsync(userId, imageId);
     if (fileName) {
       const bundleDir = resolve(getThemeAssetsDir(), userId, bundleId);
       const filepath = resolve(bundleDir, fileName);
@@ -413,11 +413,11 @@ export async function optimizeThemeAssetToWebp(userId: string, id: string): Prom
       )
       .run(nextImage.id, optimizedFile.name, "image/webp", optimizedBuffer.byteLength, now, id, userId);
   } catch (err) {
-    imagesSvc.deleteImage(userId, nextImage.id);
+    await imagesSvc.deleteImageAsync(userId, nextImage.id);
     throw err;
   }
 
-  imagesSvc.deleteImage(userId, row.image_id);
+  await imagesSvc.deleteImageAsync(userId, row.image_id);
   return getThemeAsset(userId, id);
 }
 

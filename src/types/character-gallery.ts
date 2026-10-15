@@ -1,3 +1,10 @@
+export interface GalleryItemRemoval {
+  id: string;
+  characterId: string;
+  imageId: string;
+  status: 'completed';
+}
+
 export interface CharacterGalleryItem {
   id: string;
   image_id: string;

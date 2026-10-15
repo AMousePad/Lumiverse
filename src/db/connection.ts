@@ -2,7 +2,25 @@ import { Database } from "bun:sqlite";
 import { env } from "../env";
 import { mkdirSync, existsSync } from "fs";
 import { dirname } from "path";
-import { applyBaseDatabasePragmas } from "./maintenance";
+import { applyBaseDatabasePragmas, type DatabasePragmaOptions } from "./maintenance";
+
+/** Transactions must finish before yielding control to unrelated requests. */
+class ManagedDatabase extends Database {
+  override transaction<A extends any[], T>(fn: (...args: A) => T) {
+    if (fn.constructor.name === "AsyncFunction") {
+      throw new TypeError("SQLite transaction callbacks must be synchronous");
+    }
+    return super.transaction(function (this: unknown, ...args: A): T {
+      const result = fn.apply(this, args);
+      if (result && typeof (result as any).then === "function") {
+        // Observe a rejected promise while Bun rolls the transaction back.
+        void Promise.resolve(result).catch(() => {});
+        throw new TypeError("SQLite transaction callbacks must not return promises");
+      }
+      return result;
+    });
+  }
+}
 
 let db: Database | null = null;
 let dbPathResolved: string | null = null;
@@ -14,18 +32,24 @@ let dbPathResolved: string | null = null;
 let _generation = 0;
 const _resetListeners = new Set<() => void>();
 
-export function initDatabase(path?: string): Database {
+export function initDatabase(path?: string, options: DatabasePragmaOptions = {}): Database {
   if (db) return db;
 
   const dbPath = path || `${env.dataDir}/lumiverse.db`;
-  dbPathResolved = dbPath;
   const dir = dirname(dbPath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
 
-  db = new Database(dbPath);
-  applyBaseDatabasePragmas(db);
+  const candidate = new ManagedDatabase(dbPath);
+  try {
+    applyBaseDatabasePragmas(candidate, options);
+  } catch (err) {
+    candidate.close(true);
+    throw err;
+  }
+  db = candidate;
+  dbPathResolved = dbPath;
   _generation++;
   notifyReset();
 
@@ -43,7 +67,9 @@ export function getDatabasePath(): string {
 
 export function closeDatabase(): void {
   if (db) {
-    db.close();
+    // Finalize outstanding statements, including abandoned iterators, before
+    // releasing the connection. Do not leave zombie handles until GC.
+    db.close(true);
     db = null;
   }
   dbPathResolved = null;

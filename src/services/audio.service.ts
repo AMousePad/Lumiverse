@@ -1,4 +1,7 @@
 import { getDb } from "../db/connection";
+import { executeDatabaseOperation } from "../db/execution";
+import { readDatabaseRow, runDatabaseStatement } from "../db/queries";
+import { mkdir, unlink } from "node:fs/promises";
 import { env } from "../env";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { join, extname } from "path";
@@ -109,20 +112,20 @@ export async function saveAudio(userId: string, input: SaveAudioInput): Promise<
   const id = crypto.randomUUID();
   const ext = extForMime(input.mime_type) || extname(input.original_filename || "") || ".bin";
   const filename = `${id}${ext}`;
-  const filepath = join(getAudioDir(), filename);
+  const audioDir = join(env.dataDir, AUDIO_DIR);
+  await mkdir(audioDir, { recursive: true });
+  const filepath = join(audioDir, filename);
 
   const buffer = input.data instanceof Buffer ? input.data : Buffer.from(input.data);
   await Bun.write(filepath, buffer);
 
   const now = Math.floor(Date.now() / 1000);
-  getDb()
-    .query(
+  await runDatabaseStatement(
       `INSERT INTO audio_files (
          id, user_id, filename, original_filename, mime_type,
          size_bytes, duration_ms, created_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+    [
       id,
       userId,
       filename,
@@ -131,9 +134,9 @@ export async function saveAudio(userId: string, input: SaveAudioInput): Promise<
       buffer.byteLength,
       input.duration_ms ?? null,
       now,
-    );
+    ]);
 
-  return getAudio(userId, id)!;
+  return (await getAudioAsync(userId, id))!;
 }
 
 export function getAudio(userId: string, id: string): AudioFile | null {
@@ -159,4 +162,25 @@ export function deleteAudio(userId: string, id: string): boolean {
   }
   const result = getDb().query("DELETE FROM audio_files WHERE id = ? AND user_id = ?").run(id, userId);
   return result.changes > 0;
+}
+
+export async function deleteAudioAsync(userId: string, id: string): Promise<boolean> {
+  const row = await getAudioAsync(userId, id);
+  if (!row) return false;
+  await unlink(join(env.dataDir, AUDIO_DIR, row.filename)).catch(() => {});
+  const [result] = await executeDatabaseOperation<[{ changes: number }]>({
+    kind: "transaction", statements: [{ sql: "DELETE FROM audio_files WHERE id = ? AND user_id = ?", bindings: [id, userId] }],
+  });
+  return result.changes > 0;
+}
+
+export function getAudioAsync(userId: string, id: string): Promise<AudioFile | null> {
+  return readDatabaseRow<AudioFile>("SELECT * FROM audio_files WHERE id = ? AND user_id = ?", [id, userId]);
+}
+
+export async function getAudioFilePathAsync(userId: string, id: string): Promise<string | null> {
+  const row = await getAudioAsync(userId, id);
+  if (!row) return null;
+  const filepath = join(env.dataDir, AUDIO_DIR, row.filename);
+  return await Bun.file(filepath).exists() ? filepath : null;
 }

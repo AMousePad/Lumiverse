@@ -26,7 +26,6 @@ import {
   resolveImpersonationPresetSelection,
   type ImpersonationPreference,
 } from '@/lib/impersonationPreset'
-import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import { unmarshalPreset } from '@/lib/loom/service'
 import {
   inspectPromptVariablesAvailability,
@@ -80,7 +79,7 @@ import { isWhistleAvailable } from '@/lib/whistle/config'
 import { whistleClient } from '@/lib/whistle/client'
 import { composeChatSafeZones } from '@/lib/chatSurfaceLayout'
 import { createComposerTouchFocusHandlers } from '@/lib/iosKeyboardScroll'
-import { observeComposerMotion } from '@/lib/composerMotion'
+import { measureComposerHeight, observeComposerMotion } from '@/lib/composerMotion'
 import { renderedPxToLayoutPx } from '@/lib/uiScale'
 import { applyChatAppearance } from '@/lib/chatAppearance'
 import {
@@ -1500,6 +1499,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     if (!parent) return
     const root = document.documentElement
     const loreMount = el.querySelector<HTMLElement>('[data-spindle-mount="chat_composer_above"]')
+    const popoverSlot = el.querySelector<HTMLElement>('[data-composer-popover]')
 
     const measureLoreHeight = () => {
       if (!loreMount) return 0
@@ -1513,7 +1513,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     const update = () => {
       const loreHeight = measureLoreHeight()
-      const h = el.offsetHeight
+      const h = measureComposerHeight(el, popoverSlot)
       const composerHeight = Math.max(0, h - loreHeight) + 8
       // Use the animated position, so list padding and composer move together.
       // Zero is valid for edge-to-edge PWA composers.
@@ -2030,7 +2030,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: effectivePersonaId || undefined,
         persona_addon_states: effectivePersonaId === activePersonaId ? activeGenerationAddonStates : undefined,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal' as const,
         user_input: sourceText || undefined,
       }
@@ -2380,7 +2379,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal',
         retain_council: retainCouncilForRegens || undefined,
       }
@@ -2437,7 +2435,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         message_id: lastAssistant?.id,
         target_character_id: targetCharacterId,
         retain_council: retainCouncilForRegens || undefined,
@@ -2480,8 +2477,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: presetSelection.forcePresetId
-          || shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        force_preset_id: presetSelection.forcePresetId,
         generation_type: 'impersonate',
         impersonate_mode: mode,
         impersonate_input: impersonateInput || undefined,
@@ -2711,7 +2707,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         user_input: text || undefined,
         target_character_id: isGroupChat ? focusedPreviewCharacterId || undefined : undefined,
       })
@@ -3604,7 +3599,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         />
       )}
 
-      <div className={clsx(styles.popoverSlot, openPopover && styles.popoverSlotOpen)}>
+      <div data-composer-popover className={clsx(styles.popoverSlot, openPopover && styles.popoverSlotOpen)}>
         <div className={styles.popoverSlotInner}>
           {renderPopover === 'guides' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>

@@ -17,6 +17,7 @@ import {
   type ImageLightboxZoom,
 } from '@/lib/imageLightboxZoom'
 import { toast } from '@/lib/toast'
+import { onImageDeleted } from '@/lib/deletion-events'
 import styles from './ImageLightbox.module.css'
 
 interface ImageLightboxProps {
@@ -84,6 +85,11 @@ export default function ImageLightbox({
       setDeleting(false)
     }
   }, [src, fallbackSrc])
+
+  useEffect(() => onImageDeleted((id) => {
+    const imageId = currentSrc?.match(/\/images\/([^/?#]+)/)?.[1]
+    if (imageId === encodeURIComponent(id) || imageId === id) onClose()
+  }), [currentSrc, onClose])
 
   useEffect(() => {
     const pan = mousePanRef.current

@@ -445,7 +445,7 @@ async function importOriginalCard(
       ...current,
       worldBook.id,
     ]);
-    charactersSvc.updateCharacter(userId, character.id, { extensions });
+    await charactersSvc.updateCharacterAsync(userId, character.id, { extensions });
     embeddedBookId = worldBook.id;
   }
 
