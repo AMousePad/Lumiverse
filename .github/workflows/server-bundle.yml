@@ -123,7 +123,7 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
       - name: Test launcher, release policy, and desktop lifecycle
-        run: bun test tests/server-bundle.test.ts tests/lancedb-macos-native.test.ts tests/bun-runtime-version-policy.test.ts scripts/desktop-release.test.ts desktop/src-tauri/permissions.test.ts desktop/tests/desktop-updates.test.ts desktop/tests/instance-connection.test.ts desktop/tests/custom-url-ui.test.ts desktop/tests/local-server.test.ts desktop/tests/runner-client.test.ts scripts/desktop-session-restoration.test.ts scripts/tauri-finalized.test.ts src/spindle/runtime-transport.test.ts src/db/execution-transport.test.ts
+        run: bun test tests/server-bundle.test.ts tests/lancedb-macos-native.test.ts tests/bun-runtime-version-policy.test.ts scripts/desktop-release.test.ts desktop/src-tauri/permissions.test.ts desktop/tests/desktop-updates.test.ts desktop/tests/instance-connection.test.ts desktop/tests/custom-url-ui.test.ts desktop/tests/local-server.test.ts desktop/tests/runner-client.test.ts scripts/desktop-session-restoration.test.ts scripts/tauri-finalized.test.ts scripts/appimage-packaging.test.ts src/spindle/runtime-transport.test.ts src/db/execution-transport.test.ts
       - name: Test production browser cookie transport
         run: bun --no-env-file test src/auth/request-cookies.integration.test.ts
         env:
@@ -133,26 +133,36 @@ jobs:
         run: |
           bun x tsc --noEmit
           bun x tsc --project scripts/tsconfig.server-bundle.json --noEmit
-      - name: Install Intel LanceDB build prerequisites
+      - name: Restore validated Intel LanceDB addon
         if: matrix.platform == 'darwin-x86_64'
+        id: intel-lancedb
+        uses: actions/cache/restore@v5
+        with:
+          path: dist/native/lancedb-darwin-x64
+          key: intel-lancedb-addon-${{ hashFiles('scripts/build-lancedb-macos.ts', 'scripts/lancedb-macos-native.ts', 'scripts/check-lancedb-macos.ts', 'src/runtime/lancedb-check.ts') }}
+      - name: Install Intel LanceDB build prerequisites
+        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
         run: brew install protobuf cmake
       - uses: dtolnay/rust-toolchain@stable
-        if: matrix.platform == 'darwin-x86_64'
+        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
         with:
           toolchain: 1.97.0
           targets: x86_64-apple-darwin
       - name: Prepare pinned Intel LanceDB source
-        if: matrix.platform == 'darwin-x86_64'
+        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
         run: bun run build:lancedb:macos --prepare-only
-      - uses: Swatinem/rust-cache@v2
-        if: matrix.platform == 'darwin-x86_64'
-        with:
-          workspaces: .tmp/lancedb-macos/0.37.1/source -> ../target
-          key: intel-lancedb-0.37.1-macos13-x86-64
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build and test Intel LanceDB native engine
-        if: matrix.platform == 'darwin-x86_64'
+        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
         run: bun run build:lancedb:macos
+      - name: Revalidate cached Intel LanceDB checksum and native operations
+        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit == 'true'
+        run: bun --no-env-file scripts/check-lancedb-macos.ts --artifact-dir dist/native/lancedb-darwin-x64
+      - name: Cache only the verified Intel addon, manifest, and license
+        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: dist/native/lancedb-darwin-x64
+          key: ${{ steps.intel-lancedb.outputs.cache-primary-key }}
       - name: Build standalone server and test outside the checkout
         shell: bash
         run: |

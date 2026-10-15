@@ -18,7 +18,7 @@ export interface DesktopFeed {
 // A docs-only commit outside this set does not rebuild the desktop nightly.
 export const BUNDLED_SOURCE_PATHS = ["src", "frontend", "desktop", "user-docs/docs", "package.json", "bun.lock", "tsconfig.json", "LICENSE.md",
   "scripts/build-server.ts", "scripts/build-desktop-server.ts", "scripts/build-lancedb-macos.ts", "scripts/lancedb-macos-native.ts", "scripts/reset-password.ts",
-  "scripts/input.ts", "scripts/ui.ts", "scripts/tauri-finalized.ts", "scripts/finalize-appimage.sh", "scripts/verify-appimage-permissions.sh", "scripts/verify-appimage-gstreamer.sh",
+  "scripts/input.ts", "scripts/ui.ts", "scripts/tauri-finalized.ts", "scripts/appimage-patchelf.sh", "scripts/finalize-appimage.sh", "scripts/verify-appimage-permissions.sh", "scripts/verify-appimage-gstreamer.sh",
   "scripts/desktop-release.ts", "scripts/prepare-desktop-release.ts", "scripts/publish-desktop-release.ts",
   ".github/workflows/server-bundle.yml", ".github/workflows/desktop-release.yml", ".github/workflows/desktop-nightly.yml"];
 const UNSHIPPED_PATHS = ["desktop/README.md", "desktop/releases", "desktop/tests", "frontend/README.md"];

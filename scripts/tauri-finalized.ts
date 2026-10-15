@@ -74,6 +74,10 @@ export function tauriBuildEnvironment(
     // sections used by Arch/CachyOS libraries. Distribution libraries are
     // already stripped; skipping this optional pass is safe and portable.
     NO_STRIP: "1",
+    // linuxdeploy supports a PATCHELF override. Preserve Bun's embedded ELF
+    // application while retaining normal dependency deployment for the tray.
+    PATCHELF: join(PROJECT_ROOT, "scripts", "appimage-patchelf.sh"),
+    LUMIVERSE_REAL_PATCHELF: env.PATCHELF || Bun.which("patchelf") || "patchelf",
     // Tauri's GStreamer linuxdeploy plugin guesses Ubuntu's multiarch paths.
     // pkg-config makes the same finalized build work on Fedora and Arch and
     // ensures its AppRun hook points at the scanner copied into the image.

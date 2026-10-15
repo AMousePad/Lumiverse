@@ -121,9 +121,12 @@ Large bundled release files upload directly to GitHub Releases. There are no
 duplicate desktop, standalone server, or Intel native-addon Actions artifacts
 in this pipeline. Feature-branch checkout-based installer artifacts expire
 after three days. Desktop Rust caching retains the Cargo registry rather than
-compiled target directories; the expensive pinned Intel LanceDB build retains
-its own dependency cache. Automatic release cache writes are limited to
-default-branch runs.
+compiled target directories, with registry writes limited to default-branch
+runs. Intel LanceDB caches only its finished addon, manifest, and license,
+keyed by the pinned build and validation policy. Cached addons pass checksum,
+architecture, version, and native database checks before packaging. The addon
+cache is saved after validation, so an unrelated installer failure can retry
+without repeating the native compile.
 
 Actions dependency caches, Actions artifacts, and GitHub Release assets have
 separate storage policies. Dropping `.deb` avoids duplicate installers; direct

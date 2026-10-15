@@ -186,6 +186,10 @@ pub fn bundled_server_alive(
 pub(crate) fn command(app: &AppHandle) -> Result<Command, String> {
     let executable = binary().ok_or("This desktop build does not include a server executable.")?;
     let mut command = Command::new(executable);
+    // The server owns its runtime/native libraries; AppRun's GTK overrides
+    // belong to the desktop and must not affect Bun or its subprocesses.
+    #[cfg(target_os = "linux")]
+    command.env_remove("LD_LIBRARY_PATH").env_remove("LD_PRELOAD");
     if app.state::<crate::profile::DesktopProfile>().isolated {
         let root = app
             .path()
