@@ -106,7 +106,15 @@ export class ReleaseAPI {
   }
   async release(tag: string): Promise<GitHubRelease | null> {
     try { return await this.request(`/releases/tags/${encodeURIComponent(tag)}`); }
-    catch (error) { if ((error as { status?: number }).status === 404) return null; throw error; }
+    catch (error) { if ((error as { status?: number }).status !== 404) throw error; }
+    // Draft tags are not created until publication, so GitHub's tag endpoint
+    // cannot resolve an unpublished release. Authenticated listings include it.
+    for (let page = 1; ; page++) {
+      const releases = await this.request<GitHubRelease[]>(`/releases?per_page=100&page=${page}`);
+      const draft = releases.find((release) => release.draft && release.tag_name === tag);
+      if (draft) return draft;
+      if (releases.length < 100) return null;
+    }
   }
   async assets(id: number): Promise<GitHubAsset[]> {
     const assets: GitHubAsset[] = [];

@@ -100,7 +100,14 @@ function githubFixture() {
     const url = new URL(String(input)), method = init.method || "GET";
     const path = url.pathname.replace("/repos/test/Lumiverse", "");
     calls.push(`${method} ${path}${url.search}`);
-    if (path.startsWith("/releases/tags/")) return json(releases.find((release) => release.tag_name === decodeURIComponent(path.slice(15))) || {}, releases.some((release) => release.tag_name === decodeURIComponent(path.slice(15))) ? 200 : 404);
+    if (path.startsWith("/releases/tags/")) {
+      const published = releases.find((release) => !release.draft && release.tag_name === decodeURIComponent(path.slice(15)));
+      return json(published || {}, published ? 200 : 404);
+    }
+    if (path === "/releases" && method === "GET") {
+      const page = Number(url.searchParams.get("page") || 1), count = Number(url.searchParams.get("per_page") || 100);
+      return json(releases.slice((page - 1) * count, page * count));
+    }
     if (path === "/releases" && method === "POST") {
       const body = JSON.parse(String(init.body));
       const release = { ...body, id: releases.length + 1, upload_url: `https://uploads.github.com/repos/test/Lumiverse/releases/${releases.length + 1}/assets{?name}` };
@@ -133,6 +140,14 @@ function githubFixture() {
   }) as typeof fetch;
   return { api: new ReleaseAPI("test/Lumiverse", "test-token", transport), releases, assets, calls, failNextFeed: () => { failFeed = true; } };
 }
+test("draft releases are found and reused before GitHub creates their tags", async () => {
+  const fixture = githubFixture();
+  const created = await createDesktopRelease(fixture.api, build);
+  expect((await fixture.api.release(build.tag))?.id).toBe(created.id);
+  expect((await createDesktopRelease(fixture.api, build)).id).toBe(created.id);
+  expect(fixture.releases).toHaveLength(1);
+  expect(fixture.calls).toContain("GET /releases?per_page=100&page=1");
+});
 test("partial matrix results never publish a release or advance the channel feed", async () => {
   const fixture = githubFixture(); await createDesktopRelease(fixture.api, build);
   for (const platform of UPDATE_PLATFORMS.slice(0, -1)) await uploadDesktopPlatform(fixture.api, build, platform, bundle(platform).root);

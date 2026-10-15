@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join, resolve, win32 } from "node:path";
+import { posix, resolve, win32 } from "node:path";
 
 export interface ServerBundleManifest {
   format: 1;
@@ -90,12 +90,12 @@ export function defaultBundleDirectories(
     return { config: win32.join(base, "Lumiverse"), cache: win32.join(base, "Lumiverse", "Cache"), data: win32.join(base, "Lumiverse", "data") };
   }
   if (platform === "darwin") {
-    const base = join(home, "Library", "Application Support", "Lumiverse");
-    return { config: base, cache: join(home, "Library", "Caches", "Lumiverse"), data: join(base, "data") };
+    const base = posix.join(home, "Library", "Application Support", "Lumiverse");
+    return { config: base, cache: posix.join(home, "Library", "Caches", "Lumiverse"), data: posix.join(base, "data") };
   }
   return {
-    config: join(env.XDG_CONFIG_HOME || join(home, ".config"), "lumiverse"),
-    cache: join(env.XDG_CACHE_HOME || join(home, ".cache"), "lumiverse"),
-    data: join(env.XDG_DATA_HOME || join(home, ".local", "share"), "lumiverse", "data"),
+    config: posix.join(env.XDG_CONFIG_HOME || posix.join(home, ".config"), "lumiverse"),
+    cache: posix.join(env.XDG_CACHE_HOME || posix.join(home, ".cache"), "lumiverse"),
+    data: posix.join(env.XDG_DATA_HOME || posix.join(home, ".local", "share"), "lumiverse", "data"),
   };
 }
