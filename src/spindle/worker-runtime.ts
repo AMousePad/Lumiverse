@@ -115,6 +115,7 @@ import {
 } from "lumiverse-spindle-types";
 import type { DryRunResultDTO, GetBreakdownWorkerMessage, SavedBreakdownDTO } from "./generation-contract";
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
+import type { CharacterGalleryItemDTO, CharacterGalleryWorkerMessage, ConnectionModelDTO, ConnectionModelsWorkerMessage } from "./gallery-models-contract";
 import type { ActivationPatternsMessage, ActivationPatternsOptions, ActivationPatternsResult } from "./activation-patterns-contract";
 import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef } from "./desktop-capture-contract";
 import { deserializeWorkerResponseError } from "./worker-response-error";
@@ -315,6 +316,8 @@ type SpindleUserRole = "operator" | "admin" | "user";
 type RuntimeWorkerToHost =
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
+  | CharacterGalleryWorkerMessage
+  | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
@@ -735,6 +738,12 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
   };
   images: SpindleAPI["images"] & {
     readBinary(imageId: string, userId?: string): Promise<Uint8Array>;
+  };
+  characters: SpindleAPI["characters"] & {
+    getGallery(characterId: string, userId?: string): Promise<CharacterGalleryItemDTO[]>;
+  };
+  connections: SpindleAPI["connections"] & {
+    getModels(connectionId: string, userId?: string): Promise<ConnectionModelDTO[]>;
   };
   generate: Omit<SpindleAPI["generate"], "dryRun"> & {
     dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
@@ -2440,6 +2449,11 @@ const spindleApi: RuntimeSpindleAPI = {
       const result = await request({ type: "connections_get", requestId, connectionId, userId });
       return result as ConnectionProfileDTO | null;
     },
+    async getModels(connectionId: string, userId?: string): Promise<ConnectionModelDTO[]> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "connections_models", requestId, connectionId, userId });
+      return result as ConnectionModelDTO[];
+    },
     async resolveDispatch(connectionId: string): Promise<ConnectionDispatchDescriptorDTO | null> {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "connections_resolve_dispatch", requestId, connectionId });
@@ -2967,6 +2981,11 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "characters_get", requestId, characterId, userId });
       return result as CharacterDTO | null;
+    },
+    async getGallery(characterId: string, userId?: string): Promise<CharacterGalleryItemDTO[]> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "characters_get_gallery", requestId, characterId, userId });
+      return result as CharacterGalleryItemDTO[];
     },
     async create(input: CharacterCreateDTO, userId?: string): Promise<CharacterDTO> {
       assertMutationAllowed("spindle.characters.create()");
