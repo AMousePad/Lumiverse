@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getDb, initDatabase } from "./connection";
+import { bunCmd } from "../utils/bun-cmd";
 
 let directory: string;
 beforeEach(() => {
@@ -16,6 +17,32 @@ afterEach(() => {
 });
 
 describe("managed SQLite connections", () => {
+  test("legacy synchronous writes survive a subprocess lock lasting longer than 100 ms", async () => {
+    const path = join(directory, "contended.db");
+    const db = initDatabase(path);
+    db.exec("CREATE TABLE probe (value INTEGER); INSERT INTO probe VALUES (0)");
+    const writer = Bun.spawn({
+      cmd: bunCmd(join(import.meta.dir, "test-fixtures/connection-lock-holder.ts"), path),
+      stdout: "pipe",
+      stderr: "inherit",
+    });
+    try {
+      const reader = writer.stdout.getReader();
+      const { value } = await reader.read();
+      reader.releaseLock();
+      expect(new TextDecoder().decode(value)).toBe("locked\n");
+      // The child still owns the write lock here. This must wait for its commit
+      // rather than throw SQLITE_BUSY on an ordinary server connection.
+      db.query("UPDATE probe SET value = value + 1").run();
+      expect(await writer.exited).toBe(0);
+      expect(db.query("SELECT value FROM probe").get()).toEqual({ value: 2 });
+      expect(db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
+    } finally {
+      writer.kill();
+      await writer.exited;
+    }
+  });
+
   test("rejects async transaction callbacks before invoking them", () => {
     const db = initDatabase(":memory:");
     let invoked = false;

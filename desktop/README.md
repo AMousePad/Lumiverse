@@ -18,6 +18,13 @@ its local server, it opens the native Lumiverse window. The tray menu can hide,
 reopen, or reload that window, and can still open the same address in your
 default browser when needed.
 
+On Windows, Desktop explicitly hides each WebView2 rendering surface while its
+window is hidden or minimized, or the session's display is off. Rendering returns
+when both the display and that window are visible; waking the display does not
+restore hidden or minimized windows. Dimmed displays and unfocused visible
+windows continue rendering. This applies to the browser, floating widgets, and
+desktop dialogs without reloading pages or explicitly suspending scripts.
+
 The built-in instance uses the packaged Bun server. Existing checkouts use the
 headless source runner (`bun scripts/runner.ts --headless`). Both communicate
 with the tray over a private stdio channel, and exiting the desktop stops the
@@ -199,6 +206,7 @@ cd desktop
 bun install --frozen-lockfile
 bun run build
 cargo test --locked --lib --manifest-path src-tauri/Cargo.toml capture::
+cargo test --locked --lib --manifest-path src-tauri/Cargo.toml webview_visibility::
 bun run tauri dev
 ```
 
@@ -212,6 +220,12 @@ activity on the actual device; enabling hardware acceleration does not prove
 that Windows selected a hardware encoder. No recording file is written by this
 adapter; memory may still be paged by the OS. Full on-device acceptance remains
 required before release.
+
+For WebView rendering, compare idle GPU activity before and after display sleep,
+then repeat with the browser minimized and hidden. Confirm that restoring or
+reopening it paints immediately, and that waking the display leaves hidden or
+minimized windows in their existing state. Include floating widgets, a streaming
+reply, page reloads, and closing/recreating the browser in this check.
 
 ## Translucent frontend themes
 

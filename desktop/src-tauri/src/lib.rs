@@ -11,6 +11,8 @@ mod runner;
 mod system_audio;
 #[cfg(any(target_os = "linux", test))]
 mod webview_media;
+#[cfg(any(target_os = "windows", test))]
+mod webview_visibility;
 #[cfg(target_os = "linux")]
 mod wayland_background_effect;
 
@@ -322,6 +324,9 @@ pub fn run() {
             system_audio::desktop_system_audio_start,
             system_audio::desktop_system_audio_stop,
         ]);
+
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(webview_visibility::init());
 
     #[cfg(target_os = "macos")]
     let builder = builder

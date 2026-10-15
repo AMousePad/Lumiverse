@@ -182,9 +182,9 @@ if (env.stMigrate) {
 const { seedTokenizersAsync } = await import("./services/tokenizer-seed");
 await seedTokenizersAsync();
 
-// Finish bootstrap writes before enabling background indexing/maintenance or
-// shortening the main connection's startup lock budget.
-db.run("PRAGMA busy_timeout = 100");
+// Finish bootstrap writes before enabling background indexing/maintenance.
+// Keep the main connection's lock budget for synchronous auth/legacy writes;
+// only the supervised subprocess uses short waits with asynchronous retries.
 await startDatabaseExecution();
 startAutomaticDatabaseMaintenance(
   () => db,

@@ -14,6 +14,8 @@ on:
       - "desktop/src-tauri/tauri.conf.json"
       - "desktop/src-tauri/src/capture/**"
       - "desktop/src-tauri/src/system_audio/**"
+      - "desktop/src-tauri/src/webview_visibility.rs"
+      - "desktop/src-tauri/src/lib.rs"
       - "desktop/tests/system-audio-coreaudio.test.ts"
       - "desktop/tests/fixtures/system-audio-coreaudio.m"
       - "desktop/tests/system-audio-benchmark.rs"
@@ -158,13 +160,14 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
-      - name: Test Windows native capture boundaries
+      - name: Test Windows native capture and WebView lifecycle
         if: matrix.target == 'x86_64-pc-windows-msvc'
         working-directory: desktop
         run: |
           bun run build
           cargo test --locked --lib --manifest-path src-tauri/Cargo.toml capture::
           cargo test --locked --lib --manifest-path src-tauri/Cargo.toml system_audio::
+          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml webview_visibility::
 
       - name: Test Linux system audio boundaries
         if: matrix.target == 'x86_64-unknown-linux-gnu'
