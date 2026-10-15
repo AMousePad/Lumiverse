@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from 'bun:test'
-import { act, createElement } from 'react'
+import { act, createElement, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { JSDOM } from 'jsdom'
 import type { PushSubscriptionRecord } from '@/api/push'
@@ -35,7 +35,11 @@ mock.module('@/api/push', () => ({ pushApi: {
 } }))
 const { usePushSubscription } = await import('./usePushSubscription')
 let current!: ReturnType<typeof usePushSubscription>, root: Root
-function Fixture() { current = usePushSubscription(); return null }
+function Fixture() {
+  const subscription = usePushSubscription()
+  useEffect(() => { current = subscription }, [subscription])
+  return null
+}
 beforeEach(async () => {
   configured = true; available = true; rows = []
   request.mockClear(); subscribeIOS.mockClear(); unsubscribe.mockClear(); testPush.mockClear()
