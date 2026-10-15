@@ -81,6 +81,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.bundled_nightly
     permissions:
       contents: write
+      actions: read
     uses: ./.github/workflows/desktop-nightly.yml
     secrets: inherit
 

@@ -113,7 +113,13 @@ Rerunning failed platform jobs can replace assets only in their matching
 unpublished draft. Published payloads are immutable. If publication succeeds
 but uploading the small channel feed fails, rerun the failed publication job;
 it validates the complete release and retries the feed without replacing
-payloads. Draft releases from abandoned builds can be removed manually.
+payloads. After a newer nightly and its channel feed publish successfully,
+cleanup removes older bundled nightly drafts whose source metadata matches
+the draft and whose originating nightly workflow failed or was canceled.
+Active builds, published releases, stable drafts, and unrelated releases
+are retained. Cleanup failures only log a
+warning, so they cannot fail an otherwise successful publication. Until a
+newer nightly ships, failed builds retain their uploaded assets for retries.
 Rerunning an older publication cannot move a channel back to an older version
 or replace an existing version with different source.
 

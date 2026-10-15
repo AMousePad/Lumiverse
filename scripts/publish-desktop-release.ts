@@ -4,6 +4,34 @@ import { collectReleaseAssets, mergeFeeds, ReleaseAPI, UPDATE_PLATFORMS, validat
 
 export interface ReleaseBuild { channel: ReleaseChannel; version: string; tag: string; sha: string; fingerprint: string }
 function marker(build: ReleaseBuild): string { return `<!-- lumiverse-bundled:${build.sha}:${build.fingerprint} -->`; }
+export async function pruneAbandonedNightlyDrafts(api: ReleaseAPI, build: ReleaseBuild): Promise<void> {
+  if (build.channel !== "nightly") return;
+  // Collect first: deleting while paginating can shift releases between pages.
+  const candidates: GitHubRelease[] = [];
+  for (let page = 1; ; page++) {
+    const releases = await api.request<GitHubRelease[]>(`/releases?per_page=100&page=${page}`);
+    candidates.push(...releases.filter((release) => release.draft));
+    if (releases.length < 100) break;
+  }
+  for (const candidate of candidates) {
+    const tag = candidate.tag_name.match(/^desktop-v(\d+\.\d+\.\d+-nightly\.\d{8}\.([1-9]\d*))$/);
+    const source = candidate.body?.match(/<!-- lumiverse-bundled:([a-f0-9]{40}):[a-f0-9]{64} -->/);
+    if (!tag || !source || Bun.semver.order(tag[1]!, build.version) >= 0) continue;
+    try {
+      const release = await api.request<GitHubRelease>(`/releases/${candidate.id}`);
+      if (!release.draft || release.tag_name !== candidate.tag_name || release.body !== candidate.body || release.target_commitish !== source[1]) continue;
+      const run = await api.request<{ status: string; conclusion: string | null; path: string }>(`/actions/runs/${tag[2]}`);
+      // Scheduled runs use the default branch's workflow SHA, while the bundled
+      // source is staging. Check the owning workflow and the draft's source.
+      if (run.status !== "completed" || ![".github/workflows/desktop-nightly.yml", ".github/workflows/desktop-build.yml"].includes(run.path)
+        || !["failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"].includes(run.conclusion ?? "")) continue;
+      await api.request(`/releases/${release.id}`, { method: "DELETE" });
+      console.log(`Removed superseded incomplete nightly draft: ${release.tag_name}`);
+    } catch (error) {
+      console.warn(`Could not clean nightly draft ${candidate.tag_name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
 export async function createDesktopRelease(api: ReleaseAPI, build: ReleaseBuild): Promise<GitHubRelease> {
   const existing = await api.release(build.tag);
   if (existing) {
@@ -68,6 +96,10 @@ export async function publishDesktopRelease(api: ReleaseAPI, build: ReleaseBuild
   }
   if (!feeds) throw new Error("The channel feed release is unavailable.");
   await api.upload(feeds, { name: `${build.channel}.json`, contentType: "application/json", bytes: Buffer.from(JSON.stringify(feed, null, 2) + "\n") });
+  // Keep failed-build assets available for retries until a newer nightly ships.
+  // Cleanup errors must not turn a successfully published update into a failure.
+  try { await pruneAbandonedNightlyDrafts(api, build); }
+  catch (error) { console.warn(`Could not clean superseded nightly drafts: ${error instanceof Error ? error.message : String(error)}`); }
 }
 if (import.meta.main) {
   const channel = process.env.DESKTOP_CHANNEL;

@@ -43,6 +43,9 @@ jobs:
   release:
     needs: prepare
     if: needs.prepare.outputs.build == 'true'
+    permissions:
+      contents: write
+      actions: read
     uses: ./.github/workflows/server-bundle.yml
     with:
       source: ${{ needs.prepare.outputs.sha }}

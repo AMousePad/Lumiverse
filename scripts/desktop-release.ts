@@ -88,7 +88,7 @@ export function collectReleaseAssets(bundleRoot: string, platform: UpdatePlatfor
   return { assets, updater, signature };
 }
 
-export interface GitHubRelease { id: number; draft: boolean; body: string; upload_url: string; tag_name: string }
+export interface GitHubRelease { id: number; draft: boolean; body: string; upload_url: string; tag_name: string; target_commitish: string }
 export interface GitHubAsset { id: number; name: string; browser_download_url: string }
 export class ReleaseAPI {
   readonly base: string;
