@@ -1,4 +1,5 @@
 //! Named test profiles isolate files, WebView cookies, credentials, and server data.
+#[cfg(any(target_os = "macos", test))]
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -13,6 +14,7 @@ pub struct DesktopProfile {
     pub name: Option<String>,
     pub isolated: bool,
     pub identifier: String,
+    #[cfg(any(target_os = "macos", test))]
     #[serde(skip)]
     store_identifier: [u8; 16],
 }
@@ -70,11 +72,13 @@ fn derive_profile(identifier: &str, name: Option<String>) -> DesktopProfile {
         None => identifier.to_owned(),
     };
     let isolated = name.is_some() || identifier.starts_with("chat.lumiverse.tray.debug");
+    #[cfg(any(target_os = "macos", test))]
     let digest = Sha256::digest(identifier.as_bytes());
     DesktopProfile {
         name,
         isolated,
         identifier,
+        #[cfg(any(target_os = "macos", test))]
         store_identifier: digest[..16].try_into().unwrap(),
     }
 }

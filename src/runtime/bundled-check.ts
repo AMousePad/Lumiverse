@@ -46,18 +46,20 @@ try {
   try {
     await new Promise<void>((resolveCheck, reject) => {
       let answer: unknown;
-      timer = setTimeout(() => reject(new Error("Extension subprocess did not complete")), 10_000);
+      const observed: string[] = [];
+      timer = setTimeout(() => reject(new Error(`Extension subprocess did not complete; received: ${observed.join(", ") || "no messages"}`)), 10_000);
       transport = createRuntimeTransport({
         runtimePath: join(root, "src/spindle/backend-process-runtime.ts"), mode: "process",
         extensionIdentifier: "bundle-check", repoPath: dataDir, storagePath: dataDir,
         onMessage(message) {
           const event = message as { type: string; payload?: { answer: number }; error?: string };
+          observed.push(event.type);
           if (event.type === "message") answer = event.payload?.answer;
           if (event.type === "fail") reject(new Error(event.error));
           if (event.type === "complete") { try { assert.equal(answer, 42); resolveCheck(); } catch (error) { reject(error); } }
         },
         onError: (message) => reject(new Error(message)),
-        onExit: (exitCode) => { if (exitCode) reject(new Error(`Extension exited ${exitCode}`)); },
+        onExit: (exitCode) => { if (!observed.includes("complete")) reject(new Error(`Extension exited ${exitCode}; received: ${observed.join(", ") || "no messages"}`)); },
       });
       transport.postMessage({ type: "init", process: { processId: "check", entry: "check", entryPath: built, kind: "check" } });
     });

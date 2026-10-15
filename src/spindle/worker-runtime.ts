@@ -124,6 +124,7 @@ import {
   normalizeOwnedSharedRpcEndpoint,
 } from "./shared-rpc";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createRuntimeChannel } from "./runtime-channel";
 import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock } from "../types/preset";
 import type { LumiaDlcCatalog } from "../types/pack";
 import type {
@@ -133,8 +134,6 @@ import type {
   SpindleMcpServerDTO,
   SpindleMcpToolCallOptionsDTO,
 } from "../types/mcp-server";
-
-const nativeProcessExit = process.exit.bind(process);
 
 type TokenModelSource = "main" | "sidecar" | "explicit";
 
@@ -1151,11 +1150,7 @@ function post(msg: RuntimeWorkerToHost): void {
   if (scope) {
     (msg as any).rpcPermissionScopeId = scope.id;
   }
-  if (typeof process.send === "function") {
-    process.send(msg);
-    return;
-  }
-  self.postMessage(msg);
+  channel.send(msg);
 }
 
 function request(msg: RuntimeWorkerToHost & { requestId: string }): Promise<unknown> {
@@ -5216,18 +5211,10 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         // If posting fails, the host's 5s fallback terminates us anyway.
       }
       // Allow extension to clean up
-      nativeProcessExit(0);
+      channel.exit(0);
       break;
     }
   }
 }
 
-if (typeof process.send === "function") {
-  process.on("message", (message) => {
-    void handleHostMessage(message as RuntimeHostToWorker);
-  });
-} else {
-  self.onmessage = (event: MessageEvent<RuntimeHostToWorker>) => {
-    void handleHostMessage(event.data);
-  };
-}
+const channel = createRuntimeChannel((message) => { void handleHostMessage(message as RuntimeHostToWorker); });
