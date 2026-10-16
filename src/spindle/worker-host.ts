@@ -31,6 +31,7 @@ import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { getGitMetadata } from "../utils/git-metadata";
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
+import type { CharacterGalleryWorkerMessage, ConnectionModelDTO, ConnectionModelsWorkerMessage } from "./gallery-models-contract";
 import type { ActivationPatternsMessage } from "./activation-patterns-contract";
 import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
@@ -305,6 +306,8 @@ type BackendProcessRuntimeToHost =
 type RuntimeWorkerToHost =
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
+  | CharacterGalleryWorkerMessage
+  | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
@@ -1908,6 +1911,9 @@ export class WorkerHost {
       case "connections_list":
         this.handleConnectionsList(msg.requestId, msg.userId);
         break;
+      case "connections_models":
+        void this.handleConnectionsModels(msg.requestId, msg.connectionId, msg.userId);
+        break;
       case "decisions_providers":
       case "decisions_connections_list":
       case "decisions_connection_get":
@@ -2057,6 +2063,9 @@ export class WorkerHost {
         break;
       case "characters_get":
         this.contentApi.handleCharactersGet(msg.requestId, msg.characterId, msg.userId);
+        break;
+      case "characters_get_gallery":
+        this.contentApi.handleCharactersGetGallery(msg.requestId, msg.characterId, msg.userId);
         break;
       case "characters_create":
         this.contentApi.handleCharactersCreate(msg.requestId, msg.input, msg.userId);
@@ -3577,6 +3586,38 @@ export class WorkerHost {
         updated_at: c.updated_at,
       };
       this.postToWorker({ type: "response", requestId, result: profile });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleConnectionsModels(
+    requestId: string,
+    connectionId: string,
+    userId?: string
+  ): Promise<void> {
+    if (!this.hasPermission("generation")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} generation — Connection profile access requires the generation permission`,
+      });
+      return;
+    }
+
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const result = await connectionsSvc.listConnectionModels(resolvedUserId, connectionId);
+      if (result.error) throw new Error(result.error);
+      const labels = result.model_labels ?? {};
+      const models: ConnectionModelDTO[] = result.models.map((id) => {
+        const label = Object.hasOwn(labels, id) ? labels[id] : undefined;
+        return { id, label: typeof label === "string" && label ? label : id };
+      });
+      this.postToWorker({ type: "response", requestId, result: models });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
