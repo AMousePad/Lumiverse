@@ -1,8 +1,8 @@
 name: Nightly Bundled Desktop Release
 
+# The default branch's desktop-nightly-scheduler.yml owns the daily cron.
+# Keep this workflow callable without adding a second schedule on promotion.
 on:
-  schedule:
-    - cron: '23 5 * * *'
   workflow_dispatch:
   workflow_call:
 
