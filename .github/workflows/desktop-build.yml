@@ -31,6 +31,11 @@ on:
       - "src/services/runner-control-transport.test.ts"
       - "src/types/operator.ts"
   workflow_dispatch:
+    inputs:
+      bundled_nightly:
+        description: Build and publish the bundled nightly from staging
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -42,6 +47,7 @@ concurrency:
 jobs:
   validate:
     name: Validate desktop manifests
+    if: ${{ !inputs.bundled_nightly }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
@@ -59,6 +65,15 @@ jobs:
             echo "::error::Desktop versions differ: Cargo.toml=$cargo_version, package.json=$package_version, tauri.conf.json=$tauri_version"
             exit 1
           fi
+
+  nightly:
+    name: Test bundled nightly from staging
+    if: github.event_name == 'workflow_dispatch' && inputs.bundled_nightly
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/desktop-nightly.yml
+    secrets: inherit
 
   build:
     name: Desktop (${{ matrix.target }})
