@@ -172,6 +172,8 @@ mock.module('@/components/shared/ModalShell', () => ({ ModalShell: NullComponent
 mock.module('@/components/shared/RangeSlider', () => ({
   RangeSlider: NullComponent,
   LabeledRangeSlider: NullComponent,
+  DualRangeSlider: NullComponent,
+  LabeledDualRangeSlider: NullComponent,
 }))
 mock.module('@/components/shared/PromptVariablesModal', () => ({
   PromptVariablesModal: ({ isOpen }: { isOpen: boolean }) => isOpen

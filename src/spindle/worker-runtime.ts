@@ -177,7 +177,7 @@ type AssembleRequest = {
   connectionId?: string;
   personaId?: string;
   generationType?: string;
-  promptVariables?: Record<string, Record<string, string | number | string[]>>;
+  promptVariables?: Record<string, Record<string, string | number | string[] | [number, number]>>;
   signal?: AbortSignal;
 };
 

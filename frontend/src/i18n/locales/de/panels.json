@@ -2370,6 +2370,7 @@
       "textarea": "Textbereich",
       "number": "Zahl",
       "slider": "Schieberegler",
+      "range": "Bereichsregler",
       "select": "Dropdown",
       "switch": "An / Aus",
       "multiselect": "Mehrfachauswahl"
@@ -2398,6 +2399,8 @@
     "switchOff": "Aus",
     "switchHint": "Ergibt 1 bei An, 0 bei Aus.",
     "defaultPreviewAria": "Vorschau des Standardwerts",
+    "rangeStart": "Bereichsanfang",
+    "rangeEnd": "Bereichsende",
     "min": "Min",
     "max": "Max",
     "step": "Schritt",

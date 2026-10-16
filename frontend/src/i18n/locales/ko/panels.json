@@ -2370,6 +2370,7 @@
       "textarea": "텍스트 영역",
       "number": "숫자",
       "slider": "슬라이더",
+      "range": "범위 슬라이더",
       "select": "드롭다운",
       "switch": "켜기 / 끄기",
       "multiselect": "다중 선택"
@@ -2398,6 +2399,8 @@
     "switchOff": "꺼짐",
     "switchHint": "켜짐 상태일 때 1, 꺼짐 상태일 때 0으로 처리됩니다.",
     "defaultPreviewAria": "기본값 미리보기",
+    "rangeStart": "범위 시작",
+    "rangeEnd": "범위 끝",
     "min": "최솟값",
     "max": "최댓값",
     "step": "간격",
