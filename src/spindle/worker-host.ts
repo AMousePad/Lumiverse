@@ -3562,7 +3562,10 @@ export class WorkerHost {
       const result = await connectionsSvc.listConnectionModels(resolvedUserId, connectionId);
       if (result.error) throw new Error(result.error);
       const labels = result.model_labels ?? {};
-      const models: ConnectionModelDTO[] = result.models.map((id) => ({ id, label: labels[id] || id }));
+      const models: ConnectionModelDTO[] = result.models.map((id) => {
+        const label = Object.hasOwn(labels, id) ? labels[id] : undefined;
+        return { id, label: typeof label === "string" && label ? label : id };
+      });
       this.postToWorker({ type: "response", requestId, result: models });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });

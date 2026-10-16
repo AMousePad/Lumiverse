@@ -48,7 +48,7 @@ test("characters.getGallery returns the owner's gallery as DTOs", async () => {
     id: "item-1", image_id: "image-1", reference: "gallery://1", caption: "Smile",
     sort_order: 0, created_at: 10, width: 512, height: 768, mime_type: "image/png",
   }]);
-  expect(listGallery).toHaveBeenCalledWith("alice", "char-1");
+  expect(listGallery).toHaveBeenCalledWith("alice", "char-1", { registerReferences: false });
 });
 
 test("characters.getGallery enforces the characters permission and user scope", async () => {
@@ -84,4 +84,34 @@ test("connections.getModels surfaces provider errors and enforces generation per
   expect((await invoke({ type: "connections_models", connectionId: "c" }, { granted: ["characters"] })).error).toContain("generation");
   expect((await invoke({ type: "connections_models", connectionId: "c" }, { scope: "operator" })).error).toContain("userId is required");
   expect(listModels).toHaveBeenCalledTimes(1);
+});
+
+test("connections.getModels safely labels model IDs that match Object prototype properties", async () => {
+  const models = ["constructor", "__proto__", "toString", "hasOwnProperty"];
+  const listModels = spyOn(connectionsSvc, "listConnectionModels").mockResolvedValue({ models, provider: "custom" });
+  restores.push(listModels);
+
+  const response = await invoke({ type: "connections_models", connectionId: "conn-1" });
+  expect(response.error).toBeUndefined();
+  expect(response.result).toEqual(models.map((id) => ({ id, label: id })));
+  expect(() => structuredClone(response)).not.toThrow();
+});
+
+test("connections.getModels uses only own nonempty string labels", async () => {
+  const labels = Object.assign(Object.create({ inherited: "Inherited label" }), {
+    named: "Display name", empty: "", invalid: { name: "Not a string" },
+  });
+  const listModels = spyOn(connectionsSvc, "listConnectionModels").mockResolvedValue({
+    models: ["inherited", "named", "empty", "invalid"], model_labels: labels, provider: "openrouter",
+  });
+  restores.push(listModels);
+
+  const response = await invoke({ type: "connections_models", connectionId: "conn-1" });
+  expect(response.error).toBeUndefined();
+  expect(response.result).toEqual([
+    { id: "inherited", label: "inherited" },
+    { id: "named", label: "Display name" },
+    { id: "empty", label: "empty" },
+    { id: "invalid", label: "invalid" },
+  ]);
 });

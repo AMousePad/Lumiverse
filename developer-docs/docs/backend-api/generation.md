@@ -782,11 +782,15 @@ if (conn) {
 
 List the models available to a connection profile. This fetches the live list from the provider, using the profile's stored API key. Throws if the connection is not found or the provider request fails.
 
-```ts
-const models = await spindle.connections.getModels('some-connection-id')
+This method is optional on older hosts; check support before calling.
 
-for (const model of models) {
-  spindle.log.info(`${model.id}: ${model.label}`)
+```ts
+if (spindle.connections.getModels) {
+  const models = await spindle.connections.getModels('some-connection-id')
+
+  for (const model of models) {
+    spindle.log.info(`${model.id}: ${model.label}`)
+  }
 }
 ```
 

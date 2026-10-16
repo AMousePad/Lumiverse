@@ -276,7 +276,7 @@ export class WorkerHostContentApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const items: CharacterGalleryItemDTO[] = characterGallerySvc.listGallery(resolvedUserId, characterId).map((item) => ({
+      const items: CharacterGalleryItemDTO[] = characterGallerySvc.listGallery(resolvedUserId, characterId, { registerReferences: false }).map((item) => ({
         id: item.id,
         image_id: item.image_id,
         reference: item.reference,

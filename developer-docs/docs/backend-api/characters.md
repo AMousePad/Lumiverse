@@ -4,6 +4,8 @@
 
 Full CRUD access to the user's character cards. Use this for extensions that manage, analyze, or batch-edit characters.
 
+Reading gallery image bytes with `spindle.images.readBinary()` also requires the `images` permission.
+
 ## Usage
 
 ```ts
@@ -16,10 +18,12 @@ if (char) {
   spindle.log.info(`Found: ${char.name}`)
 }
 
-// List the character's gallery images (read-only)
-const gallery = await spindle.characters.getGallery('character-id')
-for (const item of gallery) {
-  const bytes = await spindle.images.readBinary(item.image_id)
+// Check support on older hosts before listing gallery images (read-only).
+if (spindle.characters.getGallery) {
+  const gallery = await spindle.characters.getGallery('character-id')
+  for (const item of gallery) {
+    const bytes = await spindle.images.readBinary(item.image_id)
+  }
 }
 
 // Create a character (name is required)
@@ -66,7 +70,7 @@ const deleted = await spindle.characters.delete(newChar.id)
 |---|---|---|
 | `list(options?)` | `Promise<{ data: CharacterDTO[], total: number }>` | List characters. Options: `{ limit?, offset? }`. Defaults: limit 50, max 200. |
 | `get(characterId)` | `Promise<CharacterDTO \| null>` | Get a character by ID. Returns `null` if not found. |
-| `getGallery(characterId)` | `Promise<CharacterGalleryItemDTO[]>` | List the character's gallery images in gallery order. Returns `[]` if the character has no gallery or is not found. |
+| `getGallery(characterId)` | `Promise<CharacterGalleryItemDTO[]>` | List the character's gallery images in gallery order without changing saved character data. Returns `[]` if the character has no gallery or is not found. Optional on older hosts; check support before calling. |
 | `create(input)` | `Promise<CharacterDTO>` | Create a new character. `name` is required. |
 | `update(characterId, input)` | `Promise<CharacterDTO>` | Update a character. All fields are optional. |
 | `delete(characterId)` | `Promise<boolean>` | Delete a character. Returns `true` if deleted. |
