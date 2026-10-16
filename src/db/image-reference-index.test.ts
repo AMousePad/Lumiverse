@@ -320,7 +320,7 @@ describe("durable image reference index", () => {
     expect(deserialize(encodeDatabaseMessage(resultMessage).subarray(4))).toEqual(resultMessage);
   });
 
-  for (const transport of (process.platform === "win32" ? ["stdio"] : ["stdio", "ipc"]) as Array<"stdio" | "ipc">) {
+  for (const transport of (process.platform === "win32" ? ["ipc"] : ["stdio", "ipc"]) as Array<"stdio" | "ipc">) {
     test(`subprocess backfills and observes another connection's writes over ${transport}`, async () => {
       db.close(true);
       directory = mkdtempSync(join(tmpdir(), "lumiverse-image-index-worker-"));
