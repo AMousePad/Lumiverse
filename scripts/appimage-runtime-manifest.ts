@@ -20,7 +20,7 @@ export function verifyPolicy(appdir: string) {
   if (forbidden.length) throw new Error(`AppImage bundles host graphics libraries: ${forbidden.map(file => relative(appdir, file)).join(", ")}`);
   return files.sort();
 }
-export function runtimeManifest(appdir: string, verify = false) {
+export function runtimeManifest(appdir: string, verify = false, collectMetadata = collectBuildMetadata) {
   appdir = realpathSync(resolve(appdir));
   const files = verifyPolicy(appdir);
   const runtimeFiles = files.filter(file => /(?:lib(?:webkit|javascriptcore|gtk|gdk|glib|gobject|gio|soup|gst|wayland)|WebKit(?:Web|Network|GPU)Process|gst-plugin-scanner)/i.test(basename(file)));
@@ -38,23 +38,31 @@ export function runtimeManifest(appdir: string, verify = false) {
     if (JSON.stringify(manifest.files) !== JSON.stringify(entries)) throw new Error("Packaged native runtime differs from its manifest");
     return manifest;
   }
+  const manifest = {
+    format: 1, ...collectMetadata(), buildBaseline: policy.buildBaseline, policy, files: entries,
+  };
+  mkdirSync(join(appdir, "usr/share/lumiverse"), { recursive: true });
+  writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n", { mode: 0o644 });
+  return manifest;
+}
+
+function collectBuildMetadata() {
   const packages = ["gtk+-3.0", "webkit2gtk-4.1", "javascriptcoregtk-4.1", "glib-2.0", "gio-2.0", "libsoup-3.0", "gstreamer-1.0", "wayland-client"];
   const lock = Bun.TOML.parse(readFileSync(new URL("../desktop/src-tauri/Cargo.lock", import.meta.url), "utf8")) as { package: Array<{name: string; version: string}> };
   const crates = Object.fromEntries(lock.package.filter(p => ["tauri", "wry", "tao", "tauri-bundler", "tauri-plugin-opener"].includes(p.name)).map(p => [p.name, p.version]));
   const cache = join(process.env.XDG_CACHE_HOME || join(process.env.HOME || "/tmp", ".cache"), "tauri");
   const tools: Record<string,string> = {};
   try { for (const name of readdirSync(cache).filter(n => n.startsWith("linuxdeploy") || n.startsWith("AppRun"))) { const file = join(cache, name); if (statSync(file).isFile()) tools[name] = digest(file); } } catch { /* No tool cache in source tests. */ }
-  const manifest = {
-    format: 1, revision: version(["git", "rev-parse", "HEAD"]), architecture: process.arch,
-    buildBaseline: policy.buildBaseline, buildOS: (() => { try { return readFileSync("/etc/os-release", "utf8"); } catch { return process.platform; } })(),
-    glibc: version(["getconf", "GNU_LIBC_VERSION"]), nativeVersions: Object.fromEntries(packages.map(pkg => [pkg, version(["pkg-config", "--modversion", pkg])])),
+  // These probes describe the Linux runtime; other platforms do not need them.
+  const linuxVersion = (command: string[]) => process.platform === "linux" ? version(command) : "unavailable";
+  return {
+    revision: version(["git", "rev-parse", "HEAD"]), architecture: process.arch,
+    buildOS: (() => { try { return readFileSync("/etc/os-release", "utf8"); } catch { return process.platform; } })(),
+    glibc: linuxVersion(["getconf", "GNU_LIBC_VERSION"]), nativeVersions: Object.fromEntries(packages.map(pkg => [pkg, linuxVersion(["pkg-config", "--modversion", pkg])])),
     debianPackages: process.platform === "linux" ? version(["dpkg-query", "-W", "-f=${Package}=${Version}\n", "libwebkit2gtk-4.1-0", "libjavascriptcoregtk-4.1-0", "libgtk-3-0", "libglib2.0-0", "libsoup-3.0-0"]) : "unavailable",
     crates, tauriCli: (() => { try { return JSON.parse(readFileSync(new URL("../desktop/node_modules/@tauri-apps/cli/package.json", import.meta.url), "utf8")).version; } catch { return "unavailable"; } })(),
-    packagingToolSha256: tools, policy, files: entries,
+    packagingToolSha256: tools,
   };
-  mkdirSync(join(appdir, "usr/share/lumiverse"), { recursive: true });
-  writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n", { mode: 0o644 });
-  return manifest;
 }
 if (import.meta.main) {
   try { runtimeManifest(process.argv[2]!, process.argv.includes("--verify")); console.log("Verified AppImage graphics library policy and native runtime manifest."); }

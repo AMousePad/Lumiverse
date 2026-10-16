@@ -15,11 +15,25 @@ function fixture() {
 }
 test("runtime manifest verifies the exact packaged libraries and rejects mutation", () => {
   const root = fixture();
-  runtimeManifest(root);
-  expect(Object.keys(runtimeManifest(root, true).nativeVersions)).toContain("glib-2.0");
+  let probes = 0;
+  const metadata = () => {
+    probes++;
+    return {
+      revision: "fixture-revision", architecture: "arm64" as const, buildOS: "fixture-linux",
+      glibc: "glibc 2.35", nativeVersions: { "glib-2.0": "fixture-glib" },
+      debianPackages: "fixture-packages", crates: {}, tauriCli: "fixture-cli", packagingToolSha256: {},
+    };
+  };
+  // Integrity checks must not spawn host tools (getconf, pkg-config, Git),
+  // especially on Windows ARM64 where the unit-test deadline is only 5 s.
+  runtimeManifest(root, false, metadata);
+  const verified = runtimeManifest(root, true, metadata);
+  expect(verified.nativeVersions["glib-2.0"]).toBe("fixture-glib");
+  expect(verified.revision).toBe("fixture-revision");
   expect(readFileSync(join(root, "usr/share/lumiverse/runtime-manifest.json"), "utf8")).toContain("2.35");
   writeFileSync(join(root, "usr/lib/libwebkit2gtk-4.1.so.0"), "changed");
-  expect(() => runtimeManifest(root, true)).toThrow("differs from its manifest");
+  expect(() => runtimeManifest(root, true, metadata)).toThrow("differs from its manifest");
+  expect(probes).toBe(1);
 });
 test.each(["libEGL.so.1", "libGLX.so.0", "libwayland-client.so.0", "libnvidia-eglcore.so.615"])("rejects host graphics library %s", name => {
   const root = fixture(); writeFileSync(join(root, "usr/lib", name), "host");
