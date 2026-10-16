@@ -5,6 +5,10 @@
   "engines": {
     "bun": ">=1.4.2"
   },
+  "trustedDependencies": [
+    "ffmpeg-static",
+    "sharp"
+  ],
   "dependencies": {
     "@better-auth/oauth-provider": "1.7.2",
     "@lancedb/lancedb": "0.37.1",

@@ -42,6 +42,10 @@
       },
     },
   },
+  "trustedDependencies": [
+    "ffmpeg-static",
+    "sharp",
+  ],
   "overrides": {
     "kysely": "0.28.17",
     "lru-cache": "11.2.7",
