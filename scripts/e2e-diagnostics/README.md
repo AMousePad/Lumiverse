@@ -24,6 +24,9 @@ bun run diagnose
 
 ## Scripts
 
+- `node check-message-preview.mjs`
+  Exercises the real native message-preview surface, display hooks, resolver registry and regex pipeline with controlled store/HTTP boundaries. Covers owned resolvers and backend display regex, exact source ranges, swipe changes, disabled regex actions, HTML-island disclosures, navigation, source removal and remount. Runs desktop and notched-iPhone-sized layouts in Chromium and WebKit without a live server, credentials or personal data. `PREVIEW_BROWSERS` selects engines; `PLAYWRIGHT_MODULE` can point to an existing installation. Pass `--serve` for a human-review fixture. This does not emulate a physical installed PWA or substitute for the required human live-environment audit.
+
 - `node check-drawer-width.mjs`
   Exercises the real sidebar width settings controls in the settings layout with controlled persisted state. Checks Default/Custom selection, clearing drag overrides, pointer and keyboard slider input, range boundaries, close/reopen and reload persistence, and containment below the canonical safe-top area. Runs desktop and notched-iPhone-sized viewports at UI scales 1 and 1.25 in Chromium, Firefox and WebKit. No server or personal settings are used. Set `DRAWER_WIDTH_BROWSERS=chromium` for one engine; `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. This checks the settings surface; it does not run the full drawer or emulate a physical installed PWA.
 

@@ -150,6 +150,7 @@ import {
 import { frontendAuthorityRowFor } from './frontend-authority-map'
 import { createHostSurfaceAPI, type HostSurfaceAPI } from './host-surfaces'
 import './character-host-surface-renderers'
+import './message-preview-host-surface'
 import './world-book-host-surface-renderers'
 import './productivity-host-surface-renderers'
 import {
