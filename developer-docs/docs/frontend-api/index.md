@@ -36,6 +36,7 @@ Frontend UI can follow two supported rendering paths:
 
 | Category | Permission | Description |
 |----------|-----------|-------------|
+| [Client Detection](client-info.md) | Free | Identify browser tabs, PWAs, desktop apps, and iOS/Android apps, with native bridge discovery |
 | [DOM Helper](dom-helper.md) | Free | Inject sanitized HTML/CSS in the host DOM, target specific chat messages with virtualizer-safe replay, and create host-managed sandbox frames |
 | [UI Event Helpers](ui-events-helper.md) | Free | Keyboard/Drawer/Settings state and DOM Action delegation |
 | [HTML Islands](html-islands.md) | Free | Auto-isolation of styled HTML in messages, and how to opt out |

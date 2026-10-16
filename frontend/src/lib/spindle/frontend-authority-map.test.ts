@@ -87,6 +87,7 @@ describe('frontend authority map', () => {
       expect(projected.get(row?.ctxLeaf)?.permission).toBe(member.permission)
     }
     expect(frontendAuthorityPermission('ctx_member', 'ctx.connections.models')).toBe('generation')
+    expect(frontendAuthorityPermission('ctx_member', 'ctx.client.getInfo')).toBeNull()
     expect(frontendAuthorityPermission('ctx_member', 'ctx.stt.listProviders')).toBeNull()
     for (const method of ['prepare', 'start', 'transcribe']) {
       expect(frontendAuthorityPermission('ctx_member', `ctx.stt.${method}`)).toBe('media')

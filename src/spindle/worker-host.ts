@@ -29,6 +29,7 @@ import { WorkerHostDesktopCaptureApi } from "./worker-host-desktop-capture-api";
 import type { DryRunResultDTO, GetBreakdownWorkerMessage } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
+import { getGitMetadata } from "../utils/git-metadata";
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
 import type { ActivationPatternsMessage } from "./activation-patterns-contract";
 import { createOAuthState } from "./oauth-state";
@@ -314,6 +315,9 @@ type RuntimeWorkerToHost =
   | { type: 'intercept_result'; requestId: string; registrationId: string; messages: LlmMessageDTO[]; error: string; parameters?: Record<string, unknown>; breakdown?: InterceptorBreakdownEntryDTO[] }
   | WorkerToHost
   | ImageGenNativeControlWorkerMessage
+  | { type: "version_get_commit"; requestId: string }
+  | { type: "version_get_branch"; requestId: string }
+  | { type: "version_get_info"; requestId: string }
   | { type: "register_frontend_runtime_capability"; capability: string }
   | { type: "unregister_frontend_runtime_capability"; capability: string }
   | { type: "dlc_get_catalog"; requestId: string; userId?: string }
@@ -677,6 +681,44 @@ async function getFrontendVersion(): Promise<string> {
   if (cachedFrontendVersion) return cachedFrontendVersion;
   cachedFrontendVersion = await readPackageVersion("../../frontend/package.json");
   return cachedFrontendVersion;
+}
+
+/** Version report handed to extensions through the free-tier `spindle.version` API. */
+export interface LumiverseVersionInfo {
+  /** Backend server semantic version (e.g. `"1.2.5"`). */
+  backend: string;
+  /** Frontend bundle semantic version (e.g. `"1.2.5"`). */
+  frontend: string;
+  /** Commit the running build was made from, or `null` when unavailable (e.g. Docker images, detached or non-git installs). */
+  commit: string | null;
+  /** Branch the running build was made from, or `null` when unavailable or detached. */
+  branch: string | null;
+}
+
+const UNAVAILABLE_GIT_VALUES = new Set(["", "unknown", "HEAD", "bundled"]);
+
+/** Map the host git metadata placeholders onto the extension-facing `null` ("not available"). */
+export function normalizeGitReportValue(value: string): string | null {
+  const trimmed = value.trim();
+  return UNAVAILABLE_GIT_VALUES.has(trimmed) ? null : trimmed;
+}
+
+export function getLumiverseCommit(): string | null {
+  return normalizeGitReportValue(getGitMetadata().commit);
+}
+
+export function getLumiverseBranch(): string | null {
+  return normalizeGitReportValue(getGitMetadata().branch);
+}
+
+export async function getLumiverseVersionInfo(): Promise<LumiverseVersionInfo> {
+  const [backend, frontend] = await Promise.all([getBackendVersion(), getFrontendVersion()]);
+  return {
+    backend,
+    frontend,
+    commit: getLumiverseCommit(),
+    branch: getLumiverseBranch(),
+  };
 }
 
 const CORS_PROXY_TIMEOUT_MS = 30_000;
@@ -2470,6 +2512,15 @@ export class WorkerHost {
         break;
       case "version_get_frontend":
         this.handleVersionGetFrontend(msg.requestId);
+        break;
+      case "version_get_commit":
+        this.handleVersionGetCommit(msg.requestId);
+        break;
+      case "version_get_branch":
+        this.handleVersionGetBranch(msg.requestId);
+        break;
+      case "version_get_info":
+        this.handleVersionGetInfo(msg.requestId);
         break;
       // ─── Token Counting (free tier) ───────────────────────────────────
       case "tokens_count_text":
@@ -5030,6 +5081,31 @@ export class WorkerHost {
     try {
       const version = await getFrontendVersion();
       this.postToWorker({ type: "response", requestId, result: version });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleVersionGetCommit(requestId: string): Promise<void> {
+    try {
+      this.postToWorker({ type: "response", requestId, result: getLumiverseCommit() });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleVersionGetBranch(requestId: string): Promise<void> {
+    try {
+      this.postToWorker({ type: "response", requestId, result: getLumiverseBranch() });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleVersionGetInfo(requestId: string): Promise<void> {
+    try {
+      const info = await getLumiverseVersionInfo();
+      this.postToWorker({ type: "response", requestId, result: info });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }

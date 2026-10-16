@@ -325,6 +325,9 @@ type RuntimeWorkerToHost =
   | { type: 'intercept_result'; requestId: string; registrationId: string; messages: LlmMessageDTO[]; error: string }
   | WorkerToHost
   | ImageGenNativeControlWorkerMessage
+  | { type: "version_get_commit"; requestId: string }
+  | { type: "version_get_branch"; requestId: string }
+  | { type: "version_get_info"; requestId: string }
   | { type: "register_frontend_runtime_capability"; capability: "message_tag_interceptor" }
   | { type: "unregister_frontend_runtime_capability"; capability: "message_tag_interceptor" }
   | { type: "dlc_get_catalog"; requestId: string; userId?: string }
@@ -729,7 +732,20 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts"> & {
+/** Version report returned by `spindle.version.getInfo()`; mirrors `LumiverseVersionInfo` in lumiverse-spindle-types. */
+interface RuntimeLumiverseVersionInfo {
+  backend: string;
+  frontend: string;
+  commit: string | null;
+  branch: string | null;
+}
+
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version"> & {
+  version: SpindleAPI["version"] & {
+    getCommit(): Promise<string | null>;
+    getBranch(): Promise<string | null>;
+    getInfo(): Promise<RuntimeLumiverseVersionInfo>;
+  };
   regex_scripts: SpindleAPI["regex_scripts"] & {
     prepareActivationPatterns(options: ActivationPatternsOptions): Promise<ActivationPatternsResult>;
   };
@@ -4515,6 +4531,21 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "version_get_frontend", requestId });
       return result as string;
+    },
+    async getCommit(): Promise<string | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "version_get_commit", requestId });
+      return result as string | null;
+    },
+    async getBranch(): Promise<string | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "version_get_branch", requestId });
+      return result as string | null;
+    },
+    async getInfo(): Promise<RuntimeLumiverseVersionInfo> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "version_get_info", requestId });
+      return result as RuntimeLumiverseVersionInfo;
     },
   },
 

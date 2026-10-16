@@ -131,6 +131,7 @@ const HOST_SURFACE_ROWS: readonly AuthorityRow[] = [
 ]
 
 const DOMAIN_ROWS: readonly AuthorityRow[] = [
+  free({ surface: 'ctx_member', id: 'ctx.client.getInfo', source: 'client.info', ctxLeaf: 'ctx.client.getInfo', freeBecause: 'pure-host-action: reads client identity and callable bridge metadata without invoking commands or prompting' }),
   free({ surface: 'ctx_member', id: 'ctx.stt.listProviders', source: 'stt.providers', ctxLeaf: 'ctx.stt.listProviders', freeBecause: 'pure-host-action: reads speech capability metadata without audio, credentials, or microphone access' }),
   free({ surface: 'ctx_member', id: 'ctx.systemAudio.isAvailable', source: 'systemAudio.availability', ctxLeaf: 'ctx.systemAudio.isAvailable', freeBecause: 'pure-host-action: reports whether a native adapter exists and is enabled, without opening it or prompting' }),
   gated('system_audio', {
