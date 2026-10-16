@@ -8,17 +8,19 @@ on:
     branches-ignore: [main, staging]
     paths:
       - ".github/workflows/desktop-build.yml"
+      - "desktop/src/**"
+      - "desktop/tests/**"
+      - "desktop/vite.config.ts"
+      - "desktop/*.html"
+      - "desktop/src-tauri/src/**"
+      - "desktop/linux-runtime-policy.json"
+      - "scripts/appimage-*"
+      - "desktop/src-tauri/capabilities/*.json"
+      - "desktop/src-tauri/permissions/*.toml"
       - "desktop/package.json"
       - "desktop/src-tauri/Cargo.toml"
       - "desktop/src-tauri/Cargo.lock"
       - "desktop/src-tauri/tauri.conf.json"
-      - "desktop/src-tauri/src/capture/**"
-      - "desktop/src-tauri/src/system_audio/**"
-      - "desktop/src-tauri/src/webview_visibility.rs"
-      - "desktop/src-tauri/src/lib.rs"
-      - "desktop/tests/system-audio-coreaudio.test.ts"
-      - "desktop/tests/fixtures/system-audio-coreaudio.m"
-      - "desktop/tests/system-audio-benchmark.rs"
       - "desktop/src-tauri/capabilities/system-audio.json"
       - "desktop/src-tauri/permissions/system-audio.toml"
       - "desktop/src-tauri/capabilities/desktop-capture.json"
@@ -149,12 +151,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf xdg-utils \
-            dbus-x11 xauth xvfb gstreamer1.0-tools gstreamer1.0-plugins-base \
+            dbus-x11 xauth xvfb xdotool gstreamer1.0-tools gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good squashfs-tools
 
       - name: Test Linux AppImage packaging
         if: runner.os == 'Linux'
-        run: bun test scripts/appimage-packaging.test.ts scripts/tauri-finalized.test.ts
+        run: bun --no-env-file test scripts/appimage-packaging.test.ts scripts/appimage-runtime-manifest.test.ts scripts/tauri-finalized.test.ts desktop/tests/linux-desktop.test.ts
 
       - name: Install desktop dependencies
         working-directory: desktop
@@ -198,6 +200,19 @@ jobs:
           uploadUpdaterJson: false
           uploadUpdaterSignatures: false
           uploadWorkflowArtifacts: false
+
+      - name: Test native Linux desktop policies and authorization
+        if: runner.os == 'Linux'
+        run: cargo test --locked --lib --manifest-path desktop/src-tauri/Cargo.toml
+
+      - name: Retain Linux runtime provenance
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-runtime-${{ matrix.target }}
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppDir/usr/share/lumiverse/runtime-manifest.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Smoke-test Linux AppImage offline as another user
         if: runner.os == 'Linux'

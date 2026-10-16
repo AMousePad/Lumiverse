@@ -14,8 +14,7 @@ use keyring::Entry;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, State};
-use tauri_plugin_opener::OpenerExt;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -35,11 +34,13 @@ pub struct RemoteInstanceState {
     sessions: Mutex<HashMap<String, RemoteOAuthSession>>,
     operations: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     credentials: Arc<dyn RefreshCredentialStore>,
+    authorization: Mutex<Option<AuthorizationAttempt>>,
 }
 
 impl Default for RemoteInstanceState {
     fn default() -> Self {
         Self {
+            authorization: Mutex::new(None),
             sessions: Mutex::new(HashMap::new()),
             operations: Mutex::new(HashMap::new()),
             credentials: Arc::new(KeyringCredentialStore {
@@ -200,7 +201,7 @@ fn normalize_origin(value: &str) -> Result<Url, String> {
     let host = parsed.host_str().unwrap_or_default();
     let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]");
     if parsed.scheme() != "https" && !loopback {
-        return Err("Remote Lumiverse instances must use HTTPS".into());
+        return Err("Remote Lumiverse instances, including private LAN addresses, must use HTTPS with a trusted certificate matching the hostname or IP address. HTTP is allowed only for loopback development.".into());
     }
     Url::parse(&parsed.origin().ascii_serialization()).map_err(|error| error.to_string())
 }
@@ -240,7 +241,11 @@ async fn discover(client: &Client, origin: &Url) -> Result<OAuthMetadata, String
         .json()
         .await
         .map_err(|error| format!("Invalid Lumiverse OAuth metadata: {error}"))?;
-    let issuer = validate_metadata_endpoint(origin, &metadata.issuer, "issuer")?;
+    let issuer = validate_metadata_endpoint(origin, &metadata.issuer, "issuer").map_err(|_| format!(
+        "Selected origin {} advertises OAuth issuer {}. Add the selected HTTPS origin under Settings → Operator → Trusted Hostnames and restart the server. Check any AUTH_BASE_URL override. For TLS at a reverse proxy, preserve Host or configure TRUSTED_PROXIES and forwarded host/protocol headers.",
+        origin.origin().ascii_serialization(),
+        Url::parse(&metadata.issuer).map(|url| url.origin().ascii_serialization()).unwrap_or_else(|_| "(invalid issuer)".into()),
+    ))?;
     if issuer.path().trim_end_matches('/') != "/api/auth"
         || issuer.query().is_some()
         || issuer.fragment().is_some()
@@ -392,12 +397,12 @@ fn parse_callback_target(
     if url.path() != "/callback" {
         return Err("Invalid OAuth callback path".into());
     }
-    if let Some(error) = url.query_pairs().find(|(key, _)| key == "error") {
-        return Err(format!("Lumiverse authorization was denied: {}", error.1));
-    }
     let query = url.query_pairs().collect::<HashMap<_, _>>();
     if query.get("state").map(|value| value.as_ref()) != Some(expected_state) {
         return Err("OAuth callback state did not match".into());
+    }
+    if query.contains_key("error") {
+        return Err("Lumiverse desktop authorization was denied. Retry sign-in when ready.".into());
     }
     let code = query
         .get("code")
@@ -684,60 +689,313 @@ async fn fetch_snapshot(
     })
 }
 
+struct AuthorizationAttempt {
+    id: String,
+    origin: String,
+    cancel: tokio::sync::watch::Sender<bool>,
+    url: Option<String>,
+    phase: String,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizationProgress {
+    attempt_id: String,
+    origin: String,
+    url: Option<String>,
+    phase: String,
+    error: Option<String>,
+}
+
+fn current_attempt(state: &RemoteInstanceState, id: &str) -> bool {
+    state
+        .authorization
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|attempt| attempt.id == id && !*attempt.cancel.borrow())
+}
+
+fn progress(
+    state: &RemoteInstanceState,
+    id: &str,
+    phase: &str,
+    url: Option<String>,
+    error: Option<String>,
+) {
+    if let Some(attempt) = state
+        .authorization
+        .lock()
+        .unwrap()
+        .as_mut()
+        .filter(|attempt| attempt.id == id)
+    {
+        attempt.phase = phase.into();
+        attempt.url = url;
+        attempt.error = error;
+    }
+}
+
+#[tauri::command]
+pub fn remote_authorization_status(
+    window: tauri::WebviewWindow,
+    state: State<'_, RemoteInstanceState>,
+) -> Result<Option<AuthorizationProgress>, String> {
+    if window.label() != "desktop-authorization" {
+        return Err("Sign-in links belong to the trusted local authorization window.".into());
+    }
+    Ok(state
+        .authorization
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|a| AuthorizationProgress {
+            attempt_id: a.id.clone(),
+            origin: a.origin.clone(),
+            url: a.url.clone(),
+            phase: a.phase.clone(),
+            error: a.error.clone(),
+        }))
+}
+
+#[tauri::command]
+pub fn remote_authorization_cancel(
+    window: tauri::WebviewWindow,
+    state: State<'_, RemoteInstanceState>,
+    attempt_id: String,
+) -> Result<(), String> {
+    if !matches!(window.label(), "main" | "desktop-authorization") {
+        return Err("Sign-in cancellation belongs to the local desktop controls.".into());
+    }
+    cancel_attempt(&state, &attempt_id);
+    Ok(())
+}
+fn cancel_attempt(state: &RemoteInstanceState, id: &str) {
+    if let Some(attempt) = state
+        .authorization
+        .lock()
+        .unwrap()
+        .as_mut()
+        .filter(|a| a.id == id)
+    {
+        attempt.cancel.send_replace(true);
+        attempt.url = None;
+        attempt.phase = "cancelled".into();
+    }
+}
+
+#[tauri::command]
+pub fn remote_authorization_retry(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, RemoteInstanceState>,
+    attempt_id: String,
+) -> Result<(), String> {
+    if window.label() != "desktop-authorization" {
+        return Err("Retry belongs to the local sign-in window.".into());
+    }
+    cancel_attempt(&state, &attempt_id);
+    app.emit_to("main", "remote-authorization-retry", attempt_id)
+        .map_err(|e| e.to_string())
+}
+
+fn show_authorization(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window("desktop-authorization") {
+            let _ = window.show();
+            let _ = window.set_focus();
+            return;
+        }
+        match tauri::WebviewWindowBuilder::new(
+            &handle,
+            "desktop-authorization",
+            tauri::WebviewUrl::App("authorization.html".into()),
+        )
+        .title("Desktop authorization")
+        .inner_size(540.0, 480.0)
+        .min_inner_size(320.0, 240.0)
+        .build()
+        {
+            Ok(window) => {
+                let handle = handle.clone();
+                window.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::Destroyed) {
+                        let state = handle.state::<RemoteInstanceState>();
+                        let id = state
+                            .authorization
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .map(|a| a.id.clone());
+                        if let Some(id) = id {
+                            cancel_attempt(&state, &id);
+                        }
+                    }
+                });
+            }
+            Err(_) => eprintln!("[desktop-auth] could not open local authorization controls"),
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn remote_instance_connect(
     app: AppHandle,
     state: State<'_, RemoteInstanceState>,
     origin: String,
+    attempt_id: Option<String>,
 ) -> Result<RemoteInstanceSnapshot, String> {
     let origin = normalize_origin(&origin)?;
     let canonical_origin = origin.as_str().trim_end_matches('/').to_string();
+    let id = attempt_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
+    {
+        let mut active = state.authorization.lock().unwrap();
+        if let Some(previous) = active.take() {
+            previous.cancel.send_replace(true);
+        }
+        *active = Some(AuthorizationAttempt {
+            id: id.clone(),
+            origin: canonical_origin.clone(),
+            cancel,
+            url: None,
+            phase: "preparing".into(),
+            error: None,
+        });
+    }
+    show_authorization(&app);
+    let result = tokio::select! {
+        biased;
+        _ = cancelled.changed() => Err("Desktop authorization was cancelled.".into()),
+        result = prepare_authorization(&app, &state, &origin, &id) => result,
+    };
+    let result = match result {
+        Ok((client, metadata, callback, verifier, redirect_uri)) => {
+            finish_authorization(
+                &state,
+                &origin,
+                &canonical_origin,
+                &id,
+                client,
+                metadata,
+                callback,
+                verifier,
+                redirect_uri,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    let phase = if result.is_ok() {
+        "connected"
+    } else if current_attempt(&state, &id) {
+        "failed"
+    } else {
+        "cancelled"
+    };
+    progress(&state, &id, phase, None, result.as_ref().err().cloned());
+    result
+}
+
+async fn prepare_authorization(
+    app: &AppHandle,
+    state: &RemoteInstanceState,
+    origin: &Url,
+    id: &str,
+) -> Result<(Client, OAuthMetadata, AuthorizationCallback, String, String), String> {
     let client = http_client()?;
-    let metadata = discover(&client, &origin).await?;
+    let metadata = discover(&client, origin).await?;
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
-        .map_err(|error| format!("Could not open the OAuth callback listener: {error}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|error| error.to_string())?
-        .port();
-    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+        .map_err(|_| "Could not open the OAuth callback listener")?;
+    let redirect_uri = format!(
+        "http://127.0.0.1:{}/callback",
+        listener.local_addr().map_err(|e| e.to_string())?.port()
+    );
     let state_token = uuid::Uuid::new_v4().simple().to_string();
     let nonce = uuid::Uuid::new_v4().simple().to_string();
     let (verifier, challenge) = pkce_pair();
     let authorize = authorization_url(
         &metadata,
-        &origin,
+        origin,
         &redirect_uri,
         &state_token,
         &nonce,
         &challenge,
-    )?;
-    app.opener()
-        .open_url(authorize.to_string(), None::<String>)
-        .map_err(|error| format!("Could not open the system browser: {error}"))?;
-
-    let callback = await_callback(listener, &state_token).await?;
+    )?
+    .to_string();
+    progress(state, id, "opening_browser", Some(authorize.clone()), None);
+    // A launcher failure leaves a live listener for the manual-link recovery.
+    // It is bounded by the same five-minute authorization deadline.
+    let launch = crate::external_launch::open_url(app, &authorize);
+    let callback = timeout(AUTHORIZATION_TIMEOUT, async {
+        // Start listening immediately: a fast browser callback must not be
+        // delayed behind a portal chooser or a long-lived URL handler.
+        let callback = await_callback(listener, &state_token);
+        tokio::pin!(callback);
+        tokio::pin!(launch);
+        tokio::select! {
+            result = &mut callback => result,
+            launched = &mut launch => {
+                progress(state, id, "callback_pending", Some(authorize.clone()), launched.err());
+                callback.await
+            }
+        }
+    })
+    .await
+    .map_err(|_| "Desktop authorization expired after five minutes. Retry sign-in.")??;
     if callback.issuer.trim_end_matches('/') != metadata.issuer.trim_end_matches('/') {
         return Err("OAuth callback issuer did not match the selected instance".into());
     }
-    let _operation = state.lock_origin(&canonical_origin).await;
+    Ok((client, metadata, callback, verifier, redirect_uri))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finish_authorization(
+    state: &RemoteInstanceState,
+    origin: &Url,
+    canonical_origin: &str,
+    id: &str,
+    client: Client,
+    metadata: OAuthMetadata,
+    callback: AuthorizationCallback,
+    verifier: String,
+    redirect_uri: String,
+) -> Result<RemoteInstanceSnapshot, String> {
+    let _operation = state.lock_origin(canonical_origin).await;
+    if !current_attempt(state, id) {
+        return Err("Desktop authorization was cancelled.".into());
+    }
     let token = exchange_code(
         &client,
         &metadata,
-        &origin,
+        origin,
         &callback.code,
         &verifier,
         &redirect_uri,
     )
     .await?;
+    if !current_attempt(state, id) {
+        return Err("Desktop authorization was cancelled.".into());
+    }
     let credential_persisted = if let Some(refresh_token) = &token.refresh_token {
-        save_refresh_token(&state, canonical_origin.clone(), refresh_token.clone())
+        save_refresh_token(state, canonical_origin.into(), refresh_token.clone())
             .await
             .is_ok()
     } else {
         false
     };
+    // A non-cancellable keyring operation can finish after cancellation. Keep
+    // its cleanup under the per-origin lock so an old attempt cannot replace a
+    // newer attempt's saved credential or session.
+    if !current_attempt(state, id) {
+        if credential_persisted {
+            let _ = delete_refresh_token(state, canonical_origin.into()).await;
+        }
+        return Err("Desktop authorization was cancelled.".into());
+    }
     let session = RemoteOAuthSession {
         access_token: token.access_token,
         refresh_token: token.refresh_token,
@@ -748,13 +1006,21 @@ pub async fn remote_instance_connect(
         .sessions
         .lock()
         .unwrap()
-        .insert(canonical_origin.clone(), session.clone());
-    fetch_snapshot(&client, &origin, &session)
+        .insert(canonical_origin.into(), session.clone());
+    let snapshot = fetch_snapshot(&client, origin, &session)
         .await
         .map_err(|error| match error {
             PollError::Reauth(message) | PollError::Unreachable(message) => message,
             PollError::Disconnected => unreachable!("fetch_snapshot never reports Disconnected"),
-        })
+        });
+    if !current_attempt(state, id) {
+        state.sessions.lock().unwrap().remove(canonical_origin);
+        if credential_persisted {
+            let _ = delete_refresh_token(state, canonical_origin.into()).await;
+        }
+        return Err("Desktop authorization was cancelled.".into());
+    }
+    snapshot
 }
 
 /// Resolve a usable session for `origin`: in-memory session, keyring restore,
@@ -978,6 +1244,16 @@ pub async fn remote_instance_disconnect(
 ) -> Result<(), String> {
     let origin = normalize_origin(&origin)?;
     let canonical_origin = origin.as_str().trim_end_matches('/').to_string();
+    let id = state
+        .authorization
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|a| a.origin == canonical_origin)
+        .map(|a| a.id.clone());
+    if let Some(id) = id {
+        cancel_attempt(&state, &id);
+    }
     crate::capture::stop(&app, Some(&canonical_origin));
     let _operation = state.lock_origin(&canonical_origin).await;
     state.sessions.lock().unwrap().remove(&canonical_origin);

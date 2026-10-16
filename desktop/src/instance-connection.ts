@@ -43,7 +43,7 @@ export function normalizeRemoteOrigin(value: string): string {
   }
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
   if (url.protocol !== "https:" && !loopback) {
-    throw new Error("Remote Lumiverse instances must use HTTPS.");
+    throw new Error("Remote Lumiverse instances, including LAN addresses, must use HTTPS with a trusted certificate matching the hostname or IP address.");
   }
   if (url.username || url.password) {
     throw new Error("The instance URL must not contain a username or password.");

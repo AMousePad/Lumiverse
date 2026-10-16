@@ -43,7 +43,7 @@ function fixture(nativeSquashfs = false) {
   const toolDir = join(root, "tools");
   const outputPlugin = join(toolDir, "output-plugin");
   for (const entry of ["AppRun", "AppRun.wrapped", "usr/bin/lumiverse-tray",
-    "usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"]) {
+    "usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner", "usr/lib/WebKitWebProcess", "usr/lib/WebKitNetworkProcess"]) {
     write(join(appdir, entry), "#!/bin/sh\nexit 0\n", 0o755);
   }
   for (const name of ["app", "audioconvert", "audioparsers", "audioresample", "autodetect",
@@ -173,6 +173,17 @@ describe.skipIf(process.platform === "win32")("AppImage packaging permissions", 
     expect(statSync(join(packaged, "usr/share/resource.txt")).mode & 0o777).toBe(0o644);
     expect(run("verify-appimage-permissions.sh", packaged).code).toBe(0);
     expect(() => statSync(join(packaged, "usr/lib/libwayland-client.so.0"))).toThrow();
+  });
+
+  test("re-finalizes safely and replaces an older inner launcher after a new linuxdeploy build", () => {
+    const f = fixture();
+    expect(run("finalize-appimage.sh", f.bundle, f.env).code).toBe(0);
+    const original = readFileSync(join(f.appdir, "AppRun.lumiverse-inner"), "utf8");
+    expect(run("finalize-appimage.sh", f.bundle, f.env).code).toBe(0);
+    expect(readFileSync(join(f.appdir, "AppRun.lumiverse-inner"), "utf8")).toBe(original);
+    write(join(f.appdir, "AppRun"), "#!/bin/sh\n# new upstream launcher\nexit 0\n", 0o755);
+    expect(run("finalize-appimage.sh", f.bundle, f.env).code).toBe(0);
+    expect(readFileSync(join(f.appdir, "AppRun.lumiverse-inner"), "utf8")).toContain("new upstream launcher");
   });
 
   function checkStoredPermissions(native: boolean): void {

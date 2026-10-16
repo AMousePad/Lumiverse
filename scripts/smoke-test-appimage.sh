@@ -37,6 +37,8 @@ inspection_dir="$(mktemp -d /tmp/lumiverse-appimage-inspect.XXXXXX)"
 smoke_home="$(mktemp -d /tmp/lumiverse-appimage-home.XXXXXX)"
 trap 'rm -rf "$inspection_dir"; sudo -n rm -rf -- "$smoke_home"' EXIT
 chmod a+rx "$inspection_dir"
+cp "$script_dir/appimage-smoke-interact.sh" "$inspection_dir/interact.sh"
+chmod a+r "$inspection_dir/interact.sh"
 
 # Preserve the SquashFS permission bits for the cross-user launch check.
 # The runtime's --appimage-extract creates private (0700) directories instead.
@@ -62,8 +64,23 @@ if [[ ${#bundled_wayland[@]} -gt 0 ]]; then
   exit 1
 fi
 bash "$script_dir/verify-appimage-gstreamer.sh" "$inspection_dir/squashfs-root"
+bun "$script_dir/appimage-runtime-manifest.ts" "$inspection_dir/squashfs-root" --verify
 
 mkdir -p "$smoke_home/config" "$smoke_home/cache" "$smoke_home/data" "$smoke_home/runtime"
+host_tools="$smoke_home/host tools"
+mkdir -p "$host_tools"
+cat > "$host_tools/xdg-open" <<'HOST_LAUNCHER'
+#!/usr/bin/env bash
+set -eu
+[[ "$1" == https://example.invalid/lumiverse-desktop-smoke ]]
+[[ "$PATH" == "$HOME/host tools:/usr/bin:/bin" ]]
+[[ -z "${LD_LIBRARY_PATH+x}" && -z "${LD_PRELOAD+x}" ]]
+[[ -z "${GTK_PATH+x}" && -z "${GIO_MODULE_DIR+x}" && -z "${GST_PLUGIN_PATH_1_0+x}" ]]
+[[ -z "${APPDIR+x}" && -z "${GDK_BACKEND+x}" ]]
+[[ "$PWD" == "$HOME" ]]
+printf 'host environment restored\n' > "$HOME/host-launch.ok"
+HOST_LAUNCHER
+chmod 755 "$host_tools/xdg-open"
 sudo -n chown -R "nobody:$(id -gn nobody)" "$smoke_home"
 sudo -n chmod 700 "$smoke_home/runtime"
 
@@ -83,7 +100,7 @@ if [[ -f "$server" ]]; then
   fi
   server_log="$log_root/lumiverse-appimage-server-smoke.log"
   if ! sudo -n unshare --net -- runuser -u nobody -- env -i \
-    HOME="$smoke_home" PATH=/usr/bin:/bin LANG=C.UTF-8 TMPDIR="$smoke_home" \
+    HOME="$smoke_home" PATH="$host_tools:/usr/bin:/bin" LANG=C.UTF-8 TMPDIR="$smoke_home" \
     XDG_CONFIG_HOME="$smoke_home/config" XDG_CACHE_HOME="$smoke_home/cache" \
     XDG_DATA_HOME="$smoke_home/data" \
     timeout --kill-after=5s 180s "$server" --check >"$server_log" 2>&1; then
@@ -103,21 +120,22 @@ set +e
   # A fresh HOME and system-only PATH also exercise first launch without Bun,
   # a checkout, saved authorization, or the build user's settings.
   sudo -n unshare --net -- runuser -u nobody -- env -i \
-    HOME="$smoke_home" PATH=/usr/bin:/bin LANG=C.UTF-8 TMPDIR="$smoke_home" \
+    HOME="$smoke_home" PATH="$host_tools:/usr/bin:/bin" LANG=C.UTF-8 TMPDIR="$smoke_home" \
     XDG_CONFIG_HOME="$smoke_home/config" XDG_CACHE_HOME="$smoke_home/cache" \
     XDG_DATA_HOME="$smoke_home/data" XDG_RUNTIME_DIR="$smoke_home/runtime" \
-    timeout --kill-after=5s 15s dbus-run-session -- xvfb-run -a \
-    "$inspection_dir/squashfs-root/AppRun"
+    LUMIVERSE_DESKTOP_SMOKE=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+    timeout --kill-after=5s 45s dbus-run-session -- xvfb-run -a \
+    bash "$inspection_dir/interact.sh" "$inspection_dir/squashfs-root/AppRun"
 ) >"$log_file" 2>&1
 status=$?
 set -e
 
 # A healthy tray app remains in Tauri's event loop until timeout terminates it.
 # Loader, GTK, WebKit and JavaScript bootstrap failures exit before that point.
-if [[ $status -ne 124 ]] || ! grep -Fq '[desktop-startup] tray ready' "$log_file"; then
+if [[ $status -ne 124 ]] || ! grep -Fq '[desktop-startup] tray ready' "$log_file" || ! grep -Fq '[desktop-smoke] trusted click, typing, scrolling and host URL dispatch passed' "$log_file" || [[ ! -f "$smoke_home/host-launch.ok" ]]; then
   sed -n '1,240p' "$log_file" >&2
   echo "AppImage did not reach a healthy tray startup (status $status)" >&2
   exit 1
 fi
 
-echo "AppImage reached a healthy tray startup offline as another user without Bun or a checkout."
+echo "AppImage passed offline tray startup, WebKit input, and host launcher environment checks as another user."

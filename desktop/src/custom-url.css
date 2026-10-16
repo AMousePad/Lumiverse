@@ -9,10 +9,9 @@
 * { box-sizing: border-box; }
 
 body {
-  min-width: 520px;
+  min-width: 0;
   min-height: 100vh;
   margin: 0;
-  overflow-x: hidden;
   overflow-y: auto;
   background:
     radial-gradient(circle at 12% 0%, rgb(130 103 255 / 12%), transparent 38%),
@@ -22,7 +21,11 @@ body {
 button,
 input { font: inherit; }
 
-.dialog { padding: 26px 28px 22px; }
+.dialog { width: 100%; max-width: 760px; margin: 0 auto; padding: clamp(12px, 4vw, 28px); overflow-wrap: anywhere; }
+.dialog-header > div { min-width: 0; }
+select, textarea { display: block; width: 100%; max-width: 100%; min-width: 0; margin-top: 8px; padding: 8px; font: inherit; color: inherit; background: #201e27; border: 1px solid #45414f; border-radius: 7px; }
+textarea { resize: vertical; }
+a { color: #beaff9; }
 
 .dialog-header {
   display: flex;
@@ -225,6 +228,8 @@ legend,
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
 }
 
 .field-heading label { margin: 0 0 8px; }
@@ -238,7 +243,7 @@ legend,
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 39px;
+  min-height: 39px;
   padding: 0 11px;
   border: 1px solid #45414f;
   border-radius: 8px;
@@ -290,6 +295,7 @@ legend,
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  flex-wrap: wrap;
   margin-top: 22px;
   padding-top: 17px;
   border-top: 1px solid rgb(255 255 255 / 8%);
@@ -303,6 +309,9 @@ legend,
   font-size: 12px;
   font-weight: 620;
   cursor: pointer;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
   transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
 }
 
@@ -328,6 +337,14 @@ legend,
 .button-primary:hover { background: linear-gradient(180deg, #9c84f7, #8065e4); }
 
 .button:disabled { cursor: default; opacity: .55; }
+
+@media (max-width: 380px) {
+  .brand-mark { display: none; }
+  .connection-option { grid-template-columns: minmax(0, 1fr) 16px; padding: 10px; }
+  .option-icon { display: none; }
+  .checkout-field { flex-wrap: wrap; }
+  .checkout-field .input-shell { flex-basis: 100%; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }

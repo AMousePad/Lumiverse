@@ -82,7 +82,10 @@ fn main() {
             .arg("--print-file-name=libclang_rt.osx.a")
             .output()
             .expect("failed to locate the Clang macOS runtime");
-        assert!(runtime.status.success(), "Clang macOS runtime lookup failed");
+        assert!(
+            runtime.status.success(),
+            "Clang macOS runtime lookup failed"
+        );
         let runtime_path = PathBuf::from(
             std::str::from_utf8(&runtime.stdout)
                 .expect("Clang macOS runtime path is not UTF-8")
@@ -128,6 +131,15 @@ fn main() {
             "bundled_setup_complete",
             "bundled_setup_pick_folder",
             "desktop_profile_info",
+            "open_external_url",
+            "reveal_desktop_artifact",
+            "linux_diagnostics",
+            "save_linux_graphics",
+            "show_linux_settings",
+            "desktop_smoke_complete",
+            "remote_authorization_status",
+            "remote_authorization_cancel",
+            "remote_authorization_retry",
             "open_lumiverse_data_folder",
             "desktop_update_info",
             "desktop_update_check",

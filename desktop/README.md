@@ -252,9 +252,11 @@ desktop-only setting.
 The release AppImage already contains the compiled Rust shell, its GTK 3 /
 WebKitGTK 4.1 libraries, and the GStreamer plugins used for browser audio.
 Running it does **not** require Cargo, a Rust toolchain, a system WebKitGTK
-package, or system GStreamer plugins. Lumiverse Desktop still requires
-[Bun](https://bun.sh) ≥ 1.4.2 and a Lumiverse checkout because the desktop
-companion does not bundle the server.
+package, or system GStreamer plugins. Fully bundled stable/nightly releases
+include the server and Bun; they need neither a checkout nor an installed Bun
+runtime. Checkout-only feature artifacts
+require [Bun](https://bun.sh) ≥ 1.4.2 and a Lumiverse checkout. Both can connect
+to a remote HTTPS instance.
 
 Download the artifact matching the machine (`amd64`/`x86_64` for most PCs or
 `aarch64` for ARM64), then run it from a terminal once so startup errors remain
@@ -277,6 +279,13 @@ use the AppImage runtime's extract-and-run fallback:
 sudo pacman -S --needed fuse2
 APPIMAGE_EXTRACT_AND_RUN=1 ./Lumiverse*.AppImage
 ```
+
+Use **Browser → Linux Graphics & Diagnostics…** for saved backend/rendering
+choices and redacted runtime diagnostics. Changes apply after quitting and
+reopening Desktop. The NVIDIA explicit-sync-only mode and opaque diagnostic
+windows allow controlled comparisons without modifying the bundle. Slow
+compatibility modes remain explicit fallbacks. See [Linux qualification](LINUX-VALIDATION.md)
+for the remaining accelerated hardware and runtime validation gates.
 
 On Wayland, Lumiverse automatically selects the native GTK backend when no X11
 display is available. If KDE advertises an XWayland display but that path still
@@ -428,7 +437,14 @@ On Linux, Tauri bundles the GStreamer media framework needed by WebKit audio.
 The finalizer verifies the audio plugins and their AppRun search paths, removes
 the build runner's `libwayland-client` so Mesa and EGL use the host display
 stack, then extracts and checks the finished image before the build succeeds.
-Other bundle formats and platforms pass through unchanged.
+The finalizer also installs a pre-hook launcher that captures original host
+environment values, enforces the graphics library policy, and records native
+versions, build provenance, packaging tool hashes and runtime/helper hashes in
+`usr/share/lumiverse/runtime-manifest.json`. External browser and folder launches
+restore those values only in the child process. The packaged offline gate tests
+real WebKit click/type/scroll input and a fake host URL handler, using software
+compositing; it does not certify the proprietary GPU path. Other bundle formats
+and platforms pass through unchanged.
 
 Bundles land in `desktop/src-tauri/target/release/bundle/` (`.app`/`.dmg`
 on macOS, `.exe` installers on Windows, and `.AppImage` on Linux).

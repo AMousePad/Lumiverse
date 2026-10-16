@@ -19,7 +19,6 @@ import {
 import { TrayIcon } from "@tauri-apps/api/tray";
 import { listen } from "@tauri-apps/api/event";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
-import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   type DesktopShellState,
   type FullStatus,
@@ -45,6 +44,11 @@ const POLL_INTERVAL_MS = 15_000;
 const DESKTOP_REBUILD_TIMEOUT_MS = 2 * 60 * 60_000 + 5 * 60_000;
 const isMac = navigator.userAgent.includes("Mac");
 const isWindows = navigator.userAgent.includes("Windows");
+const isLinux = navigator.userAgent.includes("Linux");
+let remoteAuthorizationId: string | null = null;
+let remoteAuthorizationLastId: string | null = null;
+let remoteAuthorizationLastOrigin: string | null = null;
+let remoteAuthorizationTask: Promise<void> | null = null;
 
 /**
  * Alerts and pickers go through Rust commands so they never parent to —
@@ -185,7 +189,7 @@ function statusText(): string {
     );
     switch (remoteSnapshot?.state) {
       case "authorizing":
-        return `Signing in to ${name}…`;
+        return `Authorizing Desktop for ${name}…`;
       case "connected":
         return `${name} · connected`;
       case "restricted":
@@ -283,8 +287,8 @@ async function updateMenu(): Promise<void> {
 
   await remoteAuthItem.setText(
     remoteSnapshot?.state === "connected" || remoteSnapshot?.state === "restricted"
-      ? "Reconnect Remote Instance…"
-      : "Sign In to Remote Instance…",
+      ? "Reconnect Desktop Authorization…"
+      : "Authorize Desktop…",
   );
   await remoteAuthItem.setEnabled(remote && remoteSnapshot?.state !== "authorizing");
   await remoteDisconnectItem.setEnabled(
@@ -636,7 +640,7 @@ async function rebuildDesktop(): Promise<void> {
           "installed app with it to finish updating.\n\n" +
           result.bundlePath,
       );
-      await revealItemInDir(result.bundlePath).catch(() => {});
+      await invoke("reveal_desktop_artifact", { path: result.bundlePath }).catch(() => {});
       return;
     }
 
@@ -657,7 +661,7 @@ async function rebuildDesktop(): Promise<void> {
     if (!restartNow) {
       // Keep the old escape hatch: the bundle remains usable for a manual
       // install, and revealing it makes choosing Later non-destructive.
-      await revealItemInDir(result.bundlePath).catch(() => {});
+      await invoke("reveal_desktop_artifact", { path: result.bundlePath }).catch(() => {});
       return;
     }
 
@@ -673,7 +677,7 @@ async function rebuildDesktop(): Promise<void> {
         reopenFrontend,
       });
     } catch (error) {
-      await revealItemInDir(result.bundlePath).catch(() => {});
+      await invoke("reveal_desktop_artifact", { path: result.bundlePath }).catch(() => {});
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(
         `The desktop build succeeded, but the automatic installer handoff failed: ${reason}\n\n` +
@@ -753,48 +757,77 @@ async function persistRemoteIdentity(snapshot: RemoteInstanceSnapshot): Promise<
 async function pollRemoteInstance(): Promise<void> {
   if (instanceConnection.mode !== "remote" || remoteSnapshot?.state === "authorizing") return;
   const origin = instanceConnection.origin;
+  const before = remoteSnapshot;
   const snapshot = await invoke<RemoteInstanceSnapshot>("remote_instance_poll", {
     origin,
   });
-  if (instanceConnection.mode !== "remote" || instanceConnection.origin !== origin) return;
+  if (instanceConnection.mode !== "remote" || instanceConnection.origin !== origin || remoteSnapshot !== before) return;
   remoteSnapshot = snapshot;
   await persistRemoteIdentity(snapshot);
 }
 
-async function connectRemoteInstance(): Promise<void> {
-  if (instanceConnection.mode !== "remote" || remoteSnapshot?.state === "authorizing") return;
-  const origin = instanceConnection.origin;
-  remoteSnapshot = pendingRemoteSnapshot(origin);
-  await updateMenu();
+function connectRemoteInstance(): Promise<void> {
+  if (instanceConnection.mode !== "remote") return Promise.resolve();
+  return connectDesktopAuthorization(instanceConnection.origin);
+}
+
+function connectDesktopAuthorization(origin: string): Promise<void> {
+  if (remoteAuthorizationTask) return remoteAuthorizationTask;
+  const task = authorizeRemoteInstance(origin);
+  remoteAuthorizationTask = task;
+  void task.finally(() => { if (remoteAuthorizationTask === task) remoteAuthorizationTask = null; }).catch(() => {});
+  return task;
+}
+
+async function cancelRemoteAuthorization(): Promise<void> {
+  const id = remoteAuthorizationId;
+  remoteAuthorizationId = null;
+  if (id) {
+    await invoke("remote_authorization_cancel", { attemptId: id });
+    if (remoteSnapshot?.state === "authorizing") remoteSnapshot = { ...remoteSnapshot, state: "reauth_required" };
+  }
+  // Let the native future close its listener before a retry starts.
+  if (remoteAuthorizationTask) await remoteAuthorizationTask.catch(() => {});
+}
+
+async function authorizeRemoteInstance(origin: string): Promise<void> {
+  const id = crypto.randomUUID();
+  remoteAuthorizationId = id;
+  remoteAuthorizationLastId = id;
+  remoteAuthorizationLastOrigin = origin;
+  const current = () => remoteAuthorizationId === id && new URL(frontendUrl()).origin === origin;
+  const selectedRemote = () => instanceConnection.mode === "remote" && instanceConnection.origin === origin;
   try {
-    const snapshot = await invoke<RemoteInstanceSnapshot>("remote_instance_connect", { origin });
-    if (instanceConnection.mode !== "remote" || instanceConnection.origin !== origin) {
-      // A completed sign-in remains available when returning to this instance.
-      return;
+    if (selectedRemote()) remoteSnapshot = pendingRemoteSnapshot(origin);
+    await updateMenu();
+    if (!current()) return;
+    const snapshot = await invoke<RemoteInstanceSnapshot>("remote_instance_connect", { origin, attemptId: id });
+    if (!current()) return;
+    if (selectedRemote()) {
+      remoteSnapshot = snapshot;
+      await persistRemoteIdentity(snapshot);
     }
-    remoteSnapshot = snapshot;
-    await persistRemoteIdentity(snapshot);
     if (!snapshot.credentialPersisted) {
-      await alert(
-        "Lumiverse Desktop",
-        "The remote instance is connected for this session, but its refresh credential could not be saved in the operating system credential store. You will need to sign in again after restarting Desktop.",
-      );
+      await alert("Lumiverse Desktop", "Desktop is connected for this session, but its refresh credential could not be saved in the operating system credential store. Sign in again after restarting Desktop.");
     }
   } catch (error) {
-    if (instanceConnection.mode !== "remote" || instanceConnection.origin !== origin) return;
-    remoteSnapshot = {
-      ...pendingRemoteSnapshot(origin),
-      state: "reauth_required",
-      error: error instanceof Error ? error.message : String(error),
-    };
-    throw error;
+    if (!current()) return;
+    if (selectedRemote()) remoteSnapshot = { ...pendingRemoteSnapshot(origin), state: "reauth_required", error: error instanceof Error ? error.message : String(error) };
+    // The local sign-in window supplies Retry, Cancel, and the manual link.
+    // Menu errors still reach the normal tray error handler.
+    if (!String(error).includes("cancelled")) throw error;
   } finally {
+    if (current()) {
+      remoteAuthorizationId = null;
+      if (remoteSnapshot?.state === "authorizing") remoteSnapshot = { ...pendingRemoteSnapshot(origin), state: "reauth_required" };
+    }
     await updateMenu();
   }
 }
 
 async function disconnectRemoteInstance(): Promise<void> {
   if (instanceConnection.mode !== "remote") return;
+  await cancelRemoteAuthorization();
   await invoke("remote_instance_disconnect", { origin: instanceConnection.origin });
   remoteSnapshot = {
     ...pendingRemoteSnapshot(instanceConnection.origin),
@@ -809,6 +842,11 @@ async function toggleDesktopCapture(): Promise<void> {
     await invoke("desktop_capture_disconnect");
   } else {
     const origin = new URL(frontendUrl()).origin;
+    const authorization = await invoke<RemoteInstanceSnapshot>("remote_instance_poll", { origin });
+    if (authorization.state !== "connected" && authorization.state !== "restricted") {
+      await connectDesktopAuthorization(origin);
+    }
+    if (origin !== new URL(frontendUrl()).origin) return;
     await invoke("desktop_capture_connect", { origin });
     if (origin !== new URL(frontendUrl()).origin) {
       await invoke("desktop_capture_disconnect");
@@ -890,7 +928,7 @@ async function authorizeDiscordPresence(origin: string): Promise<void> {
   );
   // Drop any stale credential for this origin before the fresh sign-in.
   await invoke("remote_instance_disconnect", { origin }).catch(() => {});
-  await invoke("remote_instance_connect", { origin });
+  await connectDesktopAuthorization(origin);
 }
 
 // ─── System audio for extensions ────────────────────────────────────────────
@@ -1009,7 +1047,7 @@ async function buildTray(): Promise<void> {
     text: "Open in Default Browser",
     enabled: false,
     action: action(async () => {
-      await openUrl(frontendUrl());
+      await invoke("open_external_url", { url: frontendUrl() });
     }),
   });
 
@@ -1023,7 +1061,7 @@ async function buildTray(): Promise<void> {
   });
 
   remoteAuthItem = await MenuItem.new({
-    text: "Sign In to Remote Instance…",
+    text: "Authorize Desktop…",
     enabled: false,
     action: action(connectRemoteInstance),
   });
@@ -1063,6 +1101,7 @@ async function buildTray(): Promise<void> {
       desktopCaptureItem,
       await PredefinedMenuItem.new({ item: "Separator" }),
       setFrontendUrlItem,
+      ...(isLinux ? [await MenuItem.new({ text: "Linux Graphics & Diagnostics…", action: action(async () => { await invoke("show_linux_settings"); }) })] : []),
     ],
   });
 
@@ -1218,6 +1257,9 @@ async function applyInstanceConnection(selection: InstanceConnectionChange): Pro
     }
   }
 
+  await cancelRemoteAuthorization();
+  remoteAuthorizationLastId = null;
+  remoteAuthorizationLastOrigin = null;
   await invoke("desktop_capture_disconnect");
   openIntegratedBrowserWhenReady = false;
   if (selection.connection.mode === "remote") {
@@ -1315,6 +1357,11 @@ async function boot(): Promise<void> {
     if (payload?.origin === presenceOrigin()) void refreshDiscordPresence();
   });
 
+  await listen<string>("remote-authorization-retry", ({ payload }) => {
+    const origin = remoteAuthorizationLastOrigin;
+    if (remoteAuthorizationLastId !== payload || !origin || new URL(frontendUrl()).origin !== origin) return;
+    action(async () => { await cancelRemoteAuthorization(); await connectDesktopAuthorization(origin); })();
+  });
   await listen<InstanceConnectionChange>("instance-connection-changed", ({ payload }) => {
     action(() => changeInstanceConnection(payload))();
   });

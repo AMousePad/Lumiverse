@@ -30,7 +30,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 semver = "1"
-tokio = { version = "1", features = ["io-util", "net", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "net", "sync", "time", "process"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 uuid = { version = "1", features = ["v4"] }
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service"] }
@@ -60,6 +60,7 @@ windows = { version = "0.61", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+zbus = "=5.18.0"
 # Tauri/Wry does not expose Wayland background effects yet. Bind the staging
 # protocol against GTK's existing display/surface handles until that support
 # lands upstream.
@@ -76,3 +77,6 @@ codegen-units = 1
 
 [dev-dependencies]
 minisign-verify = "0.2"
+
+[target.'cfg(unix)'.dev-dependencies]
+zbus = "=5.18.0"

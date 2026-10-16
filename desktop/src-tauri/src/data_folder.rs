@@ -2,7 +2,6 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, WebviewWindow};
-use tauri_plugin_opener::OpenerExt;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -61,7 +60,8 @@ pub async fn open_lumiverse_data_folder(
     if window.label() != "main" {
         return Err("Opening local data belongs to the tray window.".into());
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    let launch_app = app.clone();
+    let path = tauri::async_runtime::spawn_blocking(move || {
         let command = match source {
             LocalServerSource::Bundled => {
                 let mut command = crate::bundled_server::command(&app)?;
@@ -82,12 +82,11 @@ pub async fn open_lumiverse_data_folder(
         // users can copy their old instance before the first server start.
         std::fs::create_dir_all(&path)
             .map_err(|error| format!("Could not access the Lumiverse data folder: {error}"))?;
-        app.opener()
-            .open_path(path.to_string_lossy(), None::<&str>)
-            .map_err(|error| format!("Could not open the Lumiverse data folder: {error}"))
+        Ok::<_, String>(path)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())??;
+    crate::external_launch::open_path(&launch_app, &path).await
 }
 
 #[cfg(test)]

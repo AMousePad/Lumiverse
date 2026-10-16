@@ -362,14 +362,8 @@ pub async fn desktop_capture_connect(
         .map_err(|_| "Capture state unavailable")? = Some(session.clone());
     let oauth = app.state::<RemoteInstanceState>();
     let snapshot = if oauth.capture_access_token(&canonical).is_none() {
-        match remote_instance::remote_instance_connect(app.clone(), oauth, canonical.clone()).await
-        {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                session.stop();
-                return Err(error);
-            }
-        }
+        session.stop();
+        return Err("Desktop authorization is required. Retry enabling capture from the tray to authorize Desktop.".into());
     } else {
         remote_instance::poll_remote_instance(&oauth, canonical.clone()).await
     };

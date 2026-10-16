@@ -3,71 +3,25 @@ mod capture;
 mod data_folder;
 mod desktop_updates;
 mod discord_rpc;
+mod external_launch;
 mod frontend;
+mod host_environment;
+mod linux_runtime;
+mod linux_smoke;
 mod notifications;
 mod profile;
 mod remote_instance;
 mod runner;
 mod system_audio;
+#[cfg(target_os = "linux")]
+mod wayland_background_effect;
 #[cfg(any(target_os = "linux", test))]
 mod webview_media;
 #[cfg(any(target_os = "windows", test))]
 mod webview_visibility;
-#[cfg(target_os = "linux")]
-mod wayland_background_effect;
 
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
-
-#[cfg(any(target_os = "linux", test))]
-fn populated_os_value(value: Option<&std::ffi::OsStr>) -> Option<&std::ffi::OsStr> {
-    value.filter(|candidate| !candidate.is_empty())
-}
-
-/// Pick an explicit GTK backend only when Lumiverse has been asked to override
-/// Tauri's AppImage hook, or when X11 is genuinely unavailable. Tauri's legacy
-/// AppImage hook defaults to `GDK_BACKEND=x11`; that is the most compatible
-/// choice when XWayland exists, but it aborts GTK initialization on pure
-/// Wayland sessions.
-#[cfg(any(target_os = "linux", test))]
-fn select_linux_gdk_backend<'a>(
-    lumiverse_override: Option<&'a std::ffi::OsStr>,
-    wayland_display: Option<&std::ffi::OsStr>,
-    x11_display: Option<&std::ffi::OsStr>,
-) -> Option<&'a std::ffi::OsStr> {
-    if let Some(requested) = populated_os_value(lumiverse_override) {
-        return Some(requested);
-    }
-
-    if populated_os_value(wayland_display).is_some() && populated_os_value(x11_display).is_none() {
-        return Some(std::ffi::OsStr::new("wayland"));
-    }
-
-    None
-}
-
-#[cfg(any(target_os = "linux", test))]
-#[cfg_attr(test, allow(dead_code))]
-fn configure_linux_display_backend() {
-    let lumiverse_override = std::env::var_os("LUMIVERSE_GDK_BACKEND");
-    let wayland_display = std::env::var_os("WAYLAND_DISPLAY");
-    let x11_display = std::env::var_os("DISPLAY");
-
-    if let Some(backend) = select_linux_gdk_backend(
-        lumiverse_override.as_deref(),
-        wayland_display.as_deref(),
-        x11_display.as_deref(),
-    ) {
-        // This runs before Tauri constructs its GTK event loop. It deliberately
-        // repairs the value inherited from the AppImage launcher rather than
-        // changing the process environment after GTK has initialized.
-        std::env::set_var("GDK_BACKEND", backend);
-        eprintln!(
-            "[linux-display] using GDK_BACKEND={}",
-            backend.to_string_lossy()
-        );
-    }
-}
 
 /// `tauri dev` can launch a raw executable instead of a bundled `.app`, which
 /// has no Info.plist icon for the Dock to read. Set the same bundled icon on
@@ -220,15 +174,25 @@ fn handle_macos_menu_event<R: tauri::Runtime>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(target_os = "linux")]
-    configure_linux_display_backend();
-
     let mut context = tauri::generate_context!();
     let profile = profile::prepare(context.config_mut(), std::env::args().skip(1))
         .expect("invalid desktop profile arguments");
+    #[cfg(target_os = "linux")]
+    {
+        linux_runtime::configure(&profile.identifier);
+        if linux_runtime::opaque() {
+            for window in &mut context.config_mut().app.windows {
+                window.transparent = false;
+            }
+        }
+    }
     let remote_state = remote_instance::RemoteInstanceState::for_identifier(&profile.identifier);
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(!cfg!(target_os = "linux"))
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -251,12 +215,23 @@ pub fn run() {
         .manage(system_audio::SystemAudioState::default())
         .on_page_load(|webview, payload| {
             // A reloaded or navigated frontend can no longer receive frames from a session its old page started.
-            if webview.label() == "frontend" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+            if webview.label() == "frontend"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
                 system_audio::frontend_gone(webview.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
             profile::desktop_profile_info,
+            external_launch::open_external_url,
+            external_launch::reveal_desktop_artifact,
+            linux_runtime::linux_diagnostics,
+            linux_runtime::save_linux_graphics,
+            linux_runtime::show_linux_settings,
+            linux_smoke::desktop_smoke_complete,
+            remote_instance::remote_authorization_status,
+            remote_instance::remote_authorization_cancel,
+            remote_instance::remote_authorization_retry,
             data_folder::open_lumiverse_data_folder,
             desktop_updates::desktop_update_info,
             desktop_updates::desktop_update_check,
@@ -325,6 +300,14 @@ pub fn run() {
             system_audio::desktop_system_audio_stop,
         ]);
 
+    #[cfg(target_os = "linux")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry>::new("linux-runtime")
+            .js_init_script(include_str!("external-links.js"))
+            .on_webview_ready(|webview| linux_runtime::observe(&webview))
+            .build(),
+    );
+
     #[cfg(target_os = "windows")]
     let builder = builder.plugin(webview_visibility::init());
 
@@ -363,50 +346,4 @@ pub fn run() {
                 runner::force_stop(app);
             }
         });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::select_linux_gdk_backend;
-    use std::ffi::OsStr;
-
-    #[test]
-    fn linux_backend_override_takes_priority() {
-        assert_eq!(
-            select_linux_gdk_backend(
-                Some(OsStr::new("wayland")),
-                Some(OsStr::new("wayland-0")),
-                Some(OsStr::new(":0")),
-            ),
-            Some(OsStr::new("wayland")),
-        );
-    }
-
-    #[test]
-    fn pure_wayland_session_repairs_tauri_x11_default() {
-        assert_eq!(
-            select_linux_gdk_backend(None, Some(OsStr::new("wayland-0")), None,),
-            Some(OsStr::new("wayland")),
-        );
-    }
-
-    #[test]
-    fn xwayland_session_keeps_tauri_default() {
-        assert_eq!(
-            select_linux_gdk_backend(None, Some(OsStr::new("wayland-0")), Some(OsStr::new(":0")),),
-            None,
-        );
-    }
-
-    #[test]
-    fn empty_display_values_are_treated_as_unavailable() {
-        assert_eq!(
-            select_linux_gdk_backend(
-                Some(OsStr::new("")),
-                Some(OsStr::new("wayland-0")),
-                Some(OsStr::new("")),
-            ),
-            Some(OsStr::new("wayland")),
-        );
-    }
 }

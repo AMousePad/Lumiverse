@@ -6,7 +6,8 @@ use super::*;
 fn profiles_keep_existing_credentials_and_isolate_test_credentials() {
     let production = KeyringCredentialStore::for_identifier("chat.lumiverse.tray");
     let debug = KeyringCredentialStore::for_identifier("chat.lumiverse.tray.debug");
-    let named = KeyringCredentialStore::for_identifier("chat.lumiverse.tray.debug.profile.setup-test-1");
+    let named =
+        KeyringCredentialStore::for_identifier("chat.lumiverse.tray.debug.profile.setup-test-1");
     assert_eq!(production.service, KEYRING_SERVICE);
     assert_ne!(debug.service, production.service);
     assert_ne!(named.service, debug.service);
@@ -422,4 +423,63 @@ fn keyring_account_is_stable_without_revealing_the_origin() {
     assert_eq!(account.len(), 64);
     assert!(!account.contains("example"));
     assert_eq!(account, keyring_account("https://example.com"));
+}
+
+#[tokio::test]
+async fn cancellation_drops_the_loopback_listener_and_old_progress_cannot_replace_a_retry() {
+    let state = RemoteInstanceState::default();
+    let (sender, mut receiver) = tokio::sync::watch::channel(false);
+    *state.authorization.lock().unwrap() = Some(AuthorizationAttempt {
+        id: "old".into(),
+        origin: "https://example.com".into(),
+        cancel: sender,
+        url: Some("https://example.com/authorize?state=private".into()),
+        phase: "callback_pending".into(),
+        error: None,
+    });
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        tokio::select! { _ = receiver.changed() => {}, _ = await_callback(listener, "state") => panic!("unexpected callback") }
+    });
+    cancel_attempt(&state, "old");
+    task.await.unwrap();
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    assert!(!current_attempt(&state, "old"));
+    assert!(state
+        .authorization
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .url
+        .is_none());
+    let (sender, _) = tokio::sync::watch::channel(false);
+    *state.authorization.lock().unwrap() = Some(AuthorizationAttempt {
+        id: "new".into(),
+        origin: "https://example.com".into(),
+        cancel: sender,
+        url: None,
+        phase: "preparing".into(),
+        error: None,
+    });
+    progress(&state, "old", "connected", Some("stale".into()), None);
+    cancel_attempt(&state, "old");
+    assert!(current_attempt(&state, "new"));
+    assert_eq!(
+        state.authorization.lock().unwrap().as_ref().unwrap().phase,
+        "preparing"
+    );
+}
+
+#[test]
+fn denied_callbacks_still_require_state_and_do_not_echo_remote_error_text() {
+    let error = parse_callback_target("/callback?error=secret-token&state=wrong", "expected")
+        .err()
+        .unwrap();
+    assert!(error.contains("state"));
+    let error = parse_callback_target("/callback?error=secret-token&state=expected", "expected")
+        .err()
+        .unwrap();
+    assert!(error.contains("denied") && !error.contains("secret-token"));
 }

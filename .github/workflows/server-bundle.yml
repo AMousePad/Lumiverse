@@ -113,7 +113,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf xdg-utils squashfs-tools dbus-x11 xauth xvfb gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+          sudo apt-get install -y build-essential libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf xdg-utils squashfs-tools dbus-x11 xauth xvfb xdotool gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
       - name: Install build dependencies
         run: bun install --frozen-lockfile
       - name: Install frontend build dependencies
@@ -123,7 +123,7 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
       - name: Test launcher, release policy, and desktop lifecycle
-        run: bun test tests/server-bundle.test.ts tests/lancedb-macos-native.test.ts tests/bun-runtime-version-policy.test.ts scripts/desktop-release.test.ts desktop/src-tauri/permissions.test.ts desktop/tests/desktop-updates.test.ts desktop/tests/instance-connection.test.ts desktop/tests/custom-url-ui.test.ts desktop/tests/local-server.test.ts desktop/tests/runner-client.test.ts scripts/desktop-session-restoration.test.ts scripts/tauri-finalized.test.ts scripts/appimage-packaging.test.ts src/spindle/runtime-transport.test.ts src/db/execution-transport.test.ts
+        run: bun test tests/server-bundle.test.ts tests/lancedb-macos-native.test.ts tests/bun-runtime-version-policy.test.ts scripts/desktop-release.test.ts desktop/src-tauri/permissions.test.ts desktop/tests/desktop-updates.test.ts desktop/tests/instance-connection.test.ts desktop/tests/custom-url-ui.test.ts desktop/tests/local-server.test.ts desktop/tests/runner-client.test.ts scripts/desktop-session-restoration.test.ts scripts/tauri-finalized.test.ts scripts/appimage-packaging.test.ts scripts/appimage-runtime-manifest.test.ts desktop/tests/linux-desktop.test.ts src/spindle/runtime-transport.test.ts src/db/execution-transport.test.ts
       - name: Test production browser cookie transport
         run: bun --no-env-file test src/auth/request-cookies.integration.test.ts
         env:
@@ -197,6 +197,11 @@ jobs:
           cache-targets: false
           add-rust-environment-hash-key: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test native Linux desktop policies and authorization
+        if: runner.os == 'Linux'
+        run: |
+          bun run --cwd desktop build
+          cargo test --locked --lib --manifest-path desktop/src-tauri/Cargo.toml
       - name: Stamp the actual release version in the CI checkout
         run: bun run desktop:version "$env:DESKTOP_VERSION"
         if: runner.os == 'Windows'
@@ -222,6 +227,15 @@ jobs:
         env:
           LUMIVERSE_UPDATER_PUBLIC_KEY: ${{ vars.LUMIVERSE_UPDATER_PUBLIC_KEY || secrets.LUMIVERSE_UPDATER_PUBLIC_KEY }}
         run: cargo run --locked --release --manifest-path desktop/src-tauri/Cargo.toml --example verify-updater --target ${{ matrix.target }} -- desktop/src-tauri/target/${{ matrix.target }}/release/bundle
+      - name: Retain Linux runtime provenance
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-runtime-${{ matrix.target }}
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppDir/usr/share/lumiverse/runtime-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Smoke-test finalized Linux AppImage offline as another user
         if: runner.os == 'Linux'
         run: bash scripts/smoke-test-appimage.sh desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage

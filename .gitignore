@@ -95,6 +95,7 @@ frontend/.dist-backup-*/
 *.md
 !developer-docs/**/*.md
 !user-docs/**/*.md
+!desktop/LINUX-VALIDATION.md
 
 !LICENSE.md
 !README.md

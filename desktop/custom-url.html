@@ -89,7 +89,9 @@
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>
             <input id="frontend-url" name="frontend-url" type="url" inputmode="url" placeholder="https://app.example.com" autocomplete="url" spellcheck="false" disabled />
           </div>
-          <p class="field-hint">Your saved session is restored when available. If needed, you’ll sign in securely in your browser.</p>
+          <p class="field-hint">LAN and private IP addresses also require HTTPS. Both Desktop and the integrated browser need a trusted certificate matching the hostname or IP address. Only localhost development can use HTTP.</p>
+          <p class="field-hint">Add this origin under the server’s Settings → Operator → Trusted Hostnames, then restart the server. Desktop authorization opens in your system browser and is separate from the integrated browser’s login.</p>
+          <p class="field-hint"><a href="https://lumiverse.chat/guides/getting-started/desktop-tray/#connect-to-a-remote-instance" target="_blank" rel="noopener noreferrer">LAN HTTPS and reverse-proxy setup</a></p>
         </section>
 
         <p id="error" class="error" role="alert" aria-live="polite" hidden></p>

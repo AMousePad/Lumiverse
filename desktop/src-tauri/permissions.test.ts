@@ -84,6 +84,34 @@ describe("tauri command registration", () => {
 });
 
 describe("capability origins", () => {
+  test("short-lived authorization links stay in the bundled UI and exact Vite control pages", () => {
+    const grants = capabilities().filter((capability) =>
+      (capability.json.permissions as string[]).includes("desktop-authorization-ui"));
+    expect(grants.length).toBe(2);
+    for (const capability of grants) {
+      if (capability.json.remote === undefined) {
+        expect(capability.json.local).toBe(true);
+        expect(capability.json.windows).toEqual(["desktop-authorization"]);
+        continue;
+      }
+      expect(capability.file).toBe("local-desktop-controls-dev.json");
+      expect(capability.json.local).toBe(false);
+      expect(capability.json.windows).toEqual(["desktop-authorization", "linux-settings"]);
+      const urls = (capability.json.remote as { urls: string[] }).urls;
+      const patterns = urls.map((url) => new URLPattern(url));
+      for (const url of urls) expect(patterns.some((pattern) => pattern.test(url))).toBe(true);
+      for (const url of ["https://example.com/authorization.html", "http://localhost:7860/authorization.html",
+        "http://localhost:1430/", "http://localhost:1430/untrusted.html"]) {
+        expect(patterns.some((pattern) => pattern.test(url))).toBe(false);
+      }
+    }
+    // The development capability serves both controls; the native check
+    // keeps the graphics window from reading the ephemeral authorization URL.
+    const source = readSource("remote_instance.rs");
+    const status = source.slice(source.indexOf("pub fn remote_authorization_status"), source.indexOf("pub fn remote_authorization_cancel"));
+    expect(status).toContain('window.label() != "desktop-authorization"');
+  });
+
   test("signed release updates are available only to the bundled or development tray host", () => {
     const grants = capabilities().filter((capability) =>
       (capability.json.permissions as string[]).includes("desktop-release-updates"));

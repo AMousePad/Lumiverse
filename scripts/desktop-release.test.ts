@@ -52,10 +52,15 @@ test("nightly skips unrelated commits and rebuilds when shipped source changes",
   expect(sourceFingerprint(cwd)).toBe(fingerprint);
   expect((await prepare()).build).toBe(false);
   writeFileSync(join(cwd, "desktop/README.md"), "Unshipped desktop docs");
+  writeFileSync(join(cwd, "desktop/LINUX-VALIDATION.md"), "Unshipped hardware qualification notes");
   writeFileSync(join(cwd, "src/main.test.ts"), "Unshipped server test");
   git("add", "."); git("commit", "-m", "Desktop docs and tests");
   expect(sourceFingerprint(cwd)).toBe(fingerprint);
   expect((await prepare()).build).toBe(false);
+  mkdirSync(join(cwd, "scripts"));
+  writeFileSync(join(cwd, "scripts/appimage-apprun.sh"), "changed launcher environment policy");
+  git("add", "."); git("commit", "-m", "Launcher change");
+  expect((await prepare()).build).toBe(true);
   writeFileSync(join(cwd, "src/main.ts"), "export const version = 2;"); git("add", "."); git("commit", "-m", "Server change");
   expect((await prepare()).build).toBe(true);
   await expect(prepareDesktopRelease({ cwd, channel: "nightly", repository: "test/Lumiverse", runNumber: "41", date: new Date("2026-10-14T05:23:00Z"), readFeed: async () => previous })).rejects.toThrow("must be newer");

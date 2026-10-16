@@ -36,6 +36,17 @@ appimage="${appimages[0]}"
 appdir="${appdirs[0]}"
 chmod +x "$appimage"
 
+# Wrap the generated launcher, not AppRun.wrapped: linuxdeploy applies its
+# environment hooks before reaching the latter. Repeated finalization is safe.
+if ! grep -Fq '# Lumiverse pre-hook launcher v1' "$appdir/AppRun"; then
+  mv -f "$appdir/AppRun" "$appdir/AppRun.lumiverse-inner"
+elif [[ ! -f "$appdir/AppRun.lumiverse-inner" ]]; then
+  echo "Lumiverse's AppRun wrapper has no inner launcher." >&2
+  exit 1
+fi
+cp "$script_dir/appimage-apprun.sh" "$appdir/AppRun"
+chmod a+x "$appdir/AppRun" "$appdir/AppRun.lumiverse-inner"
+
 # Tauri caches its AppRun launcher with mode 0770. linuxdeploy renames it to
 # AppRun.wrapped, preserving permissions that fail for other users when the
 # SquashFS is mounted. Repair the whole AppDir before every repack, including
@@ -79,6 +90,9 @@ if [[ ${#bundled_wayland[@]} -gt 0 ]]; then
 else
   echo "AppDir already uses the host Wayland client library."
 fi
+
+bun "$script_dir/appimage-runtime-manifest.ts" "$appdir"
+chmod -R a+rX "$appdir/usr/share/lumiverse"
 
 cache_root="${XDG_CACHE_HOME:-$HOME/.cache}"
 output_plugin="${LUMIVERSE_APPIMAGE_PLUGIN:-$cache_root/tauri/linuxdeploy-plugin-appimage.AppImage}"
@@ -128,6 +142,7 @@ unsquashfs -no-progress -offset "$runtime_size" \
 assert_no_bundled_wayland_client "$verification_dir/squashfs-root"
 bash "$script_dir/verify-appimage-permissions.sh" "$verification_dir/squashfs-root"
 bash "$script_dir/verify-appimage-gstreamer.sh" "$verification_dir/squashfs-root"
+bun "$script_dir/appimage-runtime-manifest.ts" "$verification_dir/squashfs-root" --verify
 mv -f "$replacement" "$appimage"
 
 echo "Finalized $(basename "$appimage"): launcher permissions, host libwayland-client and bundled GStreamer media support verified."

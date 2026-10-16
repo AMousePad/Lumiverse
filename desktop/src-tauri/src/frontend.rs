@@ -16,8 +16,11 @@ use tauri::{
 /// Besides being useful in terminal diagnostics, CI uses this to distinguish
 /// a working tray from a startup-error dialog that merely remains open.
 #[tauri::command]
-pub fn desktop_startup_ready() {
+pub fn desktop_startup_ready(app: AppHandle) {
     eprintln!("[desktop-startup] tray ready");
+    if let Err(error) = crate::linux_smoke::start(&app) {
+        eprintln!("[desktop-smoke] could not create fixture: {error}");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -680,7 +683,7 @@ pub fn show_frontend(
     }
 
     let startup_appearance = load_frontend_startup_appearance(&app);
-    let native_background = if startup_appearance.blur {
+    let native_background = if startup_appearance.blur && !crate::linux_runtime::opaque() {
         tauri::webview::Color(0, 0, 0, 0)
     } else {
         let [red, green, blue] = startup_appearance.native_color;
@@ -708,7 +711,7 @@ pub fn show_frontend(
         // and WebView transparent lets a theme opt into a translucent body.
         // Opaque themes remain visually identical because their CSS body/app
         // surfaces cover the transparent host.
-        .transparent(true)
+        .transparent(!crate::linux_runtime::opaque())
         .background_color(native_background)
         // Install a lightweight titlebar/surface before the remote frontend's
         // bundle executes. It removes itself as soon as the app root mounts.
@@ -1186,8 +1189,12 @@ pub fn show_extension_widget(
         // Widgets already draw their own visual edge. A native shadow
         // becomes a conspicuous border around transparent content.
         .shadow(false)
-        .transparent(true)
-        .background_color(tauri::webview::Color(0, 0, 0, 0))
+        .transparent(!crate::linux_runtime::opaque())
+        .background_color(if crate::linux_runtime::opaque() {
+            tauri::webview::Color(17, 16, 23, 255)
+        } else {
+            tauri::webview::Color(0, 0, 0, 0)
+        })
         .always_on_top(true)
         .skip_taskbar(true)
         .focused(false)
@@ -1359,7 +1366,10 @@ fn apply_frontend_native_appearance(
         // The protocol deliberately leaves the blur algorithm/intensity to the
         // compositor. The page continues to provide Lumiverse's tint.
         let _ = (dark, blur_intensity);
-        crate::wayland_background_effect::set_background_effect(window, blur)?;
+        crate::wayland_background_effect::set_background_effect(
+            window,
+            blur && !crate::linux_runtime::opaque(),
+        )?;
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -1480,22 +1490,102 @@ mod tests {
 pub fn show_frontend_url_settings(app: AppHandle) -> Result<(), String> {
     const LABEL: &str = "frontend-url-settings";
     if let Some(window) = app.get_webview_window(LABEL) {
+        fit_connection_dialog(&window);
         window.show().map_err(|e| e.to_string())?;
         return window.set_focus().map_err(|e| e.to_string());
     }
 
-    let window = configure_webview_runtime(WebviewWindowBuilder::new(
+    let monitor = app
+        .get_webview_window(FRONTEND_LABEL)
+        .and_then(|window| window.current_monitor().ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let (width, height, min_width, min_height) = monitor
+        .as_ref()
+        .map(|monitor| {
+            let work = monitor.work_area();
+            connection_dialog_size(work.size.width, work.size.height, monitor.scale_factor())
+        })
+        .unwrap_or((620.0, 680.0, 320.0, 240.0));
+    let mut builder = configure_webview_runtime(WebviewWindowBuilder::new(
         &app,
         LABEL,
         WebviewUrl::App("custom-url.html".into()),
     ))
     .title("Instance Connection")
-    .inner_size(620.0, 680.0)
-    .min_inner_size(620.0, 680.0)
-    .max_inner_size(620.0, 680.0)
-    .resizable(false)
-    .center()
-    .build()
-    .map_err(|e| e.to_string())?;
+    .inner_size(width, height)
+    .min_inner_size(min_width, min_height)
+    .resizable(true);
+    if let Some(monitor) = monitor {
+        let area = monitor.work_area();
+        let scale = monitor.scale_factor();
+        builder = builder.position(
+            f64::from(area.position.x) / scale + (f64::from(area.size.width) / scale - width) / 2.0,
+            f64::from(area.position.y) / scale
+                + (f64::from(area.size.height) / scale - height) / 2.0,
+        );
+    } else {
+        builder = builder.center();
+    }
+    let window = builder.build().map_err(|e| e.to_string())?;
+    let resized = window.clone();
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
+        ) {
+            fit_connection_dialog(&resized);
+        }
+    });
     window.set_focus().map_err(|e| e.to_string())
+}
+
+fn fit_connection_dialog(window: &WebviewWindow) {
+    let Some(monitor) = window.current_monitor().ok().flatten() else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let (w, h, min_w, min_h) = connection_dialog_size(area.size.width, area.size.height, scale);
+    let _ = window.set_min_size(Some(tauri::LogicalSize::new(min_w, min_h)));
+    if let Ok(size) = window.inner_size() {
+        let current = size.to_logical::<f64>(scale);
+        let available_w = (f64::from(area.size.width) / scale - 32.0).max(w);
+        let available_h = (f64::from(area.size.height) / scale - 72.0).max(h);
+        if current.width > available_w || current.height > available_h {
+            let _ = window.set_size(tauri::LogicalSize::new(
+                current.width.min(available_w),
+                current.height.min(available_h),
+            ));
+        }
+    }
+}
+
+// Tauri monitor work areas are physical; window-builder dimensions are logical.
+fn connection_dialog_size(width: u32, height: u32, scale: f64) -> (f64, f64, f64, f64) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let width = (f64::from(width) / scale - 32.0).max(1.0).min(620.0);
+    // Reserve titlebar space as well as a margin on small scaled displays.
+    let height = (f64::from(height) / scale - 72.0).max(1.0).min(680.0);
+    (width, height, width.min(320.0), height.min(240.0))
+}
+
+#[cfg(test)]
+mod connection_geometry_tests {
+    use super::connection_dialog_size;
+    #[test]
+    fn fits_scaled_work_areas_without_an_oversized_minimum() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let (w, h, mw, mh) = connection_dialog_size(1024, 768, scale);
+            assert!(w < 1024.0 / scale && h < 768.0 / scale);
+            assert!(mw <= w && mh <= h);
+        }
+        assert_eq!(
+            connection_dialog_size(2560, 1440, 1.0),
+            (620.0, 680.0, 320.0, 240.0)
+        );
+    }
 }
