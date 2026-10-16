@@ -108,6 +108,7 @@ const HOST_ACTION_ROWS: readonly AuthorityRow[] = [
 ]
 
 const HOST_SURFACE_ROWS: readonly AuthorityRow[] = [
+  free({ surface: 'host_surface', id: 'message_preview', source: 'messages.content', freeBecause: 'shipped-twin: previews only active-chat message content already exposed by ctx.messages; tag delivery, regex actions and shared message widgets are disabled' }),
   free({ surface: 'host_surface', id: 'provider_icon', source: 'hostSurface.providerIcon', freeBecause: 'pure-host-action: renders a static provider glyph from a string id' }),
   gated('world_books', { surface: 'host_surface', id: 'world_book_entry_editor', source: 'hostSurface.worldBookEntryEditor', gatedBecause: 'Rule-B clause (b): the host wrapper binds editor events to the durable worldBooksApi.updateEntry write' }),
   free({ surface: 'host_surface', id: 'world_book_entry_table', source: 'worldBooks.entries', freeBecause: 'rest: session-authenticated world-book entries are display-only here' }),

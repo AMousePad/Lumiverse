@@ -30,6 +30,7 @@ describe('frontend authority map', () => {
   })
   test('keeps every H7 surface in the canonical authority map', () => {
     const expected: Record<string, string | null> = {
+      message_preview: null,
       provider_icon: null,
       world_book_entry_editor: 'world_books',
       world_book_entry_table: null,
