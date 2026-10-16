@@ -439,9 +439,13 @@ Bundled releases support Windows x64/ARM64 (NSIS `.exe`), Linux x64/ARM64
 (`.AppImage` only), and macOS Apple Silicon/Intel (`.dmg`, plus the signed
 `.app.tar.gz` used by the updater). Each includes the tested standalone server.
 
-- **`desktop-nightly.yml`** checks `staging` daily at 05:23 UTC. It skips the
-  build if bundled source matches the last successful nightly. A new build gets
-  the next desktop patch version with `-nightly.<date>.<run>` appended.
+- **`desktop-nightly-scheduler.yml`** runs on `main` daily at 05:23 UTC and
+  dispatches **`desktop-build.yml`** on `staging` with `bundled_nightly=true`.
+  GitHub only evaluates cron on the default branch, so keep the scheduler on
+  `main` and merge that change back into `staging`.
+- **`desktop-nightly.yml`** prepares the bundled release from `staging`. It skips
+  the build if bundled source matches the last successful nightly. A new build
+  gets the next desktop patch version with `-nightly.<date>.<run>` appended.
 - **`desktop-release.yml`** publishes stable `desktop-vX.Y.Z` tags from `main`;
   manual dispatch publishes the committed version from `main`. The tag must
   match the desktop manifests and stable versions must increase, including
