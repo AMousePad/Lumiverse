@@ -296,11 +296,20 @@ export class DatabaseExecutor {
     this.retryTimer = null;
     const proc = this.process;
     this.process = null;
+    const sendMessage = this.sendMessage;
     this.sendMessage = null;
     this.ready = false;
     if (!proc) return Promise.resolve();
-    try { proc.kill("SIGKILL"); } catch { /* onExit/exited confirms release */ }
+    // Graceful shutdown: send shutdown message before SIGKILL to avoid disconnect gaps.
+    if (sendMessage) {
+      try { sendMessage({ type: "shutdown" }); } catch { /* ignore */ }
+    }
+    // Give the child a brief window to exit cleanly after shutdown message.
+    const gracefulTimeout = setTimeout(() => {
+      try { proc.kill("SIGKILL"); } catch { /* already exited */ }
+    }, 500);
     const stopping = proc.exited.catch(() => {}).finally(() => {
+      clearTimeout(gracefulTimeout);
       if (this.stopping === stopping) this.stopping = null;
     });
     this.stopping = stopping;
