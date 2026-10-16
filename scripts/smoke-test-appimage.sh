@@ -132,9 +132,16 @@ set -e
 
 # A healthy tray app remains in Tauri's event loop until timeout terminates it.
 # Loader, GTK, WebKit and JavaScript bootstrap failures exit before that point.
-if [[ $status -ne 124 ]] || ! grep -Fq '[desktop-startup] tray ready' "$log_file" || ! grep -Fq '[desktop-smoke] trusted click, typing, scrolling and host URL dispatch passed' "$log_file" || [[ ! -f "$smoke_home/host-launch.ok" ]]; then
+failures=()
+[[ $status -eq 124 ]] || failures+=("desktop exited before the smoke deadline (status $status)")
+grep -Fq '[desktop-startup] tray ready' "$log_file" || failures+=("tray startup did not complete")
+grep -Fq '[desktop-smoke] trusted click, typing, scrolling and host URL dispatch passed' "$log_file" || failures+=("WebKit interaction did not complete")
+# mktemp creates a private 0700 home, now owned by nobody. The runner cannot
+# inspect files inside it; check the marker with the same identity that wrote it.
+sudo -n runuser -u nobody -- test -f "$smoke_home/host-launch.ok" || failures+=("host launcher environment check did not complete")
+if [[ ${#failures[@]} -gt 0 ]]; then
   sed -n '1,240p' "$log_file" >&2
-  echo "AppImage did not reach a healthy tray startup (status $status)" >&2
+  printf 'AppImage smoke test failed: %s\n' "${failures[@]}" >&2
   exit 1
 fi
 
