@@ -1,4 +1,5 @@
 //! CI checks the finalized payload against the public key embedded in releases.
+//! Keep this package independent of Tauri so verification cannot rebuild the app.
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
 use std::io::Read;

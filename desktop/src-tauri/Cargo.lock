@@ -2317,7 +2317,6 @@ dependencies = [
  "gtk",
  "image",
  "keyring",
- "minisign-verify",
  "notify-rust",
  "objc2",
  "objc2-app-kit",

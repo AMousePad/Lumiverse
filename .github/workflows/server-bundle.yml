@@ -128,6 +128,8 @@ jobs:
         run: bun --no-env-file test src/auth/request-cookies.integration.test.ts
         env:
           NODE_ENV: production
+      - name: Test updater signature verifier
+        run: cargo test --locked --manifest-path desktop/tools/verify-updater/Cargo.toml --target ${{ matrix.target }}
       - name: Typecheck backend and packaging
         shell: bash
         run: |
@@ -226,7 +228,7 @@ jobs:
       - name: Verify finalized updater signatures against the embedded public key
         env:
           LUMIVERSE_UPDATER_PUBLIC_KEY: ${{ vars.LUMIVERSE_UPDATER_PUBLIC_KEY || secrets.LUMIVERSE_UPDATER_PUBLIC_KEY }}
-        run: cargo run --locked --release --manifest-path desktop/src-tauri/Cargo.toml --example verify-updater --target ${{ matrix.target }} -- desktop/src-tauri/target/${{ matrix.target }}/release/bundle
+        run: cargo run --locked --release --manifest-path desktop/tools/verify-updater/Cargo.toml --target ${{ matrix.target }} -- desktop/src-tauri/target/${{ matrix.target }}/release/bundle
       - name: Retain Linux runtime provenance
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v7

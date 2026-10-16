@@ -75,8 +75,5 @@ strip = true
 lto = true
 codegen-units = 1
 
-[dev-dependencies]
-minisign-verify = "0.2"
-
 [target.'cfg(unix)'.dev-dependencies]
 zbus = "=5.18.0"
