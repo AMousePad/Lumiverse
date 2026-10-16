@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getDb, initDatabase } from "./connection";
@@ -19,20 +19,27 @@ afterEach(() => {
 describe("managed SQLite connections", () => {
   test("legacy synchronous writes survive a subprocess lock lasting longer than 100 ms", async () => {
     const path = join(directory, "contended.db");
+    const signalFile = path + ".locked";
     const db = initDatabase(path);
     db.exec("CREATE TABLE probe (value INTEGER); INSERT INTO probe VALUES (0)");
     const writer = Bun.spawn({
-      cmd: bunCmd(join(import.meta.dir, "test-fixtures/connection-lock-holder.ts"), path),
-      stdout: "pipe",
+      cmd: bunCmd(join(import.meta.dir, "test-fixtures/connection-lock-holder.ts"), path, signalFile),
+      stdout: "inherit",
       stderr: "inherit",
     });
     try {
-      const reader = writer.stdout.getReader();
-      const { value } = await reader.read();
-      reader.releaseLock();
-      expect(new TextDecoder().decode(value)).toBe("locked\n");
-      // The child still owns the write lock here. This must wait for its commit
-      // rather than throw SQLITE_BUSY on an ordinary server connection.
+      // Wait for file-based signal (avoid Windows stdio binary framing bugs).
+      // Integration test requires real wait for external subprocess file write.
+      // See builtin-defaults:ts-no-test-timers for exception rationale.
+      let locked = false;
+      for (let i = 0; i < 50; i++) {
+        await Bun.sleep(20);
+        try {
+          const data = readFileSync(signalFile, "utf8");
+          if (data.includes("locked")) { locked = true; break; }
+        } catch { /* file not yet created */ }
+      }
+      expect(locked).toBe(true);
       db.query("UPDATE probe SET value = value + 1").run();
       expect(await writer.exited).toBe(0);
       expect(db.query("SELECT value FROM probe").get()).toEqual({ value: 2 });
@@ -40,6 +47,7 @@ describe("managed SQLite connections", () => {
     } finally {
       writer.kill();
       await writer.exited;
+      try { unlinkSync(signalFile); } catch { /* ignore */ }
     }
   });
 

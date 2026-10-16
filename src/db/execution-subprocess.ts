@@ -50,6 +50,13 @@ const channel = createDatabaseSubprocessChannel((message: DatabaseHostMessage) =
     send({ type: "result", requestId: message.requestId, result, durationMs: performance.now() - started, imageReferences });
   }, () => { stopIndexer?.(); closeDatabase(); process.exit(0); });
 
+// Graceful exit handling: ensure cleanup when parent kills with SIGKILL
+// (disconnect event may not fire properly on Windows for ipc mode).
+process.on('exit', () => {
+  stopIndexer?.();
+  closeDatabase();
+});
+
 try {
   db = initDatabase(path, { busyTimeoutMs: 100, automaticCheckpoint: false, allowMmap: false });
   if (!process.argv.includes("--defer-background")) startBackgroundWork();

@@ -153,7 +153,8 @@ export class DatabaseExecutor {
   private spawn(): void {
     try {
       // The desktop runner also avoids Bun's Windows IPC exit/disconnect gaps.
-      const pipes = (this.options.transport ?? (process.platform === "win32" ? "stdio" : "ipc")) === "stdio";
+      const pipes = this.options.transport === "stdio";
+      // Note: stdio fallback removed for win32 due to Bun 1.4.2 binary stream corruption (PR #39897, #23340).
       let outputDrained: Promise<void> = Promise.resolve();
       const launch = {
         cmd: bunCmd(this.options.runtimePath ?? join(import.meta.dir, "execution-subprocess.ts"), this.path,
