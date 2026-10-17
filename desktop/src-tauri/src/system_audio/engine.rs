@@ -301,7 +301,8 @@ mod tests {
     use std::sync::{atomic::AtomicUsize, Mutex};
 
     const RATE: u32 = 48_000;
-    const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+    // ARM64 tests run under QEMU on a shared host, where multiple test workers can be delayed by other guests.
+    const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
     /// A device the test drives by hand.
     #[derive(Clone, Default)]
@@ -564,11 +565,18 @@ mod tests {
         rig.knobs.loud.store(true, Ordering::SeqCst);
         wait_for_frames(&rig, 1);
         rig.paused.store(true, Ordering::SeqCst);
-        let sent = count(&rig);
         let discards = rig.knobs.discards.load(Ordering::SeqCst);
         wait_until(
             || rig.knobs.discards.load(Ordering::SeqCst) > discards,
             "audio was not released while the window was hidden",
+        );
+        // The first discard acknowledges that the capture thread observed the pause. Count from that point so an
+        // in-flight frame from before the pause is not mistaken for work done while hidden.
+        let sent = count(&rig);
+        let acknowledged_discards = rig.knobs.discards.load(Ordering::SeqCst);
+        wait_until(
+            || rig.knobs.discards.load(Ordering::SeqCst) > acknowledged_discards,
+            "capture did not continue draining while the window was hidden",
         );
         assert_eq!(count(&rig), sent, "frames were sent while hidden");
 
