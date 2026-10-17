@@ -481,7 +481,21 @@ mod tests {
             || rig.knobs.reopens.load(Ordering::SeqCst) == 1,
             "capture did not reopen the device",
         );
-        wait_for_frames(&rig, before_reopen + 1);
+        wait_until(
+            || {
+                rig.frames
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .skip(before_reopen)
+                    .any(|frame| {
+                        frame.stereo.as_ref().is_some_and(|stereo| {
+                            stereo.left.amplitude > 0.0 && stereo.right.amplitude > 0.0
+                        })
+                    })
+            },
+            "stereo capture did not resume after device reopen",
+        );
         assert!(rig
             .frames
             .lock()
