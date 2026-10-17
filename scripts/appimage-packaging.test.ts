@@ -184,7 +184,9 @@ describe.skipIf(process.platform === "win32")("AppImage packaging permissions", 
     write(join(f.appdir, "AppRun"), "#!/bin/sh\n# new upstream launcher\nexit 0\n", 0o755);
     expect(run("finalize-appimage.sh", f.bundle, f.env).code).toBe(0);
     expect(readFileSync(join(f.appdir, "AppRun.lumiverse-inner"), "utf8")).toContain("new upstream launcher");
-  });
+  // Three complete shell-based repacks exceed five seconds on hosted Intel
+  // macOS and under ARM64 emulation. Keep the full round-trip assertions.
+  }, 60_000);
 
   function checkStoredPermissions(native: boolean): void {
     const f = fixture(native);
