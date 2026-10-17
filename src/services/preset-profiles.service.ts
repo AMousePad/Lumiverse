@@ -8,6 +8,8 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { PresetProfileBinding, ResolvedPresetProfile } from "../types/preset-profile";
 import type { PromptBlock, PromptVariableValues } from "../types/preset";
+import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
+import { resolveChatGenerationConnection } from "./generation/connection-resolution";
 
 // ---------------------------------------------------------------------------
 // Setting key conventions
@@ -448,6 +450,55 @@ export function resolveProfile(
 
   // 6. No matching binding — use raw preset block states
   return { preset_id: fallbackPresetId, binding: null, source: "none", source_id: null };
+}
+
+/**
+ * The preset a chat generates with, mirroring prompt assembly: the selected
+ * Loom preset or the chat connection's preset, then the profile bindings
+ * above. Without a chat, only the selected preset and its defaults apply.
+ * Returns null when the chat does not exist.
+ */
+export async function resolveActivePreset(
+  userId: string,
+  chatId?: string | null,
+): Promise<ResolvedPresetProfile | null> {
+  const selected = settingsSvc.getSetting(userId, "activeLoomPresetId")?.value;
+  const selectedPresetId = typeof selected === "string" && selected ? selected : null;
+
+  if (!chatId) {
+    const defaults = selectedPresetId ? getDefaults(userId, selectedPresetId) : null;
+    return defaults
+      ? { preset_id: defaults.preset_id, binding: defaults, source: "defaults", source_id: selectedPresetId }
+      : { preset_id: selectedPresetId, binding: null, source: "none", source_id: null };
+  }
+
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
+  if (!chat) return null;
+  if (isNoPresetChatMetadata(chat.metadata)) {
+    return { preset_id: null, binding: null, source: "none", source_id: null };
+  }
+
+  let connection: { id: string; preset_id?: string | null } | null = null;
+  try {
+    connection = resolveChatGenerationConnection(userId, chat.metadata);
+  } catch {
+    // No usable connection: resolve from the selected preset alone.
+  }
+  const persona = isTemporaryChatMetadata(chat.metadata)
+    ? null
+    : await personasSvc.resolvePersonaOrDefaultAsync(userId);
+
+  return resolveProfile(
+    userId,
+    selectedPresetId ?? connection?.preset_id ?? null,
+    chatId,
+    chat.character_id,
+    {
+      isGroup: chat.metadata?.group === true,
+      connectionId: connection?.id ?? null,
+      personaId: persona?.id ?? null,
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
