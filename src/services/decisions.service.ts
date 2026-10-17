@@ -1,12 +1,42 @@
-import type { DecisionEvaluationInput, DecisionQuestion, DecisionResult } from "../decision/contract";
-import { validateDecisionInput, DecisionValidationError } from "../decision/validation";
+import type { DecisionEvaluationInput, DecisionImageAsset, DecisionQuestion, DecisionResult } from "../decision/contract";
+import { validateDecisionInput, decisionImageByteLength, DecisionValidationError, DECISION_IMAGE_MAX_BYTES } from "../decision/validation";
 import { ProviderRequestError } from "../utils/provider-errors";
 import { evaluateProviderDecision, redactDecisionError } from "../decision/providers";
 import * as connections from "./decision-connections.service";
 import * as secrets from "./secrets.service";
+import * as images from "./images.service";
 
 export class DecisionConnectionNotFoundError extends Error {}
 export class DecisionTimeoutError extends Error {}
+/** Resolve stored images without reading or retaining more than the shared image budget. */
+async function resolveImageAssets<I extends DecisionEvaluationInput>(userId: string, input: I, signal: AbortSignal): Promise<I> {
+  if (!input.assets || !Object.values(input.assets).some((asset) => "image_id" in asset)) return input;
+  const assets: Record<string, DecisionImageAsset> = Object.create(null);
+  // Count every inline image first, regardless of its position in the asset map.
+  let imageBytes = Object.values(input.assets).reduce((total, asset) => total + ("data_base64" in asset ? decisionImageByteLength(asset.data_base64) : 0), 0);
+  const sizeLimitError = `Decision images exceed ${DECISION_IMAGE_MAX_BYTES / (1024 * 1024)} MiB`;
+  for (const [ref, asset] of Object.entries(input.assets)) {
+    signal.throwIfAborted();
+    if (!("image_id" in asset)) { assets[ref] = asset; continue; }
+    const path = await images.getImageFilePath(userId, asset.image_id);
+    signal.throwIfAborted();
+    if (!path) throw new DecisionValidationError(`Image ${asset.image_id} not found`);
+    const file = Bun.file(path);
+    const remainingBytes = DECISION_IMAGE_MAX_BYTES - imageBytes;
+    if (file.size > remainingBytes) throw new DecisionValidationError(sizeLimitError);
+    // Bound the read as well as checking stat: a file can grow after its size is checked.
+    const bytes = Buffer.from(await file.slice(0, remainingBytes + 1).arrayBuffer());
+    signal.throwIfAborted();
+    imageBytes += bytes.length;
+    if (imageBytes > DECISION_IMAGE_MAX_BYTES) throw new DecisionValidationError(sizeLimitError);
+    const format = bytes[0] === 0x89 && bytes.subarray(1, 4).toString() === "PNG" ? "png" : bytes[0] === 0xff && bytes[1] === 0xd8 ? "jpg" : null;
+    if (!format) throw new DecisionValidationError(`Image ${asset.image_id} must be a PNG or JPEG`);
+    assets[ref] = { type: "image", format, data_base64: bytes.toString("base64") };
+  }
+  const resolved = { ...input, assets };
+  validateDecisionInput(resolved);
+  return resolved;
+}
 export async function evaluateDecision<const Q extends Record<string, DecisionQuestion>>(userId: string, input: DecisionEvaluationInput<Q>, signal?: AbortSignal): Promise<DecisionResult<Q>> {
   validateDecisionInput(input);
   signal?.throwIfAborted();
@@ -17,7 +47,9 @@ export async function evaluateDecision<const Q extends Record<string, DecisionQu
   const timeout = AbortSignal.timeout(30_000);
   const effectiveSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
-    return await evaluateProviderDecision(profile, apiKey, input, effectiveSignal) as DecisionResult<Q>;
+    const resolved = await resolveImageAssets(userId, input, effectiveSignal);
+    effectiveSignal.throwIfAborted();
+    return await evaluateProviderDecision(profile, apiKey, resolved, effectiveSignal) as DecisionResult<Q>;
   } catch (error) {
     if (signal?.aborted) throw new Error("AbortError: Decision evaluation cancelled");
     if (timeout.aborted) throw new DecisionTimeoutError("Decision evaluation timed out after 30 seconds");
