@@ -82,6 +82,25 @@ describe("Decision images and Box", () => {
     const large = { format: "jpg", data_base64: "A".repeat(4 * 1024 * 1024) };
     expect(() => validateDecisionInput({ ...imageInput, assets: { ...imageInput.assets, "ref-page": large } })).not.toThrow();
   });
+  test.each([
+    { format: "png", data_base64: "AAAA", metadata: "x".repeat(2 * 1024 * 1024) },
+    { image_id: "stored", metadata: "x" },
+    { image_id: "stored", format: "png" },
+    { image_id: undefined, format: "png", data_base64: "AAAA" },
+  ])("rejects unsupported asset fields", (asset) => {
+    expect(() => validateDecisionInput({ ...imageInput, assets: { "ref-page": asset } })).toThrow("only supports");
+  });
+  test("stored image IDs count toward the non-image input cap", () => {
+    const asset = { image_id: "x".repeat(1024 * 1024) };
+    expect(() => validateDecisionInput({ ...imageInput, assets: { "ref-page": asset } })).toThrow("Decision input exceeds 1 MiB");
+  });
+  test("asset reference keys count toward the non-image input cap", () => {
+    const ref = "x".repeat(1024);
+    const state = ref + "y".repeat(1024 * 1024 - 3072);
+    const questions = { check: { type: "noul", instructions: "x".repeat(1500) } };
+    expect(() => validateDecisionInput({ state, questions })).not.toThrow();
+    expect(() => validateDecisionInput({ state, questions, assets: { [ref]: { format: "png", data_base64: "AAAA" } } })).toThrow("Decision input exceeds 1 MiB");
+  });
   test.each(["range", "order", "keys", "confidence"])("rejects invalid Box answers: %s", (failure) => {
     const value: any = boxResult();
     if (failure === "range") value.answers.face.box.bottom = 1.2;

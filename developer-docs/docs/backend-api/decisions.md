@@ -63,7 +63,7 @@ const { top, bottom, left, right } = result.answers.face.box // fractions of the
 const boxConfidence = result.answers.face.confidence
 ```
 
-Each key in `assets` is a reference string that must appear in `state`, a question's `instructions`, or its `criteria`; the model receives the image in its place. Use references that cannot occur in your text by accident, such as a UUID. An asset is either `{ image_id }`, a stored Lumiverse image of the same account (PNG or JPEG; requires the `images` permission), or `{ format: 'png' | 'jpg', data_base64 }` with plain base64 (no `data:` prefix). Images must be 280–1568 px on each side; the host does not resize them. Image data is limited to 20 MiB per request.
+Each key in `assets` is a reference string that must appear in `state`, a question's `instructions`, or its `criteria`; the model receives the image in its place. Use references that cannot occur in your text by accident, such as a UUID. An asset is either `{ image_id }`, a stored Lumiverse image of the same account (PNG or JPEG; requires the `images` permission), or `{ format: 'png' | 'jpg' | 'jpeg', data_base64 }` with plain base64 (no `data:` prefix). Both forms accept an optional `type: 'image'`; combining the forms or adding other fields is rejected. Images must be 280–1568 px on each side; the host does not resize them. Stored and inline images share a 20 MiB decoded limit per request, including repeated entries. Asset references and IDs count toward the 1 MiB input limit; only the base64 data is excluded.
 
 A Box question takes no criteria and needs at least one image. It always returns a box, even when the target is absent, so pair it with a Noul such as `present` above.
 
