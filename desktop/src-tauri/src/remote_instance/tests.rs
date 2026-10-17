@@ -342,7 +342,9 @@ fn another_origin_can_poll_while_one_origin_is_busy() {
         let (state, _) = backend.client_state();
         let _busy = state.lock_origin("https://busy.example.test").await;
         let snapshot = timeout(
-            Duration::from_secs(2),
+            // This exercises real loopback I/O under ARM64 QEMU in CI; keep
+            // a finite but scheduler-tolerant deadline under emulation.
+            Duration::from_secs(10),
             poll_remote_instance(&state, backend.origin.clone()),
         )
         .await

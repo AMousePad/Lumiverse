@@ -382,7 +382,9 @@ checks Bun and Rust's actual architecture, and verifies the finalized runtime
 manifest before sharing or downloading the result. Both architectures retain
 the Ubuntu 22.04 baseline and require no host desktop session. ARM64 diagnostic
 tests allow 60 seconds per test for emulated subprocesses; x64 retains Bun's
-five-second default. Test assertions and release compiler settings are unchanged.
+five-second default. Rust unit tests under QEMU use two parallel workers, and
+timing-sensitive assertions allow for emulated scheduler delays. The release
+compiler settings are unchanged.
 
 This diagnostic command runs independently of GitHub Actions. Nightly release
 builds use the private runner integration described below.

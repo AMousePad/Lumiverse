@@ -38,7 +38,9 @@ async function main() {
       for (const path of paths) {
         if (!realpathSync(path).startsWith(realpathSync(join(target, "deps")) + sep)) throw new Error("ARM64 test executable escapes the target directory");
         verifyArm64Elf(readFileSync(path));
-        const child = Bun.spawn([path], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+        // QEMU can expose more guest CPUs than it can schedule smoothly. Keep
+        // the test harness parallel, but avoid the default unbounded fan-out.
+        const child = Bun.spawn([path, "--test-threads=2"], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
         if (await child.exited !== 0) throw new Error("ARM64 application tests failed");
       }
       break;
