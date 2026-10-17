@@ -683,12 +683,18 @@ pub fn show_frontend(
     }
 
     let startup_appearance = load_frontend_startup_appearance(&app);
-    let native_background = if startup_appearance.blur && !crate::linux_runtime::opaque() {
-        tauri::webview::Color(0, 0, 0, 0)
-    } else {
-        let [red, green, blue] = startup_appearance.native_color;
-        tauri::webview::Color(red, green, blue, 255)
-    };
+    let opaque_window = crate::linux_runtime::opaque();
+    // GTK must leave the native surface clear beneath the page's rounded
+    // corners, even when the theme does not use blur. An opaque fill here
+    // exposes a rectangle behind the CSS clip; Tao 0.35.3 also clamps its
+    // unnormalized RGB channels to white in the transparent draw path.
+    let native_background =
+        if !opaque_window && (cfg!(target_os = "linux") || startup_appearance.blur) {
+            tauri::webview::Color(0, 0, 0, 0)
+        } else {
+            let [red, green, blue] = startup_appearance.native_color;
+            tauri::webview::Color(red, green, blue, 255)
+        };
     let popup_app = app.clone();
     let frontend_origin = url.origin().ascii_serialization();
     let mut builder = WebviewWindowBuilder::new(&app, FRONTEND_LABEL, WebviewUrl::External(url))
@@ -711,7 +717,7 @@ pub fn show_frontend(
         // and WebView transparent lets a theme opt into a translucent body.
         // Opaque themes remain visually identical because their CSS body/app
         // surfaces cover the transparent host.
-        .transparent(!crate::linux_runtime::opaque())
+        .transparent(!opaque_window)
         .background_color(native_background)
         // Install a lightweight titlebar/surface before the remote frontend's
         // bundle executes. It removes itself as soon as the app root mounts.

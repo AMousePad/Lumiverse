@@ -20,8 +20,9 @@ export const BUNDLED_SOURCE_PATHS = ["src", "frontend", "desktop", "user-docs/do
   "scripts/build-server.ts", "scripts/build-desktop-server.ts", "scripts/build-lancedb-macos.ts", "scripts/lancedb-macos-native.ts", "scripts/reset-password.ts",
   "scripts/input.ts", "scripts/ui.ts", "scripts/tauri-finalized.ts", "scripts/appimage-patchelf.sh", "scripts/finalize-appimage.sh", "scripts/verify-appimage-permissions.sh", "scripts/verify-appimage-gstreamer.sh",
   "scripts/appimage-apprun.sh", "scripts/appimage-runtime-manifest.ts",
+  "scripts/private-linux-release.ts", "scripts/linux-appimage-builder",
   "scripts/desktop-release.ts", "scripts/prepare-desktop-release.ts", "scripts/publish-desktop-release.ts",
-  ".github/workflows/server-bundle.yml", ".github/workflows/desktop-release.yml", ".github/workflows/desktop-nightly.yml"];
+  ".github/workflows/server-bundle.yml", ".github/workflows/desktop-release.yml", ".github/workflows/desktop-nightly.yml", ".github/workflows/desktop-linux-complete.yml"];
 const UNSHIPPED_PATHS = ["desktop/README.md", "desktop/LINUX-VALIDATION.md", "desktop/releases", "desktop/tests", "frontend/README.md"];
 export function sourceFingerprint(cwd: string): string {
   const tree = Bun.spawnSync(["git", "ls-tree", "-rz", "HEAD", "--", ...BUNDLED_SOURCE_PATHS], { cwd, stdout: "pipe", stderr: "pipe" });

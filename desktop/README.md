@@ -284,7 +284,9 @@ Use **Browser → Linux Graphics & Diagnostics…** for saved backend/rendering
 choices and redacted runtime diagnostics. Changes apply after quitting and
 reopening Desktop. The NVIDIA explicit-sync-only mode and opaque diagnostic
 windows allow controlled comparisons without modifying the bundle. Slow
-compatibility modes remain explicit fallbacks. See [Linux qualification](LINUX-VALIDATION.md)
+compatibility modes remain explicit fallbacks. Opaque diagnostic windows fill
+the rectangular native surface; leave that option off for transparent rounded
+corners. See [Linux qualification](LINUX-VALIDATION.md)
 for the remaining accelerated hardware and runtime validation gates.
 
 On Wayland, Lumiverse automatically selects the native GTK backend when no X11
@@ -299,6 +301,110 @@ LUMIVERSE_GDK_BACKEND=wayland ./Lumiverse*.AppImage
 WebKitGTK 6.0 is the GTK 4 API and does not replace WebKitGTK 4.1/GTK 3. Neither
 needs to be installed separately for the AppImage; source builds require the
 4.1 package shown below.
+
+### Remote Linux diagnostic builds
+
+Build the current working tree on an SSH-accessible Linux machine with Docker:
+
+```bash
+bun run build:linux-appimage root@linux-builder --jobs 12 \
+  --remote-output /srv/build-output --no-download
+```
+
+An existing SSH profile also works as the host argument. The SSH identity must
+have Docker access, and the host key must already be trusted. The build runs as
+an unprivileged user inside Ubuntu 22.04, with Bun 1.4.2, Rust 1.95.0, and Node
+22.16.0. This preserves the nightly's OS/glibc baseline when the remote host is
+Arch or another newer distribution. Native package versions are recorded in
+the returned runtime manifest.
+
+The command uploads current tracked and nonignored untracked source files,
+including uncommitted changes. It excludes local dependencies, instance data,
+environment files, signing material, and generated server binaries. Version
+stamping and a diagnostic snapshot commit happen only in the remote copy. No
+push, workflow dispatch, release upload, or updater signing is performed.
+
+Finalized AppImages, SHA-256 checksums, runtime/source provenance, and the build
+log return to `.cache/linux-appimage/<build-id>/`; use `--output <directory>` to
+choose another destination. `--remote-output` also copies the result into
+`<remote-directory>/lumiverse-diagnostics/<build-id>/` with readable permissions
+and verifies its checksum there. `--no-download` leaves the result on the server.
+The destination share must already be mounted and writable. Checksums are also
+verified after any download. Each image
+contains the frontend, server, Bun, and native runtime, using the same staging
+and AppImage finalization scripts as release builds. These unsigned diagnostic
+images are for direct testing, not updater-feed publication.
+
+To build Linux ARM64 on the x64 server, select an emulated ARM64 container:
+
+```bash
+bun run build:linux-appimage root@linux-builder --arch arm64 --jobs 12 \
+  --remote-output /srv/build-output --no-download
+```
+
+The default is `--arch x64`; `--arch arm64` also works with `--local`. On an
+x64 host, an administrator must first register an ARM64 QEMU interpreter with
+`binfmt_misc`. Docker's documented setup is
+`docker run --privileged --rm tonistiigi/binfmt --install arm64`; this changes
+the host's interpreter registration and may need repeating after a reboot.
+The builder checks target execution before installing toolchains, but never
+changes host interpreter registrations itself. Emulated compilation can be
+substantially slower than a native ARM machine.
+
+ARM64 uses a separate builder image, build lock, Cargo target tree, Bun cache,
+and packaging-tool cache. The existing x64 caches remain available. The build
+checks Bun and Rust's actual architecture, and verifies the finalized runtime
+manifest before sharing or downloading the result. Both architectures retain
+the Ubuntu 22.04 baseline and require no host desktop session. ARM64 diagnostic
+tests allow 60 seconds per test for emulated subprocesses; x64 retains Bun's
+five-second default. Test assertions and release compiler settings are unchanged.
+
+This diagnostic command runs independently of GitHub Actions. Nightly release
+builds use the private runner integration described below.
+
+The remote machine retains source snapshots/logs under
+`~/.cache/lumiverse-appimage-build/runs/` and Docker volumes named
+`lumiverse-appimage-*` for Cargo, Bun, and packaging caches. Builds serialize
+access to these caches. The first build compiles dependencies; subsequent
+iterations reuse them. Checks cover native desktop policies, server setup and
+runtime, and packaging. No desktop session is required. Add `--smoke` to also run
+offline Xvfb interaction in the container, independently of the host's LXDE/X11
+session. The release CI's stronger cross-user namespace test and real GPU/
+Wayland checks remain separate.
+
+From a checkout on the Linux build server itself, use the same builder locally:
+
+```bash
+bun run build:linux-appimage --local --jobs 12 \
+  --output /srv/build-output
+```
+
+This writes `<output-directory>/<build-id>/` and requires Docker access. The
+`build:linux-remote` command remains an alias for the same builder.
+
+### Nightly Linux release builds
+
+The public nightly workflow sends an immutable build request to the private
+`Lumiverse-Builds` repository. Its self-hosted Linux runner builds x64 and
+emulated ARM64 AppImages in separate Ubuntu 22.04 containers and compiler
+caches, retaining the release tests and offline cross-user smoke checks.
+Only trusted `main` and `staging` workflow requests can reach this builder.
+
+The completed private run wakes the public completion workflow. GitHub-hosted
+jobs verify source, runtime provenance and checksums, sign the finalized images,
+and independently verify their updater signatures. Signing keys remain in the
+public repository's hosted jobs. Publication still requires all six platforms
+and successful hosted builds; neither completion order advances a partial feed.
+Hosted runners do not wait during Linux compilation. Stable releases and
+feature-branch builds retain their existing hosted platform routing.
+
+Both repositories require an Actions secret named `LINUX_RELEASE_BRIDGE_TOKEN`:
+a fine-grained token limited to these two repositories with Actions read/write
+access. It permits workflow dispatch and artifact retrieval without incoming
+SSH access. The private runner has no public pull-request trigger. If a private
+build fails, inspect its run, then rerun it; its completion notification retries
+verification. A failed public completion job can also be rerun using the original
+source run ID and attempt while the artifacts remain available.
 
 ## Source-build prerequisites
 

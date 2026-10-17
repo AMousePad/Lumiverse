@@ -60,6 +60,8 @@
     "start": "bun run src/index.ts",
     "build:server": "bun run scripts/build-server.ts",
     "build:desktop-server": "bun run scripts/build-desktop-server.ts",
+    "build:linux-remote": "bun --no-env-file scripts/build-linux-appimage-remote.ts",
+    "build:linux-appimage": "bun --no-env-file scripts/build-linux-appimage-remote.ts",
     "build:android-prototype": "bun run scripts/build-android-prototype.ts",
     "build:android-native": "bun run build:lancedb:android-native && bun run build:sharp:android-native && bun run build:ffmpeg:android-native && bun run build:git:android-native",
     "build:git:android-native": "bun run scripts/build-git-android-native.ts",
