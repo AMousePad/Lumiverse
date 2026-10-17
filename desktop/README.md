@@ -347,9 +347,34 @@ x64 host, an administrator must first register an ARM64 QEMU interpreter with
 `binfmt_misc`. Docker's documented setup is
 `docker run --privileged --rm tonistiigi/binfmt --install arm64`; this changes
 the host's interpreter registration and may need repeating after a reboot.
-The builder checks target execution before installing toolchains, but never
-changes host interpreter registrations itself. Emulated compilation can be
-substantially slower than a native ARM machine.
+The interpreter must be static so it can execute inside an ARM64 container.
+Its ELF matching rule must also accept the `AI\x02` marker in bytes 8–10 of a
+type-2 AppImage header; an ordinary ARM64 ELF execution check alone misses this.
+This is a [known AppImage/binfmt interaction](https://github.com/AppImage/AppImageKit/issues/965).
+The builder checks both cases before installing toolchains and reports a
+registration error early. It never changes host interpreter registrations
+itself. Emulated compilation can be substantially slower than a native ARM
+machine.
+
+On an x64 Linux host, add `--cross` to compile ARM64 using native x64 Rust
+and linker tools:
+
+```bash
+bun run build:linux-appimage root@linux-builder --arch arm64 --cross --jobs 12 \
+  --smoke --remote-output /srv/build-output --no-download
+```
+
+This retains Rust 1.95.0, the release optimization profile, and the Ubuntu 22.04
+baseline. The native compiler uses headers and libraries copied from the exact
+ARM64 runtime container. ARM64 server checks, application tests, and AppImage
+packaging still execute under QEMU. The finished image must pass offline
+cross-user startup and WebKit interaction when `--smoke` is selected. Compilation
+and bundling are separate Tauri commands, so packaging does not compile Rust
+again. Cross-builds use their own `lumiverse-appimage-cross-arm64-*` caches,
+with separate x64 and ARM64 Node dependencies, and return compiler/runtime
+image IDs with the artifacts. `--cross` also works with `--local --arch arm64`.
+The first cross-build fills a new dependency cache. Cargo timing reports are
+retained in its target volume; serial compiler phases can still use one core.
 
 ARM64 uses a separate builder image, build lock, Cargo target tree, Bun cache,
 and packaging-tool cache. The existing x64 caches remain available. The build
@@ -386,8 +411,11 @@ This writes `<output-directory>/<build-id>/` and requires Docker access. The
 
 The public nightly workflow sends an immutable build request to the private
 `Lumiverse-Builds` repository. Its self-hosted Linux runner builds x64 and
-emulated ARM64 AppImages in separate Ubuntu 22.04 containers and compiler
-caches, retaining the release tests and offline cross-user smoke checks.
+ARM64 AppImages in separate Ubuntu 22.04 containers and compiler caches,
+retaining the release tests and offline cross-user smoke checks. Sources with
+the cross-builder compile ARM64 using native x64 Rust tools and reserve QEMU
+for ARM64 execution and packaging. Older immutable requests retain the
+emulated compiler path; `arm64_compiler=emulated` also selects it explicitly.
 Only trusted `main` and `staging` workflow requests can reach this builder.
 
 The completed private run wakes the public completion workflow. GitHub-hosted
