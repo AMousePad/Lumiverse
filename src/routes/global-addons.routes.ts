@@ -4,10 +4,10 @@ import { parsePagination } from "../services/pagination";
 
 const app = new Hono();
 
-app.get("/", (c) => {
+app.get("/", async (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
-  return c.json(svc.listGlobalAddons(userId, pagination));
+  return c.json(await svc.listGlobalAddonsAsync(userId, pagination));
 });
 
 app.post("/", async (c) => {
@@ -19,7 +19,7 @@ app.post("/", async (c) => {
   if (typeof body.label !== "string") {
     return c.json({ error: "label must be a string" }, 400);
   }
-  const addon = svc.createGlobalAddon(userId, body);
+  const addon = await svc.createGlobalAddonAsync(userId, body);
   return c.json(addon, 201);
 });
 
@@ -27,13 +27,13 @@ app.put("/reorder", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   if (!Array.isArray(body.ids)) return c.json({ error: "ids array is required" }, 400);
-  svc.reorderGlobalAddons(userId, body.ids);
+  await svc.reorderGlobalAddonsAsync(userId, body.ids);
   return c.json({ success: true });
 });
 
-app.get("/:id", (c) => {
+app.get("/:id", async (c) => {
   const userId = c.get("userId");
-  const addon = svc.getGlobalAddon(userId, c.req.param("id"));
+  const addon = await svc.getGlobalAddonAsync(userId, c.req.param("id"));
   if (!addon) return c.json({ error: "Not found" }, 404);
   return c.json(addon);
 });
@@ -41,21 +41,21 @@ app.get("/:id", (c) => {
 app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const addon = svc.updateGlobalAddon(userId, c.req.param("id"), body);
+  const addon = await svc.updateGlobalAddonAsync(userId, c.req.param("id"), body);
   if (!addon) return c.json({ error: "Not found" }, 404);
   return c.json(addon);
 });
 
-app.delete("/:id", (c) => {
+app.delete("/:id", async (c) => {
   const userId = c.get("userId");
-  const deleted = svc.deleteGlobalAddon(userId, c.req.param("id"));
+  const deleted = await svc.deleteGlobalAddonAsync(userId, c.req.param("id"));
   if (!deleted) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });
 
-app.post("/:id/duplicate", (c) => {
+app.post("/:id/duplicate", async (c) => {
   const userId = c.get("userId");
-  const addon = svc.duplicateGlobalAddon(userId, c.req.param("id"));
+  const addon = await svc.duplicateGlobalAddonAsync(userId, c.req.param("id"));
   if (!addon) return c.json({ error: "Not found" }, 404);
   return c.json(addon, 201);
 });

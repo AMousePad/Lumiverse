@@ -1,3 +1,4 @@
+import { hasTauriDesktopBridge } from '@/lib/desktopWebView'
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { Outlet } from 'react-router'
 import { listen } from '@tauri-apps/api/event'
@@ -10,6 +11,7 @@ import { installDesktopViewportZoom } from '@/lib/desktopViewportZoom'
 import { useCharacterTheme } from '@/hooks/useCharacterTheme'
 import { useCustomCSSApplicator } from '@/hooks/useCustomCSSApplicator'
 import { useAppInit } from '@/hooks/useAppInit'
+import { useIOSPushSync } from '@/hooks/useIOSPushSync'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
@@ -24,6 +26,7 @@ import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useIsMobile from '@/hooks/useIsMobile'
+import { resolveChatWallpaper, resolveGlobalWallpaper } from '@/lib/wallpaper'
 import {
   clampCustomCSSDockSize,
   CUSTOM_CSS_DOCK_BREAKPOINT,
@@ -49,6 +52,7 @@ import {
 import styles from './App.module.css'
 import { acknowledgePendingConnectionsDeepLink } from '@/lib/uiProductivityDefaults'
 import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-extension-availability'
+import { installTauriSystemAudioSource } from '@/lib/spindle/system-audio-tauri'
 import { createDesktopDownloadFeedback, type DesktopDownloadEvent } from '@/lib/desktop-download-feedback'
 import { toast } from '@/lib/toast'
 
@@ -78,6 +82,7 @@ function Application() {
   useCharacterTheme()
   useCustomCSSApplicator()
   useAppInit()
+  useIOSPushSync(useStore(s => s.isAuthenticated ? s.user?.id ?? null : null))
   useDocumentTitle()
   useBadging()
   useTTSAutoPlay()
@@ -88,7 +93,7 @@ function Application() {
   useEffect(() => installNotificationAudioPrimer(), [])
 
   useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
+    if (!hasTauriDesktopBridge() || isDesktopFloatingWidgetWindow()) return
     const feedback = createDesktopDownloadFeedback(
       {
         title: t('toast.desktopDownloadTitle'),
@@ -125,7 +130,8 @@ function Application() {
   const wallpaper = useStore((s) => s.wallpaper)
   const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
   const sceneBackground = useStore((s) => s.sceneBackground)
-  const globalWallpaperHidden = !!activeChatWallpaper?.image_id || !!sceneBackground
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const globalWallpaperHidden = !!resolveChatWallpaper(activeChatWallpaper, activeChatMetadata, isMobile)?.image_id || !!sceneBackground
   const editingCharacterId = useStore((s) => s.editingCharacterId)
   const floatWidgets = useStore((s) => s.floatWidgets)
   const extensions = useStore((s) => s.extensions)
@@ -141,11 +147,27 @@ function Application() {
     }
   }, [customCSSDockUnavailable, customCSSDockOpen, closeCustomCSSDock])
 
+  // The desktop client can hear the device's output; extensions reach it only through `ctx.systemAudio`, which is
+  // permission-gated, prompted and indicated. Browsers and floating widget windows register nothing.
+  useEffect(() => {
+    if (!hasTauriDesktopBridge() || isDesktopFloatingWidgetWindow()) return
+    let uninstall: (() => void) | undefined
+    let disposed = false
+    void installTauriSystemAudioSource().then((stop) => {
+      if (disposed) stop()
+      else uninstall = stop
+    })
+    return () => {
+      disposed = true
+      uninstall?.()
+    }
+  }, [])
+
   // Native child windows send their resized bounds back here. Keeping the
   // primary placement registry current means a later extension setSize call
   // grows from the user's actual widget size instead of the launch default.
   useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
+    if (!hasTauriDesktopBridge() || isDesktopFloatingWidgetWindow()) return
     let unlisten: (() => void) | undefined
     void listen<DesktopFloatingWidgetCatalogEntry>('desktop-widget-size', ({ payload }) => {
       useStore.getState().updateFloatWidget(payload.id, {
@@ -159,7 +181,7 @@ function Application() {
   // The native tray owns opening and returning pop-outs. Its lifecycle event
   // determines whether this page renders the extension widget's root.
   useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
+    if (!hasTauriDesktopBridge() || isDesktopFloatingWidgetWindow()) return
     let unlisten: (() => void) | undefined
     void listen<DesktopFloatingWidgetPopoutState>('desktop-widget-popout-state', ({ payload }) => {
       if (!payload || typeof payload.id !== 'string' || typeof payload.poppedOut !== 'boolean') return
@@ -181,7 +203,7 @@ function Application() {
   // child window can resize immediately instead of waiting for the normal
   // catalog synchronization effect below.
   useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
+    if (!hasTauriDesktopBridge() || isDesktopFloatingWidgetWindow()) return
     const handleSizeRequest = (event: Event) => {
       const detail = (event as CustomEvent<{ widgetId?: unknown; width?: unknown; height?: unknown }>).detail
       if (
@@ -229,7 +251,7 @@ function Application() {
     for (const p of enabledDockPanels) {
       if (hiddenPlacements.includes(p.id)) continue
       const size = p.collapsed ? 36 : p.size
-      const edge = resolveDockPanelEdge(p.edge, dockPanelDesktopSide, isMobile)
+      const edge = resolveDockPanelEdge(p.edge, dockPanelDesktopSide, isMobile, p.respectRequestedEdge)
       switch (edge) {
         case 'left': left = Math.max(left, size); break
         case 'right': right = Math.max(right, size); break
@@ -362,7 +384,7 @@ function Application() {
                   {t(`safeTheme.${safeTheme.source ?? 'url'}`)}
                 </div>
               )}
-              <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
+              <WallpaperLayer wallpaper={resolveGlobalWallpaper(wallpaper, isMobile)} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
               <ErrorBoundary label="App">
                 {/* Mirrors react-router context out to detached drawer-tab roots */}
                 <RouterContextExporter />

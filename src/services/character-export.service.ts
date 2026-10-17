@@ -2,7 +2,7 @@ import sharp from "../utils/sharp-config";
 import { convertImageToPng, readImageMetadata } from "../utils/image-pipeline";
 import { extname } from "path";
 import { zipSync } from "fflate";
-import { LANDING_PERSPECTIVE_LAYERS_KEY, getCharacter, normalizeLandingPerspectiveLayers } from "./characters.service";
+import { LANDING_PERSPECTIVE_LAYERS_KEY, getCharacter, normalizeLandingPerspectiveLayers, getCharacterAsync } from "./characters.service";
 import { getExpressionConfig, getExpressionGroups } from "./expressions.service";
 import { listGallery } from "./character-gallery.service";
 import {
@@ -10,7 +10,7 @@ import {
   parseGalleryImageReference,
   remapGreetingBackgrounds,
 } from "../utils/gallery-image-reference";
-import { getImage, getImageFilePath } from "./images.service";
+import { getImage, getImageFilePath, getImageAsync } from "./images.service";
 import { exportWorldBook, getWorldBook } from "./world-books.service";
 import { isNsfwExpressionLabel, stableCharxAlternateAvatarId } from "./character-card.service";
 import { getCharacterBoundScripts } from "./regex-scripts.service";
@@ -170,7 +170,7 @@ interface ImageBytes {
 }
 
 async function readImageBytes(userId: string, imageId: string): Promise<ImageBytes | null> {
-  const image = getImage(userId, imageId);
+  const image = await getImageAsync(userId, imageId);
   if (!image) return null;
 
   const filepath = await getImageFilePath(userId, imageId);
@@ -320,7 +320,7 @@ export function exportAsJson(userId: string, characterId: string): Record<string
 // ── Export: PNG ──────────────────────────────────────────────────────────────
 
 export async function exportAsPng(userId: string, characterId: string): Promise<Buffer | null> {
-  const character = getCharacter(userId, characterId);
+  const character = await getCharacterAsync(userId, characterId);
   if (!character) return null;
 
   // Get avatar image
@@ -432,7 +432,7 @@ export async function exportAsCharx(
   characterId: string,
   options: CharxExportOptions = {},
 ): Promise<Uint8Array | null> {
-  const character = getCharacter(userId, characterId);
+  const character = await getCharacterAsync(userId, characterId);
   if (!character) return null;
 
   // listGallery also ensures every image has a stable gallery:// reference.

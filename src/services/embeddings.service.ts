@@ -1375,7 +1375,7 @@ async function ensureWorldBookVectorVersion(userId: string): Promise<void> {
   const cacheKey = getWorldBookVectorVersionCacheKey(userId);
   if (worldBookVectorVersionChecked.has(cacheKey)) return;
 
-  const setting = settingsSvc.getSetting(userId, WORLD_BOOK_VECTOR_VERSION_KEY);
+  const setting = await settingsSvc.getSettingAsync(userId, WORLD_BOOK_VECTOR_VERSION_KEY);
   const storedValue = typeof setting?.value === "number"
     ? setting.value
     : Number(setting?.value);
@@ -1403,7 +1403,7 @@ async function ensureWorldBookVectorVersion(userId: string): Promise<void> {
     console.warn("[embeddings] Failed to reset world-book vector state for new schema:", err);
   }
 
-  settingsSvc.putSetting(userId, WORLD_BOOK_VECTOR_VERSION_KEY, WORLD_BOOK_VECTOR_VERSION);
+  await settingsSvc.putSettingAsync(userId, WORLD_BOOK_VECTOR_VERSION_KEY, WORLD_BOOK_VECTOR_VERSION);
   worldBookVectorVersionChecked.add(cacheKey);
 }
 
@@ -2061,7 +2061,7 @@ export async function updateEmbeddingConfig(
     ...(incomingProfiles ? { connectionProfiles: incomingProfiles } : {}),
   });
   const merged = mergeEmbeddingConfigUpdate(current, patched);
-  settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, merged);
+  await settingsSvc.putSettingAsync(userId, EMBEDDING_SETTINGS_KEY, merged);
 
   for (const profile of incomingProfiles ?? []) {
     if (profile.api_key === undefined) continue;
@@ -2875,7 +2875,7 @@ export async function testEmbeddingConfig(
         : profile
     )),
   });
-  settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, updated);
+  await settingsSvc.putSettingAsync(userId, EMBEDDING_SETTINGS_KEY, updated);
   return {
     dimension: first.length,
     config: await withEmbeddingSecretStatus(userId, await toConfigWithStatus(userId, updated)),
@@ -3950,7 +3950,7 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
     console.warn("[embeddings] Failed to reset world book vector index state:", err);
   }
 
-  settingsSvc.putSetting(userId, WORLD_BOOK_VECTOR_VERSION_KEY, WORLD_BOOK_VECTOR_VERSION);
+  await settingsSvc.putSettingAsync(userId, WORLD_BOOK_VECTOR_VERSION_KEY, WORLD_BOOK_VECTOR_VERSION);
   worldBookVectorVersionChecked.add(getWorldBookVectorVersionCacheKey(userId));
 
   for (const tableName of [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE]) {

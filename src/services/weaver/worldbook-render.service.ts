@@ -278,7 +278,7 @@ export async function appendBackingWorldbook(
     if (!created) return { character, book: null, added: 0 };
     const boundIds = getCharacterWorldBookIds(character.extensions);
     const extensions = setCharacterWorldBookIds(character.extensions ?? {}, [...boundIds, created.id]);
-    const updated = charactersSvc.updateCharacter(userId, character.id, { extensions });
+    const updated = await charactersSvc.updateCharacterAsync(userId, character.id, { extensions });
     const bible = getBible(userId, session.id);
     return {
       character: updated ?? character,

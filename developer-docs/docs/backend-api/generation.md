@@ -465,6 +465,8 @@ const result = await spindle.generate.dryRun({
 | `model` | `string` | The model that would be used. |
 | `provider` | `string` | The provider that would be used. |
 | `tokenCount` | `DryRunTokenCountDTO` | Optional. Per-block token counts (if a tokenizer is available). |
+| `chatHistoryTokens` | `number` | Optional. Chat-history token total from the token breakdown. Zero is a valid count. |
+| `contextClipStats` | `ContextClipStats` | Optional. Context-budget and clipping statistics, including `maxContext`, `inputBudget`, `chatHistoryTokensBefore`, `chatHistoryTokensAfter`, `messagesDropped`, and `tokensDropped`. Use `maxContext` here for the configured context limit; it is stripped from provider parameters. |
 | `worldInfoStats` | `ActivationStatsDTO` | Optional. World info activation statistics. |
 | `memoryStats` | `MemoryStatsDTO` | Optional. Long-term memory retrieval statistics. |
 
@@ -511,6 +513,23 @@ When an interceptor returns `breakdown: [{ messageIndex, name? }]`, the host tur
 
 !!! tip
     Dry run mirrors the exact assembly pipeline used during real generation (macros, world info, context filters, memory) but skips the council execution and LLM call. It's the fastest way to debug prompt construction.
+
+---
+
+## Saved Prompt Breakdowns
+
+`spindle.generate.getBreakdown(messageId, userId?)` reads the prompt breakdown saved for a generated message. Requires the `generation` permission. It does not assemble a new prompt or call the model.
+
+```ts
+const saved = await spindle.generate.getBreakdown(messageId, userId)
+if (saved) {
+  spindle.log.info(`Saved prompt used ${saved.totalTokens} tokens`)
+}
+```
+
+User-scoped extensions always read as their owner; `userId` is required for operator-scoped extensions. The method returns `null` when the message has no readable saved breakdown, including when it belongs to another user. Missing or blank message IDs are rejected.
+
+The result contains the stored snapshot: `entries` (block names, types, token counts, and available content), `totalTokens`, `maxContext`, `model`, and `provider`. Optional fields include `chatHistoryTokens`, `messages`, `parameters`, `usage`, `presetName`, `presetId`, and `tokenizer_name`. Older snapshots can omit optional fields. The snapshot can contain full prompt text; treat it as private chat data.
 
 ---
 
@@ -758,6 +777,24 @@ if (conn) {
   spindle.log.info(`Using ${conn.provider} / ${conn.model}`)
 }
 ```
+
+### `spindle.connections.getModels(connectionId, userId?)`
+
+List the models available to a connection profile. This fetches the live list from the provider, using the profile's stored API key. Throws if the connection is not found or the provider request fails.
+
+This method is optional on older hosts; check support before calling.
+
+```ts
+if (spindle.connections.getModels) {
+  const models = await spindle.connections.getModels('some-connection-id')
+
+  for (const model of models) {
+    spindle.log.info(`${model.id}: ${model.label}`)
+  }
+}
+```
+
+Returns `Array<{ id: string; label: string }>`. `label` is the provider's display name when it has one (for example OpenRouter), otherwise the model ID.
 
 ### ConnectionProfileDTO
 

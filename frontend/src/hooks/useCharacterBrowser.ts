@@ -7,6 +7,7 @@ import { get } from '@/api/client'
 import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
+import { subscribeImportedDataRefresh } from '@/lib/import-data-events'
 import type { Character, CharacterSummary, TagCount } from '@/types/api'
 import type { LorebookInfo } from '@/components/modals/BulkImportProgressModal'
 import type { ExpressionsImportInfo } from '@/components/modals/ExpressionsImportModal'
@@ -147,11 +148,13 @@ export function useCharacterBrowser() {
     const offEdited = wsClient.on(EventType.CHARACTER_EDITED, refresh)
     const offDeleted = wsClient.on(EventType.CHARACTER_DELETED, refresh)
     const offLibraryChanged = wsClient.on(EventType.CHARACTER_LIBRARY_CHANGED, refresh)
+    const offImportComplete = subscribeImportedDataRefresh(refresh)
     return () => {
       offCreated()
       offEdited()
       offDeleted()
       offLibraryChanged()
+      offImportComplete()
     }
   }, [])
 
@@ -542,7 +545,14 @@ export function useCharacterBrowser() {
         const result = await charactersApi.batchDelete(ids, keepChats)
         removeCharacters(result.deleted)
         setBrowserTotal((t) => Math.max(0, t - result.deleted.length))
-      } catch {
+      } catch (error: any) {
+        // Only an unsupported endpoint permits falling back to new DELETEs.
+        // A timeout may follow a commit, so refresh rather than replaying it.
+        if (error?.status !== 404 && error?.status !== 405) {
+          setBatchDeleteProgress(null)
+          setFetchVersion((v) => v + 1)
+          throw error
+        }
         let done = 0
         const deleted: string[] = []
         for (const id of ids) {

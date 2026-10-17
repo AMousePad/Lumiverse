@@ -84,6 +84,89 @@ describe("tauri command registration", () => {
 });
 
 describe("capability origins", () => {
+  test("short-lived authorization links stay in the bundled UI and exact Vite control pages", () => {
+    const grants = capabilities().filter((capability) =>
+      (capability.json.permissions as string[]).includes("desktop-authorization-ui"));
+    expect(grants.length).toBe(2);
+    for (const capability of grants) {
+      if (capability.json.remote === undefined) {
+        expect(capability.json.local).toBe(true);
+        expect(capability.json.windows).toEqual(["desktop-authorization"]);
+        continue;
+      }
+      expect(capability.file).toBe("local-desktop-controls-dev.json");
+      expect(capability.json.local).toBe(false);
+      expect(capability.json.windows).toEqual(["desktop-authorization", "linux-settings"]);
+      const urls = (capability.json.remote as { urls: string[] }).urls;
+      const patterns = urls.map((url) => new URLPattern(url));
+      for (const url of urls) expect(patterns.some((pattern) => pattern.test(url))).toBe(true);
+      for (const url of ["https://example.com/authorization.html", "http://localhost:7860/authorization.html",
+        "http://localhost:1430/", "http://localhost:1430/untrusted.html"]) {
+        expect(patterns.some((pattern) => pattern.test(url))).toBe(false);
+      }
+    }
+    // The development capability serves both controls; the native check
+    // keeps the graphics window from reading the ephemeral authorization URL.
+    const source = readSource("remote_instance.rs");
+    const status = source.slice(source.indexOf("pub fn remote_authorization_status"), source.indexOf("pub fn remote_authorization_cancel"));
+    expect(status).toContain('window.label() != "desktop-authorization"');
+  });
+
+  test("signed release updates are available only to the bundled or development tray host", () => {
+    const grants = capabilities().filter((capability) =>
+      (capability.json.permissions as string[]).includes("desktop-release-updates"));
+    expect(grants.length).toBe(2);
+    for (const capability of grants) {
+      expect(capability.json.windows).toEqual(["main"]);
+      if (capability.json.remote !== undefined) {
+        expect((capability.json.remote as { urls: string[] }).urls).toEqual([
+          "http://127.0.0.1:1430", "http://localhost:1430",
+        ]);
+      } else expect(capability.json.local).toBe(true);
+    }
+    const build = readFileSync(join(HERE, "build.rs"), "utf8");
+    for (const name of ["desktop_update_info", "desktop_update_check", "desktop_update_download", "desktop_update_install"]) expect(build).toContain(`"${name}"`);
+  });
+  test("local data folder access is limited to the bundled or development tray host", () => {
+    const grants = capabilities().filter((capability) =>
+      (capability.json.permissions as string[]).includes("local-data-folder"));
+    expect(grants.length).toBe(2);
+    for (const capability of grants) {
+      expect(capability.json.windows).toEqual(["main"]);
+      if (capability.json.remote !== undefined) {
+        expect((capability.json.remote as { urls: string[] }).urls).toEqual([
+          "http://127.0.0.1:1430", "http://localhost:1430",
+        ]);
+      } else expect(capability.json.local).toBe(true);
+    }
+    expect(readFileSync(join(HERE, "build.rs"), "utf8")).toContain('"open_lumiverse_data_folder"');
+  });
+  test("checkout selection is available only to the local instance selector", () => {
+    const grants = capabilities().filter((capability) =>
+      (capability.json.permissions as string[]).includes("instance-connection-setup"));
+    expect(grants.length).toBe(2);
+    for (const capability of grants) {
+      expect(capability.json.windows).toEqual(["frontend-url-settings"]);
+      if (capability.json.remote !== undefined) {
+        expect((capability.json.remote as { urls: string[] }).urls).toEqual([
+          "http://localhost:1430/custom-url.html", "http://127.0.0.1:1430/custom-url.html",
+        ]);
+      } else expect(capability.json.local).toBe(true);
+    }
+  });
+  test("bundled setup callbacks are limited to their own local webview", () => {
+    const grants = capabilities().filter((capability) =>
+      (capability.json.permissions as string[]).includes("bundled-server-setup"));
+    expect(grants.length).toBe(2);
+    for (const capability of grants) {
+      expect(capability.json.windows).toEqual(["server-setup"]);
+      if (capability.json.remote !== undefined) {
+        expect((capability.json.remote as { urls: string[] }).urls).toEqual([
+          "http://localhost:1430/server-setup.html", "http://127.0.0.1:1430/server-setup.html",
+        ]);
+      } else expect(capability.json.local).toBe(true);
+    }
+  });
   /**
    * Labels of windows the Rust side builds from a bundled page. A capability
    * covering one of these must apply to local origins, or it matches the
@@ -196,6 +279,61 @@ describe("capability origins", () => {
   });
 });
 
+describe("system audio boundary", () => {
+  const grantsOf = (permission: string) =>
+    capabilities().filter((capability) =>
+      ((capability.json.permissions as Array<string | { identifier?: string }>) ?? []).some(
+        (entry) => entry === permission || (typeof entry === "object" && entry.identifier === permission),
+      ),
+    );
+
+  test("the on/off switch is callable only from the bundled or development tray host", () => {
+    const grants = grantsOf("desktop-system-audio-controls");
+    expect(grants.map((grant) => grant.file).toSorted()).toEqual(["system-audio.json", "tray-dev.json"]);
+    for (const grant of grants) {
+      expect(grant.json.windows).toEqual(["main"]);
+      if (grant.file === "tray-dev.json") {
+        expect(grant.json.local).toBe(false);
+        expect((grant.json.remote as { urls: string[] }).urls.toSorted()).toEqual([
+          "http://127.0.0.1:1430",
+          "http://localhost:1430",
+        ]);
+      } else {
+        expect(grant.json.remote).toBeUndefined();
+        expect(grant.json.local).not.toBe(false);
+      }
+    }
+    expect(readSource("system_audio/mod.rs")).toContain("crate::capture::trusted_host(&window)");
+  });
+
+  test("a session can be started only by the primary frontend window", () => {
+    const grants = grantsOf("desktop-system-audio-session");
+    expect(grants.map((grant) => grant.file)).toEqual(["frontend-titlebar.json"]);
+    expect(grants[0].json.windows).toEqual(["frontend"]);
+    const source = readSource("system_audio/mod.rs");
+    expect(source).toContain("window.label() == FRONTEND");
+    // Floating widgets host extension pages: they must never receive this grant.
+    for (const capability of capabilities()) {
+      if (((capability.json.windows as string[]) ?? []).some((window) => window.startsWith("widget"))) {
+        expect(JSON.stringify(capability.json.permissions)).not.toContain("system-audio");
+      }
+    }
+  });
+
+  test("only analysis frames can leave the capture thread", () => {
+    const analyzer = readSource("system_audio/analyzer.rs");
+    const source = readSource("system_audio/mod.rs").split("#[cfg(test)]")[0];
+    // The wire message is a fixed-size header plus one value per band, nothing else.
+    expect(analyzer).toContain("pub const MESSAGE_FLOATS: usize = 3 + BANDS;");
+    expect(analyzer).toContain("pub fn encode(&self, kind: f32)");
+    // Every message sent to the page is an encoded Frame, including loss of a pending session.
+    const sends = source.split("InvokeResponseBody::Raw(").slice(1);
+    expect(sends.length).toBe(2);
+    for (const rest of sends) expect(rest.slice(0, 48)).toContain(".encode(");
+    expect(source).not.toContain("emit_to(label, STATE_EVENT, frame");
+  });
+});
+
 describe("native capture boundary", () => {
   test("macOS explicitly links the configured compiler's availability runtime", () => {
     const build = readFileSync(join(HERE, "build.rs"), "utf8");
@@ -215,6 +353,17 @@ describe("native capture boundary", () => {
     expect(plist.match(/<key>NSMicrophoneUsageDescription<\/key>\s*<string>([^<]+)<\/string>/)?.[1]).toBeTruthy();
     const entitlements = readFileSync(join(HERE, config.bundle.macOS.entitlements), "utf8");
     expect(entitlements).toMatch(/<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\s*\/>/);
+  });
+
+  test("bundled debug macOS apps override the production plist identity", () => {
+    const config = JSON.parse(readFileSync(join(HERE, "tauri.conf.json"), "utf8"));
+    const debug = JSON.parse(readFileSync(join(HERE, "tauri.debug-profile.conf.json"), "utf8"));
+    const plist = readFileSync(join(HERE, debug.bundle.macOS.infoPlist), "utf8");
+    expect(debug.identifier).not.toBe(config.identifier);
+    expect(plist.match(/<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/)?.[1]).toBe(debug.identifier);
+    expect(plist.match(/<key>CFBundleDisplayName<\/key>\s*<string>([^<]+)<\/string>/)?.[1]).toBe(debug.productName);
+    expect(plist).toContain("NSMicrophoneUsageDescription");
+    expect(plist).toContain("NSAudioCaptureUsageDescription");
   });
 
   test("macOS explicitly offers other-app windows and entire displays through the system picker", () => {

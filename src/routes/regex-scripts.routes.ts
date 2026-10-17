@@ -4,7 +4,7 @@ import { parsePagination } from "../services/pagination";
 import { applyDisplayRegex } from "../services/display-regex.service";
 import { matchPromptActivation, MAX_ACTIVATION_CONTENT_LENGTH } from "../utils/regex-prompt-activation";
 import { resolveActivationFindPattern } from "../utils/regex-activation-inputs";
-import { loadActivationInputSnapshot } from "../services/regex-activation-inputs.service";
+import { loadActivationInputSnapshot, prepareActivationPatterns } from "../services/regex-activation-inputs.service";
 import type { RegexMacroMode, RegexPlacement, RegexScope, RegexScript, RegexTarget } from "../types/regex-script";
 
 const app = new Hono();
@@ -106,7 +106,7 @@ function normalizeDisplayScripts(value: unknown, userId: string): RegexScript[] 
 }
 
 // GET / — list regex scripts (paginated, filterable)
-app.get("/", (c) => {
+app.get("/", async (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
   const filters: { scope?: RegexScope; target?: RegexTarget; character_id?: string; chat_id?: string } = {};
@@ -119,7 +119,7 @@ app.get("/", (c) => {
   const chatId = c.req.query("chat_id");
   if (chatId) filters.chat_id = chatId;
 
-  return c.json(svc.listRegexScripts(userId, pagination, Object.keys(filters).length > 0 ? filters : undefined));
+  return c.json((await svc.listRegexScriptsAsync(userId, pagination, Object.keys(filters).length > 0 ? filters : undefined)));
 });
 
 // GET /active — resolved active scripts for pipeline
@@ -154,7 +154,7 @@ app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   const { active_preset_id, ...input } = body ?? {};
-  const result = svc.createRegexScript(userId, input, { activePresetId: active_preset_id ?? null });
+  const result = await svc.createRegexScriptAsync(userId, input, { activePresetId: active_preset_id ?? null });
   if (typeof result === "string") return c.json({ error: result }, 400);
   return c.json(result, 201);
 });
@@ -215,24 +215,8 @@ app.post("/apply", async (c) => {
 // Prepare persisted activation inputs without matching message content.
 app.post("/activation-patterns", async (c) => {
   const body = await c.req.json().catch(() => null);
-  if (!body || typeof body.preset_id !== "string" || !body.preset_id || body.preset_id.length > 200
-    || !Array.isArray(body.patterns) || body.patterns.length === 0 || body.patterns.length > 100
-    || body.patterns.some((pattern: unknown) => typeof pattern !== "string" || pattern.length > 10_000)
-    || body.patterns.reduce((sum: number, pattern: string) => sum + pattern.length, 0) > 100_000) {
-    return c.json({ error: "A preset ID and between 1 and 100 bounded patterns are required" }, 400);
-  }
   try {
-    const inputs = loadActivationInputSnapshot(c.get("userId"), body.preset_id, {
-      chat_id: body.chat_id, character_id: body.character_id,
-      persona_id: body.persona_id, connection_id: body.connection_id,
-    }, body.patterns);
-    return c.json({ patterns: body.patterns.map((pattern: string) => {
-      try {
-        return { source: pattern, resolved: resolveActivationFindPattern(pattern, inputs) };
-      } catch (error) {
-        return { source: pattern, error: error instanceof Error ? error.message : String(error) };
-      }
-    }) });
+    return c.json(prepareActivationPatterns(c.get("userId"), body));
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
   }
@@ -285,11 +269,11 @@ app.post("/test", async (c) => {
 app.post("/export", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json().catch(() => ({}));
-  return c.json(svc.exportRegexScripts(userId, {
+  return c.json((await svc.exportRegexScriptsAsync(userId, {
     ids: body?.ids,
     presetId: body?.preset_id,
     folder: body?.folder,
-  }));
+  })));
 });
 
 // POST /import — import scripts
@@ -304,7 +288,7 @@ app.put("/reorder", async (c) => {
   const userId = c.get("userId");
   const { ids } = await c.req.json();
   if (!Array.isArray(ids)) return c.json({ error: "ids must be an array" }, 400);
-  svc.reorderRegexScripts(userId, ids);
+  await svc.reorderRegexScriptsAsync(userId, ids);
   return c.json({ success: true });
 });
 
@@ -314,7 +298,7 @@ app.post("/bulk-delete", async (c) => {
   const { ids } = await c.req.json();
   if (!Array.isArray(ids)) return c.json({ error: "ids must be an array" }, 400);
   const stringIds = ids.filter((v: unknown): v is string => typeof v === "string" && v.length > 0);
-  const deleted = svc.deleteRegexScripts(userId, stringIds);
+  const deleted = await svc.deleteRegexScriptsAsync(userId, stringIds);
   return c.json({ deleted, count: deleted.length });
 });
 
@@ -324,16 +308,16 @@ app.post("/bulk-toggle", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!Array.isArray(body?.ids)) return c.json({ error: "ids must be an array" }, 400);
   const stringIds = body.ids.filter((v: unknown): v is string => typeof v === "string" && v.length > 0);
-  const result = svc.toggleRegexScriptsByIds(userId, stringIds, !!body?.disabled, {
+  const result = await svc.toggleRegexScriptsByIdsAsync(userId, stringIds, !!body?.disabled, {
     activePresetId: body?.active_preset_id ?? null,
   });
   return c.json(result);
 });
 
 // GET /:id — get by ID
-app.get("/:id", (c) => {
+app.get("/:id", async (c) => {
   const userId = c.get("userId");
-  const script = svc.getRegexScript(userId, c.req.param("id"));
+  const script = await svc.getRegexScriptAsync(userId, c.req.param("id"));
   if (!script) return c.json({ error: "Not found" }, 404);
   return c.json(script);
 });
@@ -343,23 +327,23 @@ app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   const { active_preset_id, ...input } = body ?? {};
-  const result = svc.updateRegexScript(userId, c.req.param("id"), input, { activePresetId: active_preset_id ?? null });
+  const result = await svc.updateRegexScriptAsync(userId, c.req.param("id"), input, { activePresetId: active_preset_id ?? null });
   if (result === null) return c.json({ error: "Not found" }, 404);
   if (typeof result === "string") return c.json({ error: result }, 400);
   return c.json(result);
 });
 
 // DELETE /:id — delete
-app.delete("/:id", (c) => {
+app.delete("/:id", async (c) => {
   const userId = c.get("userId");
-  if (!svc.deleteRegexScript(userId, c.req.param("id"))) return c.json({ error: "Not found" }, 404);
+  if (!(await svc.deleteRegexScriptAsync(userId, c.req.param("id")))) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });
 
 // POST /:id/duplicate — duplicate
-app.post("/:id/duplicate", (c) => {
+app.post("/:id/duplicate", async (c) => {
   const userId = c.get("userId");
-  const script = svc.duplicateRegexScript(userId, c.req.param("id"));
+  const script = await svc.duplicateRegexScriptAsync(userId, c.req.param("id"));
   if (!script) return c.json({ error: "Not found" }, 404);
   return c.json(script, 201);
 });
@@ -415,7 +399,7 @@ app.post("/:id/report-evidence", async (c) => {
 app.put("/:id/toggle", async (c) => {
   const userId = c.get("userId");
   const { disabled, active_preset_id } = await c.req.json();
-  const script = svc.toggleRegexScript(userId, c.req.param("id"), !!disabled, { activePresetId: active_preset_id ?? null });
+  const script = await svc.toggleRegexScriptAsync(userId, c.req.param("id"), !!disabled, { activePresetId: active_preset_id ?? null });
   if (!script) return c.json({ error: "Not found" }, 404);
   return c.json(script);
 });
@@ -426,7 +410,7 @@ app.post("/folders/toggle", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const folder = typeof body?.folder === "string" ? body.folder : undefined;
   if (folder === undefined) return c.json({ error: "folder is required" }, 400);
-  const result = svc.toggleRegexScriptsByFolder(userId, folder, !!body?.disabled, {
+  const result = await svc.toggleRegexScriptsByFolderAsync(userId, folder, !!body?.disabled, {
     activePresetId: body?.active_preset_id ?? null,
   });
   return c.json(result);

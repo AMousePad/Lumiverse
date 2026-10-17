@@ -1,25 +1,25 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import * as svc from "../services/settings.service";
-import { reconcileActiveLoomPreset } from "../services/presets.service";
+import { reconcileActiveLoomPresetAsync } from "../services/presets.service";
 import { InvalidSettingError } from "../services/settings.service";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 
 const app = new Hono();
 
-app.get("/", (c) => {
+app.get("/", async (c) => {
   const userId = c.get("userId");
   // A preset may have been deleted from another session while this browser
   // was closed. Repair the persisted selection before returning hydration
   // settings so the client never restores a ghost preset id after refresh.
-  reconcileActiveLoomPreset(userId);
-  return c.json(svc.getAllSettings(userId));
+  await reconcileActiveLoomPresetAsync(userId);
+  return c.json(await svc.getAllSettingsAsync(userId));
 });
 
-app.get("/:key", (c) => {
+app.get("/:key", async (c) => {
   const userId = c.get("userId");
-  const setting = svc.getSetting(userId, c.req.param("key"));
+  const setting = await svc.getSettingAsync(userId, c.req.param("key"));
   if (!setting) return c.json({ error: "Not found" }, 404);
   return c.json(setting);
 });
@@ -37,7 +37,7 @@ app.put(
     const userId = c.get("userId");
     const body = await c.req.json();
     try {
-      return c.json(svc.putSetting(userId, "savedThemes", body.value));
+      return c.json(await svc.putSettingAsync(userId, "savedThemes", body.value));
     } catch (err: any) {
       if (err instanceof InvalidSettingError) return c.json({ error: err.message }, 400);
       throw err;
@@ -50,7 +50,7 @@ app.put("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   try {
-    const results = svc.putMany(userId, body);
+    const results = await svc.putManyAsync(userId, body);
     return c.json(results);
   } catch (err: any) {
     if (err instanceof InvalidSettingError) return c.json({ error: err.message }, 400);
@@ -62,7 +62,7 @@ app.put("/:key", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   try {
-    const setting = svc.putSetting(userId, c.req.param("key"), body.value);
+    const setting = await svc.putSettingAsync(userId, c.req.param("key"), body.value);
     return c.json(setting);
   } catch (err: any) {
     if (err instanceof InvalidSettingError) return c.json({ error: err.message }, 400);
@@ -70,9 +70,9 @@ app.put("/:key", async (c) => {
   }
 });
 
-app.delete("/:key", (c) => {
+app.delete("/:key", async (c) => {
   const userId = c.get("userId");
-  const deleted = svc.deleteSetting(userId, c.req.param("key"));
+  const deleted = await svc.deleteSettingAsync(userId, c.req.param("key"));
   if (!deleted) return c.json({ error: "Not found" }, 404);
   eventBus.emit(EventType.SETTINGS_UPDATED, { key: c.req.param("key") }, userId);
   return c.json({ success: true });

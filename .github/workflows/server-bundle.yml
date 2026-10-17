@@ -1,7 +1,8 @@
 name: Build Bundled Desktop Release
 
 # One pipeline for both channels; builds a complete desktop/server distribution.
-# Large payloads go straight to an unpublished GitHub Release, never Actions artifacts.
+# Nightly Linux compilation runs in the private builder repository. Its short
+# completion workflow signs the returned payloads and joins the release gate.
 on:
   workflow_call:
     inputs:
@@ -21,6 +22,8 @@ on:
         type: string
         required: true
     secrets:
+      LINUX_RELEASE_BRIDGE_TOKEN:
+        required: false
       LUMIVERSE_UPDATER_PUBLIC_KEY:
         required: false
       TAURI_SIGNING_PRIVATE_KEY:
@@ -44,6 +47,8 @@ jobs:
   prepare:
     name: Prepare unpublished signed release
     runs-on: ubuntu-22.04
+    outputs:
+      platforms: ${{ steps.platforms.outputs.platforms }}
     permissions:
       contents: write
     steps:
@@ -53,6 +58,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+      - name: Choose hosted platforms for the release channel
+        id: platforms
+        run: bun scripts/private-linux-release.ts matrix
       - name: Require updater signing configuration
         env:
           LUMIVERSE_UPDATER_PUBLIC_KEY: ${{ vars.LUMIVERSE_UPDATER_PUBLIC_KEY || secrets.LUMIVERSE_UPDATER_PUBLIC_KEY }}
@@ -63,6 +71,36 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun scripts/publish-desktop-release.ts create
+      - name: Record immutable Linux build request
+        if: inputs.channel == 'nightly'
+        env:
+          LUMIVERSE_UPDATER_PUBLIC_KEY: ${{ vars.LUMIVERSE_UPDATER_PUBLIC_KEY || secrets.LUMIVERSE_UPDATER_PUBLIC_KEY }}
+        run: bun scripts/private-linux-release.ts request
+      - name: Retain request for the private builder and release verifier
+        if: inputs.channel == 'nightly'
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-release-request-${{ github.run_attempt }}
+          path: request.json
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Queue private Linux x64 and ARM64 builders
+    needs: prepare
+    if: inputs.channel == 'nightly'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Dispatch without occupying a hosted runner during compilation
+        env:
+          LINUX_RELEASE_BRIDGE_TOKEN: ${{ secrets.LINUX_RELEASE_BRIDGE_TOKEN }}
+        run: bun scripts/private-linux-release.ts dispatch
 
   build:
     name: Bundled desktop (${{ matrix.platform }})
@@ -71,31 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-            platform: darwin-aarch64
-            target: aarch64-apple-darwin
-            bundles: app,dmg
-          - os: macos-15-intel
-            platform: darwin-x86_64
-            target: x86_64-apple-darwin
-            bundles: app,dmg
-          - os: ubuntu-22.04
-            platform: linux-x86_64
-            target: x86_64-unknown-linux-gnu
-            bundles: appimage
-          - os: ubuntu-22.04-arm
-            platform: linux-aarch64
-            target: aarch64-unknown-linux-gnu
-            bundles: appimage
-          - os: windows-2022
-            platform: windows-x86_64
-            target: x86_64-pc-windows-msvc
-            bundles: nsis
-          - os: windows-11-arm
-            platform: windows-aarch64
-            target: aarch64-pc-windows-msvc
-            bundles: nsis
+        include: ${{ fromJSON(needs.prepare.outputs.platforms) }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -250,7 +264,8 @@ jobs:
 
   publish:
     name: Publish complete release and advance channel
-    needs: build
+    needs: [build, linux]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.linux.result == 'success' || needs.linux.result == 'skipped') }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -263,6 +278,10 @@ jobs:
         with:
           bun-version: 1.4.2
       - name: Require every signed platform before publication
+        if: inputs.channel == 'stable'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun scripts/publish-desktop-release.ts publish
+      - name: Leave nightly publication to the asynchronous completion gate
+        if: inputs.channel == 'nightly'
+        run: echo 'The completion workflow joins the private Linux build with these hosted platform results before publishing.'

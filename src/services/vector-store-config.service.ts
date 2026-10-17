@@ -310,7 +310,7 @@ export async function updateVectorStoreConfig(
       throw new Error("Vector store provider and connection are managed by environment variables and cannot be changed at runtime.");
     }
     validateVectorStoreRuntimeTuningInput(input);
-    settingsSvc.putSetting(
+    await settingsSvc.putSettingAsync(
       ownerId,
       VECTOR_STORE_CONFIG_KEY,
       mergeStoredVectorStoreRuntimeTuning(getStoredVectorStoreConfig(ownerId), input),
@@ -324,7 +324,7 @@ export async function updateVectorStoreConfig(
 
   if (!hasVectorStoreProviderOrConnectionFields(input)) {
     validateVectorStoreRuntimeTuningInput(input);
-    settingsSvc.putSetting(
+    await settingsSvc.putSettingAsync(
       ownerId,
       VECTOR_STORE_CONFIG_KEY,
       mergeStoredVectorStoreRuntimeTuning(getStoredVectorStoreConfig(ownerId), input),
@@ -362,7 +362,7 @@ export async function updateVectorStoreConfig(
     secretsSvc.deleteSecret(ownerId, MILVUS_PASSWORD_SECRET);
   }
 
-  settingsSvc.putSetting(ownerId, VECTOR_STORE_CONFIG_KEY, normalized);
+  await settingsSvc.putSettingAsync(ownerId, VECTOR_STORE_CONFIG_KEY, normalized);
 
   // Break the static import cycle (index.ts imports this service).
   const { resetActiveVectorStore } = await import("./vector-store");

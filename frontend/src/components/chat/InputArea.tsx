@@ -26,7 +26,6 @@ import {
   resolveImpersonationPresetSelection,
   type ImpersonationPreference,
 } from '@/lib/impersonationPreset'
-import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import { unmarshalPreset } from '@/lib/loom/service'
 import {
   inspectPromptVariablesAvailability,
@@ -79,6 +78,8 @@ import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type
 import { isWhistleAvailable } from '@/lib/whistle/config'
 import { whistleClient } from '@/lib/whistle/client'
 import { composeChatSafeZones } from '@/lib/chatSurfaceLayout'
+import { createComposerTouchFocusHandlers } from '@/lib/iosKeyboardScroll'
+import { measureComposerHeight, observeComposerMotion } from '@/lib/composerMotion'
 import { renderedPxToLayoutPx } from '@/lib/uiScale'
 import { applyChatAppearance } from '@/lib/chatAppearance'
 import {
@@ -1007,6 +1008,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   // iPhone-specific: match input bar bottom corners to device screen curvature
   const screenCornerRadius = useDeviceFrameRadius()
   const [inputFocused, setInputFocused] = useState(false)
+  const composerTouchFocus = useMemo(createComposerTouchFocusHandlers, [])
   const [sttStatus, setSttStatus] = useState<'idle' | 'starting' | 'listening' | 'processing'>('idle')
   const [sttLoadingProgress, setSttLoadingProgress] = useState<number | null>(null)
   const sttSessionConfigRef = useRef<{ provider: string; language: string; connectionId: string | null } | null>(null)
@@ -1091,7 +1093,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const pendingSelection = pendingSelectionRef.current
     if (!pendingSelection) return
     pendingSelectionRef.current = null
-    ta.focus()
+    ta.focus({ preventScroll: true })
     ta.setSelectionRange(pendingSelection.start, pendingSelection.end, pendingSelection.direction)
     syncTextareaMirrorScroll()
   }, [text, resizeTextarea, syncTextareaMirrorScroll])
@@ -1456,7 +1458,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const syncHiddenEditSafeZone = () => {
       const rootStyle = getComputedStyle(root)
       const keyboardInset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
-      const zones = composeChatSafeZones(16, 0, keyboardInset)
+      const zones = composeChatSafeZones(16, 0, renderedPxToLayoutPx(keyboardInset))
       parent.style.setProperty('--lcs-composer-safe-zone', `${Math.round(zones.composerSafeZone)}px`)
       parent.style.setProperty('--lcs-input-safe-zone', `${Math.round(zones.inputSafeZone)}px`)
     }
@@ -1496,8 +1498,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const parent = el.parentElement
     if (!parent) return
     const root = document.documentElement
-    const isIOSPwa = document.documentElement.hasAttribute('data-ios-pwa')
     const loreMount = el.querySelector<HTMLElement>('[data-spindle-mount="chat_composer_above"]')
+    const popoverSlot = el.querySelector<HTMLElement>('[data-composer-popover]')
 
     const measureLoreHeight = () => {
       if (!loreMount) return 0
@@ -1511,28 +1513,25 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     const update = () => {
       const loreHeight = measureLoreHeight()
-      const h = el.offsetHeight
+      const h = measureComposerHeight(el, popoverSlot)
       const composerHeight = Math.max(0, h - loreHeight) + 8
-      // On iOS PWA, read --app-keyboard-inset-bottom directly instead of
-      // getComputedStyle(el).bottom. The CSS `bottom` property transitions,
-      // so the computed value may be mid-animation when the ResizeObserver
-      // fires (triggered by the instant padding-bottom change). The CSS
-      // variable is set synchronously by JS and always reflects the final value.
-      let bottomOffset: number
-      if (isIOSPwa) {
-        const rootStyle = getComputedStyle(root)
-        bottomOffset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
-      } else {
-        bottomOffset = parseFloat(getComputedStyle(el).bottom) || 12
-      }
+      // Use the animated position, so list padding and composer move together.
+      // Zero is valid for edge-to-edge PWA composers.
+      const measuredBottom = parseFloat(getComputedStyle(el).bottom)
+      const bottomOffset = Number.isFinite(measuredBottom) ? measuredBottom : 12
       const zones = composeChatSafeZones(composerHeight, loreHeight, bottomOffset)
-      parent.style.setProperty('--lcs-composer-safe-zone', `${zones.composerSafeZone}px`)
-      parent.style.setProperty('--lcs-input-safe-zone', `${zones.inputSafeZone}px`)
+      const publish = (name: string, value: number) => {
+        const next = `${Math.round(value)}px`
+        if (parent.style.getPropertyValue(name) !== next) parent.style.setProperty(name, next)
+      }
+      publish('--lcs-composer-safe-zone', zones.composerSafeZone)
+      publish('--lcs-input-safe-zone', zones.inputSafeZone)
     }
 
     const ro = new ResizeObserver(update)
     ro.observe(el)
     if (loreMount) ro.observe(loreMount)
+    const stopObservingMotion = observeComposerMotion(el, update)
     update()
 
     // On iOS PWA, the virtual keyboard changes `bottom` via CSS variable but
@@ -1545,7 +1544,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       cancelAnimationFrame(vpFrame)
       vpFrame = requestAnimationFrame(update)
     }
-    const rootObserver = new MutationObserver(onViewportResize)
+    // Root writes already contain main.tsx's latest inset. Measure before
+    // paint, including when reduced motion makes the bottom change instant.
+    const rootObserver = new MutationObserver(update)
     rootObserver.observe(root, { attributes: true, attributeFilter: ['style'] })
     window.addEventListener('resize', onViewportResize)
     window.visualViewport?.addEventListener('resize', onViewportResize)
@@ -1553,6 +1554,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     return () => {
       ro.disconnect()
+      stopObservingMotion()
       cancelAnimationFrame(vpFrame)
       rootObserver.disconnect()
       window.removeEventListener('resize', onViewportResize)
@@ -1889,7 +1891,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
     }
     requestAnimationFrame(() => {
-      if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus() }
+      if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus({ preventScroll: true }) }
     })
     return 'sent'
   }, [text, chatId, saveDraftInput, resizeTextarea, finalizeRegexSelections])
@@ -1930,7 +1932,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     requestAnimationFrame(() => {
       if (textareaRef.current) {
         resizeTextarea(textareaRef.current)
-        textareaRef.current.focus()
+        textareaRef.current.focus({ preventScroll: true })
       }
     })
 
@@ -2009,7 +2011,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     requestAnimationFrame(() => {
       if (textareaRef.current) {
         resizeTextarea(textareaRef.current)
-        textareaRef.current.focus()
+        textareaRef.current.focus({ preventScroll: true })
       }
     })
 
@@ -2028,7 +2030,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: effectivePersonaId || undefined,
         persona_addon_states: effectivePersonaId === activePersonaId ? activeGenerationAddonStates : undefined,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal' as const,
         user_input: sourceText || undefined,
       }
@@ -2149,7 +2150,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, activeCharacterId, t, te])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t, te])
 
   useEffect(() => {
     const handleRegexAction = async (event: Event) => {
@@ -2175,7 +2176,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         setText((current) => applyRegexActionDraft(current, { content: action.content, mode: 'append' }))
         requestAnimationFrame(() => {
           resizeTextarea(textareaRef.current)
-          textareaRef.current?.focus()
+          textareaRef.current?.focus({ preventScroll: true })
         })
         toast.info(action.subtitle || t('toast.regexActionDraftQueued'), {
           title: action.title || t('toast.regexActionSelected'),
@@ -2210,7 +2211,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             title: action.title || t('toast.regexActionSelected'),
             duration: 2500,
           })
-          textareaRef.current?.focus()
+          textareaRef.current?.focus({ preventScroll: true })
           return
         }
         if (action.type === 'effects') {
@@ -2228,7 +2229,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             setText((current) => applyRegexActionDraft(current, draft))
             requestAnimationFrame(() => {
               resizeTextarea(textareaRef.current)
-              textareaRef.current?.focus()
+              textareaRef.current?.focus({ preventScroll: true })
             })
           }
           toast.info(action.subtitle || t('toast.regexActionEffectsApplied'), {
@@ -2272,7 +2273,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             title: action.title || t('toast.regexActionSelected'),
             duration: 2500,
           })
-          textareaRef.current?.focus()
+          textareaRef.current?.focus({ preventScroll: true })
           return
         }
         await handleSend(action.content, action)
@@ -2378,7 +2379,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal',
         retain_council: retainCouncilForRegens || undefined,
       }
@@ -2403,7 +2403,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.regenerationFailed') })
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, regenFeedback.format, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, regenFeedback.format, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleRegenerate = useCallback(() => {
     if (isGeneratingInChat) return
@@ -2435,7 +2435,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         message_id: lastAssistant?.id,
         target_character_id: targetCharacterId,
         retain_council: retainCouncilForRegens || undefined,
@@ -2450,7 +2449,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.continueFailed') })
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleImpersonate = useCallback(async (mode: import('@/api/generate').ImpersonateMode) => {
     if (isGeneratingInChat) return
@@ -2478,8 +2477,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: presetSelection.forcePresetId
-          || shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        force_preset_id: presetSelection.forcePresetId,
         generation_type: 'impersonate',
         impersonate_mode: mode,
         impersonate_input: impersonateInput || undefined,
@@ -2496,7 +2494,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.impersonationFailed') })
     }
-  }, [chatId, isGeneratingInChat, text, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea, t, te])
+  }, [chatId, isGeneratingInChat, text, activeProfileId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea, t, te])
 
   const handleStop = useCallback(async () => {
     if (!isGeneratingInChat) return
@@ -2709,7 +2707,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         user_input: text || undefined,
         target_character_id: isGroupChat ? focusedPreviewCharacterId || undefined : undefined,
       })
@@ -2721,7 +2718,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     } finally {
       setDryRunning(false)
     }
-  }, [text, chatId, dryRunning, isGeneratingInChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat, t])
+  }, [text, chatId, dryRunning, isGeneratingInChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat, t])
 
   const handleResolveMacros = useCallback(async () => {
     if (resolvingMacros) return
@@ -3602,7 +3599,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         />
       )}
 
-      <div className={clsx(styles.popoverSlot, openPopover && styles.popoverSlotOpen)}>
+      <div data-composer-popover className={clsx(styles.popoverSlot, openPopover && styles.popoverSlotOpen)}>
         <div className={styles.popoverSlotInner}>
           {renderPopover === 'guides' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
@@ -4497,6 +4494,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               onPaste={handlePaste}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
+              {...composerTouchFocus}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
               placeholder={t('input.placeholder')}

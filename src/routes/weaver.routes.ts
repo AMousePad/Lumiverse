@@ -30,7 +30,7 @@ import { getVisualProviderAdapter } from "../services/weaver/visual/provider-reg
 import { adapterImageInput } from "../services/weaver/visual/provider-adapter";
 import { resolveExpressionVariant, composeExpressionPrompts } from "../services/weaver/visual/expressions";
 import * as expressionsSvc from "../services/expressions.service";
-import { getCharacter, setCharacterAvatarFromImage } from "../services/characters.service";
+import { getCharacter, setCharacterAvatarFromImage, getCharacterAsync } from "../services/characters.service";
 import { getConnection, imageGenConnectionSecretKey } from "../services/image-gen-connections.service";
 import { getImageGenSettings } from "../services/image-gen.service";
 import * as imagesSvc from "../services/images.service";
@@ -664,11 +664,11 @@ function growableSession(c: any, userId: string): { session: ReturnType<typeof s
   return { session };
 }
 
-app.get("/sessions/:id/hub", (c) => {
+app.get("/sessions/:id/hub", async (c) => {
   const userId = c.get("userId");
   const { session, error } = growableSession(c, userId);
   if (error) return error;
-  const character = getCharacter(userId, session!.character_id!);
+  const character = await getCharacterAsync(userId, session!.character_id!);
   if (!character) return c.json({ error: "The finalized card no longer exists" }, 404);
 
   const reg = getBuildRegistry(session!.build_type);
@@ -765,7 +765,7 @@ app.post("/sessions/:id/lore/answer", async (c) => {
     await interviewSvc.answerQuestion(userId, c.req.param("id"), body, signal);
     bibleSvc.syncDynamicRegion(userId, c.req.param("id"));
 
-    const character = getCharacter(userId, session!.character_id!);
+    const character = await getCharacterAsync(userId, session!.character_id!);
     const roleId = getBuildRegistry(session!.build_type).finalizeBookRoles[0];
     let book: { id: string; name: string; entry_count: number } | null = null;
     let added = 0;
@@ -962,7 +962,7 @@ async function loadSourceImage(
   userId: string,
   imageId: string,
 ): Promise<{ data: string; mimeType: string } | null> {
-  const image = imagesSvc.getImage(userId, imageId);
+  const image = await imagesSvc.getImageAsync(userId, imageId);
   if (!image) return null;
   const path = await imagesSvc.getImageFilePath(userId, imageId);
   if (!path) return null;
@@ -991,7 +991,7 @@ app.post("/sessions/:id/visual/generate", async (c) => {
     return c.json({ error: "Choose an image connection." }, 400);
   }
 
-  const character = getCharacter(userId, session.character_id);
+  const character = await getCharacterAsync(userId, session.character_id);
   if (!character) return c.json({ error: "Character not found" }, 404);
 
   const connection = getConnection(userId, body.connection_id);
@@ -1095,7 +1095,7 @@ app.get("/sessions/:id/visual/job/:jobId", (c) => {
   return c.json(job);
 });
 
-app.get("/sessions/:id/visual/candidates", (c) => {
+app.get("/sessions/:id/visual/candidates", async (c) => {
   const userId = c.get("userId");
   const kind = c.req.query("kind");
   if (!kind || !isVisualKind(kind)) {
@@ -1105,7 +1105,7 @@ app.get("/sessions/:id/visual/candidates", (c) => {
   if (!session) return c.json({ error: "Session not found" }, 404);
   if (!session.character_id) return c.json({ data: [], total: 0 });
 
-  const result = imagesSvc.listImages(userId, {
+  const result = await imagesSvc.listImagesAsync(userId, {
     owner_character_id: session.character_id,
     owner_extension_identifier: visualCandidateOwner(kind, c.req.query("variant")),
     limit: 200,
@@ -1122,7 +1122,7 @@ app.post("/sessions/:id/visual/suggest-tags", async (c) => {
   if (session.status !== "finalized" || !session.character_id) {
     return c.json({ error: "Finalize the character before suggesting tags." }, 400);
   }
-  const character = getCharacter(userId, session.character_id);
+  const character = await getCharacterAsync(userId, session.character_id);
   if (!character) return c.json({ error: "Character not found" }, 404);
 
   try {
@@ -1165,7 +1165,7 @@ app.post("/sessions/:id/visual/commit/expressions", async (c) => {
   for (const [label, imageId] of Object.entries(body.mappings ?? {})) {
     const cleanLabel = label.trim().toLowerCase();
     if (!cleanLabel || typeof imageId !== "string" || !imageId.trim()) continue;
-    if (!imagesSvc.getImage(userId, imageId)) {
+    if (!(await imagesSvc.getImageAsync(userId, imageId))) {
       return c.json({ error: "An image in the mapping no longer exists." }, 404);
     }
     mappings[cleanLabel] = imageId;

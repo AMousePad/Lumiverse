@@ -350,6 +350,11 @@ function performSqlWipe(userId: string): Record<string, number> {
       "DELETE FROM push_subscriptions WHERE user_id = ?",
       userId,
     );
+    counts["ios_push_destinations"] = runDelete(
+      db,
+      "DELETE FROM ios_push_destinations WHERE user_id = ?",
+      userId,
+    );
     counts["desktop_notification_destinations"] = runDelete(
       db,
       "DELETE FROM desktop_notification_destinations WHERE user_id = ?",
@@ -393,6 +398,10 @@ function performSqlWipe(userId: string): Record<string, number> {
 function runDelete(db: ReturnType<typeof getDb>, sql: string, ...params: any[]): number {
   // Intentionally not catching — failures inside the transaction must
   // propagate so bun:sqlite rolls back instead of partially committing.
-  const res = db.prepare(sql).run(...params);
-  return Number(res.changes ?? 0);
+  const statement = db.prepare(sql);
+  try { statement.run(...params); }
+  finally { statement.finalize(); }
+  // Bun's run().changes includes trigger/FK work, including derived image
+  // mappings. Report only directly deleted rows for this table.
+  return (db.query("SELECT changes() AS count").get() as { count: number }).count;
 }

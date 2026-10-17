@@ -287,7 +287,7 @@ app.patch("/connection/:connectionId/prompt-variables", async (c) => {
 // Resolution — resolve the effective binding for a chat context
 // ---------------------------------------------------------------------------
 
-app.get("/resolve/:chatId", (c) => {
+app.get("/resolve/:chatId", async (c) => {
   const userId = c.get("userId");
   const presetId = c.req.query("preset_id");
   const connectionId = c.req.query("connection_id") || null;
@@ -295,13 +295,13 @@ app.get("/resolve/:chatId", (c) => {
 
   const chatId = c.req.param("chatId");
 
-  const chat = chatsSvc.getChat(userId, chatId);
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   const resolved = svc.resolveProfile(userId, presetId ?? null, chatId, chat.character_id, {
     isGroup: chat.metadata?.group === true,
     connectionId,
-    personaId: requestedPersonaId ?? personasSvc.resolvePersonaOrDefault(userId)?.id ?? null,
+    personaId: requestedPersonaId ?? (await personasSvc.resolvePersonaOrDefaultAsync(userId))?.id ?? null,
   });
   return c.json(resolved);
 });

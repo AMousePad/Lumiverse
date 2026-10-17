@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { notifyImageDeleted, onImageDeleted } from '@/lib/deletion-events'
+
+const del = mock<(...args: unknown[]) => Promise<any>>()
+const get = mock<(...args: unknown[]) => Promise<any>>()
 
 const post = mock((..._args: unknown[]) => Promise.resolve({
   total: 0,
@@ -10,8 +14,8 @@ const post = mock((..._args: unknown[]) => Promise.resolve({
 
 mock.module('./client', () => ({
   BASE_URL: '/custom/api',
-  del: mock(),
-  get: mock(),
+  del,
+  get,
   post,
   upload: mock(),
   uploadWithProgress: mock(),
@@ -23,6 +27,56 @@ const originalFetch = globalThis.fetch
 afterEach(() => {
   globalThis.fetch = originalFetch
   post.mockClear()
+  del.mockReset()
+  get.mockReset()
+})
+
+describe('image deletion confirmation', () => {
+  test('a completed HTTP response and duplicate event share one notification', async () => {
+    const id = crypto.randomUUID()
+    const listener = mock(() => {})
+    const stop = onImageDeleted(listener)
+    try {
+      del.mockResolvedValue({ success: true, deleted: true, id, status: 'completed' })
+      await imagesApi.delete(id)
+      notifyImageDeleted(id)
+      expect(listener).toHaveBeenCalledTimes(1)
+      expect(get).not.toHaveBeenCalled()
+    } finally { stop() }
+  })
+
+  test('retained images stay visible and lost responses reconcile without another DELETE', async () => {
+    const id = crypto.randomUUID()
+    const listener = mock(() => {})
+    const stop = onImageDeleted(listener)
+    try {
+      del.mockResolvedValue({ success: true, deleted: false, id, status: 'retained' })
+      expect((await imagesApi.deleteIfUnused(id)).deleted).toBe(false)
+      expect(listener).not.toHaveBeenCalled()
+      del.mockRejectedValue(new Error('timeout'))
+      get.mockResolvedValue({ id, deleted: true, status: 'completed' })
+      expect((await imagesApi.deleteWallpaper(id)).status).toBe('completed')
+      expect(listener).toHaveBeenCalledTimes(1)
+      expect(del).toHaveBeenCalledTimes(2)
+      expect(get).toHaveBeenCalledWith(`/images/${id}/deletion-status`)
+    } finally { stop() }
+  })
+
+  test('unconfirmed and unauthorized outcomes remain errors', async () => {
+    const id = crypto.randomUUID()
+    const listener = mock(() => {})
+    const stop = onImageDeleted(listener)
+    try {
+      del.mockRejectedValue(new Error('timeout'))
+      get.mockResolvedValue({ deleted: false, status: 'present' })
+      await expect(imagesApi.delete(id)).rejects.toThrow('timeout')
+      expect(listener).not.toHaveBeenCalled()
+      get.mockClear()
+      del.mockRejectedValue(Object.assign(new Error('unauthorized'), { status: 401 }))
+      await expect(imagesApi.delete(id)).rejects.toThrow('unauthorized')
+      expect(get).not.toHaveBeenCalled()
+    } finally { stop() }
+  })
 })
 
 describe('imagesApi thumbnail rebuild', () => {

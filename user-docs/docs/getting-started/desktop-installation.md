@@ -6,6 +6,17 @@ title: Desktop Installation Walkthrough
 
 This walkthrough takes you from installing Git to opening Lumiverse on Windows or macOS. For Linux, Docker, and the full configuration reference, see [Installation](installation.md). For Android, use the [Termux walkthrough](android-installation.md).
 
+For the bundled native desktop app, download the matching installer from the
+[official releases](https://github.com/prolix-oc/Lumiverse/releases) and follow
+[Experimental Lumiverse Desktop](desktop-tray.md). Bundled releases include the
+server and Bun and offer built-in, existing-checkout and remote HTTPS choices.
+Linux releases are AppImages.
+
+The walkthrough below installs a **source checkout** and opens it in your web
+browser. That path installs Bun and dependencies and keeps its server data in
+the checkout unless configured otherwise. It can also be selected later under
+Desktop's **Browser → Instance Connection… → Existing checkout**.
+
 ## 1. Install Git
 
 === "Windows"

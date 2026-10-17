@@ -169,7 +169,7 @@ async function attachBackingBook(
 
     const ids = getCharacterWorldBookIds(character.extensions);
     const extensions = setCharacterWorldBookIds(character.extensions ?? {}, [...ids, book.id]);
-    const updated = charactersSvc.updateCharacter(userId, character.id, { extensions });
+    const updated = await charactersSvc.updateCharacterAsync(userId, character.id, { extensions });
     return { character: updated ?? character, book };
   } catch (err) {
     const role = getWorldbookRole(roleId);
@@ -223,7 +223,7 @@ export async function finalizeSession(
   };
   const input = applyFieldsToCard(base, reg.fieldDefs, fieldContent);
   const existing = session.character_id
-    ? charactersSvc.getCharacter(userId, session.character_id)
+    ? (await charactersSvc.getCharacterAsync(userId, session.character_id))
     : null;
 
   const books: Record<string, WorldBook | null> = {};
@@ -243,7 +243,7 @@ export async function finalizeSession(
       ...(existing.extensions ?? {}),
       weaver: buildWeaverExtension(sessionId, bible.spine, reg.extensionSlots),
     };
-    created = charactersSvc.updateCharacter(userId, existing.id, update) ?? existing;
+    created = (await charactersSvc.updateCharacterAsync(userId, existing.id, update)) ?? existing;
   } else {
     created = charactersSvc.createCharacter(userId, input);
   }
@@ -270,7 +270,7 @@ export async function finalizeSession(
       const fresh = seedBookIds.filter((id) => !current.includes(id));
       if (fresh.length > 0) {
         const extensions = setCharacterWorldBookIds(character.extensions ?? {}, [...current, ...fresh]);
-        character = charactersSvc.updateCharacter(userId, character.id, { extensions }) ?? character;
+        character = (await charactersSvc.updateCharacterAsync(userId, character.id, { extensions })) ?? character;
       }
     }
 

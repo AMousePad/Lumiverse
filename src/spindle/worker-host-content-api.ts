@@ -19,6 +19,7 @@ import type {
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import * as spindleUploads from "./uploads";
 import * as charactersSvc from "../services/characters.service";
+import * as characterGallerySvc from "../services/character-gallery.service";
 import * as chatsSvc from "../services/chats.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 import * as worldBooksSvc from "../services/world-books.service";
@@ -32,6 +33,10 @@ import * as personasSvc from "../services/personas.service";
 import * as globalAddonsSvc from "../services/global-addons.service";
 import * as settingsSvc from "../services/settings.service";
 import * as imagesSvc from "../services/images.service";
+import { IMAGE_READ_MAX_BYTES } from "./image-binary-contract";
+import type { CharacterGalleryItemDTO } from "./gallery-models-contract";
+import { prepareActivationPatterns } from "../services/regex-activation-inputs.service";
+import type { ActivationPatternsOptions } from "./activation-patterns-contract";
 import * as mediaSvc from "../services/media.service";
 import * as audioSvc from "../services/audio.service";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
@@ -262,6 +267,32 @@ export class WorkerHostContentApi {
     }
   }
 
+  handleCharactersGetGallery(requestId: string, characterId: string, userId?: string): void {
+    try {
+      if (!this.hasPermission("characters")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const items: CharacterGalleryItemDTO[] = characterGallerySvc.listGallery(resolvedUserId, characterId, { registerReferences: false }).map((item) => ({
+        id: item.id,
+        image_id: item.image_id,
+        reference: item.reference,
+        caption: item.caption,
+        sort_order: item.sort_order,
+        created_at: item.created_at,
+        width: item.width,
+        height: item.height,
+        mime_type: item.mime_type,
+      }));
+      this.postToWorker({ type: "response", requestId, result: items });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
   handleCharactersCreate(requestId: string, input: any, userId?: string): void {
     try {
       if (!this.hasPermission("characters")) {
@@ -405,6 +436,28 @@ export class WorkerHostContentApi {
   }
 
   // ─── Images CRUD (gated: "images") ─────────────────────────────────
+
+  async handleImagesReadBinary(requestId: string, imageId: string, userId?: string): Promise<void> {
+    try {
+      if (!this.hasPermission("images")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} images - Images permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      if (typeof imageId !== "string" || !imageId) throw new Error("imageId is required");
+      const path = await imagesSvc.getImageFilePath(resolvedUserId, imageId);
+      if (!path) throw new Error("Image not found");
+      const file = Bun.file(path);
+      const sizeLimitError = `Image exceeds the ${IMAGE_READ_MAX_BYTES / (1024 * 1024)} MiB binary read limit`;
+      if (file.size > IMAGE_READ_MAX_BYTES) throw new Error(sizeLimitError);
+      const data = new Uint8Array(await file.slice(0, IMAGE_READ_MAX_BYTES + 1).arrayBuffer());
+      if (data.byteLength > IMAGE_READ_MAX_BYTES) throw new Error(sizeLimitError);
+      this.postToWorker({ type: "response", requestId, result: data });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
 
   private toImageDTO(img: any): ImageDTO {
     return {
@@ -796,7 +849,7 @@ export class WorkerHostContentApi {
       case "image": {
         const imageId = typeof source.image_id === "string" ? source.image_id.trim() : "";
         if (!imageId) throw new Error("image media source requires image_id");
-        const image = imagesSvc.getImage(resolvedUserId, imageId);
+        const image = await imagesSvc.getImageAsync(resolvedUserId, imageId);
         if (!image) throw new Error("image media source not found");
         const path = await imagesSvc.getImageFilePath(resolvedUserId, imageId);
         if (!path) throw new Error("image media source file not found");
@@ -809,9 +862,9 @@ export class WorkerHostContentApi {
       case "audio": {
         const audioId = typeof source.audio_id === "string" ? source.audio_id.trim() : "";
         if (!audioId) throw new Error("audio media source requires audio_id");
-        const audio = audioSvc.getAudio(resolvedUserId, audioId);
+        const audio = await audioSvc.getAudioAsync(resolvedUserId, audioId);
         if (!audio) throw new Error("audio media source not found");
-        const path = audioSvc.getAudioFilePath(resolvedUserId, audioId);
+        const path = await audioSvc.getAudioFilePathAsync(resolvedUserId, audioId);
         if (!path) throw new Error("audio media source file not found");
         return {
           path,
@@ -2496,6 +2549,25 @@ export class WorkerHostContentApi {
 
       const s = regexScriptsSvc.getRegexScript(resolvedUserId, scriptId);
       this.postToWorker({ type: "response", requestId, result: s ? this.toRegexScriptDTO(s) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  handleRegexScriptsPrepareActivationPatterns(requestId: string, options: ActivationPatternsOptions): void {
+    try {
+      if (!this.hasPermission("regex_scripts")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts - Regex scripts permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(options?.userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const result = prepareActivationPatterns(resolvedUserId, {
+        preset_id: options?.presetId, patterns: options?.patterns,
+        chat_id: options?.chatId, character_id: options?.characterId,
+        persona_id: options?.personaId, connection_id: options?.connectionId,
+      });
+      this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }

@@ -54,12 +54,25 @@ fn stamp_build_revision() {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=LUMIVERSE_UPDATER_PUBLIC_KEY");
+    println!(
+        "cargo:rustc-env=LUMIVERSE_UPDATER_PUBLIC_KEY={}",
+        std::env::var("LUMIVERSE_UPDATER_PUBLIC_KEY")
+            .unwrap_or_default()
+            .trim()
+    );
+    println!(
+        "cargo:rustc-env=LUMIVERSE_DESKTOP_TARGET={}",
+        std::env::var("TARGET").unwrap()
+    );
     stamp_build_revision();
     println!("cargo:rerun-if-changed=src/capture/macos.m");
+    println!("cargo:rerun-if-changed=src/system_audio/coreaudio.m");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         let mut capture = cc::Build::new();
         capture
             .file("src/capture/macos.m")
+            .file("src/system_audio/coreaudio.m")
             .flag("-fobjc-arc")
             .flag("-fblocks")
             .compile("lumiverse_capture");
@@ -69,7 +82,10 @@ fn main() {
             .arg("--print-file-name=libclang_rt.osx.a")
             .output()
             .expect("failed to locate the Clang macOS runtime");
-        assert!(runtime.status.success(), "Clang macOS runtime lookup failed");
+        assert!(
+            runtime.status.success(),
+            "Clang macOS runtime lookup failed"
+        );
         let runtime_path = PathBuf::from(
             std::str::from_utf8(&runtime.stdout)
                 .expect("Clang macOS runtime path is not UTF-8")
@@ -89,6 +105,7 @@ fn main() {
             "Cocoa",
             "CoreGraphics",
             "AVFoundation",
+            "CoreAudio",
             "AVKit",
             "VideoToolbox",
             "CoreMedia",
@@ -103,6 +120,31 @@ fn main() {
             "desktop_capture_connect",
             "desktop_capture_disconnect",
             "desktop_capture_status",
+            "bundled_server_available",
+            "bundled_server_start",
+            "bundled_server_stop",
+            "bundled_server_status",
+            "bundled_server_alive",
+            "bundled_setup_defaults",
+            "bundled_setup_save",
+            "bundled_setup_status",
+            "bundled_setup_complete",
+            "bundled_setup_pick_folder",
+            "desktop_profile_info",
+            "open_external_url",
+            "reveal_desktop_artifact",
+            "linux_diagnostics",
+            "save_linux_graphics",
+            "show_linux_settings",
+            "desktop_smoke_complete",
+            "remote_authorization_status",
+            "remote_authorization_cancel",
+            "remote_authorization_retry",
+            "open_lumiverse_data_folder",
+            "desktop_update_info",
+            "desktop_update_check",
+            "desktop_update_download",
+            "desktop_update_install",
         ]),
     ))
     .expect("failed to build desktop permissions")

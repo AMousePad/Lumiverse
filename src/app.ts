@@ -1,3 +1,4 @@
+import { DatabaseExecutionError, isDatabaseUnavailable } from "./db/execution";
 import { Hono, type Handler } from "hono";
 import { cors } from "hono/cors";
 import { compress } from "./middleware/compress";
@@ -27,6 +28,7 @@ import { providersRoutes } from "./routes/providers.routes";
 import { macrosRoutes } from "./routes/macros.routes";
 import { spindleRoutes } from "./routes/spindle.routes";
 import { uploadsRoutes } from "./routes/uploads.routes";
+import { spindleFilesRoutes } from "./routes/spindle-files.routes";
 import { usersRoutes } from "./routes/users.routes";
 import { ssoProvidersRoutes } from "./routes/sso-providers.routes";
 import { packsRoutes } from "./routes/packs.routes";
@@ -60,6 +62,8 @@ import { openrouterRoutes } from "./routes/openrouter.routes";
 import { nanogptRoutes } from "./routes/nanogpt.routes";
 import { ttsConnectionsRoutes } from "./routes/tts-connections.routes";
 import { sttConnectionsRoutes } from "./routes/stt-connections.routes";
+import { decisionConnectionsRoutes } from "./routes/decision-connections.routes";
+import { decisionsRoutes } from "./routes/decisions.routes";
 import { ttsRoutes } from "./routes/tts.routes";
 import { sttRoutes } from "./routes/stt.routes";
 import { mcpServersRoutes } from "./routes/mcp-servers.routes";
@@ -429,6 +433,7 @@ app.route("/api/v1/providers", providersRoutes);
 app.route("/api/v1/macros", macrosRoutes);
 app.route("/api/v1/spindle", spindleRoutes);
 app.route("/api/v1/spindle-uploads", uploadsRoutes);
+app.route("/api/v1/spindle-files", spindleFilesRoutes);
 app.route("/api/v1/users", usersRoutes);
 app.route("/api/v1/sso-providers", ssoProvidersRoutes);
 app.route("/api/v1/packs", packsRoutes);
@@ -456,6 +461,8 @@ app.route("/api/v1/memory-cortex", memoryCortexRoutes);
 app.route("/api/v1/operator", operatorRoutes);
 app.route("/api/v1/tts-connections", ttsConnectionsRoutes);
 app.route("/api/v1/stt-connections", sttConnectionsRoutes);
+app.route("/api/v1/decision-connections", decisionConnectionsRoutes);
+app.route("/api/v1/decisions", decisionsRoutes);
 app.route("/api/v1/tts", ttsRoutes);
 app.route("/api/v1/stt", sttRoutes);
 app.route("/api/v1/mcp-servers", mcpServersRoutes);
@@ -507,6 +514,11 @@ app.notFound((c) => c.json({ error: "Not found" }, 404));
 
 app.onError((err, c) => {
   const path = `${c.req.method} ${c.req.path}`;
+  if (isDatabaseUnavailable(err)) {
+    const outcome = err instanceof DatabaseExecutionError ? err.outcome : "unknown";
+    console.warn(`[db] ${path}: ${err.message} (${err.code}, ${outcome})`);
+    return c.json({ error: "Database temporarily unavailable", code: err.code, outcome }, 503);
+  }
   // DOMException has an empty stack, so a raw console.error(err) prints a
   // contextless object dump. Demote client-disconnect aborts to a warn line
   // tagged with the route so they're traceable, and surface real errors with

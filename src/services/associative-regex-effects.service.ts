@@ -23,11 +23,11 @@ export async function resolveRegexActionEffects(
   actionId: string,
   instanceId: string,
 ): Promise<ResolveRegexActionEffectsResult> {
-  const chat = chatsSvc.getChat(userId, chatId);
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
   const source = chatsSvc.getMessage(userId, messageId);
   if (!chat || !source || source.chat_id !== chatId) return { status: "not_found" };
 
-  const configuredScript = regexScriptsSvc.getRegexScript(userId, scriptId);
+  const configuredScript = await regexScriptsSvc.getRegexScriptAsync(userId, scriptId);
   const configuredAction = configuredScript?.actions.find((action) => action.id === actionId);
   if (!configuredScript || !configuredAction) return { status: "unavailable" };
   const configuredEffects = configuredAction?.effects ?? [];

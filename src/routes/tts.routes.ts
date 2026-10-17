@@ -4,7 +4,7 @@ import { detectSpeechSegments } from "../services/speech-detection.service";
 import * as audioSvc from "../services/audio.service";
 import * as muxSvc from "../services/audio-mux.service";
 import * as chatsSvc from "../services/chats.service";
-import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
+import { clampErrorMessage, describeProviderError, ProviderRequestError } from "../utils/provider-errors";
 import { contentTypeForFormat } from "../utils/audio-content-type";
 import type { TtsStreamChunk } from "../tts/types";
 
@@ -65,7 +65,7 @@ app.post("/synthesize", async (c) => {
     });
   } catch (err: any) {
     const msg = clampErrorMessage(describeProviderError(err, "TTS synthesis failed"));
-    const status = /required|not found|unsupported|No API key|missing|connection|configured/i.test(msg) ? 400 : 502;
+    const status = (err instanceof ProviderRequestError && err.code === "invalid_tts_parameters") || /required|not found|unsupported|No API key|missing|connection|configured/i.test(msg) ? 400 : 502;
     return c.json({ error: msg }, status);
   }
 });
@@ -346,7 +346,7 @@ app.post("/save-message-audio", async (c) => {
 
   if (!updated) {
     // Race: message vanished between validation and append. Roll back the file.
-    audioSvc.deleteAudio(userId, audioRow.id);
+    await audioSvc.deleteAudioAsync(userId, audioRow.id);
     return c.json({ error: "Message no longer exists" }, 404);
   }
 

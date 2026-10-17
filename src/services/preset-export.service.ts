@@ -2,7 +2,7 @@ import { ZipArchive, type ArchiverError } from "archiver";
 import { Writable } from "stream";
 import type { Preset, PromptBlock } from "../types/preset";
 import * as presetsSvc from "./presets.service";
-import { exportRegexScripts } from "./regex-scripts.service";
+import { exportRegexScripts, exportRegexScriptsAsync } from "./regex-scripts.service";
 
 const MAX_BULK_PRESETS = 200;
 const PREPARE_TTL_MS = 10 * 60 * 1000;
@@ -133,6 +133,14 @@ function isProtectedSealedSource(source: unknown): boolean {
 
 /** Build the same portable Loom shape as the single-preset browser export. */
 export function buildPortablePresetExport(userId: string, preset: Preset): Record<string, unknown> {
+  return portablePresetPayload(preset, exportRegexScripts(userId, { presetId: preset.id }).scripts);
+}
+
+export async function buildPortablePresetExportAsync(userId: string, preset: Preset): Promise<Record<string, unknown>> {
+  return portablePresetPayload(preset, (await exportRegexScriptsAsync(userId, { presetId: preset.id })).scripts);
+}
+
+function portablePresetPayload(preset: Preset, scripts: unknown[]): Record<string, unknown> {
   const metadata = isRecord(preset.metadata) ? preset.metadata : {};
   const parameters = isRecord(preset.parameters) ? preset.parameters : {};
   const prompts = isRecord(preset.prompts) ? preset.prompts : {};
@@ -166,15 +174,23 @@ export function buildPortablePresetExport(userId: string, preset: Preset): Recor
     promptVariables: isRecord(metadata.promptVariables) ? metadata.promptVariables : {},
   };
 
-  const regex = exportRegexScripts(userId, { presetId: preset.id });
-  if (regex.scripts.length > 0) {
-    payload.extensions = { regex_scripts: regex.scripts };
+  if (scripts.length > 0) {
+    payload.extensions = { regex_scripts: scripts };
   }
   return payload;
 }
 
 export function preparePresetBulkExport(userId: string, ids: readonly string[]): PreparedPresetExportResult | null {
   const presetIds = dedupePresetIds(ids).filter((id) => presetsSvc.getPreset(userId, id)?.provider === "loom");
+  return rememberPreparedExport(userId, presetIds);
+}
+
+export async function preparePresetBulkExportAsync(userId: string, ids: readonly string[]): Promise<PreparedPresetExportResult | null> {
+  const presets = await presetsSvc.getPresetsByIdsAsync(userId, dedupePresetIds(ids));
+  return rememberPreparedExport(userId, presets.filter((preset) => preset.provider === "loom").map((preset) => preset.id));
+}
+
+function rememberPreparedExport(userId: string, presetIds: string[]): PreparedPresetExportResult | null {
   if (presetIds.length === 0) return null;
 
   const now = Date.now();
@@ -223,6 +239,7 @@ export function buildPresetBulkExportStream(
   signal?: AbortSignal,
 ): ReadableStream<Uint8Array> {
   let archive: ZipArchive | null = null;
+  let cancelled = false;
   return new ReadableStream<Uint8Array>({
     start(controller) {
       void (async () => {
@@ -233,15 +250,19 @@ export function buildPresetBulkExportStream(
         archive.on("error", (error: ArchiverError) => {
           try { controller.error(error); } catch { /* already closed */ }
         });
-        archive.pipe(controllerSink(controller));
+        const sink = controllerSink(controller);
+        sink.on("error", (error) => { archive?.abort(); try { controller.error(error); } catch { /* already closed */ } });
+        archive.pipe(sink);
 
         const usedNames = new Set<string>();
         for (const id of dedupePresetIds(presetIds)) {
-          if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
-          const preset = presetsSvc.getPreset(userId, id);
+          if (cancelled || signal?.aborted) throw signal?.reason ?? new DOMException("Aborted", "AbortError");
+          const preset = await presetsSvc.getPresetAsync(userId, id);
           if (!preset || preset.provider !== "loom") continue;
           const entryName = uniqueEntryName(sanitizeEntryBase(preset.name, id), usedNames);
-          archive.append(JSON.stringify(buildPortablePresetExport(userId, preset), null, 2), { name: entryName });
+          const payload = await buildPortablePresetExportAsync(userId, preset);
+          if (cancelled || signal?.aborted) throw signal?.reason ?? new DOMException("Aborted", "AbortError");
+          archive.append(JSON.stringify(payload, null, 2), { name: entryName });
           await new Promise<void>((resolve) => setTimeout(resolve, 0));
         }
         await archive.finalize();
@@ -251,6 +272,7 @@ export function buildPresetBulkExportStream(
       });
     },
     cancel() {
+      cancelled = true;
       archive?.abort();
     },
   });

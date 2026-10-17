@@ -226,8 +226,9 @@ function storedCharacter(id: string): StoredCharacter {
   return { name: record.name, tags: record.tags, folder: record.folder };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   initCharactersScopeTestDb();
+  getDb().run(await Bun.file(new URL('../db/migrations/125_deletion_operations.sql', import.meta.url)).text());
   seedCharacters();
 });
 

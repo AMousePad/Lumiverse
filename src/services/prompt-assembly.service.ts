@@ -89,6 +89,7 @@ import {
 } from "../spindle/source-message-metadata";
 import * as chatsSvc from "./chats.service";
 import { stripReasoningTags, buildMacroEnvForChat } from "./chats.service";
+import { getMcpInlineTools } from "./council/mcp-tools";
 import {
   contentHasMacroHints,
   resolveAndSanitizeForVectorization,
@@ -993,7 +994,7 @@ async function resolveAttachmentBase64(
   attachment: Pick<MessageAttachment, "type" | "image_id">,
 ): Promise<string | null> {
   const filePath = attachment.type === "audio"
-    ? audioSvc.getAudioFilePath(userId, attachment.image_id)
+    ? (await audioSvc.getAudioFilePathAsync(userId, attachment.image_id))
     : await imagesSvc.getImageFilePath(userId, attachment.image_id);
   if (!filePath) return null;
   try {
@@ -1821,7 +1822,7 @@ export async function assemblePrompt(
   let phaseStartedAt = performance.now();
 
   // ---- Load data (use prefetched when available, fallback to DB) ----
-  const chat = pf?.chat ?? chatsSvc.getChat(ctx.userId, ctx.chatId);
+  const chat = pf?.chat ?? (await chatsSvc.getChatAsync(ctx.userId, ctx.chatId));
   if (!chat) throw new Error("Chat not found");
 
   const allMessages =
@@ -1895,7 +1896,7 @@ export async function assemblePrompt(
   const character =
     pf?.character ??
     (characterId
-      ? charactersSvc.getCharacter(ctx.userId, characterId)
+      ? (await charactersSvc.getCharacterAsync(ctx.userId, characterId))
       : makeAssistantCharacter());
   if (!character) throw new Error("Character not found");
 
@@ -1903,12 +1904,12 @@ export async function assemblePrompt(
     ? null
     : pf?.persona !== undefined
       ? pf.persona
-      : personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId);
+      : (await personasSvc.resolvePersonaOrDefaultAsync(ctx.userId, ctx.personaId));
   if (!pf) {
     // Prefetch already applies add-on states + resolves global add-ons; only do
     // it here for the non-prefetched path so {{persona}} includes global add-ons.
     persona = applyPersonaAddonStates(persona, ctx.personaAddonStates);
-    persona = globalAddonsSvc.resolvePersonaGlobalAddons(ctx.userId, persona);
+    persona = (await globalAddonsSvc.resolvePersonaGlobalAddonsAsync(ctx.userId, persona));
   }
 
   // Resolve connection
@@ -1956,7 +1957,7 @@ export async function assemblePrompt(
     preset =
       prefetchedPreset?.id === resolvedPresetId
         ? prefetchedPreset
-        : presetsSvc.getPreset(ctx.userId, resolvedPresetId);
+        : (await presetsSvc.getPresetAsync(ctx.userId, resolvedPresetId));
   } else {
     preset = prefetchedPreset;
   }
@@ -1980,7 +1981,7 @@ export async function assemblePrompt(
     presetProfilesSvc.applyProfileToBlocks(blocks, resolvedProfile.binding);
   }
   const activationScripts = preset && blocks.length
-    ? regexScriptsSvc.getPresetActivationScripts(ctx.userId, preset.id, { chatId: chat.id, characterId }) : [];
+    ? (await regexScriptsSvc.getPresetActivationScriptsAsync(ctx.userId, preset.id, { chatId: chat.id, characterId })) : [];
   const activationInputs = createActivationInputSnapshot({
     characterName: getEffectiveCharacterName(character),
     userName: persona?.name || "User",
@@ -2054,7 +2055,7 @@ export async function assemblePrompt(
   if (cortexEnabledForChat && !runningInAssemblyWorker()) {
     const cmRaw =
       pf?.allSettings.get("chatMemorySettings") ??
-      settingsSvc.getSetting(ctx.userId, "chatMemorySettings")?.value ??
+      (await settingsSvc.getSettingAsync(ctx.userId, "chatMemorySettings"))?.value ??
       null;
     cortexChatMemSettings = cmRaw
       ? embeddingsSvc.normalizeChatMemorySettings(cmRaw)
@@ -2227,19 +2228,19 @@ export async function assemblePrompt(
     .slice(-6)
     .map((m) => m.content)
     .join(" ");
-  let databankEmbeddingConfigPromise: Promise<
+  let assemblyEmbeddingConfigPromise: Promise<
     Awaited<ReturnType<typeof embeddingsSvc.getEmbeddingConfig>>
   > | null = null;
-  const getDatabankEmbeddingConfig = () => {
+  const getAssemblyEmbeddingConfig = () => {
     if (pf?.embeddingConfig) {
       return Promise.resolve(pf.embeddingConfig);
     }
-    if (!databankEmbeddingConfigPromise) {
-      databankEmbeddingConfigPromise = embeddingsSvc.getEmbeddingConfig(
+    if (!assemblyEmbeddingConfigPromise) {
+      assemblyEmbeddingConfigPromise = embeddingsSvc.getEmbeddingConfig(
         ctx.userId,
       );
     }
-    return databankEmbeddingConfigPromise;
+    return assemblyEmbeddingConfigPromise;
   };
   let databankPrefetchPromise: Promise<
     import("./databank").DatabankRetrievalResult
@@ -2252,7 +2253,7 @@ export async function assemblePrompt(
         : chatBgSignal;
 
       databankPrefetchPromise = (async () => {
-        const embCfg = await getDatabankEmbeddingConfig();
+        const embCfg = await getAssemblyEmbeddingConfig();
         if (!embCfg.enabled) return { chunks: [], formatted: "", count: 0 };
         if (dbSignal.aborted) return { chunks: [], formatted: "", count: 0 };
         const retrievalTopK = databankSvc.loadDatabankSettings(
@@ -2286,7 +2287,7 @@ export async function assemblePrompt(
   phaseStartedAt = performance.now();
   const globalWorldBooks =
     pf?.allSettings.get("globalWorldBooks") ??
-    (settingsSvc.getSetting(ctx.userId, "globalWorldBooks")?.value as
+    ((await settingsSvc.getSettingAsync(ctx.userId, "globalWorldBooks"))?.value as
       | string[]
       | undefined) ??
     [];
@@ -2316,7 +2317,7 @@ export async function assemblePrompt(
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
   const configuredWorldInfoSettings =
     pf?.allSettings.get("worldInfoSettings") ??
-    (settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as
+    ((await settingsSvc.getSettingAsync(ctx.userId, "worldInfoSettings"))?.value as
       | Partial<WorldInfoSettings>
       | undefined) ??
     {};
@@ -2494,6 +2495,9 @@ export async function assemblePrompt(
       if (captureVectorViewCanShareNative) rawVectorActivated = [];
     }
   }
+  const worldInfoMergeOptions: WorldInfoMergeOptions = {
+    hybridWeightMode: (await getAssemblyEmbeddingConfig()).hybrid_weight_mode,
+  };
   const mergedWorldInfo = profiler.measureSync(
     "world-info-merge",
     () => mergeActivatedWorldInfoEntries(
@@ -2504,6 +2508,7 @@ export async function assemblePrompt(
       wiSources.bookNameMap,
       undefined,
       interception.selectionContentByEntryId,
+      worldInfoMergeOptions,
     ),
   );
   const runtimeWorldInfoPlacements = buildRuntimeWorldInfoChatPlacements(
@@ -2587,6 +2592,8 @@ export async function assemblePrompt(
         wiSources.bookSourceMap,
         wiSources.bookNameMap,
         captureRandom,
+        undefined,
+        worldInfoMergeOptions,
       ),
     );
     spindleWorldInfoCaptures = buildWorldInfoCaptureMap(
@@ -2713,7 +2720,7 @@ export async function assemblePrompt(
   // Use prefetched settings or batch-load all needed settings in a single query
   const settingsMap =
     pf?.allSettings ??
-    settingsSvc.getSettingsByKeys(ctx.userId, [
+    (await settingsSvc.getSettingsByKeysAsync(ctx.userId, [
       "reasoningSettings",
       "selectedDefinition",
       "selectedBehaviors",
@@ -2737,7 +2744,7 @@ export async function assemblePrompt(
       "chatMemorySettings",
       "databankSettings",
       "council_settings",
-    ]);
+    ]));
 
   // A connection's reasoning binding is the effective source for all
   // reasoning settings, including its custom request body. Fall back to the
@@ -2769,6 +2776,10 @@ export async function assemblePrompt(
 
   // Populate Lumia / Loom / Council / OOC / Sovereign Hand context for macros
   populateLumiaLoomContext(macroEnv, ctx.userId, chat, ctx, settingsMap);
+  macroEnv.extra.mcpTools = ctx.generationType !== "impersonate" &&
+    completionSettings.enableFunctionCalling !== false
+      ? ctx.mcpTools ?? getMcpInlineTools(ctx.userId).map((tool) => tool.definition)
+      : [];
   const macroEnvSeed = cloneEnv(macroEnv);
   profiler.addPhase("macro-setup", performance.now() - phaseStartedAt);
 
@@ -2938,7 +2949,7 @@ export async function assemblePrompt(
   // Use the warm-cache pattern: check if a previous generation cached results.
   // On a cold miss, await the pre-flight query so the current generation still
   // gets databank context instead of only warming the cache for the next send.
-  const databankEmbCfg = await getDatabankEmbeddingConfig();
+  const databankEmbCfg = await getAssemblyEmbeddingConfig();
   let databankResult = databankSvc.getCachedDatabankResult(
     ctx.userId,
     ctx.chatId,
@@ -4929,6 +4940,10 @@ export interface WorldInfoMergeSelection {
   dispositions: Map<string, WorldInfoVectorMergeDisposition>;
 }
 
+export interface WorldInfoMergeOptions {
+  hybridWeightMode?: embeddingsSvc.EmbeddingConfig["hybrid_weight_mode"];
+}
+
 export function selectMergedWorldInfoEntries(
   keywordEntries: WorldBookEntryModel[],
   vectorEntries: VectorActivatedEntry[],
@@ -4936,13 +4951,16 @@ export function selectMergedWorldInfoEntries(
   bookSourceMap?: Map<string, BookSource>,
   random?: () => number,
   selectionContentByEntryId?: ReadonlyMap<string, string>,
+  options: WorldInfoMergeOptions = {},
 ): WorldInfoMergeSelection {
   const settings = normalizeWorldInfoSettings(settingsInput);
+  const vectorFirst = options.hybridWeightMode === "vector_first";
   const mergedEntries: WorldBookEntryModel[] = [];
   const sources = new Map<string, { source: "keyword" | "vector"; score?: number }>();
   const dispositions = new Map<string, WorldInfoVectorMergeDisposition>();
   const seen = new Set<string>();
   const vectorEntryIds = new Set(vectorEntries.map((item) => item.entry.id));
+  const vectorById = new Map(vectorEntries.map((item) => [item.entry.id, item]));
 
   for (const entry of keywordEntries) {
     if (seen.has(entry.id)) continue;
@@ -4954,7 +4972,11 @@ export function selectMergedWorldInfoEntries(
   for (const item of vectorEntries) {
     if (seen.has(item.entry.id)) {
       if (sources.get(item.entry.id)?.source === "keyword") {
-        dispositions.set(item.entry.id, { code: "already_keyword" });
+        if (vectorFirst && !item.entry.constant) {
+          sources.set(item.entry.id, { source: "vector", score: item.finalScore });
+        } else {
+          dispositions.set(item.entry.id, { code: "already_keyword" });
+        }
       }
       continue;
     }
@@ -4971,6 +4993,18 @@ export function selectMergedWorldInfoEntries(
     sources.set(item.entry.id, { source: "vector", score: item.finalScore });
   }
 
+  const compareVectorRetrieval = (a: WorldBookEntryModel, b: WorldBookEntryModel): number => {
+    const aVector = sources.get(a.id)?.source === "vector" ? vectorById.get(a.id) : undefined;
+    const bVector = sources.get(b.id)?.source === "vector" ? vectorById.get(b.id) : undefined;
+    if (aVector && !bVector) return -1;
+    if (bVector && !aVector) return 1;
+    if (aVector && bVector) {
+      if (aVector.distance !== bVector.distance) return aVector.distance - bVector.distance;
+      if (aVector.finalScore !== bVector.finalScore) return bVector.finalScore - aVector.finalScore;
+    }
+    return 0;
+  };
+
   const entriesForDedup = selectionContentByEntryId?.size
     ? mergedEntries.map((entry) => {
         const content = selectionContentByEntryId.get(entry.id);
@@ -4981,6 +5015,7 @@ export function selectMergedWorldInfoEntries(
     entriesForDedup,
     sources,
     bookSourceMap,
+    vectorFirst ? compareVectorRetrieval : undefined,
   );
   const mergedEntryById = new Map(mergedEntries.map((entry) => [entry.id, entry]));
   const dedupResult = {
@@ -5033,6 +5068,10 @@ export function selectMergedWorldInfoEntries(
   }
 
   const competitionOrder = [...groupSelected].sort((a, b) => {
+    if (vectorFirst) {
+      const retrievalOrder = compareVectorRetrieval(a, b);
+      if (retrievalOrder !== 0) return retrievalOrder;
+    }
     const aPriority = budgetPriorityById.get(a.id) ?? a.priority;
     const bPriority = budgetPriorityById.get(b.id) ?? b.priority;
     if (bPriority !== aPriority) return bPriority - aPriority;
@@ -5049,12 +5088,16 @@ export function selectMergedWorldInfoEntries(
     ].map((entry) => entry.id));
   }
 
-  const finalized = finalizeActivatedWorldInfoEntries(groupSelected, settings, {
-    skipGroupLogic: true,
-    preserveOrder: !hasBudget,
-    budgetPriorityById,
-    selectionContentByEntryId,
-  });
+  const finalized = finalizeActivatedWorldInfoEntries(
+    hasBudget || vectorFirst ? competitionOrder : groupSelected,
+    settings,
+    {
+      skipGroupLogic: true,
+      // Selection order already includes the retrieval mode and budget priorities.
+      preserveOrder: true,
+      selectionContentByEntryId,
+    },
+  );
   const activatedIds = new Set(finalized.activatedEntries.map((entry) => entry.id));
   for (const item of vectorEntries) {
     if (dispositions.has(item.entry.id)) continue;
@@ -5078,6 +5121,7 @@ export function mergeActivatedWorldInfoEntries(
   bookNameMap?: Map<string, string>,
   random?: () => number,
   selectionContentByEntryId?: ReadonlyMap<string, string>,
+  options: WorldInfoMergeOptions = {},
 ): MergedWorldInfoEntriesResult {
   const mergeStartedAt = performance.now();
   const selection = selectMergedWorldInfoEntries(
@@ -5087,6 +5131,7 @@ export function mergeActivatedWorldInfoEntries(
     bookSourceMap,
     random,
     selectionContentByEntryId,
+    options,
   );
   const { finalized, sources, dedupResult, dispositions } = selection;
 
@@ -6059,21 +6104,21 @@ async function computeActivatedWorldInfoForChat(
   userId: string,
   chatId: string,
 ): Promise<MergedWorldInfoEntriesResult> {
-  const chat = chatsSvc.getChat(userId, chatId);
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
   if (!chat) throw new Error("Chat not found");
 
   const messages = chatsSvc.getMessages(userId, chatId);
   const character = chat.character_id
-    ? charactersSvc.getCharacter(userId, chat.character_id)
+    ? (await charactersSvc.getCharacterAsync(userId, chat.character_id))
     : makeAssistantCharacter();
   if (!character) throw new Error("Character not found");
 
   const persona = isTemporaryChatMetadata(chat.metadata)
     ? null
-    : personasSvc.resolvePersonaOrDefault(userId);
+    : (await personasSvc.resolvePersonaOrDefaultAsync(userId));
 
   const globalWorldBookIds =
-    (settingsSvc.getSetting(userId, "globalWorldBooks")?.value as
+    ((await settingsSvc.getSettingAsync(userId, "globalWorldBooks"))?.value as
       | string[]
       | undefined) ?? [];
   const chatWorldBookIds =
@@ -6088,7 +6133,7 @@ async function computeActivatedWorldInfoForChat(
   );
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
   const worldInfoSettings =
-    (settingsSvc.getSetting(userId, "worldInfoSettings")?.value as
+    ((await settingsSvc.getSettingAsync(userId, "worldInfoSettings"))?.value as
       | Partial<WorldInfoSettings>
       | undefined) ?? {};
 
@@ -6100,21 +6145,27 @@ async function computeActivatedWorldInfoForChat(
     settings: worldInfoSettings,
   });
 
-  const vectorActivated = await collectVectorActivatedWorldInfo(
-    userId,
-    chatId,
-    wiSources.worldBookIds,
-    wiSources.entries,
-    messages,
-    undefined,
-    worldInfoSettings,
-  );
+  const [vectorActivated, embeddingConfig] = await Promise.all([
+    collectVectorActivatedWorldInfo(
+      userId,
+      chatId,
+      wiSources.worldBookIds,
+      wiSources.entries,
+      messages,
+      undefined,
+      worldInfoSettings,
+    ),
+    embeddingsSvc.getEmbeddingConfig(userId),
+  ]);
   return mergeActivatedWorldInfoEntries(
     wiResult.activatedEntries,
     vectorActivated,
     worldInfoSettings,
     wiSources.bookSourceMap,
     wiSources.bookNameMap,
+    undefined,
+    undefined,
+    { hybridWeightMode: embeddingConfig.hybrid_weight_mode },
   );
 }
 
@@ -8300,7 +8351,7 @@ async function legacyAssembly(
     });
     // Populate reasoning macros
     if (userId) {
-      const reasoningSetting = settingsSvc.getSetting(
+      const reasoningSetting = await settingsSvc.getSettingAsync(
         userId,
         "reasoningSettings",
       );
@@ -8313,7 +8364,7 @@ async function legacyAssembly(
         macroEnv.extra.reasoningSuffix = effectiveReasoning.suffix ?? "";
       }
       // Populate theme info for {{userColorMode}} macro (legacy path)
-      const themeSetting = settingsSvc.getSetting(userId, "theme");
+      const themeSetting = await settingsSvc.getSettingAsync(userId, "theme");
       if (themeSetting?.value) {
         macroEnv.extra.theme = { mode: themeSetting.value.mode ?? "dark" };
       }
@@ -8407,7 +8458,7 @@ async function legacyAssembly(
   // Skip messages marked as hidden drafts (extra.hidden === true)
   // Pre-resolve all attachment files in parallel (same pattern as main assembly)
   const legacyGeneratedImageContextPolicy = resolveGeneratedImageContextPolicy(
-    userId ? settingsSvc.getSetting(userId, "imageGeneration")?.value : null,
+    userId ? (await settingsSvc.getSettingAsync(userId, "imageGeneration"))?.value : null,
     messages,
   );
   const legacyAttachmentSources = new Map<string, MessageAttachment>();
@@ -8515,7 +8566,7 @@ async function legacyAssembly(
   // Strip reasoning from older chat history messages based on keepInHistory
   let reasoningVal: ReasoningParameterSettings | null = null;
   if (userId) {
-    const reasoningSetting = settingsSvc.getSetting(
+    const reasoningSetting = await settingsSvc.getSettingAsync(
       userId,
       "reasoningSettings",
     );
@@ -8534,7 +8585,7 @@ async function legacyAssembly(
     }
 
     // Apply context filters (details blocks, loom tags, HTML tags)
-    const contextFiltersSetting = settingsSvc.getSetting(
+    const contextFiltersSetting = await settingsSvc.getSettingAsync(
       userId,
       "contextFilters",
     );

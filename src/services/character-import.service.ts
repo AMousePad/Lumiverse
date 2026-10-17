@@ -122,7 +122,7 @@ export async function importCharacterFile(
     autoImportEmbeddedWorldbook(userId, character.id);
   }
 
-  const imported = characters.getCharacter(userId, character.id)!;
+  const imported = (await characters.getCharacterAsync(userId, character.id))!;
   const charBook = imported.extensions?.character_book;
   const entryCount = worldBooks.countImportedWorldBookEntries(charBook?.entries);
   const lorebook = entryCount > 0

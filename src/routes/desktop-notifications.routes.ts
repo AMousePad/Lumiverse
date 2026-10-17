@@ -168,7 +168,7 @@ app.get("/media", mediaLimiter, async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  const image = images.getImage(userId, target.id);
+  const image = await images.getImageAsync(userId, target.id);
   if (!image) return c.json({ error: "Not found" }, 404);
   const filepath = await images.getImageFilePath(userId, target.id, target.size);
   if (!filepath) return c.json({ error: "Not found" }, 404);

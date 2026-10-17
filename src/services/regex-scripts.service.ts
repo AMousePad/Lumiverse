@@ -1,5 +1,8 @@
+import { readDatabaseRow, readDatabaseRows, runDatabaseStatement } from "../db/queries";
+import { mutateRegexWithDb, type RegexMutationResult } from "../db/regex-operations";
 import { getDb } from "../db/connection";
-import { paginatedQuery } from "./pagination";
+import { executeDatabaseOperation } from "../db/execution";
+import { paginatedQuery, paginatedQueryAsync } from "./pagination";
 import type { PaginationParams } from "../types/pagination";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -935,95 +938,16 @@ export function createRegexScript(
   input: CreateRegexScriptInput,
   context?: RegexMutationContext,
 ): RegexScript | string {
-  const extensionIdentifier = normalizeOptionalId(context?.extensionIdentifier);
-  // Pack and character links stay host-owned. A preset link is the one binding an
-  // extension may install itself: it owns the row, so the host's preset-delete
-  // cascade must be able to reap it. The link is same-user-validated here and is
-  // treated as lifecycle-only — preset activation leaves extension-owned rows to
-  // their own `disabled` state (see applyPresetBoundActivationWithDb).
-  let nextInput: CreateRegexScriptInput = extensionIdentifier
-    ? { ...input, pack_id: null, character_id: null }
-    : { ...input };
-  if (extensionIdentifier) {
-    const rawPresetId = nextInput.preset_id;
-    // A silently-dropped link would leave the caller believing its row cascades
-    // with a preset it was never bound to, so a malformed value is rejected.
-    if (rawPresetId !== undefined && rawPresetId !== null && typeof rawPresetId !== "string") {
-      return "preset_id must be a string or null";
-    }
-    const presetId = normalizeOptionalId(rawPresetId);
-    nextInput.preset_id = presetId;
-    if (presetId) {
-      const presetError = validateOwnedPresetLink(userId, presetId);
-      if (presetError) return presetError;
-    }
-  }
-  if (extensionIdentifier && context) {
-    const folderVersionError = validateExtensionFolderVersion(context);
-    if (folderVersionError) return folderVersionError;
-    nextInput = applySpindleExtensionRegexAttribution(nextInput, extensionIdentifier, context);
-  }
-  const err = validateInput(nextInput, true);
-  if (err) return err;
-  const activationError = validatePromptActivationBinding(userId, nextInput);
-  if (activationError) return activationError;
+  return finishRegexMutation(mutateRegexWithDb(getDb(), { action: "createRegexScript", args: [userId, input, context] }), userId);
+}
 
-  const regexErr = validateRegex(nextInput.find_regex, nextInput.flags ?? "gi", nextInput.substitute_macros ?? "none", !!readPromptActivation(nextInput.metadata));
-  if (regexErr) return regexErr;
-
-  const id = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
-  const activePresetId = normalizeOptionalId(context?.activePresetId);
-  const disabled = resolveCreateDisabledState(nextInput, activePresetId, !extensionIdentifier);
-
-  try {
-    getDb()
-      .query(
-        `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, actions, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, owner_extension_identifier, metadata, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        id,
-        userId,
-        nextInput.name.trim(),
-        nextInput.script_id ?? "",
-        nextInput.find_regex,
-        nextInput.replace_string ?? "",
-        JSON.stringify(nextInput.actions ?? []),
-        nextInput.flags ?? "gi",
-        JSON.stringify(nextInput.placement ?? ["ai_output"]),
-        nextInput.scope ?? "global",
-        nextInput.scope === "global" || !nextInput.scope ? null : (nextInput.scope_id ?? null),
-        JSON.stringify(nextInput.target ?? ["response"]),
-        nextInput.min_depth ?? null,
-        nextInput.max_depth ?? null,
-        JSON.stringify(nextInput.trim_strings ?? []),
-        nextInput.run_on_edit ? 1 : 0,
-        nextInput.substitute_macros ?? "none",
-        disabled ? 1 : 0,
-        nextInput.sort_order ?? 0,
-        nextInput.description ?? "",
-        nextInput.folder ?? "",
-        nextInput.pack_id ?? null,
-        nextInput.preset_id ?? null,
-        nextInput.character_id ?? null,
-        extensionIdentifier,
-        JSON.stringify(nextInput.metadata ?? {}),
-        now,
-        now
-      );
-  } catch (err) {
-    const mapped = mapRegexScriptPersistenceError(err);
-    if (mapped) return mapped;
-    throw err;
-  }
-
-  const script = getRegexScript(userId, id)!;
-  if (!extensionIdentifier && script.preset_id && script.preset_id === activePresetId) {
-    setPresetBoundScriptEnabledInRestoreList(userId, script.preset_id, script.id, !script.disabled);
-  }
-  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script }, userId);
-  return script;
+export async function createRegexScriptAsync(
+  userId: string,
+  input: CreateRegexScriptInput,
+  context?: RegexMutationContext,
+): Promise<RegexScript | string> {
+  const result = await executeDatabaseOperation<RegexMutationResult>({ kind: "regex-mutation", mutation: { action: "createRegexScript", args: [userId, input, context] } });
+  return finishRegexMutation(result, userId);
 }
 
 export function updateRegexScript(
@@ -1032,138 +956,17 @@ export function updateRegexScript(
   input: UpdateRegexScriptInput,
   context?: RegexMutationContext,
 ): RegexScript | string | null {
-  const existing = getRegexScript(userId, id);
-  if (!existing) return null;
+  return finishRegexMutation(mutateRegexWithDb(getDb(), { action: "updateRegexScript", args: [userId, id, input, context] }), userId);
+}
 
-  const extensionIdentifier = normalizeOptionalId(context?.extensionIdentifier);
-  // Ownership, not the preset link, decides mutability: a row this extension
-  // owns stays editable after it is bound to a preset.
-  const ownsRow = !!extensionIdentifier && existing.owner_extension_identifier === extensionIdentifier;
-  const presetActivationManaged = existing.owner_extension_identifier == null;
-  if (extensionIdentifier && !ownsRow && !context?.allowUnownedMutation) {
-    return EXTENSION_REGEX_OWNERSHIP_ERROR;
-  }
-
-  const activePresetId = normalizeOptionalId(context?.activePresetId);
-  const isPresetBound = !!existing.preset_id;
-  let nextInput: UpdateRegexScriptInput = { ...input };
-  if (extensionIdentifier) {
-    const folderVersionError = validateExtensionFolderVersion(context);
-    if (folderVersionError) return folderVersionError;
-    if (existing.owner_extension_identifier === extensionIdentifier) {
-      nextInput = applySpindleExtensionRegexAttribution(nextInput, extensionIdentifier, context!, existing);
-    } else if (nextInput.metadata !== undefined) {
-      // An unrestricted editor may change ordinary metadata, but must not
-      // spoof or erase another extension's host-validated folder attribution.
-      const metadata = isPlainMetadataRecord(nextInput.metadata) ? { ...nextInput.metadata } : {};
-      const attribution = getSpindleExtensionRegexAttribution(existing.metadata);
-      delete metadata[SPINDLE_EXTENSION_REGEX_METADATA_KEY];
-      if (attribution) metadata[SPINDLE_EXTENSION_REGEX_METADATA_KEY] = attribution;
-      nextInput.metadata = metadata;
-    }
-    // Pack and character links are host-owned. A preset link is installed at
-    // creation only: an owner may edit the row it is attached to, but never
-    // re-points or clears the binding here.
-    delete nextInput.pack_id;
-    delete nextInput.preset_id;
-    delete nextInput.character_id;
-  }
-  if (nextInput.scope !== undefined) {
-    if (nextInput.scope === "global") {
-      nextInput.scope_id = null;
-    } else if (nextInput.scope_id === undefined) {
-      nextInput.scope_id = existing.scope === nextInput.scope ? existing.scope_id : null;
-    }
-  }
-  // A pattern-affecting edit clears the slow/timed-out warning, since the
-  // measurement described the old shape. The quarantine flag under
-  // metadata.regex_evidence is intentionally left untouched: a script that hung
-  // the executor stays skipped until the user clears it from the panel.
-  if (shouldResetRegexPerformance(nextInput)) {
-    nextInput.metadata = withoutRegexPerformanceMetadata(nextInput.metadata ?? existing.metadata);
-  }
-  const hasPresetIdUpdate = Object.prototype.hasOwnProperty.call(nextInput, "preset_id");
-  const nextPresetId = hasPresetIdUpdate ? normalizeOptionalId(nextInput.preset_id) : existing.preset_id;
-  const mayPersistPresetEnablement = !!nextPresetId && nextPresetId === activePresetId;
-
-  if (isPresetBound && nextInput.disabled !== undefined && nextPresetId && !mayPersistPresetEnablement && presetActivationManaged) {
-    // The preset's own enable snapshot owns host rows; an extension-owned row is
-    // outside that snapshot, so its owner keeps control of `disabled`.
-    delete nextInput.disabled;
-  }
-  if (nextPresetId && nextPresetId !== activePresetId && hasPresetIdUpdate && presetActivationManaged) {
-    nextInput.disabled = true;
-  }
-
-  // If updating regex or flags, validate together
-  if (nextInput.find_regex !== undefined || nextInput.flags !== undefined || nextInput.substitute_macros !== undefined) {
-    const pattern = nextInput.find_regex ?? existing.find_regex;
-    const flags = nextInput.flags ?? existing.flags;
-    const substituteMacros = nextInput.substitute_macros ?? existing.substitute_macros;
-    const regexErr = validateRegex(pattern, flags, substituteMacros, !!nextPresetId && !!readPromptActivation(nextInput.metadata ?? existing.metadata));
-    if (regexErr) return regexErr;
-  }
-
-  const err = validateInput(nextInput, false);
-  if (err) return err;
-
-  // Unlinking removes the preset-only capability. Other edits cannot install it unbound.
-  if (hasPresetIdUpdate && !nextPresetId) {
-    nextInput.metadata = { ...(nextInput.metadata ?? existing.metadata) };
-    delete nextInput.metadata.prompt_activation;
-  }
-  const activationError = validatePromptActivationBinding(userId, { ...existing, ...nextInput, preset_id: nextPresetId });
-  if (activationError) return activationError;
-
-  const fields: string[] = [];
-  const values: any[] = [];
-
-  if (nextInput.name !== undefined) { fields.push("name = ?"); values.push(nextInput.name.trim()); }
-  if (nextInput.script_id !== undefined) { fields.push("script_id = ?"); values.push(nextInput.script_id); }
-  if (nextInput.find_regex !== undefined) { fields.push("find_regex = ?"); values.push(nextInput.find_regex); }
-  if (nextInput.replace_string !== undefined) { fields.push("replace_string = ?"); values.push(nextInput.replace_string); }
-  if (nextInput.actions !== undefined) { fields.push("actions = ?"); values.push(JSON.stringify(nextInput.actions)); }
-  if (nextInput.flags !== undefined) { fields.push("flags = ?"); values.push(nextInput.flags); }
-  if (nextInput.placement !== undefined) { fields.push("placement = ?"); values.push(JSON.stringify(nextInput.placement)); }
-  if (nextInput.scope !== undefined) { fields.push("scope = ?"); values.push(nextInput.scope); }
-  if (nextInput.scope_id !== undefined) { fields.push("scope_id = ?"); values.push(nextInput.scope_id); }
-  if (nextInput.target !== undefined) { fields.push("target = ?"); values.push(JSON.stringify(nextInput.target)); }
-  if (nextInput.min_depth !== undefined) { fields.push("min_depth = ?"); values.push(nextInput.min_depth); }
-  if (nextInput.max_depth !== undefined) { fields.push("max_depth = ?"); values.push(nextInput.max_depth); }
-  if (nextInput.trim_strings !== undefined) { fields.push("trim_strings = ?"); values.push(JSON.stringify(nextInput.trim_strings)); }
-  if (nextInput.run_on_edit !== undefined) { fields.push("run_on_edit = ?"); values.push(nextInput.run_on_edit ? 1 : 0); }
-  if (nextInput.substitute_macros !== undefined) { fields.push("substitute_macros = ?"); values.push(nextInput.substitute_macros); }
-  if (nextInput.disabled !== undefined) { fields.push("disabled = ?"); values.push(nextInput.disabled ? 1 : 0); }
-  if (nextInput.sort_order !== undefined) { fields.push("sort_order = ?"); values.push(nextInput.sort_order); }
-  if (nextInput.description !== undefined) { fields.push("description = ?"); values.push(nextInput.description); }
-  if (nextInput.folder !== undefined) { fields.push("folder = ?"); values.push(nextInput.folder); }
-  if (hasPresetIdUpdate) { fields.push("preset_id = ?"); values.push(nextPresetId); }
-  if (nextInput.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(nextInput.metadata)); }
-
-  if (fields.length === 0) return existing;
-
-  fields.push("updated_at = ?");
-  values.push(Math.floor(Date.now() / 1000));
-  values.push(id);
-  values.push(userId);
-
-  try {
-    getDb().query(`UPDATE regex_scripts SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
-  } catch (err) {
-    const mapped = mapRegexScriptPersistenceError(err);
-    if (mapped) return mapped;
-    throw err;
-  }
-
-  const updated = getRegexScript(userId, id)!;
-  if (presetActivationManaged && existing.preset_id && existing.preset_id !== updated.preset_id) {
-    setPresetBoundScriptEnabledInRestoreList(userId, existing.preset_id, updated.id, false);
-  }
-  if (presetActivationManaged && updated.preset_id && (hasPresetIdUpdate || (mayPersistPresetEnablement && nextInput.disabled !== undefined))) {
-    setPresetBoundScriptEnabledInRestoreList(userId, updated.preset_id, updated.id, !updated.disabled);
-  }
-  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
-  return updated;
+export async function updateRegexScriptAsync(
+  userId: string,
+  id: string,
+  input: UpdateRegexScriptInput,
+  context?: RegexMutationContext,
+): Promise<RegexScript | string | null> {
+  const result = await executeDatabaseOperation<RegexMutationResult>({ kind: "regex-mutation", mutation: { action: "updateRegexScript", args: [userId, id, input, context] } });
+  return finishRegexMutation(result, userId);
 }
 
 export function deleteRegexScript(userId: string, id: string): boolean;
@@ -1234,62 +1037,40 @@ export function deleteRegexScripts(userId: string, ids: string[]): string[] {
   return existingIds;
 }
 
+export function deleteRegexScriptAsync(userId: string, id: string): Promise<boolean>;
+export function deleteRegexScriptAsync(userId: string, id: string, context: RegexMutationContext): Promise<boolean | string>;
+export async function deleteRegexScriptAsync(userId: string, id: string, context?: RegexMutationContext): Promise<boolean | string> {
+  const result = await executeDatabaseOperation<{ deleted: string[]; denied: boolean }>({ kind: "regex-delete", userId, ids: [id], context });
+  if (result.denied) return EXTENSION_REGEX_OWNERSHIP_ERROR;
+  for (const deletedId of result.deleted) eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id: deletedId }, userId);
+  return result.deleted.length > 0;
+}
+
+export async function deleteRegexScriptsAsync(userId: string, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const result = await executeDatabaseOperation<{ deleted: string[]; denied: boolean }>({ kind: "regex-delete", userId, ids });
+  for (const id of result.deleted) eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
+  return result.deleted;
+}
+
+
+
 export function duplicateRegexScript(userId: string, id: string): RegexScript | null {
-  const existing = getRegexScript(userId, id);
-  if (!existing) return null;
+  return finishRegexMutation(mutateRegexWithDb(getDb(), { action: "duplicateRegexScript", args: [userId, id] }), userId);
+}
 
-  const newId = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
-  const metadata = { ...existing.metadata };
-  delete metadata.prompt_activation; // Duplicates are unbound.
-
-  getDb()
-    .query(
-      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, actions, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      newId,
-      userId,
-      existing.name + " (Copy)",
-      "", // script_id intentionally blank on duplicate — must be unique
-      existing.find_regex,
-      existing.replace_string,
-      JSON.stringify(existing.actions),
-      existing.flags,
-      JSON.stringify(existing.placement),
-      existing.scope,
-      existing.scope_id,
-      JSON.stringify(existing.target),
-      existing.min_depth,
-      existing.max_depth,
-      JSON.stringify(existing.trim_strings),
-      existing.run_on_edit ? 1 : 0,
-      existing.substitute_macros,
-      existing.disabled ? 1 : 0,
-      existing.sort_order,
-      existing.description,
-      existing.folder,
-      JSON.stringify(metadata),
-      now,
-      now
-    );
-
-  const script = getRegexScript(userId, newId)!;
-  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id: newId, script }, userId);
-  return script;
+export async function duplicateRegexScriptAsync(userId: string, id: string): Promise<RegexScript | null> {
+  const result = await executeDatabaseOperation<RegexMutationResult>({ kind: "regex-mutation", mutation: { action: "duplicateRegexScript", args: [userId, id] } });
+  return finishRegexMutation(result, userId);
 }
 
 export function reorderRegexScripts(userId: string, orderedIds: string[]): boolean {
-  const db = getDb();
-  const txn = db.transaction(() => {
-    for (let i = 0; i < orderedIds.length; i++) {
-      db.query("UPDATE regex_scripts SET sort_order = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-        .run(i, Math.floor(Date.now() / 1000), orderedIds[i], userId);
-    }
-  });
-  txn();
-  return true;
+  return finishRegexMutation(mutateRegexWithDb(getDb(), { action: "reorderRegexScripts", args: [userId, orderedIds] }), userId);
+}
+
+export async function reorderRegexScriptsAsync(userId: string, orderedIds: string[]): Promise<boolean> {
+  const result = await executeDatabaseOperation<RegexMutationResult>({ kind: "regex-mutation", mutation: { action: "reorderRegexScripts", args: [userId, orderedIds] } });
+  return finishRegexMutation(result, userId);
 }
 
 export function toggleRegexScript(
@@ -1298,25 +1079,17 @@ export function toggleRegexScript(
   disabled: boolean,
   context?: RegexMutationContext,
 ): RegexScript | null {
-  const existing = getRegexScript(userId, id);
-  if (!existing) return null;
+  return finishRegexMutation(mutateRegexWithDb(getDb(), { action: "toggleRegexScript", args: [userId, id, disabled, context] }), userId);
+}
 
-  const activePresetId = normalizeOptionalId(context?.activePresetId);
-  const presetActivationManaged = existing.owner_extension_identifier == null;
-  if (presetActivationManaged && existing.preset_id && existing.preset_id !== activePresetId) {
-    return existing;
-  }
-
-  getDb()
-    .query("UPDATE regex_scripts SET disabled = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-    .run(disabled ? 1 : 0, Math.floor(Date.now() / 1000), id, userId);
-
-  const updated = getRegexScript(userId, id)!;
-  if (presetActivationManaged && updated.preset_id) {
-    setPresetBoundScriptEnabledInRestoreList(userId, updated.preset_id, updated.id, !updated.disabled);
-  }
-  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
-  return updated;
+export async function toggleRegexScriptAsync(
+  userId: string,
+  id: string,
+  disabled: boolean,
+  context?: RegexMutationContext,
+): Promise<RegexScript | null> {
+  const result = await executeDatabaseOperation<RegexMutationResult>({ kind: "regex-mutation", mutation: { action: "toggleRegexScript", args: [userId, id, disabled, context] } });
+  return finishRegexMutation(result, userId);
 }
 
 type RegexToggleRow = {
@@ -1388,20 +1161,17 @@ export function toggleRegexScriptsByIds(
   disabled: boolean,
   context?: RegexMutationContext,
 ): { changedIds: string[]; skippedIds: string[] } {
-  const uniqueIds = [...new Set(ids)];
-  if (uniqueIds.length === 0) return { changedIds: [], skippedIds: [] };
+  return finishRegexMutation(mutateRegexWithDb(getDb(), { action: "toggleRegexScriptsByIds", args: [userId, ids, disabled, context] }), userId);
+}
 
-  const placeholders = uniqueIds.map(() => "?").join(", ");
-  const unorderedRows = getDb()
-    .query(`SELECT id, preset_id, owner_extension_identifier, disabled FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
-    .all(userId, ...uniqueIds) as RegexToggleRow[];
-  const rowsById = new Map(unorderedRows.map((row) => [row.id, row]));
-  const rows = uniqueIds.flatMap((id) => {
-    const row = rowsById.get(id);
-    return row ? [row] : [];
-  });
-
-  return toggleRegexScriptRows(userId, rows, disabled, normalizeOptionalId(context?.activePresetId));
+export async function toggleRegexScriptsByIdsAsync(
+  userId: string,
+  ids: string[],
+  disabled: boolean,
+  context?: RegexMutationContext,
+): Promise<{ changedIds: string[]; skippedIds: string[] }> {
+  const result = await executeDatabaseOperation<RegexMutationResult>({ kind: "regex-mutation", mutation: { action: "toggleRegexScriptsByIds", args: [userId, ids, disabled, context] } });
+  return finishRegexMutation(result, userId);
 }
 
 /**
@@ -1417,12 +1187,17 @@ export function toggleRegexScriptsByFolder(
   disabled: boolean,
   context?: RegexMutationContext,
 ): { changedIds: string[]; skippedIds: string[] } {
-  const activePresetId = normalizeOptionalId(context?.activePresetId);
-  const rows = getDb()
-    .query("SELECT id, preset_id, owner_extension_identifier, disabled FROM regex_scripts WHERE user_id = ? AND folder = ?")
-    .all(userId, folder) as RegexToggleRow[];
+  return finishRegexMutation(mutateRegexWithDb(getDb(), { action: "toggleRegexScriptsByFolder", args: [userId, folder, disabled, context] }), userId);
+}
 
-  return toggleRegexScriptRows(userId, rows, disabled, activePresetId);
+export async function toggleRegexScriptsByFolderAsync(
+  userId: string,
+  folder: string,
+  disabled: boolean,
+  context?: RegexMutationContext,
+): Promise<{ changedIds: string[]; skippedIds: string[] }> {
+  const result = await executeDatabaseOperation<RegexMutationResult>({ kind: "regex-mutation", mutation: { action: "toggleRegexScriptsByFolder", args: [userId, folder, disabled, context] } });
+  return finishRegexMutation(result, userId);
 }
 
 // ── Character-bound query ────────────────────────────────────────────────────
@@ -3181,4 +2956,134 @@ export function importPresetBoundRegexScripts(
   updateStoredPresetRegexIds(userId, presetId, () => enabledIds);
 
   return { imported, skipped };
+}
+
+function finishRegexMutation<T>(result: RegexMutationResult, userId: string): T {
+  for (const event of result.events) eventBus.emit(event.type, event.payload, userId);
+  return result.value as T;
+}
+
+export async function getRegexScriptAsync(userId: string, id: string): Promise<RegexScript | null> {
+  const row = await readDatabaseRow<any>("SELECT * FROM regex_scripts WHERE id = ? AND user_id = ?", [id, userId]);
+  return row ? rowToRegexScript(row) : null;
+}
+
+export async function listRegexScriptsAsync(
+  userId: string,
+  pagination: PaginationParams,
+  filters?: { scope?: RegexScope; scope_id?: string; target?: RegexTarget; character_id?: string; chat_id?: string }
+) {
+  const conditions = ["user_id = ?"];
+  const params: any[] = [userId];
+
+  if (filters?.scope) {
+    conditions.push("scope = ?");
+    params.push(filters.scope);
+  }
+  if (filters?.scope_id) {
+    conditions.push("scope_id = ?");
+    params.push(filters.scope_id);
+  }
+  if (filters?.target) {
+    conditions.push(`instr(target, '"' || ? || '"') > 0`);
+    params.push(filters.target);
+  }
+  if (filters?.character_id) {
+    conditions.push("((scope = 'global') OR (scope = 'character' AND scope_id = ?))");
+    params.push(filters.character_id);
+  }
+  if (filters?.chat_id) {
+    conditions.push("((scope = 'global') OR (scope = 'chat' AND scope_id = ?))");
+    params.push(filters.chat_id);
+  }
+
+  const where = conditions.join(" AND ");
+  return await paginatedQueryAsync(`SELECT * FROM regex_scripts WHERE ${where} ORDER BY sort_order ASC, created_at ASC`, `SELECT COUNT(*) as count FROM regex_scripts WHERE ${where}`, params, pagination, rowToRegexScript);
+}
+
+async function readStoredPresetRegexIdsRecordAsync(userId: string, presetId: string): Promise<{ exists: boolean; ids: string[] }> {
+  const row = (await readDatabaseRow<any>("SELECT value FROM settings WHERE key = ? AND user_id = ?", [getPresetRegexSettingKey(presetId), userId])) as { value?: string } | undefined;
+  if (!row) return { exists: false, ids: [] };
+
+  try {
+    return { exists: true, ids: normalizeStoredPresetRegexIds(JSON.parse(row.value ?? "[]")) };
+  } catch {
+    return { exists: true, ids: [] };
+  }
+}
+
+export async function getPresetActivationScriptsAsync(
+  userId: string,
+  presetId: string,
+  context: { chatId: string; characterId?: string | null },
+): Promise<RegexScript[]> {
+  const scripts = getRegexScriptsByPresetId(userId, presetId);
+  if (!scripts.some((script) => readPromptActivation(script.metadata))) return [];
+  const saved = await readStoredPresetRegexIdsRecordAsync(userId, presetId);
+  const enabledIds = new Set(saved.ids);
+  const scopeOrder = { global: 0, character: 1, chat: 2 };
+  return scripts.filter((script) =>
+    (script.owner_extension_identifier == null && saved.exists
+      ? enabledIds.has(script.id)
+      : !script.disabled)
+    && readPromptActivation(script.metadata)
+    && (script.scope === "global"
+      || (script.scope === "chat" && script.scope_id === context.chatId)
+      || (script.scope === "character" && script.scope_id === context.characterId)),
+  ).sort((a, b) => scopeOrder[a.scope] - scopeOrder[b.scope] || a.sort_order - b.sort_order || a.created_at - b.created_at)
+    .map((script) => ({ ...script, disabled: false }));
+}
+
+export async function getRegexScriptsByCharacterIdAsync(userId: string, characterId: string): Promise<RegexScript[]> {
+  const rows = (await readDatabaseRows<any>("SELECT * FROM regex_scripts WHERE user_id = ? AND character_id = ? ORDER BY sort_order ASC, created_at ASC", [userId, characterId])) as any[];
+  return rows.map(rowToRegexScript);
+}
+
+export async function exportRegexScriptsAsync(userId: string, options?: string[] | RegexScriptExportOptions): Promise<RegexScriptExport> {
+
+  let rows: any[];
+  const ids = Array.isArray(options) ? options : options?.ids;
+  const presetIdFilter = !Array.isArray(options) ? normalizeOptionalId(options?.presetId) : null;
+
+  if (ids && ids.length > 0) {
+    const placeholders = ids.map(() => "?").join(", ");
+    rows = (await readDatabaseRows<any>(`SELECT * FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders}) ORDER BY sort_order ASC, created_at ASC`, [userId, ...ids])) as any[];
+  } else {
+    const conditions = ["user_id = ?"];
+    const params: any[] = [userId];
+    if (!Array.isArray(options)) {
+      if (presetIdFilter) {
+        conditions.push("preset_id = ?");
+        params.push(presetIdFilter);
+      }
+      if (typeof options?.folder === "string") {
+        conditions.push("folder = ?");
+        params.push(options.folder.trim());
+      }
+    }
+    rows = (await readDatabaseRows<any>(`SELECT * FROM regex_scripts WHERE ${conditions.join(" AND ")} ORDER BY sort_order ASC, created_at ASC`, [...params])) as any[];
+  }
+
+  let normalizedRows = rows.map(rowToRegexScript);
+  if (presetIdFilter) {
+    const stored = await readStoredPresetRegexIdsRecordAsync(userId, presetIdFilter);
+    if (stored.exists) {
+      const enabledIds = new Set(stored.ids);
+      normalizedRows = normalizedRows.map((s) => s.owner_extension_identifier == null
+        ? { ...s, disabled: !enabledIds.has(s.id) }
+        : s);
+    }
+  }
+
+  const scripts = normalizedRows.map((s) => {
+    const { id, user_id, created_at, updated_at, pack_id, preset_id, character_id, ...rest } = s;
+    return rest;
+  });
+
+  return {
+    version: 1,
+    type: "lumiverse_regex_scripts",
+    scripts,
+    exported_at: Math.floor(Date.now() / 1000),
+  };
 }

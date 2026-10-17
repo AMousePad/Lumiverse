@@ -21,8 +21,8 @@ import * as memoryCortex from "../services/memory-cortex";
 import { parsePagination } from "../services/pagination";
 import * as vectorizationQueue from "../services/vectorization-queue.service";
 import { ChatLinkError } from "../services/memory-cortex/vault";
-import { getCharacter } from "../services/characters.service";
-import { getChat } from "../services/chats.service";
+import { getCharacter, getCharacterAsync } from "../services/characters.service";
+import { getChat, getChatAsync } from "../services/chats.service";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 
@@ -81,7 +81,7 @@ async function resolveCortexParticipants(userId: string, chat: ReturnType<typeof
 
   if (!chat) return { characterNames, descriptionAliases: undefined as Map<string, string> | undefined };
 
-  const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
+  const character = chat.character_id ? (await getCharacterAsync(userId, chat.character_id)) : null;
   if (character) {
     const normalized = memoryCortex.normalizeCharacterName(character.name);
     characterNames.push(normalized);
@@ -90,7 +90,7 @@ async function resolveCortexParticipants(userId: string, chat: ReturnType<typeof
 
   if (chat.metadata?.character_ids) {
     for (const cid of chat.metadata.character_ids as string[]) {
-      const ch = getCharacter(userId, cid);
+      const ch = await getCharacterAsync(userId, cid);
       if (!ch) continue;
       const normalized = memoryCortex.normalizeCharacterName(ch.name);
       if (!characterNames.includes(normalized)) {
@@ -461,7 +461,7 @@ async function warmLongTermChatMemory(options: {
   }
 
   if (!allowRebuild) {
-    const chat = getChat(userId, chatId);
+    const chat = await getChatAsync(userId, chatId);
     const storedHash = getStoredChatMemoryHash(chat);
     if (currentChatMemoryHash && storedHash !== currentChatMemoryHash) {
       return { status: "skipped", reason: "chat_memory_rebuild_deferred" };
@@ -495,7 +495,7 @@ async function warmLongTermChatMemory(options: {
 }
 
 async function performChatWarmup(userId: string, chatId: string, force: boolean): Promise<WarmupResponse> {
-  const chat = getChat(userId, chatId);
+  const chat = await getChatAsync(userId, chatId);
   if (!chat) {
     return {
       status: "skipped",
@@ -536,7 +536,7 @@ async function performChatWarmup(userId: string, chatId: string, force: boolean)
     currentChatMemoryHash,
   });
 
-  const freshChat = getChat(userId, chatId);
+  const freshChat = await getChatAsync(userId, chatId);
   if (!freshChat) {
     return {
       status: "skipped",
@@ -1169,7 +1169,7 @@ app.get("/health", async (c) => {
   } | null = null;
 
   if (chatId) {
-    const chat = getChat(userId, chatId);
+    const chat = await getChatAsync(userId, chatId);
     if (!chat) {
       chatReport = {
         id: chatId,
@@ -2053,11 +2053,11 @@ app.get("/chats/:chatId/cortex-stats", (c) => {
 });
 
 /** GET /chats/:chatId/settings — Get the Cortex state for one chat. */
-app.get("/chats/:chatId/settings", (c) => {
+app.get("/chats/:chatId/settings", async (c) => {
   const chatId = c.req.param("chatId");
   const owned = ensureChatOwnership(c, chatId);
   if (!owned.ok) return owned.response;
-  const chat = getChat(owned.userId, chatId)!;
+  const chat = (await getChatAsync(owned.userId, chatId))!;
   const config = memoryCortex.getCortexConfig(owned.userId);
   const chatSettings = isRecord(chat.metadata?.cortex_settings)
     ? chat.metadata.cortex_settings
@@ -2079,14 +2079,14 @@ app.put("/chats/:chatId/settings", async (c) => {
     return c.json({ error: "enabled must be a boolean" }, 400);
   }
 
-  const chat = getChat(owned.userId, chatId)!;
+  const chat = (await getChatAsync(owned.userId, chatId))!;
   const existingSettings = isRecord(chat.metadata?.cortex_settings)
     ? { ...chat.metadata.cortex_settings }
     : {};
   if (body.enabled) delete existingSettings.enabled;
   else existingSettings.enabled = false;
 
-  const updated = chatsSvc.mergeChatMetadata(
+  const updated = await chatsSvc.mergeChatMetadataAsync(
     owned.userId,
     chatId,
     { cortex_settings: Object.keys(existingSettings).length ? existingSettings : undefined },
@@ -2151,7 +2151,7 @@ app.post("/chats/:chatId/rebuild", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
 
-  const chat = getChat(userId, chatId);
+  const chat = await getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   const cortexConfig = memoryCortex.getCortexConfig(userId);
@@ -2187,7 +2187,7 @@ app.post("/chats/:chatId/warm", async (c) => {
   const chatId = c.req.param("chatId");
   const body = await c.req.json().catch(() => ({})) as { force?: boolean };
   const force = body.force === true;
-  const chat = getChat(userId, chatId);
+  const chat = await getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   if (!force) {
@@ -2213,7 +2213,7 @@ app.post("/chats/:chatId/warm", async (c) => {
  */
 app.post("/chats/:chatId/migrate-heuristics", async (c) => {
   const chatId = c.req.param("chatId");
-  const chat = getChat(c.get("userId"), chatId);
+  const chat = await getChatAsync(c.get("userId"), chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   const result = memoryCortex.runHeuristicsMigration(chatId, (step, count) => {
@@ -2273,7 +2273,7 @@ app.post("/vaults", async (c) => {
   if (!chatId || !name) {
     return c.json({ error: "chatId and name are required" }, 400);
   }
-  const chat = getChat(userId, chatId);
+  const chat = await getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   try {
@@ -2350,7 +2350,7 @@ app.post("/vaults/:id/reindex", async (c) => {
 app.post("/chats/:chatId/links", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
-  const chat = getChat(userId, chatId);
+  const chat = await getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   let body: unknown;

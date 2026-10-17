@@ -50,49 +50,49 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function sanitizeImportedPersonaMetadata(
+async function sanitizeImportedPersonaMetadata(
   userId: string,
   value: unknown,
-): { metadata: Record<string, any>; skippedAssetReferences: number } {
+): Promise<{ metadata: Record<string, any>; skippedAssetReferences: number }> {
   const metadata = isRecord(value)
     ? JSON.parse(JSON.stringify(value)) as Record<string, any>
     : {};
   let skippedAssetReferences = 0;
 
-  const keepOwnedImageReference = (record: Record<string, any>, key: string) => {
+  const keepOwnedImageReference = async (record: Record<string, any>, key: string) => {
     const imageId = record[key];
     if (typeof imageId !== "string" || !imageId) return;
-    if (images.getImage(userId, imageId)) return;
+    if (await images.getImageAsync(userId, imageId)) return;
     delete record[key];
     skippedAssetReferences++;
   };
 
-  keepOwnedImageReference(metadata, "avatar_crop_image_id");
-  keepOwnedImageReference(metadata, "original_image_id");
+  await keepOwnedImageReference(metadata, "avatar_crop_image_id");
+  await keepOwnedImageReference(metadata, "original_image_id");
   for (const key of ["addons", "attached_global_addons"]) {
     const addons = metadata[key];
     if (!Array.isArray(addons)) continue;
     for (const addon of addons) {
       if (!isRecord(addon)) continue;
-      keepOwnedImageReference(addon, "avatar_image_id");
-      keepOwnedImageReference(addon, "avatar_crop_image_id");
+      await keepOwnedImageReference(addon, "avatar_image_id");
+      await keepOwnedImageReference(addon, "avatar_crop_image_id");
     }
   }
 
   return { metadata, skippedAssetReferences };
 }
 
-app.get("/", (c) => {
+app.get("/", async (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
-  return c.json(svc.listPersonas(userId, pagination));
+  return c.json(await svc.listPersonasAsync(userId, pagination));
 });
 
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   if (!body.name) return c.json({ error: "name is required" }, 400);
-  const persona = svc.createPersona(userId, body);
+  const persona = await svc.createPersonaAsync(userId, body);
   return c.json(persona, 201);
 });
 
@@ -104,7 +104,7 @@ app.post("/folders/rename", async (c) => {
   if (!oldName) return c.json({ error: "old_name is required" }, 400);
   if (!newName) return c.json({ error: "new_name is required" }, 400);
 
-  const updated = svc.renamePersonaFolder(userId, oldName, newName);
+  const updated = await svc.renamePersonaFolderAsync(userId, oldName, newName);
   if (updated.length === 0) return c.json({ error: "Folder not found" }, 404);
   return c.json({ updated, count: updated.length });
 });
@@ -115,7 +115,7 @@ app.post("/folders/delete", async (c) => {
   const name = body.name?.trim() || "";
   if (!name) return c.json({ error: "name is required" }, 400);
 
-  const updated = svc.deletePersonaFolder(userId, name);
+  const updated = await svc.deletePersonaFolderAsync(userId, name);
   return c.json({ updated, count: updated.length });
 });
 
@@ -141,7 +141,7 @@ app.post("/bulk-update", async (c) => {
   if (body.toggle_narrator === true) input.toggle_narrator = true;
   if (Object.keys(input).length === 0) return c.json({ error: "No bulk update action supplied" }, 400);
 
-  const updated = svc.bulkUpdatePersonas(userId, ids, input);
+  const updated = await svc.bulkUpdatePersonasAsync(userId, ids, input);
   return c.json({ updated, count: updated.length });
 });
 
@@ -172,19 +172,19 @@ app.post("/bulk-import", async (c) => {
 
     let attachedWorldBookId: string | null = null;
     if (typeof raw.attached_world_book_id === "string" && raw.attached_world_book_id) {
-      if (worldBooks.getWorldBook(userId, raw.attached_world_book_id)) {
+      if (await worldBooks.getWorldBookAsync(userId, raw.attached_world_book_id)) {
         attachedWorldBookId = raw.attached_world_book_id;
       } else {
         detachedWorldBooks++;
       }
     }
 
-    const sanitizedMetadata = sanitizeImportedPersonaMetadata(userId, raw.metadata);
+    const sanitizedMetadata = await sanitizeImportedPersonaMetadata(userId, raw.metadata);
     skippedAssetReferences += sanitizedMetadata.skippedAssetReferences;
 
     let baseImageId: string | null = null;
     if (typeof raw.image_id === "string" && raw.image_id) {
-      if (images.getImage(userId, raw.image_id)) {
+      if (await images.getImageAsync(userId, raw.image_id)) {
         baseImageId = raw.image_id;
       } else {
         skippedAssetReferences++;
@@ -212,10 +212,10 @@ app.post("/bulk-import", async (c) => {
     };
 
     try {
-      const persona = svc.createPersona(userId, input);
+      const persona = await svc.createPersonaAsync(userId, input);
       if (baseImageId) {
-        svc.setPersonaImage(userId, persona.id, baseImageId);
-        const updated = svc.getPersona(userId, persona.id);
+        await svc.setPersonaImageAsync(userId, persona.id, baseImageId);
+        const updated = await svc.getPersonaAsync(userId, persona.id);
         if (updated) eventBus.emit(EventType.PERSONA_CHANGED, { id: persona.id, persona: updated }, userId);
       }
       importedIds.push(persona.id);
@@ -230,9 +230,7 @@ app.post("/bulk-import", async (c) => {
 
   // Re-read after the full batch so only the final imported default persona is
   // reported as default, matching the database state.
-  const imported = importedIds
-    .map((id) => svc.getPersona(userId, id))
-    .filter((persona): persona is NonNullable<typeof persona> => !!persona);
+  const imported = await svc.getPersonasByIdsAsync(userId, importedIds);
 
   return c.json({
     imported,
@@ -254,28 +252,26 @@ app.post("/bulk-delete", async (c) => {
   }
 
   const ids = [...new Set(body.ids.filter((id): id is string => typeof id === "string" && id.length > 0))];
-  const personas = ids
-    .map((id) => svc.getPersona(userId, id))
-    .filter((persona): persona is NonNullable<typeof persona> => !!persona);
+  const personas = await svc.getPersonasByIdsAsync(userId, ids);
   const deleted: string[] = [];
   for (const persona of personas) {
-    if (svc.deletePersona(userId, persona.id)) deleted.push(persona.id);
+    if (await svc.deletePersonaAsync(userId, persona.id)) deleted.push(persona.id);
   }
 
   const imageIds = new Set(personas.flatMap(collectPersonaImageIds));
-  for (const imageId of imageIds) images.deleteImageIfUnreferenced(userId, imageId);
+  for (const imageId of imageIds) await images.deleteImageIfUnreferencedAsync(userId, imageId);
 
   const avatarPaths = new Set(personas.map((persona) => persona.avatar_path).filter((path): path is string => !!path));
   for (const avatarPath of avatarPaths) {
-    if (!svc.isPersonaAvatarPathReferenced(userId, avatarPath)) await files.deleteAvatar(avatarPath);
+    if (!(await svc.isPersonaAvatarPathReferencedAsync(userId, avatarPath))) await files.deleteAvatar(avatarPath);
   }
 
   return c.json({ deleted, count: deleted.length });
 });
 
-app.get("/:id", (c) => {
+app.get("/:id", async (c) => {
   const userId = c.get("userId");
-  const persona = svc.getPersona(userId, c.req.param("id"));
+  const persona = await svc.getPersonaAsync(userId, c.req.param("id"));
   if (!persona) return c.json({ error: "Not found" }, 404);
   return c.json(persona);
 });
@@ -283,22 +279,22 @@ app.get("/:id", (c) => {
 app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const persona = svc.updatePersona(userId, c.req.param("id"), body);
+  const persona = await svc.updatePersonaAsync(userId, c.req.param("id"), body);
   if (!persona) return c.json({ error: "Not found" }, 404);
   return c.json(persona);
 });
 
 app.delete("/:id", async (c) => {
   const userId = c.get("userId");
-  const persona = svc.getPersona(userId, c.req.param("id"));
+  const persona = await svc.getPersonaAsync(userId, c.req.param("id"));
   if (!persona) return c.json({ error: "Not found" }, 404);
 
   const imageIds = collectPersonaImageIds(persona);
 
-  const deleted = svc.deletePersona(userId, persona.id);
+  const deleted = await svc.deletePersonaAsync(userId, persona.id);
   if (!deleted) return c.json({ error: "Not found" }, 404);
   for (const imageId of imageIds) {
-    images.deleteImageIfUnreferenced(userId, imageId);
+    await images.deleteImageIfUnreferencedAsync(userId, imageId);
   }
   if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
   return c.json({ success: true });
@@ -311,12 +307,12 @@ app.get("/:id/avatar", async (c) => {
   let addonStates;
   let addonToggleOrder;
   if (chatId) {
-    const chat = chats.getChat(userId, chatId);
+    const chat = await chats.getChatAsync(userId, chatId);
     if (!chat) return c.json({ error: "Chat not found" }, 404);
     addonStates = getChatPersonaAddonStates(chat.metadata, personaId);
     addonToggleOrder = getChatPersonaAddonToggleOrder(chat.metadata, personaId);
   }
-  const info = svc.getPersonaAvatarInfo(userId, personaId, { addonStates, addonToggleOrder });
+  const info = await svc.getPersonaAvatarInfoAsync(userId, personaId, { addonStates, addonToggleOrder });
   if (!info) return c.json({ error: "Not found" }, 404);
 
   const sizeParam = c.req.query("size") as images.ThumbTier | undefined;
@@ -358,7 +354,7 @@ app.get("/:id/avatar", async (c) => {
 /** Assign an already-uploaded image to an add-on's persona avatar override. */
 app.put("/:id/addons/:addonId/avatar", async (c) => {
   const userId = c.get("userId");
-  const persona = svc.getPersona(userId, c.req.param("id"));
+  const persona = await svc.getPersonaAsync(userId, c.req.param("id"));
   if (!persona) return c.json({ error: "Not found" }, 404);
   if (!personaHasAddon(persona, c.req.param("addonId"))) {
     return c.json({ error: "Add-on is not attached to this persona" }, 404);
@@ -368,20 +364,20 @@ app.put("/:id/addons/:addonId/avatar", async (c) => {
   if (!body || typeof body.image_id !== "string" || !body.image_id) {
     return c.json({ error: "image_id is required" }, 400);
   }
-  if (!images.getImage(userId, body.image_id)) return c.json({ error: "Image not found" }, 404);
+  if (!(await images.getImageAsync(userId, body.image_id))) return c.json({ error: "Image not found" }, 404);
   if (body.avatar_crop_image_id !== undefined && body.avatar_crop_image_id !== null) {
-    if (typeof body.avatar_crop_image_id !== "string" || !images.getImage(userId, body.avatar_crop_image_id)) {
+    if (typeof body.avatar_crop_image_id !== "string" || !(await images.getImageAsync(userId, body.avatar_crop_image_id))) {
       return c.json({ error: "Avatar crop image not found" }, 404);
     }
   }
 
   const oldImageIds = collectPersonaImageIds(persona);
-  const updated = svc.setPersonaAddonAvatar(userId, persona.id, c.req.param("addonId"), {
+  const updated = await svc.setPersonaAddonAvatarAsync(userId, persona.id, c.req.param("addonId"), {
     image_id: body.image_id,
     avatar_crop_image_id: typeof body.avatar_crop_image_id === "string" ? body.avatar_crop_image_id : null,
   });
   if (!updated) return c.json({ error: "Add-on is not attached to this persona" }, 404);
-  for (const imageId of oldImageIds) images.deleteImageIfUnreferenced(userId, imageId);
+  for (const imageId of oldImageIds) await images.deleteImageIfUnreferencedAsync(userId, imageId);
   return c.json(updated);
 });
 
@@ -389,7 +385,7 @@ app.put("/:id/addons/:addonId/avatar", async (c) => {
  * base-avatar crop flow: it preserves the source while `avatar` is displayed. */
 app.post("/:id/addons/:addonId/avatar", async (c) => {
   const userId = c.get("userId");
-  const persona = svc.getPersona(userId, c.req.param("id"));
+  const persona = await svc.getPersonaAsync(userId, c.req.param("id"));
   if (!persona) return c.json({ error: "Not found" }, 404);
   if (!personaHasAddon(persona, c.req.param("addonId"))) {
     return c.json({ error: "Add-on is not attached to this persona" }, 404);
@@ -403,44 +399,44 @@ app.post("/:id/addons/:addonId/avatar", async (c) => {
   const oldImageIds = collectPersonaImageIds(persona);
   const originalImage = await images.uploadImage(userId, originalFile ?? file);
   const cropImage = originalFile ? await images.uploadImage(userId, file) : null;
-  const updated = svc.setPersonaAddonAvatar(userId, persona.id, c.req.param("addonId"), {
+  const updated = await svc.setPersonaAddonAvatarAsync(userId, persona.id, c.req.param("addonId"), {
     image_id: originalImage.id,
     avatar_crop_image_id: cropImage?.id ?? null,
   });
   if (!updated) {
-    images.deleteImageIfUnreferenced(userId, originalImage.id);
-    if (cropImage) images.deleteImageIfUnreferenced(userId, cropImage.id);
+    await images.deleteImageIfUnreferencedAsync(userId, originalImage.id);
+    if (cropImage) await images.deleteImageIfUnreferencedAsync(userId, cropImage.id);
     return c.json({ error: "Add-on is not attached to this persona" }, 404);
   }
-  for (const imageId of oldImageIds) images.deleteImageIfUnreferenced(userId, imageId);
+  for (const imageId of oldImageIds) await images.deleteImageIfUnreferencedAsync(userId, imageId);
   return c.json(updated);
 });
 
-app.delete("/:id/addons/:addonId/avatar", (c) => {
+app.delete("/:id/addons/:addonId/avatar", async (c) => {
   const userId = c.get("userId");
-  const persona = svc.getPersona(userId, c.req.param("id"));
+  const persona = await svc.getPersonaAsync(userId, c.req.param("id"));
   if (!persona) return c.json({ error: "Not found" }, 404);
   if (!personaHasAddon(persona, c.req.param("addonId"))) {
     return c.json({ error: "Add-on is not attached to this persona" }, 404);
   }
 
   const oldImageIds = collectPersonaImageIds(persona);
-  const updated = svc.setPersonaAddonAvatar(userId, persona.id, c.req.param("addonId"), { image_id: null });
+  const updated = await svc.setPersonaAddonAvatarAsync(userId, persona.id, c.req.param("addonId"), { image_id: null });
   if (!updated) return c.json({ error: "Add-on is not attached to this persona" }, 404);
-  for (const imageId of oldImageIds) images.deleteImageIfUnreferenced(userId, imageId);
+  for (const imageId of oldImageIds) await images.deleteImageIfUnreferencedAsync(userId, imageId);
   return c.json(updated);
 });
 
-app.post("/:id/duplicate", (c) => {
+app.post("/:id/duplicate", async (c) => {
   const userId = c.get("userId");
-  const persona = svc.duplicatePersona(userId, c.req.param("id"));
+  const persona = await svc.duplicatePersonaAsync(userId, c.req.param("id"));
   if (!persona) return c.json({ error: "Not found" }, 404);
   return c.json(persona, 201);
 });
 
 app.post("/:id/avatar", async (c) => {
   const userId = c.get("userId");
-  const persona = svc.getPersona(userId, c.req.param("id"));
+  const persona = await svc.getPersonaAsync(userId, c.req.param("id"));
   if (!persona) return c.json({ error: "Not found" }, 404);
 
   const formData = await c.req.formData();
@@ -451,20 +447,20 @@ app.post("/:id/avatar", async (c) => {
   const oldImageIds = collectPersonaImageIds(persona);
   const originalImage = await images.uploadImage(userId, originalFile ?? file);
   const cropImage = originalFile ? await images.uploadImage(userId, file) : null;
-  svc.setPersonaImage(userId, persona.id, originalImage.id);
-  svc.setPersonaAvatar(userId, persona.id, originalImage.filename);
+  await svc.setPersonaImageAsync(userId, persona.id, originalImage.id);
+  await svc.setPersonaAvatarAsync(userId, persona.id, originalImage.filename);
 
   const nextMetadata = { ...(persona.metadata ?? {}) };
   delete nextMetadata.original_image_id;
   if (cropImage) nextMetadata.avatar_crop_image_id = cropImage.id;
   else delete nextMetadata.avatar_crop_image_id;
-  svc.updatePersona(userId, persona.id, { metadata: nextMetadata });
+  await svc.updatePersonaAsync(userId, persona.id, { metadata: nextMetadata });
   for (const imageId of oldImageIds) {
-    images.deleteImageIfUnreferenced(userId, imageId);
+    await images.deleteImageIfUnreferencedAsync(userId, imageId);
   }
   if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
 
-  const updated = svc.getPersona(userId, persona.id);
+  const updated = await svc.getPersonaAsync(userId, persona.id);
   if (!updated) return c.json({ error: "Not found" }, 404);
 
   eventBus.emit(EventType.PERSONA_CHANGED, { id: persona.id, persona: updated }, userId);

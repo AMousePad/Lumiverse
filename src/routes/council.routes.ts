@@ -103,10 +103,10 @@ app.delete("/settings/chat/:chatId", (c) => {
   return c.json({ success: true });
 });
 
-app.get("/settings/resolve/:chatId", (c) => {
+app.get("/settings/resolve/:chatId", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
-  const chat = chatsSvc.getChat(userId, chatId);
+  const chat = await chatsSvc.getChatAsync(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   const resolved = councilProfilesSvc.resolveProfile(userId, chatId, chat.character_id, {

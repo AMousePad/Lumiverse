@@ -1,5 +1,33 @@
 import { get, del, post, upload, uploadWithProgress, BASE_URL } from './client'
 import type { Image } from '@/types/api'
+import { isImageDeleted, notifyImageDeleted } from '@/lib/deletion-events'
+
+export interface ImageDeletionResult {
+  success: boolean
+  deleted: boolean
+  id: string
+  status: 'completed' | 'retained'
+}
+
+async function deleteAndConfirm(id: string, path: string): Promise<ImageDeletionResult> {
+  try {
+    const result = await del<ImageDeletionResult>(path)
+    if (result?.deleted && result.status === 'completed') notifyImageDeleted(id)
+    else if (!result || result.deleted !== false || result.status !== 'retained') throw new Error('Image deletion could not be confirmed')
+    return result
+  } catch (error: any) {
+    if (error?.status === 401 || error?.status === 403 || error?.name === 'InactiveTabError') throw error
+    // A timeout can follow a committed deletion. Reconcile without replaying it.
+    try {
+      const status = isImageDeleted(id) ? { deleted: true } : await get<{ deleted: boolean }>(`/images/${encodeURIComponent(id)}/deletion-status`)
+      if (status.deleted) {
+        notifyImageDeleted(id)
+        return { success: true, deleted: true, id, status: 'completed' }
+      }
+    } catch { /* Preserve the original failure while the outcome is unconfirmed. */ }
+    throw error
+  }
+}
 
 export type ImageSize = 'sm' | 'lg'
 
@@ -73,15 +101,15 @@ export const imagesApi = {
   },
 
   deleteWallpaper(id: string) {
-    return del<{ success: boolean; deleted: boolean }>(`/images/wallpapers/${id}`)
+    return deleteAndConfirm(id, `/images/wallpapers/${encodeURIComponent(id)}`)
   },
 
   delete(id: string) {
-    return del<void>(`/images/${id}`)
+    return deleteAndConfirm(id, `/images/${encodeURIComponent(id)}`)
   },
 
   deleteIfUnused(id: string) {
-    return del<{ success: boolean; deleted: boolean }>(`/images/${id}?unused=true`)
+    return deleteAndConfirm(id, `/images/${encodeURIComponent(id)}?unused=true`)
   },
 
   /** Full-size original */

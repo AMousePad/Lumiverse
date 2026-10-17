@@ -4,6 +4,7 @@ import { Plus, Upload, Image as ImageIcon, Ghost, Trash2, Users, Download } from
 import { expressionsApi } from '@/api/expressions'
 import { charactersApi } from '@/api/characters'
 import { characterGalleryApi } from '@/api/character-gallery'
+import { isImageDeleted, onImageDeleted, isGalleryItemRemoved, onGalleryItemRemoved } from '@/lib/deletion-events'
 import { fetchConnectionModels } from '@/api/connectionModels'
 import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
@@ -266,9 +267,18 @@ export default function ExpressionEditorTab({ characterId, chubSourcePath }: Pro
   const openGalleryPicker = useCallback(() => {
     setShowGalleryPicker(true)
     characterGalleryApi.list(characterId)
-      .then(setGalleryItems)
+      .then((items) => setGalleryItems(items.filter((item) => !isImageDeleted(item.image_id) && !isGalleryItemRemoved(characterId, item.id))))
       .catch(() => setGalleryItems([]))
   }, [characterId])
+
+  useEffect(() => onImageDeleted((id) => {
+    setGalleryItems((prev) => prev.filter((item) => item.image_id !== id))
+    setPickerImageId((prev) => prev === id ? null : prev)
+  }), [])
+
+  useEffect(() => onGalleryItemRemoved((item) => {
+    if (item.characterId === characterId) setGalleryItems((prev) => prev.filter((entry) => entry.id !== item.id))
+  }), [characterId])
 
   const confirmGalleryPick = useCallback(() => {
     if (!pickerImageId || !pickerLabel.trim() || !config) return

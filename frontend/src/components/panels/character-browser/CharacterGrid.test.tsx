@@ -188,7 +188,7 @@ describe('CharacterGrid theme column override', () => {
 
     // Native desktop calculation at 900px is four columns.
     await emitResize(observer, scrollContainer, 900)
-    let row = host.querySelector<HTMLElement>('[data-index="0"]')
+    let row = host.querySelector<HTMLElement>('[data-virtual-grid]')
     expect(row?.style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))')
     expect(host.querySelectorAll('[data-character-card]').length).toBe(4)
     expect(virtualizerCounts.at(-1)).toBe(3)
@@ -197,7 +197,7 @@ describe('CharacterGrid theme column override', () => {
     // both the rendered tracks and the virtualizer's row count.
     scrollContainer.style.setProperty('--character-grid-columns', '3')
     await emitResize(observer, probe!, 3)
-    row = host.querySelector<HTMLElement>('[data-index="0"]')
+    row = host.querySelector<HTMLElement>('[data-virtual-grid]')
     expect(row?.style.gridTemplateColumns).toBe('repeat(3, minmax(0, 1fr))')
     expect(host.querySelectorAll('[data-character-card]').length).toBe(3)
     expect(virtualizerCounts.at(-1)).toBe(4)
@@ -206,7 +206,7 @@ describe('CharacterGrid theme column override', () => {
     // calculation without requiring the container itself to resize.
     scrollContainer.style.removeProperty('--character-grid-columns')
     await emitResize(observer, probe!, 0)
-    row = host.querySelector<HTMLElement>('[data-index="0"]')
+    row = host.querySelector<HTMLElement>('[data-virtual-grid]')
     expect(row?.style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))')
     expect(virtualizerCounts.at(-1)).toBe(3)
   })
@@ -233,7 +233,7 @@ describe('CharacterGrid theme column override', () => {
     scrollContainer.style.setProperty('--character-grid-columns', '4')
     await emitResize(observer, probe!, 4)
 
-    const row = host.querySelector<HTMLElement>('[data-index="0"]')
+    const row = host.querySelector<HTMLElement>('[data-virtual-grid]')
     expect(row?.style.gridTemplateColumns).toBe('repeat(1, minmax(0, 1fr))')
     expect(host.querySelectorAll('[data-character-card]').length).toBe(1)
     expect(virtualizerCounts.at(-1)).toBe(6)
@@ -260,7 +260,7 @@ describe('CharacterGrid theme column override', () => {
     scrollContainer.style.setProperty('--character-grid-columns', 'banana')
     await emitResize(observer, probe!, 0)
 
-    const row = host.querySelector<HTMLElement>('[data-index="0"]')
+    const row = host.querySelector<HTMLElement>('[data-virtual-grid]')
     expect(row?.style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))')
     expect(virtualizerCounts.at(-1)).toBe(4)
   })

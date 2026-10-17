@@ -14,6 +14,7 @@ import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/p
 import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
+import type { DecisionConnectionProfile } from '@/types/api'
 import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
 import {
   createProviderRegistryProjection,
@@ -32,7 +33,9 @@ import { imageGenApi } from '@/api/image-gen'
 import { generateApi } from '@/api/generate'
 import { operatorApi } from '@/api/operator'
 import { presetsApi } from '@/api/presets'
+import { refreshAppDataAfterImport } from '@/hooks/useAppInit'
 import { toast } from '@/lib/toast'
+import { notifyImageDeleted, notifyDeletionOperation, notifyDeletionReconnect, notifyGalleryItemRemoved, onImageDeleted, type DeletionOperation, type GalleryItemRemoved } from '@/lib/deletion-events'
 import i18n from '@/i18n'
 import {
   invalidateDisplayRegexCache,
@@ -614,11 +617,22 @@ export function useWebSocket() {
     wsClient.connect()
 
     const unsubs = [
+      wsClient.on(EventType.DECISION_CONNECTION_CHANGED, (payload: { id: string; deleted?: boolean; profile?: DecisionConnectionProfile }) => {
+        const store = useStore.getState()
+        if (payload.deleted) store.removeDecisionProfile(payload.id)
+        else if (payload.profile) {
+          if (payload.profile.is_default) {
+            for (const profile of store.decisionProfiles) if (profile.id !== payload.id && profile.is_default) store.updateDecisionProfile(profile.id, { is_default: false })
+          }
+          store.addDecisionProfile(payload.profile)
+        }
+      }),
       subscribeDesktopDiscordPresenceRefresh(wsClient),
       // Connection lifecycle — drives the full-screen "Server connection lost"
       // overlay. Each disconnect resets all three signals; reconnect flips them
       // back to true (socket open → CONNECTED with role → pong received).
       wsClient.on(WS_OPEN, () => {
+        notifyDeletionReconnect()
         store.getState().setWsConnected(true)
         // Push the current extension drawer-tab snapshot so the backend's
         // spindle.ui.getDrawerTabs() can enumerate extension-added tabs.
@@ -645,6 +659,7 @@ export function useWebSocket() {
         store.getState().setWsResumeRecovering(true)
       }),
       wsClient.on(WS_RESUME_RECOVERY_COMPLETE, () => {
+        notifyDeletionReconnect()
         store.getState().setWsResumeRecovering(false)
       }),
       wsClient.on(WS_RESUME_RECOVERY_FAILED, () => {
@@ -1424,6 +1439,11 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.USER_IMPORT_COMPLETE, (payload: { jobId: string }) => {
+        void refreshAppDataAfterImport(payload.jobId)
+          .catch((error) => console.error('[Import] Could not refresh imported data:', error))
+      }),
+
       wsClient.on(EventType.CHARACTER_CREATED, (payload: { id: string; character?: import('@/types/api').Character }) => {
         if (payload?.character) {
           store.getState().updateCharacter(payload.id, payload.character)
@@ -1445,6 +1465,26 @@ export function useWebSocket() {
 
       wsClient.on(EventType.CHARACTER_DELETED, (payload: { id: string }) => {
         store.getState().removeCharacter(payload.id)
+      }),
+
+      wsClient.on(EventType.DELETION_OPERATION_CHANGED, (operation: DeletionOperation) => {
+        notifyDeletionOperation(operation)
+        if (operation.status === 'completed') store.getState().removeCharacter(operation.entityId)
+      }),
+
+      wsClient.on(EventType.IMAGE_DELETED, (payload: { id: string }) => notifyImageDeleted(payload.id)),
+      wsClient.on(EventType.CHARACTER_GALLERY_ITEM_REMOVED, (item: GalleryItemRemoved) => notifyGalleryItemRemoved(item)),
+      onImageDeleted((id) => {
+        const state = store.getState()
+        const wallpaper = { ...state.wallpaper }
+        if (wallpaper.global?.image_id === id) wallpaper.global = null
+        if (wallpaper.mobile?.image_id === id) wallpaper.mobile = null
+        const metadata = { ...state.activeChatMetadata }
+        for (const key of ['wallpaper', 'mobile_wallpaper']) {
+          if ((metadata[key] as { image_id?: string } | undefined)?.image_id === id) metadata[key] = null
+        }
+        store.setState({ wallpaper, activeChatMetadata: state.activeChatMetadata ? metadata : null,
+          activeChatWallpaper: state.activeChatWallpaper?.image_id === id ? null : state.activeChatWallpaper })
       }),
 
       wsClient.on(EventType.PERSONA_CHANGED, (payload: { id: string; persona?: import('@/types/api').Persona; deleted?: boolean }) => {

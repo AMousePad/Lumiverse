@@ -11,4 +11,6 @@ preload = ["./frontend/bun-test-setup.ts"]
 isolate = true
 
 [install]
+# package.json explicitly permits only required dependency installers. Keep
+# ssh2 and cpu-features excluded: their optional native builds slow CI installs.
 peer = false

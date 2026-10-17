@@ -1,10 +1,12 @@
+import { mutateChatWithDb, rowToChat, parseMetadataObject, type ChatUpdateResult, type ChatMetadataMergeOptions } from "../db/chat-operations";
+import { executeDatabaseOperation } from "../db/execution";
 import { createHash } from "node:crypto";
 import { shieldMessageLiterals } from "../macros/message-literals";
 import { getDatabasePath, getDb } from "../db/connection";
 import { healCorruptDatabase } from "../db/maintenance";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspectiveLayers } from "./characters.service";
+import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspectiveLayers, getCharacterAsync } from "./characters.service";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Character } from "../types/character";
 import type { Chat, ChatAppearanceAction, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
@@ -31,7 +33,7 @@ import { invalidateChatMemoryCache, scheduleChatMemoryRefresh } from "./chat-mem
 import { enqueueChatPipelineTask } from "./chat-pipeline-coordinator.service";
 import { getReasoningStripOptions } from "../utils/reasoning-strip";
 import { buildEnv, type MacroEnv } from "../macros";
-import { resolvePersonaOrDefault } from "./personas.service";
+import { resolvePersonaOrDefault, resolvePersonaOrDefaultAsync } from "./personas.service";
 import { resolvePersonaForChatMacros } from "./persona-addon-states";
 import { resolveAndSanitizeForVectorization, contentHasMacroHints } from "./vectorization-content.service";
 import {
@@ -46,15 +48,7 @@ import {
 
 // --- Chat helpers ---
 
-function parseMetadataObject(value: unknown): Record<string, any> {
-  if (typeof value !== "string") return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
+
 
 const HIDDEN_FROM_RECENT_KEY = "hidden_from_recent";
 
@@ -174,10 +168,7 @@ function withRecentChatRecovery<T>(label: string, fn: () => T): T {
   }
 }
 
-function rowToChat(row: any): Chat {
-  const metadata = parseMetadataObject(row.metadata);
-  return { ...row, metadata };
-}
+
 
 function normalizeReasoningEntries(
   value: unknown,
@@ -1138,6 +1129,11 @@ export function listGroupChatSummaries(userId: string, characterIds?: string[]):
 let _stmtChatById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtChatByIdGen = -1;
 
+export async function getChatAsync(userId: string, id: string): Promise<Chat | null> {
+  const row = await executeDatabaseOperation<any>({ kind: "read", statement: { sql: "SELECT * FROM chats WHERE id = ? AND user_id = ?", bindings: [id, userId], mode: "get" } });
+  return row ? rowToChat(row) : null;
+}
+
 export function getChat(userId: string, id: string): Chat | null {
   const gen = require("../db/connection").getDbGeneration() as number;
   if (!_stmtChatById || _stmtChatByIdGen !== gen) {
@@ -1295,31 +1291,68 @@ export function deleteChat(userId: string, id: string): boolean {
   })();
   if (result.changes > 0) {
     cleanupMessageAttachments(userId, attachments);
-    invalidateChatMemoryCache(id);
-    removePoolEntriesForChat(userId, id);
-
-    // Clean up long-term chat memory (LanceDB vectors)
-    embeddingsSvc.deleteChatChunkEmbeddings(userId, id).catch(err => {
-      console.warn(`[chats] Failed to delete LanceDB chat_chunk vectors for chat ${id}:`, err);
-    });
-
-    try {
-      memoryCortex.invalidateCortexCache(id);
-      memoryCortex.invalidateLinkedCortexCache(id);
-      memoryCortex.clearIngestionState(id);
-    } catch { /* ignore if not loaded */ }
-
-    // Drop any debounced vectorization timers tied to this chat — without
-    // this the gc.dirtyChunks Map would hold timers for a chat that no longer
-    // exists until they fire and quietly fail.
-    try {
-      const { clearDebouncedVectorizationsForChat } = require("./memory-cortex/gc") as
-        typeof import("./memory-cortex/gc");
-      clearDebouncedVectorizationsForChat(id);
-    } catch { /* memory-cortex disabled or not loaded */ }
-    eventBus.emit(EventType.CHAT_DELETED, { id }, userId);
+    finishChatDeletion(userId, id);
   }
   return result.changes > 0;
+}
+
+function finishChatDeletion(userId: string, id: string): void {
+  invalidateChatMemoryCache(id);
+  removePoolEntriesForChat(userId, id);
+
+  // Clean up long-term chat memory (LanceDB vectors)
+  embeddingsSvc.deleteChatChunkEmbeddings(userId, id).catch(err => {
+    console.warn(`[chats] Failed to delete LanceDB chat_chunk vectors for chat ${id}:`, err);
+  });
+
+  try {
+    memoryCortex.invalidateCortexCache(id);
+    memoryCortex.invalidateLinkedCortexCache(id);
+    memoryCortex.clearIngestionState(id);
+  } catch { /* ignore if not loaded */ }
+
+  // Drop any debounced vectorization timers tied to this chat — without
+  // this the gc.dirtyChunks Map would hold timers for a chat that no longer
+  // exists until they fire and quietly fail.
+  try {
+    const { clearDebouncedVectorizationsForChat } = require("./memory-cortex/gc") as
+      typeof import("./memory-cortex/gc");
+    clearDebouncedVectorizationsForChat(id);
+  } catch { /* memory-cortex disabled or not loaded */ }
+  eventBus.emit(EventType.CHAT_DELETED, { id }, userId);
+}
+
+/** Snapshot dependent rows and delete atomically, then perform external cleanup. */
+export async function deleteChatAsync(userId: string, id: string): Promise<boolean> {
+  const [messages, , result] = await executeDatabaseOperation<[any[], unknown, { changes: number }]>({
+    kind: "transaction", statements: [
+      { sql: "SELECT extra FROM messages WHERE chat_id = ? AND EXISTS (SELECT 1 FROM chats WHERE id = ? AND user_id = ?)", bindings: [id, id, userId], mode: "all" },
+      { sql: "DELETE FROM message_breakdowns WHERE chat_id = ? AND user_id = ? AND EXISTS (SELECT 1 FROM chats WHERE id = ? AND user_id = ?)", bindings: [id, userId, id, userId] },
+      { sql: "DELETE FROM chats WHERE id = ? AND user_id = ?", bindings: [id, userId] },
+    ],
+  });
+  if (result.changes > 0) {
+    const attachments = messages.flatMap((row) => collectMessageAttachments(row));
+    await cleanupMessageAttachmentsAsync(userId, attachments);
+    finishChatDeletion(userId, id);
+  }
+  return result.changes > 0;
+}
+
+export async function deleteChatsAsync(userId: string, ids: string[]): Promise<string[]> {
+  const deleted: string[] = [];
+  for (const id of new Set(ids)) {
+    if (await deleteChatAsync(userId, id)) deleted.push(id);
+  }
+  return deleted;
+}
+
+export async function deleteTemporaryChatsAsync(userId: string): Promise<number> {
+  const rows = await executeDatabaseOperation<Array<{ id: string; metadata: string }>>({
+    kind: "read", statement: { sql: "SELECT id, metadata FROM chats WHERE user_id = ? AND character_id IS NULL", bindings: [userId], mode: "all" },
+  });
+  const ids = rows.filter((row) => isTemporaryChatMetadata(parseMetadataObject(row.metadata))).map((row) => row.id);
+  return (await deleteChatsAsync(userId, ids)).length;
 }
 
 /**
@@ -1438,60 +1471,7 @@ export function updateChat(
   input: UpdateChatInput,
   opts: { touchUpdatedAt?: boolean } = {},
 ): Chat | null {
-  const existing = getChat(userId, id);
-  if (!existing) return null;
-
-  const fields: string[] = [];
-  const values: any[] = [];
-
-  if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
-  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
-
-  if (fields.length === 0) return existing;
-
-  if (opts.touchUpdatedAt !== false) {
-    const now = Math.floor(Date.now() / 1000);
-    fields.push("updated_at = ?");
-    values.push(now);
-  }
-  values.push(id);
-  values.push(userId);
-
-  getDb().query(`UPDATE chats SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
-  const updated = getChat(userId, id)!;
-  const changedFields = diffChatChangedFields(existing, updated);
-  eventBus.emit(EventType.CHAT_CHANGED, { chat: updated, changedFields }, userId);
-
-  // Detect avatar switches and emit specific events for theme resampling / extensions.
-  if (updated.metadata?.group === true) {
-    const oldByCharacter = isPlainObject(existing.metadata?.group_active_avatar_ids)
-      ? existing.metadata.group_active_avatar_ids
-      : {};
-    const newByCharacter = isPlainObject(updated.metadata?.group_active_avatar_ids)
-      ? updated.metadata.group_active_avatar_ids
-      : {};
-    const characterIds = new Set([...Object.keys(oldByCharacter), ...Object.keys(newByCharacter)]);
-    for (const characterId of characterIds) {
-      if (oldByCharacter[characterId] === newByCharacter[characterId]) continue;
-      eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
-        chatId: id,
-        characterId,
-        imageId: typeof newByCharacter[characterId] === "string" ? newByCharacter[characterId] : null,
-      }, userId);
-    }
-  } else {
-    const oldAvatarId = existing.metadata?.active_avatar_id as string | undefined;
-    const newAvatarId = updated.metadata?.active_avatar_id as string | undefined;
-    if (oldAvatarId !== newAvatarId) {
-      eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
-        chatId: id,
-        characterId: updated.character_id,
-        imageId: newAvatarId || null,
-      }, userId);
-    }
-  }
-
-  return updated;
+  return finishChatUpdate(userId, id, mutateChatWithDb(getDb(), { action: "update", userId, id, input, ...opts }));
 }
 
 /**
@@ -1516,14 +1496,7 @@ export function mergeChatMetadata(
   partial: Record<string, any>,
   opts: { touchUpdatedAt?: boolean } = {},
 ): Chat | null {
-  const existing = getChat(userId, id);
-  if (!existing) return null;
-  const merged: Record<string, any> = { ...(existing.metadata || {}) };
-  for (const [key, value] of Object.entries(partial)) {
-    if (value === undefined) delete merged[key];
-    else merged[key] = value;
-  }
-  return updateChat(userId, id, { metadata: merged }, opts);
+  return finishChatUpdate(userId, id, mutateChatWithDb(getDb(), { action: "merge", userId, id, partial, ...opts }));
 }
 
 // ---- Group chat muting ----
@@ -1866,79 +1839,7 @@ export function addGroupMember(
 }
 
 export function removeGroupMember(userId: string, chatId: string, characterId: string): Chat | null {
-  const chat = getChat(userId, chatId);
-  if (!chat || !chat.metadata?.group) return null;
-
-  const characterIds: string[] = chat.metadata.character_ids || [];
-  if (!characterIds.includes(characterId)) return null;
-  if (characterIds.length <= 2) return null;
-
-  const newCharacterIds = characterIds.filter((id) => id !== characterId);
-
-  // Clean up muted list
-  const mutedIds: string[] = Array.isArray(chat.metadata.muted_character_ids)
-    ? chat.metadata.muted_character_ids.filter((id: string) => id !== characterId)
-    : [];
-
-  // Clean up per-character expression state
-  const groupExpressions = chat.metadata.group_expressions
-    ? { ...chat.metadata.group_expressions }
-    : undefined;
-  if (groupExpressions && characterId in groupExpressions) {
-    delete groupExpressions[characterId];
-  }
-
-  // Clean up per-member alternate field selections
-  const groupAlternateFieldSelections = isPlainObject(chat.metadata.group_alternate_field_selections)
-    ? { ...chat.metadata.group_alternate_field_selections }
-    : undefined;
-  if (groupAlternateFieldSelections && characterId in groupAlternateFieldSelections) {
-    delete groupAlternateFieldSelections[characterId];
-  }
-
-  const groupActiveAvatarIds = isPlainObject(chat.metadata.group_active_avatar_ids)
-    ? { ...chat.metadata.group_active_avatar_ids }
-    : undefined;
-  if (groupActiveAvatarIds) delete groupActiveAvatarIds[characterId];
-  const groupActiveAvatarEntryIds = isPlainObject(chat.metadata.group_active_avatar_entry_ids)
-    ? { ...chat.metadata.group_active_avatar_entry_ids }
-    : undefined;
-  if (groupActiveAvatarEntryIds) delete groupActiveAvatarEntryIds[characterId];
-  const groupActiveGreetingIndices = isPlainObject(chat.metadata.group_active_greeting_indices)
-    ? { ...chat.metadata.group_active_greeting_indices }
-    : undefined;
-  if (groupActiveGreetingIndices) delete groupActiveGreetingIndices[characterId];
-
-  const newMetadata = {
-    ...chat.metadata,
-    character_ids: newCharacterIds,
-    muted_character_ids: mutedIds,
-    ...(groupExpressions !== undefined && { group_expressions: groupExpressions }),
-    ...(groupAlternateFieldSelections !== undefined && {
-      group_alternate_field_selections: groupAlternateFieldSelections,
-    }),
-    ...(groupActiveAvatarIds !== undefined && { group_active_avatar_ids: groupActiveAvatarIds }),
-    ...(groupActiveAvatarEntryIds !== undefined && { group_active_avatar_entry_ids: groupActiveAvatarEntryIds }),
-    ...(groupActiveGreetingIndices !== undefined && { group_active_greeting_indices: groupActiveGreetingIndices }),
-  };
-
-  if (groupAlternateFieldSelections && Object.keys(groupAlternateFieldSelections).length === 0) {
-    delete newMetadata.group_alternate_field_selections;
-  }
-  if (groupActiveAvatarIds && Object.keys(groupActiveAvatarIds).length === 0) delete newMetadata.group_active_avatar_ids;
-  if (groupActiveAvatarEntryIds && Object.keys(groupActiveAvatarEntryIds).length === 0) delete newMetadata.group_active_avatar_entry_ids;
-  if (groupActiveGreetingIndices && Object.keys(groupActiveGreetingIndices).length === 0) delete newMetadata.group_active_greeting_indices;
-
-  // If the removed character was the primary character_id on the chat row,
-  // reassign to the first remaining member
-  if (chat.character_id === characterId) {
-    const now = Math.floor(Date.now() / 1000);
-    getDb()
-      .query("UPDATE chats SET character_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-      .run(newCharacterIds[0], now, chatId, userId);
-  }
-
-  return updateChat(userId, chatId, { metadata: newMetadata });
+  return finishChatUpdate(userId, chatId, mutateChatWithDb(getDb(), { action: "remove-group-member", userId, id: chatId, characterId }));
 }
 
 export function reattributeUserMessages(userId: string, chatId: string, personaId: string, personaName: string): number | null {
@@ -2596,7 +2497,7 @@ export function appendMessageAttachment(
  * shared image store, so they are deleted only after the message mutation and
  * only when no other persisted reference remains.
  */
-function cleanupMessageAttachments(userId: string, attachments: any[]): void {
+function attachmentFileIds(attachments: any[]): { audioIds: Set<string>; imageIds: Set<string> } {
   const audioIds = new Set<string>();
   const imageIds = new Set<string>();
 
@@ -2608,6 +2509,25 @@ function cleanupMessageAttachments(userId: string, attachments: any[]): void {
     if (att.type === "audio") audioIds.add(id);
     if (att.type === "image" || att.type === "video") imageIds.add(id);
   }
+  return { audioIds, imageIds };
+}
+
+async function cleanupMessageAttachmentsAsync(userId: string, attachments: any[]): Promise<void> {
+  const { audioIds, imageIds } = attachmentFileIds(attachments);
+  for (const id of audioIds) {
+    try { await audioSvc.deleteAudioAsync(userId, id); }
+    catch (err) { console.warn(`[chats] Failed to delete audio file ${id} on cleanup:`, err); }
+  }
+  if (imageIds.size === 0) return;
+  const images = await import("./images.service");
+  for (const id of imageIds) {
+    try { await images.deleteImageIfUnreferencedAsync(userId, id); }
+    catch (err) { console.warn(`[chats] Failed to delete unreferenced image file ${id} on cleanup:`, err); }
+  }
+}
+
+function cleanupMessageAttachments(userId: string, attachments: any[]): void {
+  const { audioIds, imageIds } = attachmentFileIds(attachments);
 
   for (const id of audioIds) {
     try {
@@ -4383,7 +4303,7 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       const characterNames: string[] = [];
       const aliasMaps: Map<string, string>[] = [];
       if (chat) {
-        const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
+        const character = chat.character_id ? (await getCharacterAsync(userId, chat.character_id)) : null;
         if (character) {
           // Normalize sloppy bot-card names to extract the real character name
           const normalized = memoryCortex.normalizeCharacterName(character.name);
@@ -4395,7 +4315,7 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
         // Group chat: add all character names + extract aliases
         if (chat.metadata?.character_ids) {
           for (const cid of chat.metadata.character_ids as string[]) {
-            const c = getCharacter(userId, cid);
+            const c = await getCharacterAsync(userId, cid);
             if (!c) continue;
             const normalized = memoryCortex.normalizeCharacterName(c.name);
             if (!characterNames.includes(normalized)) {
@@ -4406,8 +4326,7 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
         }
         // User's persona
         try {
-          const { resolvePersonaOrDefault } = require("./personas.service");
-          const persona = resolvePersonaOrDefault(userId);
+          const persona = await resolvePersonaOrDefaultAsync(userId);
           if (persona?.name) {
             const normalized = memoryCortex.normalizeCharacterName(persona.name);
             if (!characterNames.includes(normalized)) {
@@ -4977,4 +4896,56 @@ async function _rebuildChatChunksFromBody(userId: string, chatId: string, fromMe
   scheduleChatMemoryRefresh(userId, chatId, 9);
 
   console.info(`[chats] Surgically rebuilt chat ${chatId}: ${discardedChunkIds.length} chunks → re-chunked ${messagesToChunk.length} messages (${fromIdx} chunks preserved)`);
+}
+
+function finishChatUpdate(userId: string, id: string, result: ChatUpdateResult | null): Chat | null {
+  if (!result) return null;
+  const { before: existing, after: updated } = result;
+  if (!result.changed) return updated;
+  const changedFields = diffChatChangedFields(existing, updated);
+  eventBus.emit(EventType.CHAT_CHANGED, { chat: updated, changedFields }, userId);
+
+  // Detect avatar switches and emit specific events for theme resampling / extensions.
+  if (updated.metadata?.group === true) {
+    const oldByCharacter = isPlainObject(existing.metadata?.group_active_avatar_ids)
+      ? existing.metadata.group_active_avatar_ids
+      : {};
+    const newByCharacter = isPlainObject(updated.metadata?.group_active_avatar_ids)
+      ? updated.metadata.group_active_avatar_ids
+      : {};
+    const characterIds = new Set([...Object.keys(oldByCharacter), ...Object.keys(newByCharacter)]);
+    for (const characterId of characterIds) {
+      if (oldByCharacter[characterId] === newByCharacter[characterId]) continue;
+      eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
+        chatId: id,
+        characterId,
+        imageId: typeof newByCharacter[characterId] === "string" ? newByCharacter[characterId] : null,
+      }, userId);
+    }
+  } else {
+    const oldAvatarId = existing.metadata?.active_avatar_id as string | undefined;
+    const newAvatarId = updated.metadata?.active_avatar_id as string | undefined;
+    if (oldAvatarId !== newAvatarId) {
+      eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
+        chatId: id,
+        characterId: updated.character_id,
+        imageId: newAvatarId || null,
+      }, userId);
+    }
+  }
+
+  return updated;
+}
+
+export async function updateChatAsync(userId: string, id: string, input: UpdateChatInput, opts: { touchUpdatedAt?: boolean } = {}): Promise<Chat | null> {
+  const result = await executeDatabaseOperation<ChatUpdateResult | null>({ kind: "chat-mutation", mutation: { action: "update", userId, id, input, ...opts } });
+  return finishChatUpdate(userId, id, result);
+}
+export async function mergeChatMetadataAsync(userId: string, id: string, partial: Record<string, any>, opts: ChatMetadataMergeOptions = {}): Promise<Chat | null> {
+  const result = await executeDatabaseOperation<ChatUpdateResult | null>({ kind: "chat-mutation", mutation: { action: "merge", userId, id, partial, ...opts } });
+  return finishChatUpdate(userId, id, result);
+}
+export async function removeGroupMemberAsync(userId: string, chatId: string, characterId: string): Promise<Chat | null> {
+  const result = await executeDatabaseOperation<ChatUpdateResult | null>({ kind: "chat-mutation", mutation: { action: "remove-group-member", userId, id: chatId, characterId } });
+  return finishChatUpdate(userId, chatId, result);
 }

@@ -1,86 +1,18 @@
+import { putSettingsWithDb } from "../db/settings-operations";
+import { assertValidKey, serializeValueOrThrow, InvalidSettingError } from "./settings-validation";
+export { InvalidSettingError, MAX_SAVED_THEMES_VALUE_BYTES } from "./settings-validation";
 import { getDb } from "../db/connection";
+import { executeDatabaseOperation } from "../db/execution";
+import { readDatabaseRow, readDatabaseRows, runDatabaseStatement } from "../db/queries";
 import { hasEnabledExtensionForUser } from "../spindle/extension-availability";
 import { REQUEST_HISTORY_SETTING, requestHistoryStore } from "./request-history-store";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import {
-  worldBookVectorDesiredStatusSql,
-  worldBookVectorSettingsFingerprint,
-} from "./world-book-vector-state";
-import { WORLD_BOOK_VECTOR_SETTINGS_KEY } from "./world-book-vector-constants";
-import { normalizeWorldBookVectorSettings } from "./world-book-vector-settings-model";
 
 export interface Setting {
   key: string;
   value: any;
   updated_at: number;
-}
-
-const MAX_SETTING_KEY_LENGTH = 200;
-const MAX_SETTING_VALUE_BYTES = 2 * 1024 * 1024; // 2 MB serialized JSON
-// Theme packs embed their assets as base64 in savedThemes. A fully supported
-// 250 MiB theme archive expands to about 333 MiB when represented as JSON, so
-// this leaves room for the manifest and saved-theme metadata.
-export const MAX_SAVED_THEMES_VALUE_BYTES = 350 * 1024 * 1024;
-const SETTING_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,200}$/;
-
-export class InvalidSettingError extends Error {
-  status = 400 as const;
-}
-
-function markWorldBookVectorStatesStaleForSettingsChange(userId: string): void {
-  getDb().query(
-    `UPDATE world_book_entries
-     SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
-         vector_indexed_at = NULL,
-         vector_index_error = NULL
-     WHERE world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`
-  ).run(userId);
-}
-
-function worldBookVectorIndexSettingsChanged(existingJson: string | undefined, nextValue: unknown): boolean {
-  try {
-    const previous = normalizeWorldBookVectorSettings(existingJson === undefined ? null : JSON.parse(existingJson));
-    const next = normalizeWorldBookVectorSettings(nextValue);
-    return worldBookVectorSettingsFingerprint(previous) !== worldBookVectorSettingsFingerprint(next);
-  } catch {
-    // A malformed legacy value should be treated conservatively so the next
-    // valid save cannot leave vectors built with unknown chunking settings.
-    return true;
-  }
-}
-
-function assertValidKey(key: unknown): asserts key is string {
-  if (typeof key !== "string" || key.length === 0 || key.length > MAX_SETTING_KEY_LENGTH) {
-    throw new InvalidSettingError(
-      `Setting key must be a non-empty string ≤${MAX_SETTING_KEY_LENGTH} chars`,
-    );
-  }
-  if (!SETTING_KEY_PATTERN.test(key)) {
-    throw new InvalidSettingError(
-      "Setting key may only contain letters, digits, '.', '_', '-', and ':'",
-    );
-  }
-}
-
-function serializeValueOrThrow(key: string, value: unknown): string {
-  // Settings storage is opaque JSON; reject payloads that would otherwise
-  // bloat the DB or block the event loop on every read.
-  let json: string;
-  try {
-    json = JSON.stringify(value ?? null);
-  } catch (err: any) {
-    throw new InvalidSettingError(`Setting "${key}" value is not JSON-serializable: ${err?.message || "unknown"}`);
-  }
-  const maxBytes = key === "savedThemes"
-    ? MAX_SAVED_THEMES_VALUE_BYTES
-    : MAX_SETTING_VALUE_BYTES;
-  if (json.length > maxBytes) {
-    throw new InvalidSettingError(
-      `Setting "${key}" exceeds ${maxBytes} bytes serialized`,
-    );
-  }
-  return json;
 }
 
 export function getAllSettings(userId: string): Setting[] {
@@ -150,20 +82,7 @@ export function putSetting(
   assertValidKey(key);
   const json = serializeValueOrThrow(key, value);
   const now = Math.floor(Date.now() / 1000);
-  const existingRow = key === WORLD_BOOK_VECTOR_SETTINGS_KEY
-    ? getDb().query("SELECT value FROM settings WHERE key = ? AND user_id = ?").get(key, userId) as { value: string } | null
-    : null;
-
-  getDb()
-    .query(
-      `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-    )
-    .run(key, json, userId, now);
-
-  if (key === WORLD_BOOK_VECTOR_SETTINGS_KEY && worldBookVectorIndexSettingsChanged(existingRow?.value, value)) {
-    markWorldBookVectorStatesStaleForSettingsChange(userId);
-  }
+  putSettingsWithDb(getDb(), userId, [{ key, json }], now);
 
   const setting = { key, value, updated_at: now };
   if (key === REQUEST_HISTORY_SETTING && value !== true) requestHistoryStore.clear(userId);
@@ -196,41 +115,12 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
     prepared.push({ key, value, json: serializeValueOrThrow(key, value) });
   }
 
-  const db = getDb();
   const now = Math.floor(Date.now() / 1000);
-  const results: Setting[] = [];
-  const existingValues = prepared.some((entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY)
-    ? new Map(
-        (db
-          .query(`SELECT key, value FROM settings WHERE user_id = ? AND key IN (${prepared.map(() => "?").join(", ")})`)
-          .all(userId, ...prepared.map((entry) => entry.key)) as Array<{ key: string; value: string }>)
-          .map((row) => [row.key, row.value]),
-      )
-    : null;
-
-  const upsert = db.query(
-    `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-  );
-
-  const transaction = db.transaction(() => {
-    for (const { key, value, json } of prepared) {
-      upsert.run(key, json, userId, now);
-      results.push({ key, value, updated_at: now });
-    }
-  });
-  transaction();
+  putSettingsWithDb(getDb(), userId, prepared, now);
+  const results = prepared.map(({ key, value }) => ({ key, value, updated_at: now }));
 
   if (prepared.some((entry) => entry.key === REQUEST_HISTORY_SETTING && entry.value !== true)) {
     requestHistoryStore.clear(userId);
-  }
-
-  const worldBookVectorSettingsChanged = prepared.some(
-    (entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY
-      && worldBookVectorIndexSettingsChanged(existingValues?.get(entry.key), entry.value),
-  );
-  if (worldBookVectorSettingsChanged) {
-    markWorldBookVectorStatesStaleForSettingsChange(userId);
   }
 
   eventBus.emit(EventType.SETTINGS_UPDATED, { keys: prepared.map((p) => p.key) }, userId);
@@ -244,5 +134,57 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
 export function deleteSetting(userId: string, key: string): boolean {
   if (key === REQUEST_HISTORY_SETTING) requestHistoryStore.clear(userId);
   const result = getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run(key, userId);
+  return result.changes > 0;
+}
+
+export async function getAllSettingsAsync(userId: string): Promise<Setting[]> {
+  const rows = await readDatabaseRows<{ key: string; value: string; updated_at: number }>("SELECT key, value, updated_at FROM settings WHERE user_id = ?", [userId]);
+  return rows.map((row) => ({ ...row, value: JSON.parse(row.value) }));
+}
+
+export async function getSettingAsync(userId: string, key: string): Promise<Setting | null> {
+  const row = await readDatabaseRow<{ key: string; value: string; updated_at: number }>("SELECT key, value, updated_at FROM settings WHERE key = ? AND user_id = ?", [key, userId]);
+  return row ? { ...row, value: JSON.parse(row.value) } : null;
+}
+
+export async function getSettingsByKeysAsync(userId: string, keys: string[]): Promise<Map<string, any>> {
+  if (keys.length === 0) return new Map();
+  const rows = await readDatabaseRows<{ key: string; value: string }>(`SELECT key, value FROM settings WHERE user_id = ? AND key IN (${keys.map(() => "?").join(", ")})`, [userId, ...keys]);
+  return new Map(rows.map((row) => [row.key, JSON.parse(row.value)]));
+}
+
+export async function putSettingAsync(userId: string, key: string, value: any, options: { suppressBroadcast?: boolean } = {}): Promise<Setting> {
+  assertValidKey(key);
+  const json = serializeValueOrThrow(key, value);
+  const now = Math.floor(Date.now() / 1000);
+  await executeDatabaseOperation({ kind: "settings-put", userId, entries: [{ key, json }], updatedAt: now });
+  if (key === REQUEST_HISTORY_SETTING && value !== true) requestHistoryStore.clear(userId);
+  if (!options.suppressBroadcast) {
+    eventBus.emit(EventType.SETTINGS_UPDATED, { key, value }, userId);
+    if (key === "activeChatId") eventBus.emit(EventType.CHAT_SWITCHED, { chatId: typeof value === "string" ? value : null }, userId);
+  }
+  return { key, value, updated_at: now };
+}
+
+export async function putManyAsync(userId: string, settings: Record<string, any>): Promise<Setting[]> {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new InvalidSettingError("settings payload must be an object");
+  const entries = Object.entries(settings);
+  if (entries.length > MAX_SETTINGS_PER_BULK_PUT) throw new InvalidSettingError(`Cannot upsert more than ${MAX_SETTINGS_PER_BULK_PUT} settings in one request`);
+  const prepared = entries.map(([key, value]) => {
+    assertValidKey(key);
+    return { key, value, json: serializeValueOrThrow(key, value) };
+  });
+  const now = Math.floor(Date.now() / 1000);
+  await executeDatabaseOperation({ kind: "settings-put", userId, entries: prepared.map(({ key, json }) => ({ key, json })), updatedAt: now });
+  if (prepared.some((entry) => entry.key === REQUEST_HISTORY_SETTING && entry.value !== true)) requestHistoryStore.clear(userId);
+  eventBus.emit(EventType.SETTINGS_UPDATED, { keys: prepared.map((entry) => entry.key) }, userId);
+  const activeChat = prepared.find((entry) => entry.key === "activeChatId");
+  if (activeChat) eventBus.emit(EventType.CHAT_SWITCHED, { chatId: typeof activeChat.value === "string" ? activeChat.value : null }, userId);
+  return prepared.map(({ key, value }) => ({ key, value, updated_at: now }));
+}
+
+export async function deleteSettingAsync(userId: string, key: string): Promise<boolean> {
+  const result = await runDatabaseStatement("DELETE FROM settings WHERE key = ? AND user_id = ?", [key, userId]);
+  if (key === REQUEST_HISTORY_SETTING) requestHistoryStore.clear(userId);
   return result.changes > 0;
 }

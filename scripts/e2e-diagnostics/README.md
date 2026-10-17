@@ -24,11 +24,31 @@ bun run diagnose
 
 ## Scripts
 
+- `node check-message-preview.mjs`
+  Exercises the real native message-preview surface, display hooks, resolver registry and regex pipeline with controlled store/HTTP boundaries. Covers owned resolvers and backend display regex, exact source ranges, swipe changes, disabled regex actions, HTML-island disclosures, navigation, source removal and remount. Runs desktop and notched-iPhone-sized layouts in Chromium and WebKit without a live server, credentials or personal data. `PREVIEW_BROWSERS` selects engines; `PLAYWRIGHT_MODULE` can point to an existing installation. Pass `--serve` for a human-review fixture. This does not emulate a physical installed PWA or substitute for the required human live-environment audit.
+
+- `node check-drawer-width.mjs`
+  Exercises the real sidebar width settings controls in the settings layout with controlled persisted state. Checks Default/Custom selection, clearing drag overrides, pointer and keyboard slider input, range boundaries, close/reopen and reload persistence, and containment below the canonical safe-top area. Runs desktop and notched-iPhone-sized viewports at UI scales 1 and 1.25 in Chromium, Firefox and WebKit. No server or personal settings are used. Set `DRAWER_WIDTH_BROWSERS=chromium` for one engine; `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. This checks the settings surface; it does not run the full drawer or emulate a physical installed PWA.
+
 - `node check-spindle-touch-scroll.mjs`
   Audits the real installed-iOS document guard and Spindle widget policy with synthetic touch events in Chromium, Firefox and WebKit, at desktop and notched-iPhone viewport sizes. Checks default guarding, opt-in, isolation from core and nested widgets, shadow content, reversal and root teardown. No server, credentials or user data. `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. This tests cancellation decisions, not physical installed-PWA scrolling.
 
 - `node check-world-book-workspace.mjs`
   Bundles the real native book modal, entry list and editor with controlled API/store boundaries. Covers same-instance maximize/restore, independent collapsed navigation, cross-folder/session tabs, keyboard tab switching, two-editor split/swap/close, mobile open-entry switching and Books views, keyboard-height layout, 0/1/44/50/137-entry books, exact tag filtering and vector failure indicators. Also checks activation method/status/chance transitions, vector recursion restrictions, keyboard focus, equal timing columns, Group Name/Weight proportions, equal UID/Automation dimensions, a read-only UID, compact organization rows and horizontal containment (including long untranslated labels). Checks desktop Books/Entries pointer and keyboard resizing, scaled collapse thresholds, focus restoration, pointer cancellation, Escape without closing the modal, before-paint mobile book-header hiding/restoration, and shared organization/detail backgrounds under light and dark theme variables. Runs desktop/mobile at UI scales 1 and 1.25 in Chromium, Firefox and WebKit without login or personal data. Also renders the actual inline compact entry list in the real sidebar scroll-panel styles at widths 320/440/560px and scales 1/1.25: expanded Injection/Activation field heights, wheel scrolling over the form, activation selection and disclosure draft retention. Set `SIDEBAR_ONLY=1` to run those 18 cases alone. Set `WORKSPACE_BROWSERS=chromium` for one engine; `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. This checks core behavior; it does not emulate an installed Suite extension or a physical mobile keyboard.
+- `node check-world-book-reorder.mjs`
+  Exercises All entries on a controlled 251-entry book in the real workspace and sidebar. Checks keyboard and pointer ordering across the former 200-entry boundary, complete revision-guarded payloads, handle focus, editor mount guards, switching back to pagination, saved preferences after remount and search disabling reorder. Also checks preview geometry inside a transformed sidebar, pointer tracking after deep scrolling, a single visible drag preview, source restoration after drop/cancel and row-render counts at pickup and movement. Runs desktop/iPhone-sized layouts at scales 1 and 1.25 in Chromium, Firefox and WebKit. Set `REORDER_BROWSERS=chromium` for one engine; `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. No login or personal data.
+  For a focused performance comparison, run from the repository root in PowerShell:
+
+  ```powershell
+  $env:REORDER_BROWSERS = 'chromium'
+  $env:REORDER_BENCHMARK = '1'
+  $env:REORDER_WITHOUT_MEMO = '1'
+  node scripts/e2e-diagnostics/check-world-book-reorder.mjs
+  $env:REORDER_WITHOUT_MEMO = '0'
+  node scripts/e2e-diagnostics/check-world-book-reorder.mjs
+  ```
+
+  The first run disables row memoization in memory without editing source. Token-cell renders measure row-content work: the 251-entry fixture measured 1,009 at pickup and 1,545 during pointer movement without memoization, versus 2 and 2 with it. Counts can vary with browser scheduling.
 - `node check-world-book-search.mjs`
   Exercises ranked search in the real native workspace and sidebar with controlled entries. Checks folder card layout, touch targets, visible keyboard focus and folder activation, plus an exact title beyond the first server page, relevance before result pagination, highlights, typo matching, Escape/focus, returning from the editor, empty results and clearing back to ordinary navigation. Runs desktop/mobile widths at UI scales 1 and 1.25 in Chromium, Firefox and WebKit. Set `SEARCH_BROWSERS=chromium` for one engine; `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. No login or personal data.
 - `node check-entry-organization.mjs`
@@ -38,6 +58,13 @@ bun run diagnose
   with no server or login required. Install the frontend dependencies and run
   `bun x playwright install chromium firefox webkit` here first. Set
   `UI_SCALE_BROWSERS=chromium` to run one engine. See [UI scaling](../../developer-docs/docs/frontend-api/ui-scaling.md).
+- `node check-expanded-editor-caret.mjs`
+  Checks the real expanded editor with font scales 0.85–2, combined UI scaling,
+  desktop/mobile widths, highlighted/plain text, and inline/modal layouts in
+  Chromium, Firefox and WebKit. Verifies matching wrapping widths, native caret
+  placement and typing after scrolling, including live scale and content changes.
+  No server or login required. Set `EDITOR_BROWSERS=webkit` or pass
+  `--browsers=webkit` to focus on the macOS desktop engine.
 - `bun run diagnose`
   Captures general chat scroll and virtualization stats on the busiest recent chat.
 - `bun run diagnose:spindle`

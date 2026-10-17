@@ -1,11 +1,12 @@
-import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
+import { useRef, useState, useEffect, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import { getCharacterAvatarLargeUrl, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
-import { prefetchImages } from '@/lib/imageDecodeCache'
+import { useImagePrefetch } from '@/hooks/useImagePrefetch'
 import { measureLayoutHeight } from '@/lib/uiScale'
 import { readLayoutVar } from '@/lib/layoutVars'
 import CharacterCard from './CharacterCard'
+import VirtualGrid from '@/components/shared/VirtualGrid'
 import type { Character, CharacterSummary } from '@/types/api'
 import styles from './CharacterGrid.module.css'
 
@@ -68,6 +69,7 @@ export default function CharacterGrid({
   const geometryProbeRef = useRef<HTMLDivElement>(null)
   const columnStyleProbeRef = useRef<HTMLSpanElement>(null)
   useScrollGate(parentRef)
+  const prefetchImages = useImagePrefetch()
 
   const [containerWidth, setContainerWidth] = useState(400)
   const [layoutMetrics, setLayoutMetrics] = useState({
@@ -171,21 +173,16 @@ export default function CharacterGrid({
     virtualizer.measure()
   }, [virtualizer, rowHeight, columns])
 
-  const getCharacter = useCallback(
-    (rowIndex: number, colIndex: number): Character | CharacterSummary | undefined => {
-      const index = rowIndex * columns + colIndex
-      return characters[index]
-    },
-    [characters, columns]
-  )
-
   // Prefetch avatar images for rows near the visible viewport so they're
   // already decoded when the virtualizer scrolls them into view.
   const virtualItems = virtualizer.getVirtualItems()
   const visStart = virtualItems.length > 0 ? virtualItems[0].index : -1
   const visEnd = virtualItems.length > 0 ? virtualItems[virtualItems.length - 1].index : -1
   useEffect(() => {
-    if (visStart < 0 || characters.length === 0) return
+    if (visStart < 0 || characters.length === 0) {
+      prefetchImages([])
+      return
+    }
     const startRow = Math.max(0, visStart - PREFETCH_ROWS)
     const endRow = Math.min(rowCount - 1, visEnd + PREFETCH_ROWS)
     const startIdx = startRow * columns
@@ -197,8 +194,8 @@ export default function CharacterGrid({
       const url = getCharacterAvatarLargeUrl(char) ?? getCharacterAvatarThumbUrl(char)
       if (url) urls.push(url)
     }
-    if (urls.length > 0) prefetchImages(urls)
-  }, [visStart, visEnd, characters, columns, rowCount])
+    prefetchImages(urls)
+  }, [visStart, visEnd, characters, columns, rowCount, prefetchImages])
 
   if (characters.length === 0) return null
 
@@ -217,45 +214,29 @@ export default function CharacterGrid({
           position: 'relative',
         }}
       >
-        {virtualizer.getVirtualItems().map((virtualRow) => (
-          <div
-            key={virtualRow.key}
-            className={styles.row}
-            ref={virtualizer.measureElement}
-            data-index={virtualRow.index}
-            style={{
-              position: 'absolute',
-              top: virtualRow.start,
-              left: 0,
-              right: 0,
-              display: 'grid',
-              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-              gridAutoRows: 'auto',
-              alignItems: 'start',
-              gap: `${gap}px`,
-              padding: `0 ${gap / 2}px ${gap}px`,
-            }}
-          >
-            {Array.from({ length: columns }).map((_, colIndex) => {
-              const character = getCharacter(virtualRow.index, colIndex)
-              if (!character) return <div key={colIndex} />
-              return (
-                <CharacterCard
-                  key={character.id}
-                  character={character}
-                  isFavorite={favSet.has(character.id)}
-                  isSelected={batchSet.has(character.id)}
-                  batchMode={batchMode}
-                  useLargeTier
-                  onOpen={onOpen}
-                  onEdit={onEdit}
-                  onToggleFavorite={onToggleFavorite}
-                  onToggleBatch={onToggleBatch}
-                />
-              )
-            })}
-          </div>
-        ))}
+        <VirtualGrid
+          items={characters}
+          rows={virtualItems}
+          columns={columns}
+          gap={gap}
+          paddingInline={gap / 2}
+          className={styles.row}
+          measureElement={virtualizer.measureElement}
+          getItemKey={(character) => character.id}
+          renderItem={(character) => (
+            <CharacterCard
+              character={character}
+              isFavorite={favSet.has(character.id)}
+              isSelected={batchSet.has(character.id)}
+              batchMode={batchMode}
+              useLargeTier
+              onOpen={onOpen}
+              onEdit={onEdit}
+              onToggleFavorite={onToggleFavorite}
+              onToggleBatch={onToggleBatch}
+            />
+          )}
+        />
       </div>
     </div>
   )

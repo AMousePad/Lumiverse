@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import * as profiles from "./preset-profiles.service";
 import { deleteConnection } from "./connections.service";
@@ -27,13 +27,17 @@ for (const [key, remove] of [
     getDb().query("INSERT INTO settings (key, user_id, value) VALUES (?, 'other', '{}')").run(key);
     getDb().run("INSERT INTO connection_profiles VALUES ('id', 'user')");
     getDb().run("INSERT INTO connection_profiles VALUES ('id', 'other')");
-    const result = eventBus.withBufferedEvents(() => remove());
-    expect(await result.value).toBe(true);
-    expect(result.events).toEqual([{ event: EventType.PRESET_PROFILE_CHANGED,
-      payload: { key: key === "connection" ? "presetProfile:connection:id" : key, binding: null }, userId: "user", options: undefined }]);
-    const repeated = eventBus.withBufferedEvents(() => remove());
-    expect(await repeated.value).toBe(false);
-    expect(repeated.events).toEqual([]);
+    const emit = spyOn(eventBus, "emit").mockImplementation(() => {});
+    try {
+      expect(await remove()).toBe(true);
+      const events = emit.mock.calls.filter(([event]) => event === EventType.PRESET_PROFILE_CHANGED)
+        .map(([event, payload, userId, options]) => ({ event, payload, userId, options }));
+      expect(events).toEqual([{ event: EventType.PRESET_PROFILE_CHANGED,
+        payload: { key: key === "connection" ? "presetProfile:connection:id" : key, binding: null }, userId: "user", options: undefined }]);
+      emit.mockClear();
+      expect(await remove()).toBe(false);
+      expect(emit).not.toHaveBeenCalled();
+    } finally { emit.mockRestore(); }
     expect(getDb().query("SELECT * FROM settings WHERE user_id = 'other'").all()).toHaveLength(1);
     expect(getDb().query("SELECT * FROM connection_profiles WHERE user_id = 'other'").all()).toHaveLength(1);
   });

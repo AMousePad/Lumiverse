@@ -28,7 +28,7 @@ app.post("/chats", async (c) => {
     }
     characterId = matches[0].id;
   } else {
-    const char = charactersSvc.getCharacter(userId, characterId);
+    const char = await charactersSvc.getCharacterAsync(userId, characterId);
     if (!char) {
       return c.json({ error: `Character not found: ${characterId}` }, 404);
     }
@@ -105,7 +105,7 @@ app.post("/personas", async (c) => {
         continue;
       }
 
-      const persona = personasSvc.createPersona(userId, {
+      const persona = await personasSvc.createPersonaAsync(userId, {
         name: input.name,
         title: input.title,
         description: input.description,

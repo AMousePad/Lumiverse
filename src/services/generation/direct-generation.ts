@@ -185,7 +185,7 @@ async function prepareQuietCall(
   );
   let mergedParams: GenerationParameters = input.parameters || {};
   if (connection.preset_id) {
-    const preset = presetsSvc.getPreset(userId, connection.preset_id);
+    const preset = await presetsSvc.getPresetAsync(userId, connection.preset_id);
     if (preset) mergedParams = { ...preset.parameters, ...mergedParams };
   }
   applyEffectiveReasoningSettings(

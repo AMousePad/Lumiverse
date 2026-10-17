@@ -119,6 +119,27 @@ export function persistMacroVariableState(
   });
 }
 
+export async function persistMacroVariableStateAsync(
+  userId: string,
+  chatId: string,
+  env: MacroEnv,
+): Promise<void> {
+  await mergeMacroVariables(userId, chatId, Object.fromEntries(env.variables.global), Object.fromEntries(env.variables.chat));
+}
+
+async function mergeMacroVariables(
+  userId: string,
+  chatId: string,
+  globalVariables: Record<string, string>,
+  chatVariables: Record<string, string>,
+): Promise<void> {
+  // Read and merge in the child transaction so concurrent extension keys survive.
+  await chatsSvc.mergeChatMetadataAsync(userId, chatId, {
+    macro_variables: { global: globalVariables },
+    chat_variables: chatVariables,
+  }, { mergeObjectPaths: [["macro_variables", "global"], ["chat_variables"]] });
+}
+
 export async function reconcileChatMessageMacros(
   input: ReconcileChatMessageMacrosInput,
 ): Promise<Map<string, string>> {
@@ -147,14 +168,7 @@ export async function reconcileChatMessageMacros(
   }
 
   if (input.persistVariables !== false && globalVariables && chatVariables) {
-    const chat = chatsSvc.getChat(input.userId, input.chatId);
-    // Env values win on collision but concurrent extension writes survive.
-    const existingMacroVars = (chat?.metadata?.macro_variables as Record<string, unknown> | undefined) ?? {};
-    const existingChatVars = (chat?.metadata?.chat_variables as Record<string, string> | undefined) ?? {};
-    chatsSvc.mergeChatMetadata(input.userId, input.chatId, {
-      macro_variables: buildPersistedMacroVariables(existingMacroVars, globalVariables),
-      chat_variables: { ...existingChatVars, ...chatVariables },
-    });
+    await mergeMacroVariables(input.userId, input.chatId, globalVariables, chatVariables);
   }
 
   return resolvedById;
