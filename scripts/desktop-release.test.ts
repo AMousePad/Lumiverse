@@ -68,7 +68,9 @@ test("nightly skips unrelated commits and rebuilds when shipped source changes",
   await expect(prepareDesktopRelease({ cwd, channel: "stable", repository: "test/Lumiverse", runNumber: "1", tagVersion: "0.3.2", readFeed: async () => null })).rejects.toThrow("tag must match");
   writeFileSync(join(cwd, "desktop/src-tauri/tauri.conf.json"), JSON.stringify({ version: "0.4.0" }));
   await expect(prepare()).rejects.toThrow("Desktop versions differ");
-});
+// This fixture starts many Git processes; Windows process startup can exceed
+// Bun's five-second default even when every assertion passes.
+}, 60_000);
 test("feeds require every architecture and cannot mix channels, commits, or signatures", () => {
   expect(validateFeed(feed(), "nightly").version).toBe(build.version);
   expect(() => validateFeed(feed({ channel: "stable" }), "nightly")).toThrow();
