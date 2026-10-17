@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { computeGroups, importFromSTPreset } from './service'
+import { computeGroups, importFromSTPreset, marshalPreset } from './service'
 
 describe('SillyTavern preset import', () => {
   test('keeps prompts grouped under sequential ━ category headings', () => {
@@ -41,5 +41,45 @@ describe('SillyTavern preset import', () => {
       { category: '━━━━ OOC ━━━', children: ['Tone', 'Style'] },
       { category: '━━━━ Optional', children: ['Detailing', 'Chat History'] },
     ]))
+  })
+
+  test('keeps extension data such as JS-Slash-Runner scripts as passthrough metadata', () => {
+    const tavernHelper = {
+      scripts: [{ type: 'script', enabled: true, name: 'Panel', id: 'script-1', content: 'console.log(1)', info: '', button: { enabled: true, buttons: [{ name: 'Open', visible: true }] }, data: {} }],
+      variables: {},
+    }
+    const toolkit = { presetPromptGroups: [{ name: 'Mode', ids: ['ooc-tone'] }] }
+    const preset = importFromSTPreset({
+      prompts: [{ identifier: 'ooc-tone', name: 'Tone', content: 'Write vividly.' }],
+      extensions: {
+        regex_scripts: [{ scriptName: 'Hide', findRegex: '<x>', replaceString: '' }],
+        tavern_helper: tavernHelper,
+        otherToolkit: toolkit,
+        source: { type: 'spoofed' },
+        _lumiverse_install_source: 'lumihub',
+      },
+    }, 'Scripted')
+
+    expect(preset.passthroughMetadata).toEqual({ tavern_helper: tavernHelper, otherToolkit: toolkit })
+    expect(preset.source?.type).toBe('st_import')
+    expect(preset.lumihubMeta).toBeNull()
+
+    const metadata = marshalPreset(preset).metadata as Record<string, unknown>
+    expect(metadata.tavern_helper).toEqual(tavernHelper)
+    expect(metadata.otherToolkit).toEqual(toolkit)
+    expect(metadata).not.toHaveProperty('regex_scripts')
+    expect((metadata.source as { type?: string }).type).toBe('st_import')
+  })
+
+  test('imports presets without extensions with empty passthrough metadata', () => {
+    const preset = importFromSTPreset({
+      prompts: [{ identifier: 'ooc-tone', name: 'Tone', content: 'Write vividly.' }],
+    }, 'Plain')
+    expect(preset.passthroughMetadata).toEqual({})
+    const malformed = importFromSTPreset({
+      prompts: [{ identifier: 'ooc-tone', name: 'Tone', content: 'Write vividly.' }],
+      extensions: ['not', 'a', 'record'] as unknown as Record<string, unknown>,
+    }, 'Malformed')
+    expect(malformed.passthroughMetadata).toEqual({})
   })
 })
