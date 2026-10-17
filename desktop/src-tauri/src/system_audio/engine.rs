@@ -474,7 +474,7 @@ mod tests {
             },
             "stereo capture did not produce audible frames",
         );
-        let before_reopen = count(&rig);
+        let drains_before_reopen = rig.knobs.drains.load(Ordering::SeqCst);
         rig.knobs.reopen_works.store(true, Ordering::SeqCst);
         rig.knobs.gone.store(true, Ordering::SeqCst);
         wait_until(
@@ -482,12 +482,17 @@ mod tests {
             "capture did not reopen the device",
         );
         wait_until(
+            || rig.knobs.drains.load(Ordering::SeqCst) > drains_before_reopen + 1,
+            "capture did not drain the reopened device",
+        );
+        let resumed_after_reopen = count(&rig);
+        wait_until(
             || {
                 rig.frames
                     .lock()
                     .unwrap()
                     .iter()
-                    .skip(before_reopen)
+                    .skip(resumed_after_reopen)
                     .any(|frame| {
                         frame.stereo.as_ref().is_some_and(|stereo| {
                             stereo.left.amplitude > 0.0 && stereo.right.amplitude > 0.0
