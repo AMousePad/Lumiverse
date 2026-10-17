@@ -87,6 +87,7 @@ frontend/src/lib/generatedComponentCss.ts
 frontend/.dist-build-*/
 frontend/.dist-backup-*/
 *.tsbuildinfo
+desktop/tools/verify-updater
 
 # =============================================================================
 # Zensical docs build output
