@@ -75,5 +75,10 @@ strip = true
 lto = true
 codegen-units = 1
 
+# Parallelize the large application crate on every release architecture while
+# keeping dependency code generation and release LTO unchanged.
+[profile.release.package.lumiverse-tray]
+codegen-units = 8
+
 [target.'cfg(unix)'.dev-dependencies]
 zbus = "=5.18.0"
