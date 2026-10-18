@@ -330,12 +330,8 @@ function markPresetAsLocalImport(preset: LoomPreset): LoomPreset {
 }
 
 function extractPassthroughMetadata(meta: Record<string, any>): Record<string, unknown> {
-  const bag: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(meta)) {
-    if (isLoomOwnedPresetMetadataKey(key)) continue
-    bag[key] = value
-  }
-  return bag
+  return Object.fromEntries(Object.entries(meta)
+    .filter(([key]) => !isLoomOwnedPresetMetadataKey(key)))
 }
 
 function hasLegacyPromptOrderShape(promptOrder: unknown): boolean {
@@ -1498,6 +1494,7 @@ interface STPresetData {
   prompt_order?: Record<string, { order?: Array<{ identifier: string; enabled?: boolean }> }>
   extensions?: {
     regex_scripts?: unknown[]
+    [key: string]: unknown
   }
   // Root-level behavior prompts (ST stores these outside the prompts array)
   continue_nudge_prompt?: string
@@ -1506,6 +1503,18 @@ interface STPresetData {
   new_chat_prompt?: string
   new_group_chat_prompt?: string
   send_if_empty?: string
+}
+
+/**
+ * Keep the extension data an ST preset carries (e.g. JS-Slash-Runner scripts)
+ * as passthrough metadata, stored as-is and never executed. regex_scripts is
+ * imported separately as preset-linked regex rows; Loom-owned keys are skipped.
+ */
+function importSTExtensions(extensions: unknown): Record<string, unknown> {
+  if (!isRecord(extensions)) return {}
+  return Object.fromEntries(Object.entries(extensions).filter(([key, value]) => (
+    key !== 'regex_scripts' && !isLoomOwnedPresetMetadataKey(key) && value !== undefined
+  )))
 }
 
 /**
@@ -1649,7 +1658,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     coverUrl: null,
     presetVersion: null,
     lumihubMeta: null,
-    passthroughMetadata: {},
+    passthroughMetadata: importSTExtensions(stPresetData.extensions),
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
