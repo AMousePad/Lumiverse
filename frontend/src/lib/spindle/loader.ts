@@ -94,6 +94,7 @@ import { spindleApi } from '@/api/spindle'
 import { charactersApi } from '@/api/characters'
 import * as chatsApiModule from '@/api/chats'
 import * as connectionsApiModule from '@/api/connections'
+import * as embeddingsApiModule from '@/api/embeddings'
 import * as worldBooksApiModule from '@/api/world-books'
 import * as tokenizersApiModule from '@/api/tokenizers'
 import { settingsApi } from '@/api/settings'
@@ -142,6 +143,7 @@ import {
   type SpindleSettingsAPI,
 } from './settings-bridge'
 import { createFrontendDomainApi } from './frontend-domain-api'
+import { SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
 import { createStateSelectors, type StateSelectors } from './state-selectors'
 import {
   canonicalFrontendAuthorityResolver,
@@ -1248,6 +1250,8 @@ async function doLoadFrontendExtension(
         ?? (async (_id: string): Promise<ConnectionModelsResult> => ({ models: [], provider: '' })),
       update: connectionsApiModule.connectionsApi?.update
         ?? (async (_id: string, _input: UpdateConnectionProfileInput): Promise<ConnectionProfile> => ({ } as ConnectionProfile)),
+      embeddingConfig: embeddingsApiModule.embeddingsApi?.getConfig
+        ?? (async () => ({ connectionProfiles: [], primaryProfileId: null })),
     }
     const runtimeWorldBooksApi = {
       list: worldBooksApiModule.worldBooksApi?.list
@@ -1311,6 +1315,7 @@ async function doLoadFrontendExtension(
       connections: {
         models: runtimeConnectionsApi.models,
         update: runtimeConnectionsApi.update,
+        embeddingConfig: runtimeConnectionsApi.embeddingConfig,
       },
       chats: {
         listForCharacter: runtimeChatsApi.listCharacterChats,
@@ -1422,6 +1427,7 @@ async function doLoadFrontendExtension(
       descriptorVersion: 1 as const,
       lumiverseVersion: LUMIVERSE_VERSION,
       capabilities: Object.freeze({ ...SPINDLE_HOST_CAPABILITIES, ...THEME_AUTHORING_HOST_CAPABILITIES, ...SPINDLE_STT_HOST_CAPABILITIES, ...SPINDLE_SYSTEM_AUDIO_HOST_CAPABILITIES,
+        ...SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES,
         ...CLIENT_HOST_CAPABILITIES,
         'frontend-session-origin-v1': 1,
       }),

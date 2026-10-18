@@ -142,8 +142,14 @@ const DOMAIN_ROWS: readonly AuthorityRow[] = [
     surface: 'ctx_member' as const, id: `ctx.stt.${method}`, source: `stt.${method}`, ctxLeaf: `ctx.stt.${method}`,
     gatedBecause: 'Rule-B clause (c): invokes host-managed speech processing; capture additionally requires browser microphone consent',
   })),
-  free({ surface: 'ctx_member', id: 'ctx.connections.list', source: 'connections.list', ctxLeaf: 'ctx.connections.list', freeBecause: 'rest: GET /api/v1/connections returns credential-redacted profiles for the authenticated session' }),
-  free({ surface: 'ctx_member', id: 'ctx.connections.getActive', source: 'connections.active', ctxLeaf: 'ctx.connections.getActive', freeBecause: 'rest: GET /api/v1/connections returns the authenticated active-profile projection' }),
+  free({ surface: 'ctx_member', id: 'ctx.connections.list', source: 'connections.list', ctxLeaf: 'ctx.connections.list', freeBecause: [
+    'rest: GET /api/v1/connections returns credential-redacted profiles for the authenticated session',
+    'rest: GET /api/v1/{image-gen,tts,stt,decision}-connections and /api/v1/embeddings/config return credential-redacted profiles; list({ kind }) projects only id, name, provider, model, TTS voice and the active flag',
+  ] }),
+  free({ surface: 'ctx_member', id: 'ctx.connections.getActive', source: 'connections.active', ctxLeaf: 'ctx.connections.getActive', freeBecause: [
+    'rest: GET /api/v1/connections returns the authenticated active-profile projection',
+    'limb-e: getActive(kind) is the active row of the same list({ kind }) projection',
+  ] }),
   free({ surface: 'ctx_member', id: 'ctx.connections.subscribe', source: 'connections.active', ctxLeaf: 'ctx.connections.subscribe', freeBecause: 'limb-e: subscription observes the same active-profile projection as ctx.connections.getActive' }),
   gated('generation', { surface: 'ctx_member', id: 'ctx.connections.models', source: 'connections.models', ctxLeaf: 'ctx.connections.models', gatedBecause: 'Rule-B clause (a): model lookup spends the stored provider credential on outbound egress' }),
   gated('generation', { surface: 'ctx_member', id: 'ctx.connections.setActive', source: 'connections.setActive', ctxLeaf: 'ctx.connections.setActive', gatedBecause: 'Rule-B clause (c): the store action persists generation-routing side effects' }),
