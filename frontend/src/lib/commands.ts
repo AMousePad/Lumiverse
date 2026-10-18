@@ -3,7 +3,7 @@ import type { ComponentType } from 'react'
 import {
   Plus, RotateCw, CornerDownLeft, Trash2, Edit3, Copy,
   Eye, EyeOff, Columns, FolderOpen, ClipboardCopy, Upload, Search,
-  GitBranch,
+  GitBranch, Square, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import i18n from '@/i18n'
 import { useStore } from '@/store'
@@ -14,6 +14,7 @@ import { DRAWER_TABS, registryToCommands } from '@/lib/drawer-tab-registry'
 import { getVisibleSettingsTabs, settingsRegistryToCommands } from '@/lib/settings-tab-registry'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { preloadChatNavigationSnapshot } from '@/lib/chatNavigationSnapshot'
+import { executeSwipe } from '@/hooks/useSwipeAction'
 
 export type CommandScope = 'global' | 'chat' | 'chat-idle' | 'landing' | 'character'
 
@@ -34,13 +35,21 @@ export const GROUP_ORDER: CommandGroup[] = ['actions', 'panels', 'settings', 'ex
 
 const tc = (key: string, options?: Record<string, unknown>) => i18n.t(key, { ns: 'commands', ...options })
 
+/** Swipe the last assistant message, like the ArrowLeft/ArrowRight shortcut. */
+async function swipeLastAssistant(direction: 'left' | 'right') {
+  const { activeChatId, messages } = useStore.getState()
+  const target = messages.findLast((message) => !message.is_user)
+  if (!activeChatId || !target) return
+  await executeSwipe(target, activeChatId, direction)
+}
+
 export const COMMANDS: Command[] = [
 
 
   {
     id: 'action-regenerate',
     label: 'Regenerate Response',
-    description: 'Delete the last AI reply and generate a new one',
+    description: 'Generate a new swipe for the last AI reply',
     icon: RotateCw,
     keywords: ['regenerate', 'retry', 'redo', 'reroll', 'response'],
     group: 'actions',
@@ -94,6 +103,47 @@ export const COMMANDS: Command[] = [
         addToast({ type: 'error', message: msg })
       }
     },
+  },
+  {
+    id: 'action-stop-generation',
+    label: 'Stop Generation',
+    description: 'Stop the reply that is being generated in this chat',
+    icon: Square,
+    keywords: ['stop', 'cancel', 'abort', 'halt', 'interrupt', 'generation'],
+    group: 'actions',
+    scope: 'chat',
+    run: async () => {
+      const { activeChatId, activeGenerationId, isStreaming, mpRoomId, mpIsHost, stopStreaming } = useStore.getState()
+      // Room peers do not own the host's generation (same rule as the stop button).
+      if (!activeChatId || (mpRoomId && !mpIsHost)) return
+      try {
+        // Without a generation id the backend stops every generation of this chat.
+        await generateApi.stop(undefined, activeChatId)
+      } catch (err) {
+        console.error('[commands] Failed to stop generation:', err)
+      }
+      if (isStreaming && !activeGenerationId) stopStreaming()
+    },
+  },
+  {
+    id: 'action-swipe-left',
+    label: 'Previous Swipe',
+    description: 'Show the previous swipe of the last AI reply',
+    icon: ChevronLeft,
+    keywords: ['swipe', 'left', 'previous', 'back', 'alternate', 'response'],
+    group: 'actions',
+    scope: 'chat',
+    run: () => swipeLastAssistant('left'),
+  },
+  {
+    id: 'action-swipe-right',
+    label: 'Next Swipe',
+    description: 'Show the next swipe of the last AI reply, or generate a new one after the last swipe',
+    icon: ChevronRight,
+    keywords: ['swipe', 'right', 'next', 'forward', 'alternate', 'reroll', 'response'],
+    group: 'actions',
+    scope: 'chat',
+    run: () => swipeLastAssistant('right'),
   },
 
   {

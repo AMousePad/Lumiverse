@@ -22,6 +22,10 @@ const testStore = {
   extensionCommands: [],
   inputBarActions: [],
   pendingWorldBookEditEntryId: null as string | null,
+  settingsCalls: [] as unknown[][],
+  openSettings(...args: unknown[]) {
+    testStore.settingsCalls.push(args)
+  },
   activeModal: null as string | null,
   modalProps: {} as Record<string, unknown>,
   setPendingWorldBookEditEntryId(id: string | null) {
@@ -184,6 +188,17 @@ describe('H4 host surface catalog and invocation', () => {
     })
     await crossApi.invoke({ kind: 'input_bar_action', id: 'b-action' })
     expect(calls).toEqual(['a-action', 'b-action'])
+  })
+
+  test('default settings action forwards the section anchor', () => {
+    testStore.settingsCalls = []
+    const api = createHostSurfaceAPI({
+      extensionId: 'ext-a',
+      getInputs: () => ({ userRole: 'user', settingsTabs: [settings('voice')], inputBarActions: [], extensionCommands: [] }),
+    })
+    api.invoke({ kind: 'settings_tab', id: 'voice' }, { anchorId: 'setsec-voice-tts' })
+    api.invoke({ kind: 'settings_tab', id: 'voice' })
+    expect(testStore.settingsCalls).toEqual([['voice', { anchorId: 'setsec-voice-tts' }], ['voice', undefined]])
   })
 
   test('role-filtered settings remain absent for invocation and snapshot', () => {

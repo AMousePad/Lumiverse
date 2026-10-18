@@ -69,6 +69,9 @@ const SETTINGS_TAB_IDS = [
 const CORE_ACTION_ROWS: readonly AuthorityRow[] = [
   gated('generation', { surface: 'host_action', id: 'command:action-regenerate', source: 'generation.regenerate', gatedBecause: 'Rule-B clause (a): starts credentialed provider generation' }),
   gated('generation', { surface: 'host_action', id: 'command:action-continue', source: 'generation.continue', gatedBecause: 'Rule-B clause (a): starts credentialed provider generation' }),
+  gated('generation', { surface: 'host_action', id: 'command:action-stop-generation', source: 'generation.stop', gatedBecause: 'Rule-B clause (a): ends a credentialed provider generation of the active chat' }),
+  gated('chats', { surface: 'host_action', id: 'command:action-swipe-left', source: 'chats.message.swipe', gatedBecause: 'Rule-B clause (b): durable swipe selection write via messagesApi.swipe' }),
+  gated('generation', { surface: 'host_action', id: 'command:action-swipe-right', source: 'generation.swipe', gatedBecause: 'Rule-B clause (a): past the last swipe it starts credentialed provider generation' }),
   free({ surface: 'host_action', id: 'command:action-new-chat', source: 'nav.route:/', freeBecause: 'pure-host-action: navigates to an allowlisted landing route' }),
   free({ surface: 'host_action', id: 'command:action-character-browser', source: 'nav.route:/characters', freeBecause: 'pure-host-action: navigates to an allowlisted character route' }),
   gated('characters', { surface: 'host_action', id: 'command:action-import-character', source: 'characters.import', gatedBecause: 'Rule-B clause (b): durable character write after a user file selection' }),

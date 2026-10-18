@@ -242,7 +242,7 @@ function defaultRuntime(
   return {
     openDrawer: (id) => useStore.getState().openDrawer(id),
     closeDrawer: () => useStore.getState().closeDrawer(),
-    openSettings: (id) => useStore.getState().openSettings(id),
+    openSettings: (id, anchorId) => useStore.getState().openSettings(id, anchorId ? { anchorId } : undefined),
     closeSettings: () => useStore.getState().closeSettings(),
     openCommandPalette: () => useStore.getState().openCommandPalette(),
     closeCommandPalette: () => useStore.getState().closeCommandPalette(),
