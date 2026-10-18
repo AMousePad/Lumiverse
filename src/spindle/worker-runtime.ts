@@ -96,6 +96,7 @@ import type {
   QuietTrackedRequestDTO,
   QuietTrackedResultDTO,
   SpindleHostDescriptorV1,
+  ActivePresetDTO,
 } from "lumiverse-spindle-types";
 import type {
   MediaConvertAudioRequestDTO,
@@ -378,6 +379,7 @@ type RuntimeWorkerToHost =
   | { type: "user_get_role"; requestId: string; userId?: string }
   | { type: "presets_list"; requestId: string; limit?: number; offset?: number; userId?: string }
   | { type: "presets_get"; requestId: string; presetId: string; userId?: string }
+  | { type: "presets_get_active"; requestId: string; chatId?: string; userId?: string }
   | { type: "presets_create"; requestId: string; input: CreatePresetInput; userId?: string }
   | { type: "presets_update"; requestId: string; presetId: string; input: UpdatePresetInput; userId?: string }
   | { type: "presets_delete"; requestId: string; presetId: string; userId?: string }
@@ -911,6 +913,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
   presets: {
     list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: Preset[]; total: number }>;
     get(presetId: string, userId?: string): Promise<Preset | null>;
+    getActive(chatId?: string, userId?: string): Promise<ActivePresetDTO>;
     create(input: CreatePresetInput, userId?: string): Promise<Preset>;
     update(presetId: string, input: UpdatePresetInput, userId?: string): Promise<Preset>;
     delete(presetId: string, userId?: string): Promise<boolean>;
@@ -2916,6 +2919,11 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "presets_get", requestId, presetId, userId });
       return result as Preset | null;
+    },
+    async getActive(chatId?: string, userId?: string): Promise<ActivePresetDTO> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "presets_get_active", requestId, chatId, userId });
+      return result as ActivePresetDTO;
     },
     async create(input: CreatePresetInput, userId?: string): Promise<Preset> {
       assertMutationAllowed("spindle.presets.create()");

@@ -357,6 +357,7 @@ type RuntimeWorkerToHost =
   | { type: "user_storage_stat"; requestId: string; path: string; userId?: string }
   | { type: "presets_list"; requestId: string; limit?: number; offset?: number; userId?: string }
   | { type: "presets_get"; requestId: string; presetId: string; userId?: string }
+  | { type: "presets_get_active"; requestId: string; chatId?: string; userId?: string }
   | { type: "presets_create"; requestId: string; input: CreatePresetInput; userId?: string }
   | { type: "presets_update"; requestId: string; presetId: string; input: UpdatePresetInput; userId?: string }
   | { type: "presets_delete"; requestId: string; presetId: string; userId?: string }
