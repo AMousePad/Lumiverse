@@ -303,7 +303,6 @@ export function createHostSurfaceAPI(options: HostSurfaceAPIFactoryOptions): Hos
     return {
       ...options,
       userRole: state.user?.role ?? null,
-      settingsTabs: filterEnabledFrontendContributions(state.settingsTabs, extensions) as unknown as readonly SettingsTabEntry[],
       extensionTabs: filterEnabledFrontendContributions(state.drawerTabs, extensions),
       extensionCommands: filterEnabledFrontendContributions(state.extensionCommands, extensions),
       inputBarActions: filterEnabledFrontendContributions(state.inputBarActions, extensions),
