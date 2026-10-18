@@ -1,4 +1,5 @@
 import { getDb } from "../db/connection";
+import type { EmbeddingConnectionDTO, EmbeddingsEmbedResult } from "lumiverse-spindle-types";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
 import type {
@@ -2526,7 +2527,7 @@ export async function embedTexts(
 }
 
 function getModelFingerprint(
-  cfg: Pick<EmbeddingConfig, "provider" | "model" | "dimensions" | "api_url" | "vertex_region" | "vertex_project">,
+  cfg: Pick<EmbeddingDriverConfig, "provider" | "model" | "dimensions" | "api_url" | "vertex_region" | "vertex_project">,
 ): ModelFingerprint {
   // For Vertex the `api_url` field is cosmetic — the effective endpoint is
   // derived from `vertex_region`. Encode it into the fingerprint so a region
@@ -2903,6 +2904,89 @@ export async function testEmbeddingConnection(
   const first = vectors[0] || [];
   if (!first.length) throw new Error("No embedding vector returned");
   return { dimension: first.length, provider: profile.provider };
+}
+
+/** Limits for embeddings requested by extensions (spindle.embeddings.embed). */
+export const EXTENSION_EMBED_MAX_TEXTS = 256;
+export const EXTENSION_EMBED_MAX_TEXT_CHARS = 8192;
+
+/** The effective user's embedding connections, without URLs or secrets. */
+export async function listEmbeddingConnections(userId: string): Promise<EmbeddingConnectionDTO[]> {
+  const cfg = await getEmbeddingConfig(userId);
+  return cfg.connectionProfiles.map((profile) => ({
+    id: profile.id,
+    name: profile.name || embeddingProviderDisplayName(profile.provider),
+    provider: profile.provider,
+    model: profile.model,
+    dimensions: profile.dimensions,
+    enabled: profile.enabled,
+    is_primary: profile.id === cfg.primaryProfileId,
+    has_api_key: profile.hasSecret,
+  }));
+}
+
+/**
+ * Embed texts with exactly one connection: `connectionId`, or the primary one.
+ * Unlike the chain used for retrieval, fallbacks are never used, so every
+ * vector in one result (and across calls) comes from the same model.
+ * Shares the vector cache with host retrieval.
+ */
+export async function embedTextsWithConnection(
+  userId: string,
+  texts: string[],
+  options: { connectionId?: string; inputType?: EmbeddingInputType; signal?: AbortSignal } = {},
+): Promise<EmbeddingsEmbedResult> {
+  if (!Array.isArray(texts) || texts.length === 0) throw new Error("texts must be a non-empty array");
+  if (texts.length > EXTENSION_EMBED_MAX_TEXTS) throw new Error(`At most ${EXTENSION_EMBED_MAX_TEXTS} texts per request`);
+  for (const text of texts) {
+    if (typeof text !== "string" || !text.trim()) throw new Error("Each text must be a non-empty string");
+    if (text.length > EXTENSION_EMBED_MAX_TEXT_CHARS) throw new Error(`Each text must be at most ${EXTENSION_EMBED_MAX_TEXT_CHARS} characters`);
+  }
+  const inputType: EmbeddingInputType = options.inputType ?? "passage";
+  if (inputType !== "query" && inputType !== "passage") throw new Error('input_type must be "query" or "passage"');
+
+  const ctx = resolveEmbeddingUserContext(userId);
+  const cfg = readRawEmbeddingConfig(ctx.userId);
+  if (!cfg.enabled) throw new Error("Embeddings are disabled for this user");
+  const connectionId = options.connectionId ?? cfg.primaryProfileId;
+  const profile = cfg.connectionProfiles?.find((entry) => entry.id === connectionId);
+  if (!profile) throw new Error("Embedding connection not found");
+  if (!profile.enabled) throw new Error("Embedding connection is disabled");
+
+  const driver = profileToDriverConfig(cfg, profile);
+  const fingerprint = getModelFingerprint(driver);
+  const cacheFingerprint: ModelFingerprint = { ...fingerprint, api_url: `${fingerprint.api_url}|input_type:${inputType}` };
+  const keys = texts.map((text) => computeCacheKey(text, cacheFingerprint));
+  const embeddings: Array<number[] | null> = keys.map((key) => embeddingCache.get(key));
+  const missing = embeddings.flatMap((vector, index) => (vector ? [] : [index]));
+
+  if (missing.length > 0) {
+    const apiKey = await resolveProfileSecret(ctx.userId, profile);
+    if (!apiKey) throw new Error("No API key is configured for this embedding connection");
+    const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));
+    for (let offset = 0; offset < missing.length; offset += batchSize) {
+      if (options.signal?.aborted) throw resolveAbortError(options.signal);
+      const indices = missing.slice(offset, offset + batchSize);
+      let vectors: number[][];
+      try {
+        vectors = await requestEmbeddingsWithDriver(driver, apiKey, indices.map((index) => texts[index]), { inputType, signal: options.signal });
+      } catch (err) {
+        if (options.signal?.aborted || isEmbeddingAbortError(err)) throw resolveAbortError(options.signal);
+        throw sanitizeEmbeddingError(err, [apiKey]);
+      }
+      indices.forEach((index, j) => {
+        embeddings[index] = vectors[j];
+        embeddingCache.set(keys[index], vectors[j]);
+      });
+    }
+  }
+
+  const result = embeddings as number[][];
+  const dimensions = result[0]?.length ?? 0;
+  if (!dimensions || result.some((vector) => vector.length !== dimensions)) {
+    throw new Error("Embedding provider returned vectors of different sizes");
+  }
+  return { embeddings: result, connection_id: profile.id, model: driver.model, dimensions };
 }
 
 export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: string): Promise<void> {
