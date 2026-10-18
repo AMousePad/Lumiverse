@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 import { fileURLToPath, URL } from "node:url";
-import { BUNDLE_SETUP_PAGE } from "../src/runtime/bundle-setup-page";
+import { BUNDLE_SETUP_PAGE } from "../src/runtime/bundle-setup-page.ts";
 
 // The tray app is a hidden-window Tauri shell; there is no visible UI.
 // clearScreen off + fixed port per Tauri's Vite integration guidance.
@@ -23,7 +23,7 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         authorization: fileURLToPath(new URL("./authorization.html", import.meta.url)),
         linuxSmoke: fileURLToPath(new URL("./linux-smoke.html", import.meta.url)),

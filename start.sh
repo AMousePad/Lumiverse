@@ -230,9 +230,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR"
 FRONTEND_DIR="${FRONTEND_PATH:-$SCRIPT_DIR/frontend}"
 # Keep these aligned with frontend/package.json overrides and optionalDependencies.
-# Rolldown 1.2.4 includes the Android ARMv8.0 SIGILL fix.
+# Rolldown >=1.2.4 includes the Android ARMv8.0 SIGILL fix.
 TERMUX_FRONTEND_NATIVE_DEPS=(
-  "@rolldown/binding-android-arm64@1.2.4"
+  "@rolldown/binding-android-arm64@1.2.14"
   "lightningcss-android-arm64@1.33.0"
 )
 

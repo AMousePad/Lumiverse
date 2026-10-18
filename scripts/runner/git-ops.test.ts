@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { spawnAsync } from "./lib/spawn-async.js";
@@ -378,6 +378,24 @@ test("repairs Termux native bindings before a source-only frontend rebuild", () 
     installFrontend: false,
     repairTermuxFrontendNativeDeps: true,
   });
+});
+
+test("Termux repair paths install the same native bindings as the frontend lock inputs", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../../frontend/package.json", import.meta.url), "utf8"));
+  const repairSources = ["./git-ops.ts", "../../start.sh"].map((path) => (
+    readFileSync(new URL(path, import.meta.url), "utf8")
+  ));
+
+  for (const [engine, binding] of [
+    ["rolldown", "@rolldown/binding-android-arm64"],
+    ["lightningcss", "lightningcss-android-arm64"],
+  ]) {
+    const version = manifest.optionalDependencies[binding];
+    expect(version).toBe(manifest.overrides[engine]);
+    for (const source of repairSources) {
+      expect(source).toContain(`"${binding}@${version}"`);
+    }
+  }
 });
 
 test("does not duplicate the Termux binding repair after a frontend install", () => {

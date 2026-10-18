@@ -56,7 +56,14 @@ export default defineConfig({
       },
       integration: {
         configureCustomSWViteBuild(config) {
-          const output = config.build?.rollupOptions?.output as
+          const build = config.build
+          if (!build) return
+          // vite-plugin-pwa still generates the deprecated option name.
+          const options = build.rolldownOptions ?? build.rollupOptions
+          if (!options) return
+          build.rolldownOptions = options
+          delete build.rollupOptions
+          const output = options.output as
             | Record<string, unknown>
             | undefined
           if (output) {
@@ -96,16 +103,20 @@ export default defineConfig({
     // step uses a binding we ship and can rely on across platforms.
     cssMinify: 'esbuild',
     chunkSizeWarningLimit: 6000,
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         main: path.resolve(import.meta.dirname, './index.html'),
         widget: path.resolve(import.meta.dirname, './widget.html'),
       },
       output: {
-        manualChunks(id) {
-          const normalized = id.replace(/\\/g, '/')
-          const m = normalized.match(/\/i18n\/locales\/([^/]+)\//)
-          if (m) return `i18n-${m[1]}`
+        codeSplitting: {
+          groups: [{
+            name(id) {
+              const normalized = id.replace(/\\/g, '/')
+              const match = normalized.match(/\/i18n\/locales\/([^/]+)\//)
+              return match ? `i18n-${match[1]}` : null
+            },
+          }],
         },
         chunkFileNames(chunkInfo) {
           const name = chunkInfo.name ?? ''

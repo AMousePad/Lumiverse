@@ -306,11 +306,6 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     forcedScrollEnabledRef.current = true
   }, [])
 
-  const interruptForcedScroll = useCallback(() => {
-    forcedScrollEnabledRef.current = false
-    cancelForcedScroll()
-  }, [cancelForcedScroll])
-
   useEffect(() => {
     if (typeof window === 'undefined') return
 
@@ -1071,6 +1066,15 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       if (!sync) scheduleInitialScrollToEnd(instance)
     },
   })
+
+  const interruptForcedScroll = useCallback(() => {
+    forcedScrollEnabledRef.current = false
+    cancelForcedScroll()
+    // Stop TanStack's measurement reconciliation as well as our animation,
+    // so a later row resize cannot resume a navigation the user interrupted.
+    rowVirtualizer.cancelScroll()
+  }, [cancelForcedScroll, rowVirtualizer])
+
   // The core virtualizer exposes this as a mutable instance hook even though
   // the React wrapper's options type does not currently declare it.
   useLayoutEffect(() => {
