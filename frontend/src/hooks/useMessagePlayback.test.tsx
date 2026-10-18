@@ -30,6 +30,7 @@ mock.module('@/api/client', () => ({ BASE_URL: '/api/v1', upload: async () => un
 let activeMessageId: string | null = null
 mock.module('@/lib/ttsAudio', () => ({
   getActiveMessageId: () => activeMessageId,
+  getPlaybackSession: () => 0,
   subscribeActiveMessage: () => () => {},
   stop: () => { activeMessageId = null },
   speak: () => {},

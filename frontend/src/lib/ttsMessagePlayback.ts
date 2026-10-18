@@ -24,7 +24,7 @@ import {
   resolveMessageVoices,
   voiceCoalesceKey,
 } from '@/lib/voiceResolution'
-import { getActiveMessageId, speak, speakSegments, stop, setTTSVolume, setTTSSpeed, unlockTTSAudio } from '@/lib/ttsAudio'
+import { getActiveMessageId, getPlaybackSession, speak, speakSegments, stop, setTTSVolume, setTTSSpeed, unlockTTSAudio } from '@/lib/ttsAudio'
 import type { TtsConnectionProfile, VoiceRef } from '@/types/api'
 
 /**
@@ -237,6 +237,49 @@ export function startMessageTtsPlayback(args: {
   })
 
   return true
+}
+
+/**
+ * Speak caller text with one connection's default voice. Nothing is saved.
+ * Stops in-flight playback first. Resolves once synthesis has finished (NOT
+ * once playback finishes); rejects when synthesis fails.
+ */
+export async function startTextTtsPlayback(args: { text: string; connectionId: string; signal?: AbortSignal }): Promise<void> {
+  const voiceSettings = useStore.getState().voiceSettings
+  const profile = resolveTtsConnectionProfile(args.connectionId)
+  stop()
+  unlockTTSAudio()
+  setTTSVolume(voiceSettings.ttsVolume)
+  setTTSSpeed(1.0)
+  // Hold the session open until synthesis ends, as startStreamingPlayback does.
+  let release!: () => void
+  speakSegments([new Promise<null>((resolve) => { release = () => resolve(null) })])
+  const owner = getPlaybackSession()
+  try {
+    await synthesizeTtsSegments(args.connectionId, args.text, {
+      profile,
+      ...voiceSynthesisOptions({ connectionId: args.connectionId, voice: profile?.voice ?? '' }, voiceSettings.ttsSpeed),
+      signal: args.signal,
+      onPlayableSegment: (segment) => {
+        if (getPlaybackSession() === owner) speak(segment.data)
+      },
+    })
+  } finally {
+    release()
+  }
+}
+
+/** Replay a message's saved audio attachment through the engine, as MessageAudioPlayer's fallback does. */
+export function playSavedMessageAudio(messageId: string, audioId: string): void {
+  stop()
+  unlockTTSAudio()
+  setTTSVolume(useStore.getState().voiceSettings.ttsVolume)
+  setTTSSpeed(1.0)
+  speakSegments([
+    fetch(audioApi.url(audioId), { credentials: 'include' })
+      .then((response) => (response.ok ? response.arrayBuffer() : null))
+      .catch(() => null),
+  ], messageId)
 }
 
 /**

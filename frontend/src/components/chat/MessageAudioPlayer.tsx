@@ -20,6 +20,7 @@ import {
   stop as stopTTSEngine,
   getActiveMessageId,
   subscribeActiveMessage,
+  trackTTSAudioElement,
 } from '@/lib/ttsAudio'
 import styles from './MessageAudioPlayer.module.css'
 import clsx from 'clsx'
@@ -190,8 +191,10 @@ export default function MessageAudioPlayer({
     el.addEventListener('pause', onPause)
     el.addEventListener('ended', onEnded)
     el.addEventListener('volumechange', onVolume)
+    const untrack = trackTTSAudioElement(el)
 
     return () => {
+      untrack()
       el.removeEventListener('loadedmetadata', onLoaded)
       el.removeEventListener('durationchange', onLoaded)
       el.removeEventListener('timeupdate', onTime)
