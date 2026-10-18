@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zipSync } from "fflate";
@@ -10,6 +9,7 @@ import { initIdentity } from "../../crypto/init";
 import { env } from "../../env";
 import { eventBus } from "../../ws/bus";
 import { EventType } from "../../ws/events";
+import { bunCmd } from "../../utils/bun-cmd";
 import { getSecret } from "../secrets.service";
 import { startImport, submitTicket, type ImportJob } from "./import.service";
 import { createManifest } from "./manifest";
@@ -21,8 +21,7 @@ const CROP = "29dddaed-cfe1-4412-be94-3bf6015030d4";
 const BACKGROUND = "bb0892c1-47cd-4e74-b8da-f36ead4d2621";
 const originalDataDir = env.dataDir;
 let directory: string;
-let writer: Database | undefined;
-let release: ReturnType<typeof setTimeout> | undefined;
+const writers: ReturnType<typeof Bun.spawn>[] = [];
 
 beforeEach(async () => {
   closeDatabase();
@@ -36,9 +35,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (release) clearTimeout(release);
-  writer?.close(true);
-  writer = undefined;
+  for (const writer of writers.splice(0)) {
+    writer.kill();
+    await writer.exited;
+  }
   await stopDatabaseExecution();
   closeDatabase();
   (env as { dataDir: string }).dataDir = originalDataDir;
@@ -53,9 +53,19 @@ async function waitFor(job: ImportJob, status: ImportJob["status"]) {
 }
 
 function contend() {
-  writer = new Database(join(directory, "lumiverse.db"));
-  writer.exec("BEGIN IMMEDIATE");
-  release = setTimeout(() => { writer!.exec("COMMIT"); }, 350);
+  const signalFile = join(directory, `writer-${crypto.randomUUID()}.locked`);
+  const writer = Bun.spawn({
+    cmd: bunCmd(join(import.meta.dir, "test-fixtures/import-lock-holder.ts"), join(directory, "lumiverse.db"), signalFile),
+    stdout: "ignore",
+    stderr: "inherit",
+  });
+  writers.push(writer);
+  // The progress listener below is synchronous. Wait for the subprocess to own
+  // the lock before returning; its release runs independently of this thread.
+  const deadline = Date.now() + 2000;
+  while (!existsSync(signalFile) && Date.now() < deadline) Bun.sleepSync(5);
+  expect(existsSync(signalFile)).toBe(true);
+  return writer;
 }
 
 async function archive(withSecrets: boolean) {
@@ -118,9 +128,10 @@ test("restores original and cropped avatars, legacy avatar files, and wallpapers
 
 test("waits for a competing writer instead of abandoning table restoration", async () => {
   const { archivePath } = await archive(false);
-  contend();
+  const writer = contend();
   const job = startImport({ userId: USER, archivePath, jobId: crypto.randomUUID() });
   await waitFor(job, "complete");
+  expect(await writer.exited).toBe(0);
   expect(job.fileSummary.images).toBe(3);
 });
 
@@ -128,18 +139,23 @@ test("accepts a ticket and restores its secrets while another process writes", a
   const { archivePath, ticket, key } = await archive(true);
   const job = startImport({ userId: USER, archivePath, jobId: crypto.randomUUID() });
   await waitFor(job, "awaiting_ticket");
-  contend();
-  await submitTicket(job.jobId, ticket);
+  const ticketWriter = contend();
+  let secretWriter: ReturnType<typeof Bun.spawn> | undefined;
   const emit = eventBus.emit.bind(eventBus);
   const publishing = spyOn(eventBus, "emit").mockImplementation((event, payload, userId, options) => {
     if (event === EventType.USER_IMPORT_PROGRESS && payload.phase === "secrets_apply_start") {
-      writer!.close(true);
-      contend();
+      secretWriter = contend();
     }
     emit(event, payload, userId, options);
   });
-  try { await waitFor(job, "complete"); }
+  try {
+    await submitTicket(job.jobId, ticket);
+    expect(await ticketWriter.exited).toBe(0);
+    await waitFor(job, "complete");
+  }
   finally { publishing.mockRestore(); }
+  expect(secretWriter).toBeDefined();
+  expect(await secretWriter!.exited).toBe(0);
   expect(job.secretsRestored).toBe(1);
   expect(await getSecret(USER, key)).toBe("restored-api-key");
   expect(getDb().query("SELECT has_api_key FROM connection_profiles WHERE id = 'restored-connection'").get()).toEqual({ has_api_key: 1 });

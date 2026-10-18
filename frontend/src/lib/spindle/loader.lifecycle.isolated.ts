@@ -314,6 +314,9 @@ mock.module('./display-resolver-registry', () => ({
   registerDisplayResolver: () => () => {},
   unregisterDisplayResolver() {},
   revokeInlineCardWrappingOptOut() {},
+  shouldSkipFormattingHealing: () => false,
+  shouldSkipInlineCardWrapping: () => false,
+  subscribeDisplayFormatting: () => () => {},
 }))
 mock.module('@/hooks/useDisplayRegex', () => ({
   invalidateDisplayRegexCache() {},
