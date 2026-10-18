@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { computeGroups, importFromSTPreset, marshalPreset } from './service'
+import {
+  coerceImportedLoomPreset,
+  computeGroups,
+  createPortableLoomPresetExport,
+  importFromSTPreset,
+  marshalPreset,
+  marshalUpdate,
+  unmarshalPreset,
+} from './service'
 
 describe('SillyTavern preset import', () => {
   test('keeps prompts grouped under sequential ━ category headings', () => {
@@ -81,5 +89,34 @@ describe('SillyTavern preset import', () => {
       extensions: ['not', 'a', 'record'] as unknown as Record<string, unknown>,
     }, 'Malformed')
     expect(malformed.passthroughMetadata).toEqual({})
+  })
+
+  test('round-trips prototype-like extension keys as own data properties', () => {
+    const extensions = JSON.parse('{"__proto__":{"inherited":"extension data"},"constructor":{"scripts":[]},"ordinary":null}')
+    const imported = importFromSTPreset({ prompts: [], extensions }, 'Special keys')
+    const input = marshalPreset(imported)
+    const saved = unmarshalPreset({
+      ...input,
+      id: imported.id,
+      parameters: input.parameters ?? {},
+      prompt_order: input.prompt_order ?? [],
+      prompts: input.prompts ?? {},
+      metadata: input.metadata ?? {},
+      created_at: 1,
+      updated_at: 1,
+    })
+    const exported = JSON.parse(JSON.stringify(createPortableLoomPresetExport(saved)))
+    const reimported = coerceImportedLoomPreset(exported, 'Round trip')
+
+    for (const preset of [imported, saved, reimported]) {
+      expect(Object.getPrototypeOf(preset.passthroughMetadata)).toBe(Object.prototype)
+      expect(Object.hasOwn(preset.passthroughMetadata, '__proto__')).toBe(true)
+      expect(preset.passthroughMetadata.inherited).toBeUndefined()
+      expect(preset.passthroughMetadata).toEqual(extensions)
+      const metadata = JSON.parse(JSON.stringify(marshalUpdate(preset).metadata))
+      expect(Object.hasOwn(metadata, '__proto__')).toBe(true)
+      expect(metadata.__proto__).toEqual(extensions.__proto__)
+      expect(metadata.constructor).toEqual(extensions.constructor)
+    }
   })
 })

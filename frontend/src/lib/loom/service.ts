@@ -330,12 +330,8 @@ function markPresetAsLocalImport(preset: LoomPreset): LoomPreset {
 }
 
 function extractPassthroughMetadata(meta: Record<string, any>): Record<string, unknown> {
-  const bag: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(meta)) {
-    if (isLoomOwnedPresetMetadataKey(key)) continue
-    bag[key] = value
-  }
-  return bag
+  return Object.fromEntries(Object.entries(meta)
+    .filter(([key]) => !isLoomOwnedPresetMetadataKey(key)))
 }
 
 function hasLegacyPromptOrderShape(promptOrder: unknown): boolean {
@@ -1515,13 +1511,10 @@ interface STPresetData {
  * imported separately as preset-linked regex rows; Loom-owned keys are skipped.
  */
 function importSTExtensions(extensions: unknown): Record<string, unknown> {
-  const bag: Record<string, unknown> = {}
-  if (!isRecord(extensions)) return bag
-  for (const [key, value] of Object.entries(extensions)) {
-    if (key === 'regex_scripts' || isLoomOwnedPresetMetadataKey(key) || value === undefined) continue
-    bag[key] = value
-  }
-  return bag
+  if (!isRecord(extensions)) return {}
+  return Object.fromEntries(Object.entries(extensions).filter(([key, value]) => (
+    key !== 'regex_scripts' && !isLoomOwnedPresetMetadataKey(key) && value !== undefined
+  )))
 }
 
 /**
