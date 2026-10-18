@@ -350,6 +350,8 @@ mock.module('./stt-native', () => ({ createNativeSTTAPI: (deps: Parameters<typeo
   listProviders: () => [{ id: 'whistle', name: 'Whistle', onDevice: true, available: true, supportsAudioTranscription: true }],
   prepare: async () => {},
   transcribe: async () => ({ text: 'hello', provider: 'whistle' }),
+  isHostCapturing: () => false,
+  subscribeHostCapture: () => () => {},
   createEngine: () => ({
     start() {}, stop() {}, destroy() {}, isListening: () => true,
     onResult() {}, onError() {}, onStop() {}, onAudioFrame() {},
