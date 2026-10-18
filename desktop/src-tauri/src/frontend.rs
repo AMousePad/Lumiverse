@@ -124,12 +124,12 @@ const WIDGET_MAX_HEIGHT: u32 = 900;
 // WebView2 explicitly supports this switch for applications whose foreground
 // work must not be coalesced into background-timer batches. Supplying browser
 // arguments replaces Wry's defaults, so retain its UI/SmartScreen feature
-// exclusions alongside the streaming fix. Every WebView in this process uses
-// the same value because WebView2 requires matching environment options for a
-// shared user-data directory.
+// exclusions and gesture-free playback alongside the streaming fix. Every
+// WebView in this process uses the same value because WebView2 requires matching
+// environment options for a shared user-data directory.
 #[cfg(target_os = "windows")]
 const WINDOWS_WEBVIEW_BROWSER_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling";
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling";
 
 fn configure_webview_runtime<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
     builder: WebviewWindowBuilder<'a, R, M>,

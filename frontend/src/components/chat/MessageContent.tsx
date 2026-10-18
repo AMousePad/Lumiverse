@@ -14,6 +14,7 @@ import { normalizeLegacyFontTags } from '@/lib/legacyFontTags'
 import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { sanitizeHtmlIsland, sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
+import { createMessageHtmlTree, reconcileMessageHtml } from '@/lib/reconcileMessageHtml'
 import {
   dispatchCollapsibleToggleLayoutEvent,
   findDetailsToggleLayoutTarget,
@@ -1300,42 +1301,6 @@ function notifyMessageContentLayout(el: HTMLElement): void {
   dispatchMessageContentLayout(el)
 }
 
-function replaceHtmlPreservingImages(root: HTMLElement | ShadowRoot, html: string): void {
-  const stableImgs = new Map<string, HTMLImageElement>()
-  for (const img of root.querySelectorAll<HTMLImageElement>('img[src]')) {
-    const src = img.getAttribute('src')
-    if (src && !stableImgs.has(src)) stableImgs.set(src, img)
-  }
-
-  root.innerHTML = html
-
-  for (const newImg of root.querySelectorAll<HTMLImageElement>('img[src]')) {
-    const src = newImg.getAttribute('src')
-    if (!src) continue
-    const preserved = stableImgs.get(src)
-    if (preserved && newImg.parentNode) {
-      // Reuse the decoded image, but keep the current render's layout and metadata.
-      if (!preserved.isEqualNode(newImg)) {
-        const oldAttributes = preserved.attributes
-        for (let i = oldAttributes.length - 1; i >= 0; i--) {
-          const attribute = oldAttributes[i]
-          const value = newImg.getAttribute(attribute.name)
-          if (value === null) preserved.removeAttribute(attribute.name)
-          else if (attribute.value !== value) attribute.value = value
-        }
-        const newAttributes = newImg.attributes
-        if (oldAttributes.length !== newAttributes.length) {
-          for (let i = 0; i < newAttributes.length; i++) {
-            const { name, value } = newAttributes[i]
-            if (!preserved.hasAttribute(name)) preserved.setAttribute(name, value)
-          }
-        }
-      }
-      newImg.replaceWith(preserved)
-      stableImgs.delete(src)
-    }
-  }
-}
 export function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
 
@@ -1343,18 +1308,26 @@ export function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming:
     const el = ref.current
     if (!el) return
     const shadow = el.shadowRoot ?? el.attachShadow({ mode: 'open' })
-    replaceHtmlPreservingImages(shadow, `<style data-lumi-island-base>${ISLAND_BASE_CSS}</style>${html}`)
-    for (const actionEl of shadow.querySelectorAll<HTMLElement>('[data-lumiverse-regex-action]')) {
+    clearChatFindHighlights(shadow)
+    const next = createMessageHtmlTree(`<style data-lumi-island-base>${ISLAND_BASE_CSS}</style>${html}`)
+    for (const actionEl of next.querySelectorAll<HTMLElement>('[data-lumiverse-regex-action]')) {
       actionEl.style.cursor = 'pointer'
     }
     if (
       el.classList.contains('not-prose')
       || el.classList.contains('not-island-prose')
-      || shadow.querySelector('.not-prose, .not-island-prose')
+      || next.querySelector('.not-prose, .not-island-prose')
     ) {
-      shadow.querySelector('style[data-lumi-island-base]')?.remove()
+      next.querySelector('style[data-lumi-island-base]')?.remove()
     }
+    reconcileMessageHtml(shadow, next)
     notifyMessageContentLayout(el)
+  }, [html])
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    const shadow = el?.shadowRoot
+    if (!el || !shadow) return
 
     let pendingRaf = 0
     const scheduleLayoutNotify = () => {
@@ -1387,7 +1360,7 @@ export function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming:
       shadow.removeEventListener('error', scheduleLayoutNotify, true)
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
     }
-  }, [html, isStreaming])
+  }, [isStreaming])
 
   return <div ref={ref} className={styles.htmlIsland} data-lumiverse-html-island />
 }
@@ -1547,7 +1520,7 @@ function restoreInlineHtmlCardSpacing(root: HTMLElement, html: string): void {
   for (const card of cards) {
     const parent = card.parentNode
     if (!parent) continue
-    const shell = document.createElement('div')
+    const shell = root.ownerDocument.createElement('div')
     shell.className = styles.inlineHtmlCard
     shell.setAttribute(INLINE_HTML_CARD_ATTR, '')
     parent.insertBefore(shell, card)
@@ -1556,9 +1529,8 @@ function restoreInlineHtmlCardSpacing(root: HTMLElement, html: string): void {
 }
 
 /**
- * dangerouslySetInnerHTML wrapper that preserves IMG element identity by
- * src across innerHTML replacements, so images don't redo the cache lookup,
- * decode, paint cycle on every chat re-render.
+ * Update only changed DOM nodes so streamed text leaves media and animation
+ * containers connected, including their browser-managed interaction state.
  */
 export function ProseHtml({ html, className, skipInlineCardWrapping = false }: { html: string; className?: string; skipInlineCardWrapping?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -1570,13 +1542,12 @@ export function ProseHtml({ html, className, skipInlineCardWrapping = false }: {
     if (!el) return
     if (lastHtmlRef.current === html && lastWrappingRef.current === skipInlineCardWrapping) return
 
-    replaceHtmlPreservingImages(el, html)
-    if (skipInlineCardWrapping) {
-      el.classList.remove(styles.inlineHtmlCard)
-      el.removeAttribute(INLINE_HTML_CARD_ATTR)
-    } else {
-      restoreInlineHtmlCardSpacing(el, html)
-    }
+    clearChatFindHighlights(el)
+    const next = createMessageHtmlTree(html)
+    if (!skipInlineCardWrapping) restoreInlineHtmlCardSpacing(next, html)
+    reconcileMessageHtml(el, next)
+    el.classList.toggle(styles.inlineHtmlCard, next.classList.contains(styles.inlineHtmlCard))
+    el.toggleAttribute(INLINE_HTML_CARD_ATTR, next.hasAttribute(INLINE_HTML_CARD_ATTR))
     lastHtmlRef.current = html
     lastWrappingRef.current = skipInlineCardWrapping
     notifyMessageContentLayout(el)
@@ -1811,7 +1782,6 @@ export default function MessageContent({
   )
   const containerRef = useRef<HTMLDivElement>(null)
   const contentBodyRef = useRef<HTMLDivElement>(null)
-  const prevTextLenRef = useRef(0)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
   const [regexSelectionVersion, setRegexSelectionVersion] = useState(0)
   const [longMessageOverflowing, setLongMessageOverflowing] = useState(false)
@@ -2346,61 +2316,6 @@ export default function MessageContent({
       if (didClear) notifyMessageContentLayout(container)
     }
   }, [findQuery, renderedBlocks])
-
-  // Chunk fade animation for streaming tokens
-  useLayoutEffect(() => {
-    if (!isStreaming || !containerRef.current) {
-      prevTextLenRef.current = content.length
-      return
-    }
-
-    const container = containerRef.current
-    const currentLen = content.length
-    const prevLen = prevTextLenRef.current
-
-    if (currentLen <= prevLen) {
-      prevTextLenRef.current = currentLen
-      return
-    }
-
-    // Walk text nodes and wrap new content
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
-    let charCount = 0
-    const nodesToWrap: { node: Text; start: number; end: number }[] = []
-
-    while (walker.nextNode()) {
-      const textNode = walker.currentNode as Text
-      const nodeLen = textNode.length
-      const nodeStart = charCount
-      const nodeEnd = charCount + nodeLen
-
-      if (nodeEnd > prevLen) {
-        const start = Math.max(0, prevLen - nodeStart)
-        nodesToWrap.push({ node: textNode, start, end: nodeLen })
-      }
-
-      charCount += nodeLen
-    }
-
-    for (const { node, start, end } of nodesToWrap) {
-      if (start === 0 && end === node.length) {
-        // Wrap entire node
-        const span = document.createElement('span')
-        span.className = styles.chunkFade
-        node.parentNode?.insertBefore(span, node)
-        span.appendChild(node)
-      } else if (start < end) {
-        // Split and wrap only new portion
-        const newPart = node.splitText(start)
-        const span = document.createElement('span')
-        span.className = styles.chunkFade
-        newPart.parentNode?.insertBefore(span, newPart)
-        span.appendChild(newPart)
-      }
-    }
-
-    prevTextLenRef.current = currentLen
-  }, [content, isStreaming])
 
   return (
     <>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref, type RefObject } from 'react'
 import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
 import { measureLayoutHeight } from '@/lib/uiScale'
+import { getTauriMobilePlatform } from '@/lib/desktopWebView'
 import {
   landingScrollOffset,
   restoreLandingVirtualSnapshot,
@@ -55,7 +56,9 @@ export function useLandingVirtualizer({
     initialOffset: offset,
     initialMeasurementsCache: restored?.measurements,
     ...(layout === 'compact' ? { measureElement: measureCompactRow } : {}),
-    useFlushSync: false,
+    // Commit a new range before Blink paints the next fling frame. Deferring
+    // this update leaves the compositor scrolling beyond the mounted rows.
+    useFlushSync: getTauriMobilePlatform() === 'android',
     getItemKey,
   })
 

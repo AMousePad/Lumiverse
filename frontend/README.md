@@ -27,25 +27,45 @@ before making it the default.
 Run the production compiler regression tests with:
 
 ```sh
-bun test --isolate scripts/react-compiler.test.tsx
+bun test --isolate scripts/react-compiler.test.tsx scripts/vite-chunks.test.ts
 ```
 
 They build a fixture through each real Vite compiler path and exercise its
 compiled output with React, including fresh Effect Event callbacks, Activity
 effect cleanup/restart, and retained state and DOM drafts.
 
-For a reproducible local build comparison, run these sequentially from the same
-checkout, with dependencies installed and component metadata generated:
+For a reproducible local build comparison, run from the same checkout with
+dependencies installed:
 
 ```sh
 bun run generate
-VITE_BUILD_ID=compiler-trial LUMIVERSE_REACT_COMPILER=babel time bun node_modules/vite/bin/vite.js build --outDir .tmp/compiler-babel --emptyOutDir
-VITE_BUILD_ID=compiler-trial LUMIVERSE_REACT_COMPILER=native time bun node_modules/vite/bin/vite.js build --outDir .tmp/compiler-native --emptyOutDir
+bun run scripts/benchmark-react-compiler.ts
 ```
 
-These timings cover a production app and service-worker build, excluding
-generation and type checking. Annotation coverage is intentionally small, so
-they do not establish a general runtime performance improvement.
+The script runs a warm-up per compiler, then three fresh-process builds per
+compiler in alternating order. It uses the production runtime selection and a
+fixed build ID, writes logs and `results.json` under `.tmp/compiler-benchmark/`,
+and leaves `dist/` untouched. Timings include the production app and service
+worker, excluding generation and type checking. JavaScript totals include all
+emitted `.js` files, with each file gzipped separately.
+
+Local comparison on 2026-10-18 (macOS arm64, Bun 1.4.2, Vite 8.3.4):
+
+| Compiler | Build seconds (three samples) | Median | JavaScript gzip bytes |
+| --- | --- | --- | --- |
+| Babel | 2.140, 2.138, 2.143 | 2.140 s | 2,762,231 |
+| Native | 2.073, 2.028, 2.030 | 2.030 s | 2,763,753 |
+
+Native saved 0.110 s (5.1%) and added 1,522 gzip bytes. Keep Babel as the default:
+the absolute gain is small, the [native compiler remains experimental](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler),
+and other supported platforms still need validation. Only `App` currently opts
+into compilation; these measurements do not establish a runtime performance
+improvement or predict results with broader annotation coverage.
+
+The locale code-splitting group has `debugName: 'i18n-locales'` so Rolldown can
+identify its functional name callback in timing reports. This label preserves
+the existing per-language chunk names and `assets/i18n/` paths; both compiler
+paths build without the missing-label warning.
 
 ## Retained settings panels
 

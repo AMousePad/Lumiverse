@@ -79,6 +79,7 @@ export default defineConfig({
       output: {
         codeSplitting: {
           groups: [{
+            debugName: 'i18n-locales',
             name(id) {
               const normalized = id.replace(/\\/g, '/')
               const match = normalized.match(/\/i18n\/locales\/([^/]+)\//)
