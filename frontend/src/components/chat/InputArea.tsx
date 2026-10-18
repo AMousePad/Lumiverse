@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, Fragment, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders, SlidersHorizontal, Search, ListChecks, Waypoints } from 'lucide-react'
@@ -92,6 +93,7 @@ import { acknowledgeConnectionProfileSelection } from '@/lib/uiProductivityDefau
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import { readProductivityFeature } from '@/lib/spindle/productivity-feature-toggles'
 import { hasEnabledFrontendExtension } from '@/lib/spindle/frontend-extension-availability'
+import { notifyComposerChanged, registerComposer } from '@/lib/spindle/composer-api'
 import { useQuickToolbarActions } from '@/components/quick-toolbar/useQuickToolbarActions'
 import InputAreaCustomizeModal, {
   fromComposerExtraId,
@@ -2151,6 +2153,38 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       sendingRef.current = false
     }
   }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t, te])
+
+  // ── Extension composer bridge (ctx.composer) ─────────────────────────
+  // Extensions read and write this draft through the same state the textarea
+  // uses. Writes flush synchronously so a following getState() or send() sees them.
+  const composerLatestRef = useRef({ chatId, text, handleSend, busy: isGeneratingInChat })
+  useLayoutEffect(() => {
+    composerLatestRef.current = { chatId, text, handleSend, busy: isGeneratingInChat }
+  })
+  useEffect(() => registerComposer({
+    getChatId: () => composerLatestRef.current.chatId,
+    getText: () => composerLatestRef.current.text,
+    setText: (next) => flushSync(() => setText(next)),
+    insertText: (value, at) => {
+      const current = composerLatestRef.current.text
+      const ta = at === 'caret' ? textareaRef.current : null
+      const start = ta ? ta.selectionStart : current.length
+      const end = ta ? ta.selectionEnd : current.length
+      flushSync(() => setText(current.slice(0, start) + value + current.slice(end)))
+      ta?.setSelectionRange(start + value.length, start + value.length)
+    },
+    focus: () => textareaRef.current?.focus(),
+    send: async () => {
+      const latest = composerLatestRef.current
+      if (latest.busy || sendingRef.current) {
+        throw new Error('COMPOSER_BUSY: A message is already being sent or generated in this chat')
+      }
+      await latest.handleSend()
+    },
+  }), [])
+  useEffect(() => {
+    notifyComposerChanged()
+  }, [chatId, text])
 
   useEffect(() => {
     const handleRegexAction = async (event: Event) => {

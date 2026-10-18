@@ -44,7 +44,7 @@
     "i18next": "^26.2.0",
     "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^0.468.0",
-    "lumiverse-spindle-types": "0.6.52",
+    "lumiverse-spindle-types": "github:prolix-oc/lumiverse-spindle-types#f1ca9326e9f8e2072d21cd9de1b04c5960a624c4",
     "marked": "^15.0.4",
     "motion": "^12.0.0",
     "react": "^19.3.1",
