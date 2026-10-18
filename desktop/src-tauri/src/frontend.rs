@@ -1,5 +1,7 @@
 //! Frontend window — a native WebView loading the local Lumiverse server.
 
+use crate::desktop_surface::{Backend, SurfaceMode};
+
 use std::{
     path::PathBuf,
     sync::{
@@ -201,6 +203,8 @@ pub fn close_current_sso_popup(window: WebviewWindow) -> Result<(), String> {
 pub struct FrontendState {
     /// Persisted window bounds: (x, y, width, height) or None for defaults.
     bounds: Mutex<Option<(i32, i32, u32, u32)>>,
+    surface_mode: Mutex<Option<SurfaceMode>>,
+    surface_color: Mutex<Option<[u8; 3]>>,
 }
 
 /// Native window-presence snapshot consumed by the remote frontend. Browser
@@ -267,6 +271,8 @@ pub struct FrontendStartupAppearance {
     native_color: [u8; 3],
     #[serde(default)]
     high_refresh: bool,
+    #[serde(default)]
+    surface_mode: Option<SurfaceMode>,
 }
 
 impl Default for FrontendStartupAppearance {
@@ -281,6 +287,7 @@ impl Default for FrontendStartupAppearance {
             blur_intensity: "balanced".into(),
             native_color: [10, 8, 18],
             high_refresh: false,
+            surface_mode: Some(SurfaceMode::Opaque),
         }
     }
 }
@@ -436,6 +443,17 @@ fn frontend_startup_shell_script(
   set('--lumiverse-startup-text-muted', snapshot.textMuted);
   set('--lumiverse-startup-primary', snapshot.primary);
   root.setAttribute('data-tauri-desktop', '');
+  if (snapshot.surfaceMode) root.setAttribute('data-desktop-surface', snapshot.surfaceMode);
+  if (snapshot.surfaceMode === 'opaque') {{
+    const rgb = snapshot.nativeColor || [10, 8, 18];
+    const color = `rgb(${{rgb.join(',')}})`;
+    set('--lumiverse-native-background', color);
+    set('--lumiverse-startup-background', color);
+    const surfaceStyle = document.createElement('style');
+    surfaceStyle.id = 'lumiverse-native-surface';
+    surfaceStyle.textContent = 'html[data-desktop-surface="opaque"]{{background:var(--lumiverse-native-background)!important;--desktop-window-corner-radius:0px!important;border-radius:0!important}}html[data-desktop-surface="opaque"] body{{background:var(--lumiverse-native-background)}}html[data-desktop-surface="opaque"] [data-app-root]{{background-color:var(--lumiverse-native-background)!important;border-radius:0!important;clip-path:none!important}}';
+    (document.head || root).appendChild(surfaceStyle);
+  }}
   if ('{windows_corners}') root.setAttribute('data-desktop-windows-corners', '{windows_corners}');
   root.setAttribute('data-lumiverse-startup-shell', '');
 
@@ -661,7 +679,9 @@ pub fn show_frontend(
             .set_shadow(rounded_windows)
             .map_err(|e| e.to_string())?;
         #[cfg(target_os = "macos")]
-        enforce_frontend_content_corner_radius(&window)?;
+        if *state.surface_mode.lock().unwrap() != Some(SurfaceMode::Opaque) {
+            enforce_frontend_content_corner_radius(&window)?;
+        }
         let target_changed = window
             .url()
             .map(|current| {
@@ -682,19 +702,13 @@ pub fn show_frontend(
         return Ok(());
     }
 
-    let startup_appearance = load_frontend_startup_appearance(&app);
-    let opaque_window = crate::linux_runtime::opaque();
-    // GTK must leave the native surface clear beneath the page's rounded
-    // corners, even when the theme does not use blur. An opaque fill here
-    // exposes a rectangle behind the CSS clip; Tao 0.35.3 also clamps its
-    // unnormalized RGB channels to white in the transparent draw path.
-    let native_background =
-        if !opaque_window && (cfg!(target_os = "linux") || startup_appearance.blur) {
-            tauri::webview::Color(0, 0, 0, 0)
-        } else {
-            let [red, green, blue] = startup_appearance.native_color;
-            tauri::webview::Color(red, green, blue, 255)
-        };
+    let mut startup_appearance = load_frontend_startup_appearance(&app);
+    let surface_mode = resolved_surface_mode(startup_appearance.surface_mode);
+    // The page receives the actual creation-time mode, including a Linux
+    // compatibility override or a debug-only profiling override.
+    startup_appearance.surface_mode = Some(surface_mode);
+    let webview_background =
+        surface_mode.webview_background(Backend::current(), startup_appearance.native_color);
     let popup_app = app.clone();
     let frontend_origin = url.origin().ascii_serialization();
     let mut builder = WebviewWindowBuilder::new(&app, FRONTEND_LABEL, WebviewUrl::External(url))
@@ -713,12 +727,8 @@ pub fn show_frontend(
         // The tray host starts without a Dock/taskbar entry. Enable the
         // frontend's entry immediately before its first show below.
         .skip_taskbar(true)
-        // The frontend owns its own surface color. Keeping the native window
-        // and WebView transparent lets a theme opt into a translucent body.
-        // Opaque themes remain visually identical because their CSS body/app
-        // surfaces cover the transparent host.
-        .transparent(!opaque_window)
-        .background_color(native_background)
+        // Surface opacity is a creation-time contract on all three backends.
+        .transparent(surface_mode == SurfaceMode::Translucent)
         // Install a lightweight titlebar/surface before the remote frontend's
         // bundle executes. It removes itself as soon as the app root mounts.
         .initialization_script(frontend_startup_shell_script(
@@ -762,6 +772,9 @@ pub fn show_frontend(
             }
         })
         .visible(false);
+    if let Some([red, green, blue, alpha]) = webview_background {
+        builder = builder.background_color(tauri::webview::Color(red, green, blue, alpha));
+    }
     builder = configure_webview_runtime(builder);
 
     // Quality mode opts into the high-refresh WebView configuration where
@@ -792,6 +805,31 @@ pub fn show_frontend(
     }
 
     let window = builder.build().map_err(|e| e.to_string())?;
+    *state.surface_mode.lock().unwrap() = Some(surface_mode);
+    *state.surface_color.lock().unwrap() = None;
+    if surface_mode == SurfaceMode::Opaque {
+        update_opaque_surface(&window, &state, startup_appearance.native_color)?;
+    }
+    eprintln!("[desktop-surface] created {surface_mode:?} frontend");
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    if std::env::var_os("LUMIVERSE_NATIVE_SURFACE").is_some() {
+        window
+            .with_webview(|webview| unsafe {
+                use objc2::{msg_send, runtime::AnyObject};
+                use objc2_foundation::ns_string;
+                let ns_window = &*webview.ns_window().cast::<AnyObject>();
+                let wk_view = &*webview.inner().cast::<AnyObject>();
+                let opaque: bool = msg_send![ns_window, isOpaque];
+                let draws: objc2::rc::Retained<AnyObject> =
+                    msg_send![wk_view, valueForKey: ns_string!("drawsBackground")];
+                let draws: bool = msg_send![&*draws, boolValue];
+                eprintln!(
+                    "[desktop-surface] AppKit opaque={opaque}, WebKit drawsBackground={draws}"
+                );
+            })
+            .map_err(|error| error.to_string())?;
+    }
+
     #[cfg(target_os = "linux")]
     crate::webview_media::configure_frontend_microphone(&window)?;
     // Applying this again after construction keeps a hot-reloaded frontend
@@ -803,14 +841,16 @@ pub fn show_frontend(
         .set_shadow(rounded_windows)
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    enforce_frontend_content_corner_radius(&window)?;
+    if surface_mode == SurfaceMode::Translucent {
+        enforce_frontend_content_corner_radius(&window)?;
+    }
     // A newly-created hidden GTK window does not have a wl_surface yet. Apply
     // the Wayland effect after `show` below; the other platforms can install
     // their native material before the first visible frame.
     #[cfg(not(target_os = "linux"))]
     apply_frontend_native_appearance(
         &window,
-        startup_appearance.blur,
+        surface_mode.allows_blur(startup_appearance.blur),
         startup_appearance.dark,
         &startup_appearance.blur_intensity,
     )?;
@@ -857,7 +897,9 @@ pub fn show_frontend(
     });
     // `tauri dev` runs a debug build, where the inspector is available.
     #[cfg(debug_assertions)]
-    window.open_devtools();
+    if std::env::var_os("LUMIVERSE_PERF_NO_INSPECTOR").is_none() {
+        window.open_devtools();
+    }
     set_frontend_task_switcher_visible(&app, &window, true)?;
     // On macOS `show` unhides the NSApplication. Calling it before focusing
     // ensures the active app (and therefore the menu bar) becomes Lumiverse.
@@ -867,7 +909,7 @@ pub fn show_frontend(
     #[cfg(target_os = "linux")]
     apply_frontend_native_appearance(
         &window,
-        startup_appearance.blur,
+        surface_mode.allows_blur(startup_appearance.blur),
         startup_appearance.dark,
         &startup_appearance.blur_intensity,
     )?;
@@ -1277,6 +1319,53 @@ pub fn return_extension_widget_from_tray(
     emit_widget_popout_state(&app, widget.id, false)
 }
 
+fn resolved_surface_mode(requested: Option<SurfaceMode>) -> SurfaceMode {
+    #[cfg(debug_assertions)]
+    let debug_override = match std::env::var("LUMIVERSE_NATIVE_SURFACE").as_deref() {
+        Ok("opaque") => Some(SurfaceMode::Opaque),
+        Ok("translucent") => Some(SurfaceMode::Translucent),
+        _ => None,
+    };
+    #[cfg(not(debug_assertions))]
+    let debug_override = None;
+    SurfaceMode::resolve(requested, crate::linux_runtime::opaque(), debug_override)
+}
+
+fn update_opaque_surface(
+    window: &WebviewWindow,
+    state: &FrontendState,
+    color: [u8; 3],
+) -> Result<(), String> {
+    if *state.surface_color.lock().unwrap() == Some(color) {
+        return Ok(());
+    }
+    let [red, green, blue] = color;
+    let background = Some(tauri::webview::Color(red, green, blue, 255));
+    // The combined WebviewWindow setter would turn off WK drawsBackground.
+    // Window-only preserves it. WebView2/GTK accept a fully opaque WebView color.
+    #[cfg(target_os = "macos")]
+    AsRef::<Webview>::as_ref(window)
+        .window()
+        .set_background_color(background)
+        .map_err(|error| error.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    window
+        .set_background_color(background)
+        .map_err(|error| error.to_string())?;
+    window.eval(&format!(
+        "document.documentElement.style.setProperty('--lumiverse-native-background', 'rgb({red}, {green}, {blue})')"
+    )).map_err(|error| error.to_string())?;
+    *state.surface_color.lock().unwrap() = Some(color);
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendSurfaceStatus {
+    surface_mode: SurfaceMode,
+    restart_required: bool,
+}
+
 /// Apply the native material behind an opt-in translucent frontend theme.
 /// The document provides the color/tint itself, while the native effect
 /// supplies the platform blur. This is shared by the launch snapshot and the
@@ -1397,7 +1486,8 @@ pub fn configure_frontend_appearance(
     blur: bool,
     dark: bool,
     blur_intensity: Option<String>,
-) -> Result<(), String> {
+    surface_mode: Option<SurfaceMode>,
+) -> Result<FrontendSurfaceStatus, String> {
     #[cfg(debug_assertions)]
     eprintln!(
         "[desktop-appearance] native-effect request: blur={blur}, dark={dark}, intensity={blur_intensity:?}"
@@ -1406,12 +1496,22 @@ pub fn configure_frontend_appearance(
     let window = app
         .get_webview_window(FRONTEND_LABEL)
         .ok_or("Frontend is not open")?;
+    let state = app.state::<FrontendState>();
+    let actual = state
+        .surface_mode
+        .lock()
+        .unwrap()
+        .unwrap_or(SurfaceMode::Translucent);
     apply_frontend_native_appearance(
         &window,
-        blur,
+        actual.allows_blur(blur),
         dark,
         blur_intensity.as_deref().unwrap_or("balanced"),
-    )
+    )?;
+    Ok(FrontendSurfaceStatus {
+        surface_mode: actual,
+        restart_required: resolved_surface_mode(surface_mode) != actual,
+    })
 }
 
 /// Persist the last resolved page surface and titlebar palette. It is limited
@@ -1425,7 +1525,15 @@ pub fn cache_frontend_startup_appearance(
     if !valid_startup_appearance(&appearance) {
         return Err("Invalid frontend startup appearance".into());
     }
-    save_frontend_startup_appearance(&app, &appearance)
+    save_frontend_startup_appearance(&app, &appearance)?;
+    let state = app.state::<FrontendState>();
+    let opaque = *state.surface_mode.lock().unwrap() == Some(SurfaceMode::Opaque);
+    if opaque {
+        if let Some(window) = app.get_webview_window(FRONTEND_LABEL) {
+            update_opaque_surface(&window, &state, appearance.native_color)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1437,6 +1545,21 @@ mod tests {
         supports_windows_rounded_corners, supports_windows_system_backdrop, valid_widget_size,
         FrontendStartupAppearance,
     };
+
+    #[test]
+    fn old_startup_caches_preserve_translucency_and_new_caches_roundtrip_the_mode() {
+        let mut cache = serde_json::to_value(FrontendStartupAppearance::default()).unwrap();
+        cache.as_object_mut().unwrap().remove("surfaceMode");
+        let old: FrontendStartupAppearance = serde_json::from_value(cache).unwrap();
+        assert_eq!(old.surface_mode, None);
+        let new = FrontendStartupAppearance::default();
+        let new: FrontendStartupAppearance =
+            serde_json::from_slice(&serde_json::to_vec(&new).unwrap()).unwrap();
+        assert_eq!(
+            new.surface_mode,
+            Some(crate::desktop_surface::SurfaceMode::Opaque)
+        );
+    }
 
     #[test]
     fn rounds_only_supported_windows_frames() {
