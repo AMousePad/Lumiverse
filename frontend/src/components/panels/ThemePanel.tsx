@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Bookmark, Download, Upload, Code2, Lock, Unlock } from 'lucide-react'
 import { useStore } from '@/store'
 import { useThemePackActions } from '@/hooks/useThemePackActions'
+import { applyThemePreset } from '@/lib/themeSelection'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import { resolveMode } from '@/hooks/useThemeApplicator'
 import type { ThemeConfig, ThemeMode, BaseColors, RenderingMode } from '@/types/theme'
@@ -55,27 +56,6 @@ export default function ThemePanel() {
   const handleModeChange = useCallback(
     (mode: ThemeMode) => update({ mode }),
     [update]
-  )
-
-  const clearAllExtensionThemeOverrides = useStore((s) => s.clearAllExtensionThemeOverrides)
-
-  const handlePresetSelect = useCallback(
-    (preset: ThemeConfig) => {
-      // Preserve wrapper-owned appearance when applying legacy presets. A
-      // theme that explicitly includes desktopBackground still takes control.
-      // Without this fallback, every older preset clears the field and turns
-      // the Tauri blur off simply because it predates the desktop setting.
-      const latest = getLatest()
-      // Clear extension theme overrides so the preset takes full control
-      clearAllExtensionThemeOverrides()
-      setTheme({
-        ...preset,
-        mode: latest.mode,
-        desktopBackground: preset.desktopBackground ?? latest.desktopBackground,
-        renderingMode: preset.renderingMode ?? latest.renderingMode,
-      })
-    },
-    [setTheme, getLatest, clearAllExtensionThemeOverrides]
   )
 
   const handleAccentChange = useCallback(
@@ -156,7 +136,7 @@ export default function ThemePanel() {
 
       <section className={styles.section}>
         <h4 className={styles.sectionLabel}>{t('themePanel.presets')}</h4>
-        <PresetGrid activeId={hasExtensionOverrides ? '' : current.id} onSelect={handlePresetSelect} />
+        <PresetGrid activeId={hasExtensionOverrides ? '' : current.id} onSelect={applyThemePreset} />
       </section>
 
       <SavedThemes />

@@ -107,6 +107,10 @@ const HOST_ACTION_ROWS: readonly AuthorityRow[] = [
   free({ surface: 'host_action', id: 'input_bar_action:self', source: 'ui.inputBarAction.self', freeBecause: 'pure-host-action: invokes the caller extension’s own registered handler' }),
   gated('app_manipulation', { surface: 'host_action', id: 'input_bar_action:cross_extension', source: 'ui.inputBarAction.crossExtension', gatedBecause: 'Rule-B clause (c): invokes another extension’s handler under its owner boundary' }),
   free({ surface: 'host_action', id: 'ext_command:self', source: 'ui.extCommand.self', freeBecause: 'pure-host-action: invokes the caller extension’s own backend command' }),
+  gated('personas', { surface: 'host_action', id: 'entity_action:switch_persona', source: 'personas.switchActive', gatedBecause: 'Rule-B clause (b): durable active-persona write (on the chat when a saved chat is open)' }),
+  gated('presets', { surface: 'host_action', id: 'entity_action:switch_preset', source: 'presets.setActive', gatedBecause: 'Rule-B clause (b): durable active-preset setting write' }),
+  gated('app_manipulation', { surface: 'host_action', id: 'entity_action:apply_theme', source: 'theme.applyUserTheme', gatedBecause: 'Rule-B clause (c): replaces the user theme setting and clears extension theme overrides' }),
+  gated('chats', { surface: 'host_action', id: 'entity_action:character_chat', source: 'chats.openForCharacter', gatedBecause: 'Rule-B clause (b): can create a durable chat' }),
   gated('app_manipulation', { surface: 'host_action', id: 'ext_command:cross_extension', source: 'ui.extCommand.crossExtension', gatedBecause: 'Rule-B clause (c): invokes another extension backend under its owner boundary' }),
 ]
 

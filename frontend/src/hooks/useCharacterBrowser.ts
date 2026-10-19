@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router'
 import { toast } from '@/lib/toast'
 import { charactersApi } from '@/api/characters'
 import { chatsApi } from '@/api/chats'
-import { get } from '@/api/client'
 import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
@@ -16,6 +15,7 @@ import { getEmbeddedCharacterBookEntryCount } from '@/utils/character-world-book
 import { sortFolderGroups } from '@/lib/folderSorting'
 import { reconcileLoadedCharacters } from '@/lib/reconcileLoadedCharacters'
 import i18n from '@/i18n'
+import { startCharacterChat } from '@/lib/characterChat'
 
 /**
  * If a character carries a portable LoRA hint in `extensions.lumiverse_image_gen_lora`,
@@ -661,21 +661,11 @@ export function useCharacterBrowser() {
   }, [applyFolderUpdates])
 
   const openModal = useStore((s) => s.openModal)
-  const showChatCreationToast = useCallback(
-    () => toast.info(i18n.t('chat.toast.creatingChatCortex'), {
-      title: i18n.t('chat.toast.startingChat'),
-      duration: 60_000,
-      dismissible: false,
-    }),
-    []
-  )
-
   // Open chat
   const openChat = useCallback(
     async (character: Character | CharacterSummary) => {
-      let creationToastId: string | null = null
       try {
-        const chats = await get<any[]>('/chats/character-chats/' + character.id)
+        const chats = await chatsApi.listCharacterChats(character.id)
 
         if (chats.length === 1) {
           navigate(`/chat/${chats[0].id}`)
@@ -691,94 +681,26 @@ export function useCharacterBrowser() {
           return
         }
 
-        // Check for alternate greetings — use has_alternate_greetings from summary,
-        // or alternate_greetings from full character
-        const hasAlternates = 'has_alternate_greetings' in character
-          ? character.has_alternate_greetings
-          : (character as Character).alternate_greetings?.length > 0
-
-        if (hasAlternates) {
-          // Fetch full character for greeting content
-          const fullChar = await charactersApi.get(character.id)
-          openModal('greetingPicker', {
-            character: fullChar,
-            onSelect: async (greetingIndex: number) => {
-              const toastId = showChatCreationToast()
-              try {
-                const chat = await chatsApi.create({
-                  character_id: character.id,
-                  greeting_index: greetingIndex,
-                })
-                toast.dismiss(toastId)
-                navigate(`/chat/${chat.id}`)
-              } catch (err) {
-                toast.dismiss(toastId)
-                console.error('[CharacterBrowser] Failed to create chat:', err)
-                toast.error(i18n.t('chat.toast.failedCreateChat'))
-              }
-            },
-          })
-          return
-        }
-
-        creationToastId = showChatCreationToast()
-        const chat = await chatsApi.create({ character_id: character.id })
-        toast.dismiss(creationToastId)
-        creationToastId = null
-        navigate(`/chat/${chat.id}`)
+        await startCharacterChat(character, navigate)
       } catch (err) {
-        if (creationToastId) toast.dismiss(creationToastId)
         console.error('[CharacterBrowser] Failed to open chat:', err)
         toast.error(i18n.t('chat.toast.failedOpenChat'))
       }
     },
-    [navigate, openModal, showChatCreationToast]
+    [navigate, openModal]
   )
 
   // Start a new chat
   const startNewChat = useCallback(
     async (character: Character | CharacterSummary) => {
-      let creationToastId: string | null = null
       try {
-        const hasAlternates = 'has_alternate_greetings' in character
-          ? character.has_alternate_greetings
-          : (character as Character).alternate_greetings?.length > 0
-
-        if (hasAlternates) {
-          const fullChar = await charactersApi.get(character.id)
-          openModal('greetingPicker', {
-            character: fullChar,
-            onSelect: async (greetingIndex: number) => {
-              const toastId = showChatCreationToast()
-              try {
-                const chat = await chatsApi.create({
-                  character_id: character.id,
-                  greeting_index: greetingIndex,
-                })
-                toast.dismiss(toastId)
-                navigate(`/chat/${chat.id}`)
-              } catch (err) {
-                toast.dismiss(toastId)
-                console.error('[CharacterBrowser] Failed to create chat:', err)
-                toast.error(i18n.t('chat.toast.failedCreateChat'))
-              }
-            },
-          })
-          return
-        }
-
-        creationToastId = showChatCreationToast()
-        const chat = await chatsApi.create({ character_id: character.id })
-        toast.dismiss(creationToastId)
-        creationToastId = null
-        navigate(`/chat/${chat.id}`)
+        await startCharacterChat(character, navigate)
       } catch (err) {
-        if (creationToastId) toast.dismiss(creationToastId)
         console.error('[CharacterBrowser] Failed to start new chat:', err)
         toast.error(i18n.t('chat.toast.failedStartNewChat'))
       }
     },
-    [navigate, openModal, showChatCreationToast]
+    [navigate]
   )
 
   // ─── Trigger a re-fetch of the current browser page ─────────────────────

@@ -124,6 +124,10 @@ const spindleUiActionRuntime: HostActionRuntime = {
   openWorldBookEditor: () => { throw new Error('HOST_ACTION_UNMAPPED:modal') },
   invokeInputBarAction: () => { throw new Error('HOST_ACTION_UNMAPPED:input_bar_action') },
   invokeExtensionCommand: () => { throw new Error('HOST_ACTION_UNMAPPED:ext_command') },
+  switchPersona: () => { throw new Error('HOST_ACTION_UNMAPPED:entity_action') },
+  switchPreset: () => { throw new Error('HOST_ACTION_UNMAPPED:entity_action') },
+  applyTheme: () => { throw new Error('HOST_ACTION_UNMAPPED:entity_action') },
+  openCharacterChat: () => { throw new Error('HOST_ACTION_UNMAPPED:entity_action') },
 }
 
 const LIVE_GENERATION_HEAD_STATUSES = new Set<ChatHeadStatus>([

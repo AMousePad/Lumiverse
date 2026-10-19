@@ -29,6 +29,12 @@ const testStore = {
   openSettings(...args: unknown[]) {
     testStore.settingsCalls.push(args)
   },
+  personas: [{ id: 'persona-1', name: 'Ann' }],
+  savedThemes: [{ id: 'saved-1', name: 'Night Owl', kind: 'config' }],
+  appliedSavedThemes: [] as string[],
+  applySavedTheme(id: string) {
+    testStore.appliedSavedThemes.push(id)
+  },
   activeModal: null as string | null,
   modalProps: {} as Record<string, unknown>,
   setPendingWorldBookEditEntryId(id: string | null) {
@@ -58,8 +64,12 @@ mock.module('@/store', () => ({
   }),
 }))
 mock.module('@/ws/client', () => ({ wsClient: { send: () => {} } }))
+mock.module('@/i18n', () => ({ default: { t: (key: string) => key } }))
+let personaSelection: void | Promise<void>
+mock.module('@/lib/personaSelection', () => ({ selectPersona: () => personaSelection }))
 
 const { buildHostSurfaceCatalog, createHostSurfaceAPI } = await import('./host-surfaces')
+const { configurePresetSelectionCoordinator } = await import('@/lib/loom/preset-selection-coordinator')
 
 const drawer = (id: string) => ({ id, tabName: id, tabDescription: `${id} panel`, shortName: id, keywords: [id] }) as any
 const settings = (id: string, role?: 'admin' | 'owner') => ({ id, tabName: id, tabDescription: `${id} settings`, shortName: id, keywords: [id], role }) as any
@@ -238,6 +248,100 @@ describe('H4 host surface catalog and invocation', () => {
     api.invoke({ kind: 'settings_tab', id: 'voice' }, { anchorId: 'setsec-voice-tts' })
     api.invoke({ kind: 'settings_tab', id: 'voice' })
     expect(testStore.settingsCalls).toEqual([['voice', { anchorId: 'setsec-voice-tts' }], ['voice', undefined]])
+  })
+
+  test('entity actions are listed with a param schema and theme choices', () => {
+    const api = createHostSurfaceAPI({
+      extensionId: 'ext-a',
+      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [], themes: [{ id: 'rose', name: 'Rose' }, { id: 'saved-1', name: 'Night Owl' }] }),
+    })
+    const actions = api.list(['entity_action'])
+    expect(actions.map((surface) => surface.id)).toEqual(['switch_persona', 'switch_preset', 'apply_theme', 'character_chat'])
+    expect(actions.find((surface) => surface.id === 'character_chat')?.params).toMatchObject({
+      type: 'object',
+      required: ['characterId', 'mode'],
+      additionalProperties: false,
+      properties: { mode: { type: 'string', enum: ['latest', 'new'] } },
+    })
+    expect(actions.find((surface) => surface.id === 'apply_theme')?.params?.properties.themeId.oneOf).toEqual([
+      { const: 'rose', title: 'Rose' },
+      { const: 'saved-1', title: 'Night Owl' },
+    ])
+  })
+
+  test('entity actions check their permission and that the entity exists', () => {
+    const calls: string[] = []
+    const inputs = () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] })
+    const denied = createHostSurfaceAPI({ extensionId: 'ext-a', getGrantedPermissions: () => ['chats'], getInputs: inputs })
+    expect(() => denied.invoke({ kind: 'entity_action', id: 'switch_persona' }, { personaId: 'persona-1' })).toThrow('PERMISSION_DENIED:personas')
+    expect(() => denied.invoke({ kind: 'entity_action', id: 'apply_theme' }, { themeId: 'rose' })).toThrow('PERMISSION_DENIED:app_manipulation')
+
+    const allowed = createHostSurfaceAPI({
+      extensionId: 'ext-a',
+      getGrantedPermissions: () => ['personas', 'app_manipulation'],
+      getInputs: inputs,
+      runtime: { switchPersona: (id) => { calls.push(id) } },
+    })
+    allowed.invoke({ kind: 'entity_action', id: 'switch_persona' }, { personaId: 'persona-1' })
+    expect(calls).toEqual(['persona-1'])
+    testStore.appliedSavedThemes = []
+    allowed.invoke({ kind: 'entity_action', id: 'apply_theme' }, { themeId: 'saved-1' })
+    expect(testStore.appliedSavedThemes).toEqual(['saved-1'])
+    expect(() => allowed.invoke({ kind: 'entity_action', id: 'apply_theme' }, { themeId: 'missing' })).toThrow('HOST_ACTION_NOT_FOUND:themeId')
+
+    const defaults = createHostSurfaceAPI({ extensionId: 'ext-a', getGrantedPermissions: () => ['personas'], getInputs: inputs })
+    expect(() => defaults.invoke({ kind: 'entity_action', id: 'switch_persona' }, { personaId: 'persona-2' })).toThrow('HOST_ACTION_NOT_FOUND:personaId')
+  })
+
+  test('the default persona runtime forwards persistence failures to its caller', async () => {
+    let fail!: (error: Error) => void
+    personaSelection = new Promise<void>((_, reject) => { fail = reject })
+    const api = createHostSurfaceAPI({ extensionId: 'ext-a', getGrantedPermissions: () => ['personas'], getInputs: () => ({}) })
+    const pending = api.invoke({ kind: 'entity_action', id: 'switch_persona' }, { personaId: 'persona-1' })
+    expect(pending).toBe(personaSelection)
+    fail(new Error('persona persistence failed'))
+    await expect(pending).rejects.toThrow('persona persistence failed')
+    personaSelection = undefined
+  })
+
+  test('a superseded preset action rejects while the latest action flushes and switches', async () => {
+    let activePresetId = 'previous'
+    const calls: string[] = []
+    configurePresetSelectionCoordinator({
+      getActivePresetId: () => activePresetId,
+      setActivePresetId: (id) => { activePresetId = id!; calls.push(`select:${id}`) },
+      flushPreset: async (id) => { calls.push(`flush:${id}`) },
+    })
+    const api = createHostSurfaceAPI({ extensionId: 'ext-a', getGrantedPermissions: () => ['presets'], getInputs: () => ({}) })
+    const previous = api.invoke({ kind: 'entity_action', id: 'switch_preset' }, { presetId: 'superseded' })
+    const latest = api.invoke({ kind: 'entity_action', id: 'switch_preset' }, { presetId: 'latest' })
+    await expect(previous).rejects.toThrow('HOST_ACTION_UNAVAILABLE:entity_action:switch_preset')
+    await latest
+    expect(calls).toEqual(['flush:previous', 'select:latest'])
+    expect(activePresetId).toBe('latest')
+  })
+
+  test.each([
+    ['switch_persona', 'personas', { personaId: 'persona-1' }],
+    ['switch_preset', 'presets', { presetId: 'preset-1' }],
+    ['apply_theme', 'app_manipulation', { themeId: 'rose' }],
+    ['character_chat', 'chats', { characterId: 'char-1', mode: 'new' }],
+  ] as const)('%s checks current grants before calling any runtime', (id, permission, params) => {
+    let granted: string[] = []
+    const calls: string[] = []
+    const invoke = () => { calls.push(id) }
+    const api = createHostSurfaceAPI({
+      extensionId: 'ext-a', getGrantedPermissions: () => granted, getInputs: () => ({}),
+      runtime: { switchPersona: invoke, switchPreset: invoke, applyTheme: invoke, openCharacterChat: invoke },
+    })
+    expect(() => api.invoke({ kind: 'entity_action', id }, params)).toThrow(`PERMISSION_DENIED:${permission}`)
+    expect(calls).toEqual([])
+    granted = [permission]
+    api.invoke({ kind: 'entity_action', id }, params)
+    expect(calls).toEqual([id])
+    granted = []
+    expect(() => api.invoke({ kind: 'entity_action', id }, params)).toThrow(`PERMISSION_DENIED:${permission}`)
+    expect(calls).toEqual([id])
   })
 
   test('role-filtered settings remain absent for invocation and snapshot', () => {
