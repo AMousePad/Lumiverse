@@ -175,6 +175,12 @@ const DOMAIN_ROWS: readonly AuthorityRow[] = [
   free({ surface: 'ctx_member', id: 'ctx.worldBooks.entries', source: 'worldBooks.entries', ctxLeaf: 'ctx.worldBooks.entries', freeBecause: 'rest: GET /api/v1/world-books/:id/entries is session-authenticated' }),
   free({ surface: 'ctx_member', id: 'ctx.messages.getContent', source: 'messages.content', ctxLeaf: 'ctx.messages.getContent', freeBecause: 'limb-e: shipped ctx.messages.listMessageIds already enumerates the same shared message store' }),
   free({ surface: 'ctx_member', id: 'ctx.messages.getRecent', source: 'messages.recent', ctxLeaf: 'ctx.messages.getRecent', freeBecause: 'limb-e: shared message DOM and shipped message-id readers observe the same recent messages' }),
+  gated('media', { surface: 'ctx_member', id: 'ctx.tts.speak', source: 'tts.speak', ctxLeaf: 'ctx.tts.speak', gatedBecause: 'Rule-B clause (c): plays audio and spends the stored TTS provider credential; message playback may save audio like the Play button' }),
+  gated('media', { surface: 'ctx_member', id: 'ctx.tts.stop', source: 'tts.stop', ctxLeaf: 'ctx.tts.stop', gatedBecause: 'Rule-B clause (c): stops host-managed audio playback, including chat auto-play' }),
+  ...(['isSpeaking', 'subscribe'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.tts.${method}`, source: 'tts.playbackState', ctxLeaf: `ctx.tts.${method}`,
+    freeBecause: 'limb-e: whether host TTS is playing is observable in the shared DOM (message Stop buttons and audio players); no text, audio, or credential crosses the boundary',
+  })),
   ...(['countText', 'countMessages', 'countChat', 'countTextBatch'] as const).map((method) => free({
     surface: 'ctx_member' as const,
     id: `ctx.tokens.${method}`,

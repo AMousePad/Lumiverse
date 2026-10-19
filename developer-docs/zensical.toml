@@ -85,6 +85,7 @@ nav = [
     { "Shared Components" = "frontend-api/shared-components.md" },
     { "Connection Profiles" = "frontend-api/connections.md" },
     { "Speech-to-text" = "frontend-api/speech-to-text.md" },
+    { "Text-to-speech" = "frontend-api/text-to-speech.md" },
     { "System audio" = "frontend-api/system-audio.md" },
     { "Backend Communication" = "frontend-api/backend-communication.md" },
     { "Frontend Process Lifecycle" = "frontend-api/processes.md" },

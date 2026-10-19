@@ -175,6 +175,8 @@ import {
 } from './dom-decorator-service'
 import { registerHostIntentHandler, type HostIntentHandler, type JsonValue } from './host-intent-registry'
 import { createNativeSTTAPI } from './stt-native'
+import { createNativeTTSAPI } from './tts-native'
+import { SPINDLE_TTS_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
 import { createNativeSystemAudioAPI } from './system-audio-native'
 import { SPINDLE_COMPOSER_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
 import { createFrontendComposerAPI } from './composer-api'
@@ -709,6 +711,7 @@ async function doLoadFrontendExtension(
   }
   let stateSelectors: StateSelectors | undefined
   let speech: ReturnType<typeof createNativeSTTAPI> | undefined
+  let textToSpeech: ReturnType<typeof createNativeTTSAPI> | undefined
   let systemAudio: ReturnType<typeof createNativeSystemAudioAPI> | undefined
   let cachedGrantedPermissions: string[] = []
   const settingsBridge = createSettingsBridge({
@@ -841,6 +844,7 @@ async function doLoadFrontendExtension(
     stateSelectors?.revokePermissions(revokedPermissions)
     if (revokedPermissions.includes('media')) speech?.revoke()
     if (revokedPermissions.includes('system_audio')) systemAudio?.revoke()
+    if (revokedPermissions.includes('media')) textToSpeech?.revoke()
     if (revokedPermissions.includes('app_manipulation')) revokeInlineCardWrappingOptOut(manifest.identifier)
     if (previous.includes('world_books') && !next.includes('world_books')) {
       destroyComponentsForExtensionPermission(extensionId, 'world_books', generation)
@@ -1297,6 +1301,11 @@ async function doLoadFrontendExtension(
       requirePermission: assertCanonicalPermission,
       onTeardown,
     })
+    textToSpeech = createNativeTTSAPI({
+      assertActive: assertFrontendActive,
+      requirePermission: assertCanonicalPermission,
+      onTeardown,
+    })
     systemAudio = createNativeSystemAudioAPI({
       assertActive: assertFrontendActive,
       requirePermission: assertCanonicalPermission,
@@ -1431,6 +1440,7 @@ async function doLoadFrontendExtension(
       capabilities: Object.freeze({ ...SPINDLE_HOST_CAPABILITIES, ...THEME_AUTHORING_HOST_CAPABILITIES, ...SPINDLE_STT_HOST_CAPABILITIES, ...SPINDLE_SYSTEM_AUDIO_HOST_CAPABILITIES,
         ...SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES,
         ...CLIENT_HOST_CAPABILITIES,
+        ...SPINDLE_TTS_HOST_CAPABILITIES,
         'frontend-session-origin-v1': 1,
         ...SPINDLE_COMPOSER_HOST_CAPABILITIES,
       }),
@@ -2189,6 +2199,7 @@ async function doLoadFrontendExtension(
       domain,
       geometry: createFrontendGeometryAPI(),
       stt: speech.api,
+      tts: textToSpeech.api,
       systemAudio: systemAudio.api,
       composer: createFrontendComposerAPI({
         assertActive: assertFrontendActive,

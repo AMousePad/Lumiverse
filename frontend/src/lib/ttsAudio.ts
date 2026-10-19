@@ -243,6 +243,7 @@ function drainQueue(): void {
         lastScheduledSource = null
         setActiveId(null)
         onEndCb?.()
+        notifySpeaking()
       }
     }
 
@@ -280,6 +281,7 @@ function startPlaybackSession(): void {
     paused = false
     nextStartTime = 0
     onStartCb?.()
+    notifySpeaking()
   }
 }
 
@@ -414,6 +416,7 @@ function maybeFireEnd(): void {
     lastScheduledSource = null
     setActiveId(null)
     onEndCb?.()
+    notifySpeaking()
   }
 }
 
@@ -471,6 +474,7 @@ export function stop(): void {
   lastScheduledSource = null
   playing = false
   setActiveId(null)
+  notifySpeaking()
 }
 
 /** Pause playback by suspending the AudioContext. */
@@ -494,6 +498,58 @@ export function resume(): void {
 
 export function isSpeaking(): boolean {
   return playing
+}
+
+/** Engine playback id; it changes on every stop(). Lets a producer check it still owns playback. */
+export function getPlaybackSession(): number {
+  return session
+}
+
+// Host-wide TTS playback state: the engine above plus saved message audio,
+// which plays through <audio> elements (MessageAudioPlayer). Extensions that
+// listen to the microphone pause while this is true.
+const trackedElements = new Set<HTMLMediaElement>()
+const speakingListeners = new Set<() => void>()
+
+/** Called on every engine start/end/stop and saved-audio play/pause, not only on changes. */
+function notifySpeaking(): void {
+  speakingListeners.forEach((cb) => {
+    try { cb() } catch { /* listener failure shouldn't break playback */ }
+  })
+}
+
+export function isTTSPlaybackActive(): boolean {
+  return playing || [...trackedElements].some((el) => !el.paused && !el.ended)
+}
+
+export function subscribeTTSPlayback(cb: () => void): () => void {
+  speakingListeners.add(cb)
+  return () => { speakingListeners.delete(cb) }
+}
+
+/** Count a saved-message <audio> element as TTS playback while it plays. Returns the cleanup. */
+export function trackTTSAudioElement(el: HTMLMediaElement): () => void {
+  const update = () => {
+    notifySpeaking()
+  }
+  trackedElements.add(el)
+  const events = ['play', 'playing', 'pause', 'ended', 'emptied'] as const
+  for (const event of events) el.addEventListener(event, update)
+  notifySpeaking()
+  return () => {
+    for (const event of events) el.removeEventListener(event, update)
+    trackedElements.delete(el)
+    notifySpeaking()
+  }
+}
+
+/** Stop the engine and pause every playing saved-message <audio> element. */
+export function stopAllTTSPlayback(): void {
+  stop()
+  for (const el of [...trackedElements]) {
+    if (!el.paused) el.pause()
+  }
+  notifySpeaking()
 }
 
 export function onTTSEvent(event: 'start' | 'end' | 'error', cb: (() => void) | ((err: Error) => void)): void {

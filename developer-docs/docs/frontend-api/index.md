@@ -53,4 +53,5 @@ Frontend UI can follow two supported rendering paths:
 | [Theme Authoring](theme-authoring.md) | Varies | Work with native theme assets, safe `.lumitheme` drafts, the component/variable catalog, and native Theme Editor navigation |
 | [Connection Profiles](connections.md) | Free (switching the LLM profile needs `generation`) | List the user's LLM, image, TTS, STT, embedding, and Decision profiles without credentials |
 | [Speech-to-text](speech-to-text.md) | `media` (discovery is free) | Record or transcribe audio through the host speech stack, including bundled on-device Whistle |
+| [Text-to-speech](text-to-speech.md) | `media` (playback state is free) | Speak text or chat messages through the user's TTS connections, and know when host TTS is playing |
 | [System audio](system-audio.md) | `system_audio` (discovery is free) | Combined and optional stereo spectrum and loudness of the sound the device is playing; analysis only, with explicit host consent (optionally remembered) and a host indicator while it runs. Needs a native desktop adapter |
