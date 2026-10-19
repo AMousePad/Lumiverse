@@ -75,6 +75,7 @@ import {
   type RegexActionActivation,
 } from '@/lib/regex/actionBus'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
+import { holdHostCapture } from '@/lib/sttHostCapture'
 import { isWhistleAvailable } from '@/lib/whistle/config'
 import { whistleClient } from '@/lib/whistle/client'
 import { composeChatSafeZones } from '@/lib/chatSurfaceLayout'
@@ -1035,6 +1036,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   }, [voiceSettings.sttProvider, isSTTSupported])
   const isListeningToSTT = sttStatus === 'starting' || sttStatus === 'listening' || sttStatus === 'processing'
   const showSTTIndicator = isListeningToSTT
+  useEffect(() => isListeningToSTT ? holdHostCapture() : undefined, [isListeningToSTT])
   const sttIndicatorLabel = useMemo(() => {
     if (sttStatus === 'starting' && voiceSettings.sttProvider === 'whistle' && sttLoadingProgress !== null) {
       return t('input.sttWhistleLoading', { percent: Math.round(sttLoadingProgress * 100) })
