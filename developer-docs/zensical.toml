@@ -32,6 +32,7 @@ nav = [
     { "LLM Tools" = "backend-api/llm-tools.md" },
     { "Generation" = "backend-api/generation.md" },
     { "Decision Models" = "backend-api/decisions.md" },
+    { "Embeddings" = "backend-api/embeddings.md" },
     { "Image Generation" = "backend-api/image-generation.md" },
     { "Images" = "backend-api/images.md" },
     { "Media" = "backend-api/media.md" },
