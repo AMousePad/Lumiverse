@@ -5,6 +5,50 @@ the frontend and continues generation while iOS suspends the app. UIKit scene
 transitions restore WebSocket presence, stream focus, and generation buffers
 when the app returns, including brief app switches.
 
+On launch, the native launch screen and connection page share a plain dark
+background. No logo or startup message appears while restoring the saved
+address and reconnecting; the iOS frontend session check also stays visually
+empty. Setup appears for a new installation, when
+changing servers, or after a restore/connection failure. Failed reconnects keep
+the saved address available for retry.
+
+## Caching and the Home Screen PWA
+
+The wrapper accepts user-configured HTTPS server origins without an app-bound
+domain list. Ordinary builds use WebKit's persistent HTTP cache for cacheable
+server responses and require an online connection probe before opening a server.
+
+The opt-in `--native-cache-preview` build adds a native, origin-scoped frontend
+store to the real wrapper. It ships the current frontend in the IPA, verifies
+its SHA-256 before use, and supplies the document at the selected server's real
+URL. Scripts, styles, fonts, and worker/worklet code load locally. Authentication,
+API calls, WebSockets, uploads, and media continue through normal WebKit
+networking with the server's existing cookies. A saved server can open its
+cached interface without waiting for the native connection probe or runtime
+configuration. New server addresses still require validation.
+
+This is a device-testing preview. Frontend updates currently require a new IPA;
+background server bundle downloads and managed image/media caching are not yet
+implemented. Cached startup does not provide offline conversations or login,
+and PWA performance parity has not been measured. The native store retains two
+frontend generations per origin and excludes them from device backups. A local
+boot acknowledgement detects failed bundles and falls back to the server UI.
+Hold two fingers on the page to choose **Reload**, **Use server frontend**, or
+**Use native cached interface**. The server-frontend preference is per origin.
+
+The separate iOS Home Screen PWA uses a same-window SSO redirect for sign-in
+and account linking. Completion returns to the app without closing its window;
+provider errors stay visible with a return action. This frontend change does
+not alter the native wrapper's selected-origin navigation policy.
+
+The [native cache implementation plan](ios-native-cache-plan.md)
+describes managed frontend/media caching, fast startup, updates, rollback,
+authentication integration, and PWA performance comparisons. The preview above
+implements an initial subset; the full release remains in progress. A separate
+[native cache feasibility probe](ios-native-cache-probe.md) exercises production
+frontend loading from disk, origin/cookie behavior, worker compatibility, and
+cold-process restores independently of the wrapper integration tests.
+
 ## Build and install
 
 On a Mac with Xcode, an enrolled Apple Developer signing team, and a provisioned
@@ -20,6 +64,29 @@ paired iPhone using Xcode or `xcrun devicectl device install app`. The generated
 archive's application is under
 `ios/tauri/src-tauri/gen/apple/build/arm64/Lumiverse.xcarchive/Products/Applications/Lumiverse.app`.
 The updated server frontend is also required for lifecycle recovery.
+
+To build the integrated native cache preview with push notifications:
+
+```sh
+bun run build:ios-client --push-notifications --native-cache-preview
+```
+
+This writes `dist/ios/lumiverse-ios-arm64-native-cache-preview-push.ipa` and
+includes the bundled frontend manifest in the build metadata. Install over the
+existing bundle to retain server settings and WebKit storage. For an automated
+test of the real wrapper, use a disposable `LumiverseClientSmoke` simulator:
+
+```sh
+bun run build:ios-client --simulator --debug --push-notifications --native-cache-preview
+bun scripts/smoke-test-ios-native-cache.ts --simulator <UUID>
+```
+
+The test resets only that simulator's wrapper installation. It checks cached
+login rendering, reload, a saved-server launch with a failing backend, online
+fallback, re-enabling the cache, and native boot-health acknowledgement. It does
+not log into a live account. Native diagnostics at
+`Library/Application Support/NativeCache/status.json` contain bundle identity,
+origin, and boot-health flags; they contain no account or session data.
 
 ## Native push notifications
 

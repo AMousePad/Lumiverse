@@ -22,6 +22,7 @@ import ErrorBoundary from './components/shared/ErrorBoundary'
 import './theme/variables.css'
 import './theme/reset.css'
 import './theme/global.css'
+import { reportNativeCacheReady } from './lib/nativeCache'
 
 installDisplayPerformanceTelemetry('application')
 installWindowOpenGuard()
@@ -372,4 +373,5 @@ void Promise.all([initI18n(), initializeSafeThemeMode()]).then(() => {
     </StrictMode>,
   )
   markDisplayInteractive()
+  reportNativeCacheReady()
 })

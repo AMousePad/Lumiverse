@@ -39,7 +39,7 @@ import { useBoundPresetSelection } from '@/hooks/useBoundPresetSelection'
 import { RouterContextExporter } from '@/lib/router-bridge'
 import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
 import { installNotificationAudioPrimer } from '@/lib/notificationAudio'
-import { getSafeThemeState } from '@/lib/safeThemeMode'
+import { useSafeThemeState } from '@/lib/safeThemeMode'
 import DesktopFloatingWidgetHost from '@/components/spindle/DesktopFloatingWidgetHost'
 import {
   buildDesktopFloatingWidgetCatalog,
@@ -74,7 +74,7 @@ function Application() {
   'use memo'
 
   const { t } = useTranslation('common')
-  const safeTheme = getSafeThemeState()
+  const safeTheme = useSafeThemeState()
   useWebSocket()
   useThemeApplicator()
   const desktopPinchZoomEnabled = useStore((s) => s.desktopPinchZoomEnabled)
