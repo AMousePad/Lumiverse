@@ -14,9 +14,9 @@ external service, or separate model installation is needed for Whistle.
 Feature-detect `ctx.stt` and `ctx.host.capabilities['speech-to-text-v1'] >= 1`.
 `lumiverse-spindle-types` 0.6.39 declares the optional API and exports its options,
 session, transcript, provider, PCM, audio frame, and status types. It remains
-optional for compatibility with older hosts and API mocks. A version newer than
-0.6.52 declares `keywords`, `words`, `onHostActivity`, and `isHostCapturing`
-(capability `speech-to-text-options-v1`).
+optional for compatibility with older hosts and API mocks. Version 0.6.55 declares
+`keywords`, `words`, `onHostActivity`, and `isHostCapturing`; feature-detect them with the
+`speech-to-text-options-v1` capability.
 
 Declare `"media"` in `spindle.json`. `listProviders()` is free; `prepare()`,
 `start()`, and `transcribe()` require that permission. Recording also uses the
@@ -105,7 +105,8 @@ With `ctx.host.capabilities['speech-to-text-options-v1'] >= 1`, `transcribe()` a
 accepts two options:
 
 - `keywords`: names and words to favour, such as character names. Up to 500 entries,
-  each 1-100 characters without line breaks. Other values reject with `STT_OPTIONS_INVALID`.
+  each 1-100 characters after trimming, without line breaks or NUL characters.
+  Other values reject with `STT_OPTIONS_INVALID`.
 - `words: true`: the transcript also has `words`, a list of `{ word, start, end, probability }`.
   `start` and `end` are seconds from the start of the supplied audio, `probability` is the
   decoder's confidence from 0 to 1. Words keep their punctuation (`"one."`).

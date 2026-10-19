@@ -9,8 +9,10 @@ const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime
 const directory = mkdtempSync(join(tmpdir(), "lumiverse-apns-test-"));
 const keyPath = join(directory, "AuthKey.p8");
 writeFileSync(keyPath, privateKey.export({ type: "pkcs8", format: "pem" }));
-const variables = ["APNS_TEAM_ID", "APNS_KEY_ID", "APNS_PRIVATE_KEY_PATH", "APNS_BUNDLE_ID"];
+const variables = ["APNS_TEAM_ID", "APNS_KEY_ID", "APNS_PRIVATE_KEY_PATH", "APNS_BUNDLE_ID",
+  "APNS_CERTIFICATE_PATH", "APNS_PRIVATE_KEY_PASSPHRASE_FILE", "APNS_PRIVATE_KEY_PASSPHRASE"];
 const previous = Object.fromEntries(variables.map(key => [key, process.env[key]]));
+for (const key of variables) delete process.env[key];
 Object.assign(process.env, { APNS_TEAM_ID: "TEAM123456", APNS_KEY_ID: "KEY1234567", APNS_PRIVATE_KEY_PATH: keyPath, APNS_BUNDLE_ID: "chat.lumiverse.ios" });
 let responseStatus = 200, responseBody = "", authority = "", lastHeaders: Record<string, unknown> = {}, lastPayload = "";
 let requestCount = 0;

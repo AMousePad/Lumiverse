@@ -81,3 +81,10 @@
   color: var(--lumiverse-text);
   background: var(--lumiverse-fill);
 }
+
+.renderingHint {
+  margin: 0;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.5;
+}

@@ -1,0 +1,6 @@
+{
+  "identifier": "connection",
+  "description": "Choose local hosting or a hosted server from the bundled connection page only.",
+  "windows": ["main"],
+  "permissions": ["allow-mobile-connection"]
+}

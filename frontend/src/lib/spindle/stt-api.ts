@@ -37,10 +37,10 @@ function transcribeExtras(options: SpindleSTTTranscribeOptions): STTTranscribeEx
   if (!Array.isArray(keywords) || keywords.length > MAX_KEYWORDS) {
     throw new Error(`STT_OPTIONS_INVALID: keywords must be an array of at most ${MAX_KEYWORDS} strings`)
   }
-  const copy = keywords.map((keyword) => {
+  const copy = Array.from(keywords, (keyword) => {
     const value = typeof keyword === 'string' ? keyword.trim() : ''
-    if (!value || value.length > MAX_KEYWORD_LENGTH || /[\r\n]/.test(value)) {
-      throw new Error(`STT_OPTIONS_INVALID: each keyword must be 1-${MAX_KEYWORD_LENGTH} characters without line breaks`)
+    if (!value || value.length > MAX_KEYWORD_LENGTH || /[\0\r\n\u2028\u2029]/.test(keyword)) {
+      throw new Error(`STT_OPTIONS_INVALID: each keyword must be 1-${MAX_KEYWORD_LENGTH} characters without line breaks or NUL`)
     }
     return value
   })
@@ -130,10 +130,18 @@ export function createFrontendSTTAPI(deps: FrontendSTTDependencies) {
     onHostActivity(listener) {
       assertLive()
       if (typeof listener !== 'function') throw new Error('STT_OPTIONS_INVALID: listener must be a function')
+      let subscribed = true
       const unsubscribe = deps.subscribeHostCapture((active) => {
+        if (!subscribed) return
+        try { assertLive() } catch { return }
         try { listener(active) } catch (error) { console.error('[Spindle] Speech callback failed', error) }
       })
-      const release = () => { unsubscribe(); hostCaptureSubscriptions.delete(release) }
+      const release = () => {
+        if (!subscribed) return
+        subscribed = false
+        unsubscribe()
+        hostCaptureSubscriptions.delete(release)
+      }
       hostCaptureSubscriptions.add(release)
       return release
     },

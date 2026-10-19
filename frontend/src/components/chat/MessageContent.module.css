@@ -693,11 +693,6 @@
   background: #000;
 }
 
-/* ── Chunk fade for streaming ── */
-.chunkFade {
-  animation: lcs-chunk-fade 180ms ease-out both;
-}
-
 /* ── Scroll-time CSS suppression ── */
 :global([data-scrolling]) .codeBlock {
   backdrop-filter: none !important;

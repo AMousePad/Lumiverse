@@ -3,6 +3,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync,
 import { join, relative, resolve } from "node:path";
 import { zipSync, type Zippable } from "fflate";
 import { configureIOSPushEntitlements } from "./ios-entitlements";
+import { buildIOSNativeCache } from "./build-ios-native-cache";
 
 const root = resolve(import.meta.dir, ".."), project = join(root, "ios/tauri");
 const generated = join(project, "src-tauri/gen/apple");
@@ -10,7 +11,8 @@ const args = new Set(process.argv.slice(2));
 const simulator = args.has("--simulator"), unsigned = args.has("--unsigned") || simulator;
 const experimentalHighRefresh = args.has("--experimental-high-refresh");
 const pushNotifications = args.has("--push-notifications");
-const artifactSuffix = (experimentalHighRefresh ? "-experimental-high-refresh" : "") + (pushNotifications ? "-push" : "");
+const nativeCachePreview = args.has("--native-cache-preview");
+const artifactSuffix = (nativeCachePreview ? "-native-cache-preview" : "") + (experimentalHighRefresh ? "-experimental-high-refresh" : "") + (pushNotifications ? "-push" : "");
 if (process.platform !== "darwin") throw new Error("iOS builds require macOS and Xcode.");
 const cli = join(root, "desktop/node_modules/@tauri-apps/cli/tauri.js");
 if (!existsSync(cli)) throw new Error("Install the locked desktop CLI first: bun install --cwd desktop --frozen-lockfile");
@@ -31,14 +33,23 @@ async function run(command: string[], cwd = project, extraEnv: Record<string, st
   if (await child.exited !== 0) throw new Error(`iOS client build failed: ${command.join(" ")}`);
 }
 await run(["xcodebuild", "-version"]);
+const nativeCacheManifest = nativeCachePreview ? await buildIOSNativeCache() : null;
 if (!existsSync(join(generated, "project.yml")))
   await run(["node", cli, "ios", "init", "--ci", "--skip-targets-install"]);
+copyFileSync(join(project, "src-tauri/LaunchScreen.storyboard"), join(generated, "LaunchScreen.storyboard"));
 copyFileSync(join(root, "frontend/public/icon.svg"), join(project, "ui/icon.svg"));
 const icons = join(root, ".tmp/ios-icons");
 await run(["node", cli, "icon", join(root, "frontend/public/icon.svg"), "--output", icons, "--ios-color", "#231e30"]);
 cpSync(join(icons, "ios"), join(generated, "Assets.xcassets/AppIcon.appiconset"), { recursive: true });
 const specPath = join(generated, "project.yml");
 let spec = readFileSync(specPath, "utf8");
+spec = spec.replace(/      # Lumiverse native cache preview\n[\s\S]*?      # End Lumiverse native cache preview\n/g, "");
+if (nativeCachePreview) spec = spec.replace("      - path: LaunchScreen.storyboard", `      # Lumiverse native cache preview
+      - path: ../../../../../.tmp/ios-native-cache-preview
+        buildPhase: resources
+        type: folder
+      # End Lumiverse native cache preview
+      - path: LaunchScreen.storyboard`);
 // Xcode GUI builds have a minimal PATH and no Tauri CLI options server. Use
 // the same standalone Rust build phase as this packaging helper.
 spec = spec.replace(/    preBuildScripts:\n(?:[ \t]{6,}[^\n]*(?:\n|$)|[ \t]*\n)*/, `    preBuildScripts:
@@ -158,6 +169,8 @@ const metadata = { artifact: relative(root, artifact), target: simulator ? "aarc
   signed: !unsigned, debug: args.has("--debug"), backend: "remote", version: "0.3.1",
   experimentalHighRefresh,
   pushNotifications,
+  nativeCachePreview,
+  ...(nativeCacheManifest ? { nativeCacheManifest } : {}),
   ...(simulator ? {} : { sha256: new Bun.CryptoHasher("sha256").update(readFileSync(artifact)).digest("hex") }) };
 writeFileSync(join(out, `${simulator ? "simulator-build" : "ipa-build"}${artifactSuffix}.json`), JSON.stringify(metadata, null, 2) + "\n");
 console.log(`[ios] Built ${artifact}${unsigned && !simulator ? " (unsigned; requires provisioning and signing before installation)" : ""}`);

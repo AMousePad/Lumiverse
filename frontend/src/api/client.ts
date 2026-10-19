@@ -114,6 +114,8 @@ export async function get<T>(path: string, params?: Record<string, any>, options
   try {
     const res = await fetch(url.toString(), {
       headers: { 'Accept': 'application/json' },
+      // Database reads must be fresh after a restore in persistent WebViews.
+      cache: 'no-store',
       credentials: 'include',
       signal,
     })

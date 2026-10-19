@@ -169,6 +169,18 @@ const DOMAIN_ROWS: readonly AuthorityRow[] = [
     ctxLeaf: `ctx.tokens.${method}`,
     freeBecause: 'rest: public authenticated tokenizer routes count bounded caller-supplied text without provider egress',
   })),
+  ...(['getState', 'onChange'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.composer.${method}`, source: 'composer.draft', ctxLeaf: `ctx.composer.${method}`,
+    freeBecause: 'limb-e: the draft is the value of the host chat textarea, which is readable in the shared document',
+  })),
+  ...(['setText', 'insertText', 'focus'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.composer.${method}`, source: 'composer.edit', ctxLeaf: `ctx.composer.${method}`,
+    freeBecause: 'pure-host-action: changes the transient draft or focus of the host chat textarea; nothing is sent or stored on the server until the user sends',
+  })),
+  gated('generation', {
+    surface: 'ctx_member', id: 'ctx.composer.send', source: 'composer.send', ctxLeaf: 'ctx.composer.send',
+    gatedBecause: 'Rule-B clause (a): runs the host send path, which writes the user message and starts credentialed provider generation',
+  }),
 ]
 
 const GEOMETRY_ROWS: readonly AuthorityRow[] = [

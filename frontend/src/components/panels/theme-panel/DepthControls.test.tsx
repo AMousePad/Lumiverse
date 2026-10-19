@@ -19,10 +19,11 @@ Object.assign(globalThis, {
   HTMLElement: domWindow.HTMLElement,
   HTMLInputElement: domWindow.HTMLInputElement,
   Event: domWindow.Event,
+  MutationObserver: domWindow.MutationObserver,
   IS_REACT_ACT_ENVIRONMENT: true,
 })
 
-const { DeferredColorInput } = await import('./DepthControls')
+const { default: DepthControls, DeferredColorInput } = await import('./DepthControls')
 
 let root: Root
 let host: HTMLElement
@@ -65,4 +66,18 @@ describe('DeferredColorInput', () => {
 
     expect(host.querySelector<HTMLInputElement>('input')?.value).toBe('#abcdef')
   })
+})
+
+
+test('shows the native restart requirement and clears it when the requested surface matches', async () => {
+  act(() => root.render(
+    <DepthControls radiusScale={1} enableGlass={false} fontScale={1} uiScale={1}
+      onRadiusChange={() => {}} onGlassToggle={() => {}} onFontScaleChange={() => {}} onUiScaleChange={() => {}}
+      showDesktopBackgroundControls onDesktopBackgroundChange={() => {}} />,
+  ))
+  expect(host.querySelector('[role="status"]')).toBeNull()
+  await act(async () => { document.documentElement.setAttribute('data-desktop-surface-restart', '') })
+  expect(host.querySelector('[role="status"]')?.textContent).toBe('renderingMode.restartRequired')
+  await act(async () => { document.documentElement.removeAttribute('data-desktop-surface-restart') })
+  expect(host.querySelector('[role="status"]')).toBeNull()
 })

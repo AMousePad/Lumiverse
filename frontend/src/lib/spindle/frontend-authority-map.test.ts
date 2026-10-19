@@ -97,6 +97,11 @@ describe('frontend authority map', () => {
     // System audio: discovery is free; starting analysis needs the privileged permission.
     expect(frontendAuthorityPermission('ctx_member', 'ctx.systemAudio.isAvailable')).toBeNull()
     expect(frontendAuthorityPermission('ctx_member', 'ctx.systemAudio.start')).toBe('system_audio')
+    // Composer: the draft is free to read and edit; sending starts a generation.
+    for (const method of ['getState', 'onChange', 'setText', 'insertText', 'focus']) {
+      expect(frontendAuthorityPermission('ctx_member', `ctx.composer.${method}`)).toBeNull()
+    }
+    expect(frontendAuthorityPermission('ctx_member', 'ctx.composer.send')).toBe('generation')
     expect(frontendAuthorityPermission('legacy_ctx_member', 'ctx.chats.updateMessage')).toBe('chats')
     for (const member of [
       'ctx.ui.registerConnectionEditorTab',

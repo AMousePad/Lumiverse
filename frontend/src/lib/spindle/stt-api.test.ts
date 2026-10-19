@@ -188,11 +188,38 @@ describe('extension speech lifecycle', () => {
   })
 
   test('rejects invalid keywords before transcription', async () => {
-    for (const keywords of [['Lumi\nSeo'], [''], ['x'.repeat(101)], Array(501).fill('Lumi'), 'Lumi', [3]]) {
+    for (const keywords of [['Lumi\nSeo'], ['Lumi\n'], ['\rLumi'], ['Lumi\u2028Seo'], ['Lumi\0Seo'], [''], ['x'.repeat(101)], Array(501).fill('Lumi'), Array(1), 'Lumi', [3]]) {
       const f = fixture()
-      await expect(f.api.transcribe(new Blob(['audio']), { keywords: keywords as string[] })).rejects.toThrow('STT_OPTIONS_INVALID')
+      const pending = f.api.transcribe(new Blob(['audio']), { keywords: keywords as string[] })
+      f.transcription.resolve({ text: 'unexpected transcription', provider: 'whistle' })
+      await expect(pending).rejects.toThrow('STT_OPTIONS_INVALID')
       expect(f.extras()).toBeUndefined()
     }
+  })
+
+  test('suppresses host activity after another listener unsubscribes or unloads it during delivery', () => {
+    const first = fixture(); const second = fixture()
+    const events: boolean[] = []
+    let unsubscribe = () => {}
+    first.api.onHostActivity!(() => unsubscribe())
+    unsubscribe = second.api.onHostActivity!((active) => events.push(active))
+    const release = holdHostCapture()
+    try { expect(events).toEqual([]) } finally { release() }
+
+    first.dispose()
+    const unloading = fixture(); const unloaded = fixture()
+    unloading.api.onHostActivity!(() => unloaded.dispose())
+    unloaded.api.onHostActivity!((active) => events.push(active))
+    const end = holdHostCapture()
+    try { expect(events).toEqual([]) } finally { end() }
+  })
+
+  test('rechecks extension liveness before delivering host activity', () => {
+    const f = fixture(); const events: boolean[] = []
+    f.api.onHostActivity!((active) => events.push(active))
+    f.deactivate()
+    const release = holdHostCapture()
+    try { expect(events).toEqual([]) } finally { release() }
   })
 
   test('reports host microphone activity without media and stops after unsubscribe or teardown', () => {
