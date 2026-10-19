@@ -5,6 +5,9 @@ const COMMANDS = [
   ['action-new-chat', 'global'],
   ['action-delete-last-message', 'chat'],
   ['action-regenerate', 'chat-idle'],
+  ['action-stop-generation', 'chat'],
+  ['action-swipe-left', 'chat'],
+  ['action-swipe-right', 'chat'],
 ].map(([id, scope]) => ({
   id,
   label: id,
@@ -22,6 +25,10 @@ const testStore = {
   extensionCommands: [],
   inputBarActions: [],
   pendingWorldBookEditEntryId: null as string | null,
+  settingsCalls: [] as unknown[][],
+  openSettings(...args: unknown[]) {
+    testStore.settingsCalls.push(args)
+  },
   activeModal: null as string | null,
   modalProps: {} as Record<string, unknown>,
   setPendingWorldBookEditEntryId(id: string | null) {
@@ -38,8 +45,9 @@ mock.module('@/lib/drawer-tab-registry', () => ({
   DRAWER_TABS: [],
   extensionTabsToCommands: () => [],
 }))
+let visibleSettingsTabs: unknown[] = []
 mock.module('@/lib/settings-tab-registry', () => ({
-  getVisibleSettingsTabs: () => [],
+  getVisibleSettingsTabs: () => visibleSettingsTabs,
   settingsRegistryToCommands: () => [],
 }))
 mock.module('@/router', () => ({ router: { navigate: () => {} } }))
@@ -116,6 +124,30 @@ describe('H4 host surface catalog and invocation', () => {
     expect(calls).toEqual(['action-regenerate'])
   })
 
+  test.each([
+    ['action-stop-generation', 'generation'],
+    ['action-swipe-left', 'chats'],
+    ['action-swipe-right', 'generation'],
+  ])('%s checks its permission on every invocation', (id, permission) => {
+    const calls: string[] = []
+    let granted: string[] = []
+    const api = createHostSurfaceAPI({
+      extensionId: 'ext-a',
+      getGrantedPermissions: () => granted,
+      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] }),
+      runtime: { runCommand: (commandId) => { calls.push(commandId) } },
+    })
+    expect(api.list(['command']).some((surface) => surface.id === id)).toBe(true)
+    expect(() => api.invoke({ kind: 'command', id })).toThrow(`PERMISSION_DENIED:${permission}`)
+    expect(calls).toEqual([])
+    granted = [permission]
+    api.invoke({ kind: 'command', id })
+    expect(calls).toEqual([id])
+    granted = []
+    expect(() => api.invoke({ kind: 'command', id })).toThrow(`PERMISSION_DENIED:${permission}`)
+    expect(calls).toEqual([id])
+  })
+
   test('world-book editor invocation requires permission and forwards the entry target', () => {
     const calls: Array<[string, string | undefined]> = []
     const denied = createHostSurfaceAPI({
@@ -184,6 +216,28 @@ describe('H4 host surface catalog and invocation', () => {
     })
     await crossApi.invoke({ kind: 'input_bar_action', id: 'b-action' })
     expect(calls).toEqual(['a-action', 'b-action'])
+  })
+
+  test('the live catalog lists the core settings tabs, not extension tab bodies', () => {
+    visibleSettingsTabs = [settings('account'), settings('voice')]
+    Object.assign(testStore, { settingsTabs: [{ tabId: 'voice', extensionId: 'ext-b' }] })
+    try {
+      const api = createHostSurfaceAPI({ extensionId: 'ext-a' })
+      expect(api.list(['settings_tab']).map((surface) => surface.id)).toEqual(['account', 'voice'])
+    } finally {
+      visibleSettingsTabs = []
+    }
+  })
+
+  test('default settings action forwards the section anchor', () => {
+    testStore.settingsCalls = []
+    const api = createHostSurfaceAPI({
+      extensionId: 'ext-a',
+      getInputs: () => ({ userRole: 'user', settingsTabs: [settings('voice')], inputBarActions: [], extensionCommands: [] }),
+    })
+    api.invoke({ kind: 'settings_tab', id: 'voice' }, { anchorId: 'setsec-voice-tts' })
+    api.invoke({ kind: 'settings_tab', id: 'voice' })
+    expect(testStore.settingsCalls).toEqual([['voice', { anchorId: 'setsec-voice-tts' }], ['voice', undefined]])
   })
 
   test('role-filtered settings remain absent for invocation and snapshot', () => {

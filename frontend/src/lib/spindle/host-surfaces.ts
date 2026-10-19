@@ -242,7 +242,7 @@ function defaultRuntime(
   return {
     openDrawer: (id) => useStore.getState().openDrawer(id),
     closeDrawer: () => useStore.getState().closeDrawer(),
-    openSettings: (id) => useStore.getState().openSettings(id),
+    openSettings: (id, anchorId) => useStore.getState().openSettings(id, anchorId ? { anchorId } : undefined),
     closeSettings: () => useStore.getState().closeSettings(),
     openCommandPalette: () => useStore.getState().openCommandPalette(),
     closeCommandPalette: () => useStore.getState().closeCommandPalette(),
@@ -303,7 +303,6 @@ export function createHostSurfaceAPI(options: HostSurfaceAPIFactoryOptions): Hos
     return {
       ...options,
       userRole: state.user?.role ?? null,
-      settingsTabs: filterEnabledFrontendContributions(state.settingsTabs, extensions) as unknown as readonly SettingsTabEntry[],
       extensionTabs: filterEnabledFrontendContributions(state.drawerTabs, extensions),
       extensionCommands: filterEnabledFrontendContributions(state.extensionCommands, extensions),
       inputBarActions: filterEnabledFrontendContributions(state.inputBarActions, extensions),
