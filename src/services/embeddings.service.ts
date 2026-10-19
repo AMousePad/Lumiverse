@@ -2929,13 +2929,15 @@ export async function listEmbeddingConnections(userId: string): Promise<Embeddin
  * Embed texts with exactly one connection: `connectionId`, or the primary one.
  * Unlike the chain used for retrieval, fallbacks are never used, so every
  * vector in one result (and across calls) comes from the same model.
- * Shares the vector cache with host retrieval.
+ * Uses connection-scoped cache entries: host retrieval can cache fallback
+ * vectors under its primary fingerprint, which cannot identify their source.
  */
 export async function embedTextsWithConnection(
   userId: string,
   texts: string[],
   options: { connectionId?: string; inputType?: EmbeddingInputType; signal?: AbortSignal } = {},
 ): Promise<EmbeddingsEmbedResult> {
+  if (options.signal?.aborted) throw resolveAbortError(options.signal);
   if (!Array.isArray(texts) || texts.length === 0) throw new Error("texts must be a non-empty array");
   if (texts.length > EXTENSION_EMBED_MAX_TEXTS) throw new Error(`At most ${EXTENSION_EMBED_MAX_TEXTS} texts per request`);
   for (const text of texts) {
@@ -2953,9 +2955,21 @@ export async function embedTextsWithConnection(
   if (!profile) throw new Error("Embedding connection not found");
   if (!profile.enabled) throw new Error("Embedding connection is disabled");
 
-  const driver = profileToDriverConfig(cfg, profile);
+  const driver: EmbeddingDriverConfig = {
+    provider: profile.provider,
+    api_url: profile.api_url,
+    model: profile.model,
+    dimensions: profile.dimensions,
+    send_dimensions: cfg.send_dimensions,
+    request_timeout: cfg.request_timeout,
+    vertex_region: profile.vertex_region,
+    vertex_project: profile.vertex_project,
+  };
   const fingerprint = getModelFingerprint(driver);
-  const cacheFingerprint: ModelFingerprint = { ...fingerprint, api_url: `${fingerprint.api_url}|input_type:${inputType}` };
+  const cacheFingerprint: ModelFingerprint = {
+    ...fingerprint,
+    api_url: `${fingerprint.api_url}|input_type:${inputType}|connection_id:${profile.id}`,
+  };
   const keys = texts.map((text) => computeCacheKey(text, cacheFingerprint));
   const embeddings: Array<number[] | null> = keys.map((key) => embeddingCache.get(key));
   const missing = embeddings.flatMap((vector, index) => (vector ? [] : [index]));
@@ -2974,18 +2988,23 @@ export async function embedTextsWithConnection(
         if (options.signal?.aborted || isEmbeddingAbortError(err)) throw resolveAbortError(options.signal);
         throw sanitizeEmbeddingError(err, [apiKey]);
       }
+      if (options.signal?.aborted) throw resolveAbortError(options.signal);
       indices.forEach((index, j) => {
         embeddings[index] = vectors[j];
-        embeddingCache.set(keys[index], vectors[j]);
       });
     }
   }
 
-  const result = embeddings as number[][];
-  const dimensions = result[0]?.length ?? 0;
-  if (!dimensions || result.some((vector) => vector.length !== dimensions)) {
-    throw new Error("Embedding provider returned vectors of different sizes");
+  const dimensions = Array.isArray(embeddings[0]) ? embeddings[0].length : 0;
+  if (!dimensions || embeddings.some((vector) => (
+    !Array.isArray(vector)
+    || vector.length !== dimensions
+    || vector.some((value) => typeof value !== "number" || !Number.isFinite(value))
+  ))) {
+    throw new Error("Embedding provider returned invalid vectors");
   }
+  const result = embeddings as number[][];
+  for (const index of missing) embeddingCache.set(keys[index], result[index]);
   return { embeddings: result, connection_id: profile.id, model: driver.model, dimensions };
 }
 

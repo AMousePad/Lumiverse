@@ -2,7 +2,7 @@
 
 `spindle.embeddings` turns text into vectors with the user's embedding connections (Settings > Embeddings). Use it to rank short texts by meaning, for example to match a spoken request against command labels. Declare the `embeddings` permission in `spindle.json` and obtain the user's grant. The host advertises `embeddings-v1: 1` in `spindle.host.capabilities`; check this before calling the API on older hosts.
 
-Use a `lumiverse-spindle-types` version newer than **0.6.52** for `SpindleEmbeddingsAPI`, the `Embedding*` types, and the `embeddings` permission.
+Use `lumiverse-spindle-types` **0.6.53** or newer for `SpindleEmbeddingsAPI`, the `Embedding*` types, and the `embeddings` permission.
 
 ## Embed
 
@@ -31,7 +31,7 @@ The result has one vector per text, in input order, plus the `connection_id`, `m
 - A request has 1–256 texts. Each text must be non-empty and at most 8192 characters. Split larger sets into several requests.
 - The host sends texts to the provider in batches of the user's embedding batch size.
 - The request fails when the user has turned embeddings off.
-- Results share the host's embedding cache (10 minutes), so repeated texts do not call the provider again.
+- Results use the host's embedding cache (10 minutes), scoped to the selected connection and input type, so repeated extension requests do not call the provider again. Host retrieval uses separate entries because its vectors may come from a fallback connection.
 
 Extensions never supply credentials or endpoints, and errors never contain the API key. User extensions always resolve their owner's account. Operator extensions must supply `userId`. When the server owner shares their embedding setup with other accounts, those accounts embed with the owner's connections, as host features do.
 

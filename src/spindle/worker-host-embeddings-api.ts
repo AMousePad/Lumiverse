@@ -31,6 +31,7 @@ export class WorkerHostEmbeddingsApi {
         this.pending.set(message.requestId, controller);
         try {
           result = await embedTextsWithConnection(userId, texts, { connectionId: connection_id, inputType: input_type, signal: controller.signal });
+          controller.signal.throwIfAborted();
         } catch (error) {
           if (controller.signal.aborted) throw new Error("AbortError: Embeddings request cancelled");
           throw error;

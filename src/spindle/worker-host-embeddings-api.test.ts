@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as settingsSvc from "../services/settings.service";
 import * as secretsSvc from "../services/secrets.service";
+import * as googleVertex from "../llm/providers/google-vertex";
 import { embeddingCache } from "../services/embedding-cache";
 import {
   EMBEDDING_SETTINGS_KEY,
@@ -109,6 +110,14 @@ describe("embedTextsWithConnection", () => {
     expect(sent).toHaveLength(1);
   });
 
+  test.each([{ texts: ["label"] }, { texts: ["label", "other label"] }])("does not mislabel cached host fallback vectors for %j", async ({ texts }) => {
+    respond = (body, url) => url.includes("primary") ? new Response("down", { status: 503 }) : Response.json(vectorsFor(body));
+    await cachedEmbedTexts(USER, [...texts]);
+    expect(sent).toHaveLength(2);
+    await expect(embedTextsWithConnection(USER, [...texts])).rejects.toThrow("Embedding request failed (503)");
+    expect(sent).toHaveLength(3);
+  });
+
   test("uses the requested connection", async () => {
     respond = (body) => Response.json(vectorsFor(body, 5));
     const result = await embedTextsWithConnection(USER, ["hello"], { connectionId: SECOND_ID });
@@ -119,16 +128,67 @@ describe("embedTextsWithConnection", () => {
     expect(sent[0]!.body.model).toBe("local-model");
   });
 
-  test("shares the vector cache with host retrieval and keeps queries apart", async () => {
+  test("preserves the selected connection's native dimensions", async () => {
+    settings.set(`${USER}::${EMBEDDING_SETTINGS_KEY}`, config({ send_dimensions: true }));
+    respond = (body) => Response.json(vectorsFor(body, body.dimensions ?? 5));
+    const result = await embedTextsWithConnection(USER, ["hello"], { connectionId: SECOND_ID });
+    expect(sent[0]!.body).not.toHaveProperty("dimensions");
+    expect(result.dimensions).toBe(5);
+  });
+
+  test("uses the selected Vertex connection's project and region defaults", async () => {
+    settings.set(`${USER}::${EMBEDDING_SETTINGS_KEY}`, config({
+      connectionProfiles: config().connectionProfiles.map((profile) => ({
+        ...profile,
+        provider: "google_vertex",
+        model: "gemini-embedding-001",
+        ...(profile.id === PRIMARY_ID ? { vertex_project: "primary-project", vertex_region: "us-central1" } : {}),
+      })),
+    }));
+    secrets.set(`${USER}::${embeddingProfileSecretKey(SECOND_ID)}`, JSON.stringify({
+      project_id: "secondary-project", client_email: "secondary@example.test", private_key: "test-key",
+    }));
+    spies.push(spyOn(googleVertex, "getAccessToken").mockResolvedValue("vertex-token"));
+    respond = () => Response.json({ predictions: [{ embeddings: { values: [1, 2, 3] } }] });
+    await embedTextsWithConnection(USER, ["hello"], { connectionId: SECOND_ID });
+    expect(sent[0]!.url).toContain("/projects/secondary-project/locations/global/");
+  });
+
+  test.each([
+    { vectors: ["not a vector"] },
+    { vectors: [[1, "bad", 3]] },
+    { vectors: [[1, null, 3]] },
+    { vectors: [[]] },
+    { vectors: [[1, 2], [1, 2, 3]] },
+  ])("rejects invalid provider vectors without caching them: %j", async ({ vectors }) => {
+    const texts = vectors.map((_, index) => `label ${index}`);
+    respond = () => Response.json({ data: vectors.map((embedding) => ({ embedding })) });
+    await expect(embedTextsWithConnection(USER, texts)).rejects.toThrow("Embedding provider returned invalid vectors");
+    expect(embeddingCache.size).toBe(0);
+    respond = (body) => Response.json(vectorsFor(body));
+    expect((await embedTextsWithConnection(USER, texts)).embeddings).toHaveLength(texts.length);
+    expect(sent).toHaveLength(2);
+  });
+
+  test("does not cache earlier batches when later vectors have different dimensions", async () => {
+    respond = (body) => Response.json(vectorsFor(body, body.input.includes("last") ? 5 : 3));
+    await expect(embedTextsWithConnection(USER, ["first", "second", "last"])).rejects.toThrow("Embedding provider returned invalid vectors");
+    expect(sent).toHaveLength(2);
+    expect(embeddingCache.size).toBe(0);
+  });
+
+  test("scopes cached vectors to their connection and keeps queries apart", async () => {
     await cachedEmbedTexts(USER, ["shared label", "other label"]);
     expect(sent).toHaveLength(1);
     const passage = await embedTextsWithConnection(USER, ["shared label", "other label"]);
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(2);
     expect(passage.embeddings).toEqual([[12, 13, 14], [11, 12, 13]]);
-    await embedTextsWithConnection(USER, ["shared label"], { inputType: "query" });
+    await embedTextsWithConnection(USER, ["shared label", "other label"]);
     expect(sent).toHaveLength(2);
     await embedTextsWithConnection(USER, ["shared label"], { inputType: "query" });
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(3);
+    await embedTextsWithConnection(USER, ["shared label"], { inputType: "query" });
+    expect(sent).toHaveLength(3);
   });
 
   test("rejects bad input before any provider call", async () => {
@@ -193,5 +253,15 @@ describe("WorkerHostEmbeddingsApi", () => {
     await api.handle({ type: "embeddings_cancel", requestId: "slow" });
     await pending;
     expect(responses).toEqual([{ type: "response", requestId: "slow", error: "AbortError: Embeddings request cancelled" }] as any);
+  });
+
+  test("cancels a cached request before its response is posted", async () => {
+    await embedTextsWithConnection(USER, ["hi"]);
+    const { api, responses } = hostApi();
+    const pending = api.handle({ type: "embeddings_embed", requestId: "cached", input: { texts: ["hi"] } });
+    await api.handle({ type: "embeddings_cancel", requestId: "cached" });
+    await pending;
+    expect(responses).toEqual([{ type: "response", requestId: "cached", error: "AbortError: Embeddings request cancelled" }] as any);
+    expect(sent).toHaveLength(1);
   });
 });
