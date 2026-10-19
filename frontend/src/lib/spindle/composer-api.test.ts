@@ -93,6 +93,31 @@ describe('ctx.composer', () => {
     expect(seen[1]).toEqual({ mounted: false, chatId: null, text: '' })
   })
 
+  test('unsubscribe or teardown during delivery skips callbacks still queued in that burst', async () => {
+    const one = createApi()
+    const two = createApi()
+    const third = createApi()
+    const removed = mock(() => {})
+    const unloaded = mock(() => {})
+    let unsubscribe = () => {}
+    one.api.onChange(() => {
+      unsubscribe()
+      third.teardown()
+    })
+    unsubscribe = two.api.onChange(removed)
+    third.api.onChange(unloaded)
+    try {
+      unregister = registerComposer(fakeComposer())
+      await flush()
+      expect(removed).not.toHaveBeenCalled()
+      expect(unloaded).not.toHaveBeenCalled()
+    } finally {
+      one.teardown()
+      two.teardown()
+      third.teardown()
+    }
+  })
+
   test('a stale unregister does not remove the newer composer', () => {
     const first = registerComposer(fakeComposer('chat-1'))
     unregister = registerComposer(fakeComposer('chat-2'))

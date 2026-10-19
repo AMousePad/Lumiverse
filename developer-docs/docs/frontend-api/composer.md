@@ -34,6 +34,25 @@ export function setup(ctx: SpindleFrontendContext) {
 
 `setText` and `insertText` apply synchronously: `getState()` and `send()` right after them see the new draft. Editing the draft is free because nothing leaves the browser until the user (or a `generation`-gated `send()`) sends it. When the user has draft saving on, the host saves the new draft like a typed one.
 
+### Calling from React effects
+
+The synchronous writes use [React's `flushSync`](https://react.dev/reference/react-dom/flushSync). Call `setText` and `insertText` from event handlers, asynchronous callbacks, or `onChange` handlers. When calling from a React effect or lifecycle callback, defer the write and any dependent reads or sends to a microtask, after React has finished committing:
+
+```tsx
+useEffect(() => {
+  let active = true
+  queueMicrotask(() => {
+    if (active && composer.getState().mounted) {
+      composer.setText(transcript)
+      // getState() or send() here sees the updated draft.
+    }
+  })
+  return () => { active = false }
+}, [composer, transcript])
+```
+
+Calling a synchronous write directly inside an effect produces a React warning; the new draft is applied on a later render, so an immediate read or send can still use the previous draft.
+
 ## Sending
 
 `send()` runs the host's send path for the open chat, the same one as the Send button and Enter:

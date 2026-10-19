@@ -43,6 +43,7 @@ export function notifyComposerChanged(): void {
     if (next.mounted === published.mounted && next.chatId === published.chatId && next.text === published.text) return
     published = next
     for (const listener of [...listeners]) {
+      if (!listeners.has(listener)) continue
       try {
         listener(next)
       } catch (error) {
