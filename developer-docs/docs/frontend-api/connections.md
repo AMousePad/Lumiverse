@@ -12,8 +12,10 @@ ignore the `kind` argument and return LLM profiles.
 if ((ctx.host.capabilities['connection-kinds-v1'] ?? 0) >= 1) {
   const voices = await ctx.connections.list({ kind: 'tts' })
   // [{ id, kind: 'tts', name, provider, model, voice, active }]
-  const stt = await ctx.connections.getActive('stt')
-  // { activeProfileId, provider, model }; all null when the kind has no active profile
+  if (ctx.connections.getActive) {
+    const stt = await ctx.connections.getActive('stt')
+    // { activeProfileId, provider, model }; all null when the kind has no active profile
+  }
 }
 ```
 

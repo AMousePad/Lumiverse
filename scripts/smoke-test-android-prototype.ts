@@ -100,7 +100,21 @@ function launches(status: Status) {
   assert.ok(count > 0);
   return count;
 }
-async function start() { await closeRuntimeConnection(); await command("shell", "am", "start", "-n", `${app}/.MainActivity`); }
+async function start() {
+  await closeRuntimeConnection()
+  await command("shell", "am", "start", "-n", `${app}/.MainActivity`)
+  if (args.includes("--require-tauri")) {
+    const deadline = Date.now() + 15000
+    while (Date.now() < deadline) {
+      try {
+        if (await evaluate("!!document.getElementById('connection-form')")) {
+          await evaluate("document.getElementById('local').click(); true")
+        }
+        break
+      } catch { await Bun.sleep(250) }
+    }
+  }
+}
 await command("shell", "am", "force-stop", app);
 await start();
 const first = await waitForStatus();

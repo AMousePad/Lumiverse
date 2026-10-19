@@ -29,6 +29,7 @@ These are always available:
 | `"screen_recording"` | Privileged worker-only requests for bounded desktop video or an explicitly armed replay buffer. Never auto-granted; does not authorize silent recording. |
 | `"generation"` | Fire LLM generations (raw, quiet, batch) on behalf of the user. Also grants access to list/inspect connection profiles and list their models. |
 | `"decisions"` | Inspect saved Decision model connections and evaluate typed Choice, Score, and Noul questions through OpenRouter or TypeSafe. See [Decision models](../backend-api/decisions.md). |
+| `"embeddings"` | List the user's embedding connections and embed text with them. See [Embeddings](../backend-api/embeddings.md). |
 | `"interceptor"` | Register a pre-generation interceptor that can modify the prompt before it reaches the LLM |
 | `"tools"` | Register LLM tools (function calling). Council-eligible tools appear in the Council tools list and can be assigned to members for pre-generation analysis |
 | `"cors_proxy"` | Make HTTP requests through the Lumiverse server (bypass CORS) |

@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type SyntheticEvent } from 'react'
 import { Spinner } from '@/components/shared/Spinner'
 import { isImageDecoded, onImageDecoded, rememberImageDecoded } from '@/lib/imageDecodeCache'
-import { isMacTauriWebView } from '@/lib/desktopWebView'
+import { getTauriMobilePlatform, isMacTauriWebView } from '@/lib/desktopWebView'
 
 interface LazyImageProps {
   src?: string | null
@@ -39,6 +39,7 @@ export default function LazyImage({
   // backing surface, which briefly exposes a black image layer. On macOS
   // desktop, keep this particular element hidden until its own load and decode.
   const requiresMountedDecode = isMacTauriWebView()
+  const androidWebView = getTauriMobilePlatform() === 'android'
   // Skip the spinner when the image is already decoded in the cache — it'll
   // paint within one frame, so showing/hiding a spinner just adds flicker.
   const [isLoading, setIsLoading] = useState(() => {
@@ -155,7 +156,9 @@ export default function LazyImage({
           width: '100%',
           height: '100%',
           objectFit: 'cover',
-          transition: requiresMountedDecode
+          // Virtualized Android rows are already near the viewport. Replaying
+          // an opacity fade on each remount makes fast scrolling look blank.
+          transition: requiresMountedDecode || androidWebView
             ? 'transform var(--lazy-image-transform-transition, 0ms)'
             : 'opacity 0.2s ease, transform var(--lazy-image-transform-transition, 0ms)',
           objectPosition,
@@ -165,7 +168,7 @@ export default function LazyImage({
         }}
         className={className}
         decoding={decoding}
-        loading={loading}
+        loading={androidWebView ? 'eager' : loading}
         onLoad={handleLoad}
         onError={handleError}
         {...props}

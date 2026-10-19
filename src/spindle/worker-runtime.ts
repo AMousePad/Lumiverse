@@ -7,6 +7,7 @@
 import type {
   SpindleDecisionsAPI,
   DecisionResult,
+  SpindleEmbeddingsAPI,
   SpindleManifest,
   WorkerToHost,
   HostToWorker,
@@ -1599,6 +1600,22 @@ const spindleApi: RuntimeSpindleAPI = {
       options?.signal?.addEventListener("abort", cancel, { once: true });
       if (options?.signal?.aborted) cancel();
       try { return await result as DecisionResult<typeof input.questions>; }
+      finally { options?.signal?.removeEventListener("abort", cancel); pendingResponses.delete(requestId); }
+    },
+  },
+  embeddings: {
+    async listConnections(options) {
+      return await request({ type: "embeddings_connections_list", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleEmbeddingsAPI["listConnections"]>>;
+    },
+    async embed(input, options) {
+      assertMutationAllowed("spindle.embeddings.embed()");
+      options?.signal?.throwIfAborted();
+      const requestId = crypto.randomUUID();
+      const cancel = () => post({ type: "embeddings_cancel", requestId });
+      const result = request({ type: "embeddings_embed", requestId, input });
+      options?.signal?.addEventListener("abort", cancel, { once: true });
+      if (options?.signal?.aborted) cancel();
+      try { return await result as Awaited<ReturnType<SpindleEmbeddingsAPI["embed"]>>; }
       finally { options?.signal?.removeEventListener("abort", cancel); pendingResponses.delete(requestId); }
     },
   },
