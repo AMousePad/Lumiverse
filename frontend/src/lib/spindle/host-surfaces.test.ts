@@ -5,6 +5,9 @@ const COMMANDS = [
   ['action-new-chat', 'global'],
   ['action-delete-last-message', 'chat'],
   ['action-regenerate', 'chat-idle'],
+  ['action-stop-generation', 'chat'],
+  ['action-swipe-left', 'chat'],
+  ['action-swipe-right', 'chat'],
 ].map(([id, scope]) => ({
   id,
   label: id,
@@ -119,6 +122,30 @@ describe('H4 host surface catalog and invocation', () => {
     expect(() => api.invoke({ kind: 'command', id: 'not-in-the-map' })).toThrow('HOST_ACTION_UNMAPPED')
     api.invoke({ kind: 'command', id: 'action-regenerate' })
     expect(calls).toEqual(['action-regenerate'])
+  })
+
+  test.each([
+    ['action-stop-generation', 'generation'],
+    ['action-swipe-left', 'chats'],
+    ['action-swipe-right', 'generation'],
+  ])('%s checks its permission on every invocation', (id, permission) => {
+    const calls: string[] = []
+    let granted: string[] = []
+    const api = createHostSurfaceAPI({
+      extensionId: 'ext-a',
+      getGrantedPermissions: () => granted,
+      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] }),
+      runtime: { runCommand: (commandId) => { calls.push(commandId) } },
+    })
+    expect(api.list(['command']).some((surface) => surface.id === id)).toBe(true)
+    expect(() => api.invoke({ kind: 'command', id })).toThrow(`PERMISSION_DENIED:${permission}`)
+    expect(calls).toEqual([])
+    granted = [permission]
+    api.invoke({ kind: 'command', id })
+    expect(calls).toEqual([id])
+    granted = []
+    expect(() => api.invoke({ kind: 'command', id })).toThrow(`PERMISSION_DENIED:${permission}`)
+    expect(calls).toEqual([id])
   })
 
   test('world-book editor invocation requires permission and forwards the entry target', () => {

@@ -116,13 +116,22 @@ export const COMMANDS: Command[] = [
       const { activeChatId, activeGenerationId, isStreaming, mpRoomId, mpIsHost, stopStreaming } = useStore.getState()
       // Room peers do not own the host's generation (same rule as the stop button).
       if (!activeChatId || (mpRoomId && !mpIsHost)) return
+      const generationEpoch = useStore.getState().getGenerationEpoch()
       try {
         // Without a generation id the backend stops every generation of this chat.
         await generateApi.stop(undefined, activeChatId)
       } catch (err) {
         console.error('[commands] Failed to stop generation:', err)
       }
-      if (isStreaming && !activeGenerationId) stopStreaming()
+      // The stop response can arrive after navigation or a newer generation.
+      // Only revert the optimistic stream that this command actually stopped.
+      const latest = useStore.getState()
+      if (
+        isStreaming && !activeGenerationId &&
+        latest.activeChatId === activeChatId &&
+        latest.getGenerationEpoch() === generationEpoch &&
+        latest.isStreaming && !latest.activeGenerationId
+      ) stopStreaming()
     },
   },
   {
