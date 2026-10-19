@@ -22,6 +22,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-store = "2"
 discord-rich-presence = "1"
 reqwest = { version = "0.13", features = ["form", "json", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 base64 = "0.22"
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

@@ -20,6 +20,7 @@ import {
 } from '@dnd-kit/sortable'
 import { DndContext, useScaledSortableStyle } from '@/lib/dndUiScale'
 import { CloseButton } from '@/components/shared/CloseButton'
+import { ActivityPanel } from '@/components/shared/ActivityPanel'
 import LanguageSwitcher from '@/components/shared/LanguageSwitcher'
 import { useTranslation } from 'react-i18next'
 import { translateSettingsField } from '@/lib/i18n/resolveLabel'
@@ -291,9 +292,9 @@ function SettingsView({ view }: { view: string }) {
     case 'account':
       coreContent = <AccountSettings />; break
     case 'display':
-      coreContent = <DisplaySettings />; break
+      break
     case 'chat':
-      coreContent = <ChatSettings />; break
+      break
     case 'extensions':
       coreContent = <ExtensionSettingsView />; break
     case 'guided':
@@ -340,12 +341,15 @@ function SettingsView({ view }: { view: string }) {
       break
   }
 
-  if (!coreContent && extensionTabs.length === 0) {
-    return hasCoreTab ? <div className={styles.placeholder}>{t('selectCategory')}</div> : null
+  const retainedCoreView = view === 'display' || view === 'chat'
+  if (!coreContent && !retainedCoreView && extensionTabs.length === 0) {
+    coreContent = hasCoreTab ? <div className={styles.placeholder}>{t('selectCategory')}</div> : null
   }
 
   return (
     <>
+      <ActivityPanel active={view === 'display'}><DisplaySettings /></ActivityPanel>
+      <ActivityPanel active={view === 'chat'}><ChatSettings /></ActivityPanel>
       {coreContent}
       {extensionTabs.length > 0
         ? <SettingsExtensionTabBodies tabs={extensionTabs} />

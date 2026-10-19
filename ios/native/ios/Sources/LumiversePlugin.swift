@@ -5,6 +5,7 @@ import WebKit
 /// UIKit controls and a narrowly scoped WebKit permission bridge.
 class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
     private var nativeBridge: NativeBridge?
+    private var nativeCache: NativeCache?
     private weak var webview: WKWebView?
     private var observation: NSKeyValueObservation?
     private var menuGesture: UILongPressGestureRecognizer?
@@ -21,7 +22,9 @@ class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
 
     @objc public override func load(webview: WKWebView) {
         self.webview = webview
-        nativeBridge = NativeBridge(webview: webview)
+        let cache = NativeCache(webview: webview)
+        nativeCache = cache
+        nativeBridge = NativeBridge(webview: webview, cache: cache)
         #if LUMIVERSE_EXPERIMENTAL_HIGH_REFRESH
         refreshStatus = HighRefreshExperiment.apply(to: webview.configuration.preferences)
         NSLog("[Lumiverse] Experimental high refresh: %@", String(describing: refreshStatus))
@@ -78,6 +81,18 @@ class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
+    @objc func cacheAvailable(_ invoke: Invoke) { invoke.resolve(NativeCache.available) }
+
+    @objc func loadCached(_ invoke: Invoke) throws {
+        struct Arguments: Decodable { let server: String }
+        let args = try invoke.parseArgs(Arguments.self)
+        guard let server = URL(string: args.server) else { invoke.resolve(false); return }
+        DispatchQueue.main.async { [weak self] in
+            guard let cache = self?.nativeCache else { invoke.resolve(false); return }
+            cache.load(server: server) { invoke.resolve($0) }
+        }
+    }
+
     @objc private func updateAccessibility() {
         let needsButton = UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning
         accessibilityButton?.isHidden = !needsButton
@@ -116,7 +131,8 @@ class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
               controller.presentedViewController == nil else { return }
         webview.endEditing(true)
         UISelectionFeedbackGenerator().selectionChanged()
-        let sheet = UIAlertController(title: "Lumiverse", message: nil, preferredStyle: .actionSheet)
+        let cacheMessage = nativeCache?.isActive == true ? "Native cache preview · \(nativeCache?.status["version"] as? String ?? "")" : nil
+        let sheet = UIAlertController(title: "Lumiverse", message: cacheMessage, preferredStyle: .actionSheet)
         let remote = ["https", "http"].contains(webview.url?.scheme ?? "") && webview.url?.host != "tauri.localhost"
         let share = UIAlertAction(title: "Share this page", style: .default) { [weak self, weak sheet] _ in
             sheet?.dismiss(animated: true) { [weak self] in self?.share(at: point) }
@@ -129,7 +145,19 @@ class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
         }
         safari.isEnabled = remote
         sheet.addAction(safari)
-        sheet.addAction(UIAlertAction(title: "Reload", style: .default) { [weak self] _ in self?.webview?.reload() })
+        sheet.addAction(UIAlertAction(title: "Reload", style: .default) { [weak self] _ in
+            if self?.nativeCache?.reload() != true { self?.webview?.reload() }
+        })
+        if NativeCache.available && remote {
+            if nativeCache?.isActive == true {
+                sheet.addAction(UIAlertAction(title: "Use server frontend", style: .default) { [weak self] _ in self?.nativeCache?.useServerFrontend() })
+            } else {
+                sheet.addAction(UIAlertAction(title: "Use native cached interface", style: .default) { [weak self] _ in
+                    guard let self = self, let url = self.webview?.url else { return }
+                    self.nativeCache?.load(server: url, force: true) { loaded in if !loaded { self.webview?.reload() } }
+                })
+            }
+        }
         sheet.addAction(UIAlertAction(title: "App permissions", style: .default) { [weak self, weak sheet] _ in
             sheet?.dismiss(animated: true) { [weak self] in self?.showPermissions() }
         })

@@ -70,6 +70,7 @@ import type { WallpaperRef } from '@/types/store'
 import { toast } from '@/lib/toast'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { galleryImageMarkdown } from '@/lib/galleryImageReference'
+import { getTauriMobilePlatform } from '@/lib/desktopWebView'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import { Button } from '@/components/shared/FormComponents'
@@ -708,7 +709,8 @@ export default function CharacterEditorPage() {
     estimateSize: () => galleryRowEstimate,
     overscan: GALLERY_OVERSCAN,
     anchorTo: 'start',
-    useFlushSync: false,
+    // Android flings must commit the visible range before the next paint.
+    useFlushSync: getTauriMobilePlatform() === 'android',
     getItemKey: (index) => {
       const start = index * galleryColumns
       const end = Math.min(start + galleryColumns, galleryItems.length)

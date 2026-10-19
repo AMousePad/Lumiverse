@@ -3,6 +3,7 @@ import { useStore } from '@/store'
 import { trackInitialDisplayResolve } from '@/lib/chatDisplaySettle'
 import { applyDisplayRegexTiered } from '@/lib/regex/pipeline'
 import { canSkipDisplayRegex } from '@/lib/regex/match-gate'
+import { applyLiteralDisplayNormalization } from '@/lib/regex/literal-normalization'
 import { getRegexScriptCacheKey } from '@/lib/regex/script-cache-key'
 import { useDisplayTask } from './useDisplayTask'
 import { resolveMacrosBatch } from '@/api/macros'
@@ -862,6 +863,10 @@ export function useDisplayRegexState(
   const passthrough = !displayOwned && displayScripts.every(
     (script) => canSkipDisplayRegex(content, script, resolvedTemplates.resolvedFindPatterns),
   )
+  const normalizedContent = useMemo(
+    () => displayOwned || passthrough ? undefined : applyLiteralDisplayNormalization(content, displayScripts),
+    [displayOwned, passthrough, content, displayScripts],
+  )
   const resolvedTemplateKey = useMemo(
     () => JSON.stringify({
       find: Array.from(resolvedTemplates.resolvedFindPatterns.entries()),
@@ -880,7 +885,7 @@ export function useDisplayRegexState(
     activePersonaId, isUser, depth, macroCtx, messageIndex, resolvedTemplateKey,
     dynamicMacros, previousContent, displayOwned, displayScripts])
   const version = useMemo(() => ({ contextKey, cvSnapshot, processingState }), [contextKey, cvSnapshot, processingState])
-  const contentCacheKey = skipEmptyFinalization || passthrough || regexGated
+  const contentCacheKey = skipEmptyFinalization || passthrough || regexGated || normalizedContent !== undefined
     ? null : JSON.stringify([contextKey, content])
   const schedule = useDisplayTask(version, content, isStreaming)
   const cachedResolvedContent = contentCacheKey ? getDisplayContentCacheEntry(contentCacheKey, processingState)?.value : undefined
@@ -954,7 +959,7 @@ export function useDisplayRegexState(
     seenState.current = resolvedContentState
     if (resolvedContentState?.version === version) carry.current = resolvedContentState
   }
-  const live = passthrough || (skipEmptyFinalization && preprocessSettled) ? content : cachedResolvedContent
+  const live = normalizedContent ?? (passthrough || (skipEmptyFinalization && preprocessSettled) ? content : cachedResolvedContent)
     ?? (resolvedContentState?.key === contentCacheKey && resolvedContentState.version === version
       ? resolvedContentState.value : undefined)
   const pending = !preprocessSettled || (

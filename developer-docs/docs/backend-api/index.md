@@ -23,6 +23,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [LLM Tools](llm-tools.md) | `tools` | Register function-calling tools + Council-eligible tools |
 | [Generation](generation.md) | `generation` | Fire LLM generations + inspect connections |
 | [Decision Models](decisions.md) | `decisions` | Evaluate typed questions using saved Decision connections |
+| [Embeddings](embeddings.md) | `embeddings` | Embed text with the user's embedding connections |
 | [Image Generation](image-generation.md) | `image_gen` | Generate images via image gen connection profiles |
 | [Images](images.md) | `images` | Read, upload, filter, and delete stored image/video assets |
 | [Media](media.md) | `media` | Convert audio/video, transcode with custom parameters, mux tracks, and compose still-image videos |

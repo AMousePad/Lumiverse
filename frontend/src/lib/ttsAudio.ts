@@ -5,9 +5,11 @@
  * queue management. Separate from the notification HTMLAudioElement
  * singleton in notificationAudio.ts.
  *
- * Call unlockTTSAudio() during a user gesture (e.g. send button click)
- * to create/resume the AudioContext.
+ * Browser sessions call unlockTTSAudio() during a user gesture. Native
+ * WebViews allow playback directly and create their context for actual audio.
  */
+
+import { isTauriWebView } from '@/lib/desktopWebView'
 
 let ctx: AudioContext | null = null
 let gainNode: GainNode | null = null
@@ -124,14 +126,14 @@ let hasPlayedSilentUnlock = false
 /**
  * Create/resume the AudioContext AND push a single silent buffer through it.
  *
- * Safari/iOS treat `AudioContext.resume()` alone as insufficient — the context
- * must actually produce output during a user gesture before later automated
- * playback is permitted. Playing a zero-duration silent buffer satisfies that
- * requirement on every browser without being audible.
+ * This compatibility workaround belongs to browser sessions only. Native
+ * WebViews already allow playback without a gesture, so no dummy
+ * source or idle AudioContext is needed there.
  *
  * Safe to call repeatedly; the silent-buffer prime only runs once.
  */
 export function unlockTTSAudio(): void {
+  if (isTauriWebView()) return
   const c = ensureContext()
   if (!c) return
   if (c.state === 'suspended') {
@@ -162,7 +164,7 @@ export function unlockTTSAudio(): void {
  * Returns a disposer so callers can remove the listeners early if needed.
  */
 export function installTTSAudioPrimer(): () => void {
-  if (typeof document === 'undefined') return () => {}
+  if (typeof document === 'undefined' || isTauriWebView()) return () => {}
 
   const events: (keyof DocumentEventMap)[] = ['pointerdown', 'keydown', 'touchstart']
   let disposed = false
@@ -216,6 +218,11 @@ export function setTTSSpeed(s: number): void {
 function drainQueue(): void {
   if (paused) return
   const c = requireContext()
+  // The native context is created lazily for real playback. The OS may also
+  // suspend/interrupt it in the background; resume when audio is requested.
+  if (isTauriWebView() && c.state !== 'running' && c.state !== 'closed') {
+    void c.resume().catch((error) => onErrorCb?.(error instanceof Error ? error : new Error(String(error))))
+  }
   while (queue.length > 0) {
     const buffer = queue.shift()!
     const source = c.createBufferSource()

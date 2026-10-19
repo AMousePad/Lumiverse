@@ -731,6 +731,42 @@ describe('useDisplayRegex resolver lifecycle', () => {
     }
   })
 
+  test('braille cleanup streams synchronously without regex jobs or repeated preprocessing', async () => {
+    const { host, root } = await createHarness()
+    const identity = { chatId: 'chat-braille-stream', messageId: 'message-braille-stream' }
+    const originalScripts = storeState.regexScripts
+    isDisplayChatOwnedMock.mockImplementation(() => false)
+    storeState.regexScripts = [
+      ...originalScripts.map(script => ({
+        ...script, find_regex: String.raw`[\u2800]`, replace_string: ' ',
+      })),
+      { ...originalScripts[0], id: 'unused-card', find_regex: String.raw`\[STATUS\](.*?)\[/STATUS\]`, replace_string: '<div>$1</div>' },
+    ]
+    try {
+      let content = 'Hello⠀friend'
+      await renderWhilePreprocessPending(root, { content, identity, isStreaming: true })
+      await act(async () => { await new Promise<void>(resolve => domWindow.setTimeout(resolve, 12)) })
+      for (const suffix of Array(40).fill('⠀word')) {
+        content += suffix
+        const commits: Array<{ content: string; pending: boolean }> = []
+        await act(async () => root.render(createElement(Harness, {
+          content, identity, isStreaming: true, onCommit: state => commits.push(state),
+        })))
+        expect(commits.length).toBeGreaterThan(0)
+        expect(commits.every(state => state.content === content.replaceAll('⠀', ' '))).toBe(true)
+      }
+      expect(applyDisplayRegexTiered).not.toHaveBeenCalled()
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes(identity.chatId))).toHaveLength(1)
+      await renderWhilePreprocessPending(root, { content, identity, isStreaming: false })
+      await act(async () => { await new Promise<void>(resolve => domWindow.setTimeout(resolve, 12)) })
+      expect(readRendered(host)).toBe(content.replaceAll('⠀', ' '))
+      expect(host.querySelector('output')?.dataset.pending).toBe('false')
+    } finally {
+      storeState.regexScripts = originalScripts
+      await destroyHarness(host, root)
+    }
+  })
+
   test('display regexes resolve each answer frame without a trailing timer', async () => {
     const { host, root } = await createHarness()
     const identity = { chatId: 'chat-worker-stream', messageId: 'message-worker-stream' }

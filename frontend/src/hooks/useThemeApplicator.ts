@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useStore } from '@/store'
 import { generateThemeVariables } from '@/theme/engine'
 import { DEFAULT_THEME, PRESETS } from '@/theme/presets'
-import { toOpaqueRgb, toOpaqueRgbChannels, withPreservedAlpha } from '@/theme/themeColor'
+import { isOpaqueThemeColor, toOpaqueRgb, toOpaqueRgbChannels, withPreservedAlpha } from '@/theme/themeColor'
 import type { CharacterThemeOverlay, ResolvedMode, ThemeConfig } from '@/types/theme'
 
 const THEME_TRANSITION_MS = 280
@@ -230,6 +230,25 @@ export function resolveDesktopSurfaceColor(
   return configuredBackground
 }
 
+export type DesktopSurfaceMode = 'opaque' | 'translucent'
+
+export function resolveDesktopSurface(
+  config: ThemeConfig,
+  vars: Record<string, string>,
+  hasPaletteOverride: boolean,
+) {
+  const configured = resolveDesktopSurfaceColor(config, vars, hasPaletteOverride)
+  const efficiency = config.renderingMode === 'efficiency'
+  const background = efficiency ? (toOpaqueRgb(configured) ?? 'rgb(10, 8, 18)') : configured
+  const surfaceMode: DesktopSurfaceMode = efficiency || isOpaqueThemeColor(background) ? 'opaque' : 'translucent'
+  return {
+    background,
+    surfaceMode,
+    blur: surfaceMode === 'translucent' && Boolean(config.desktopBackground?.color && config.desktopBackground.blur),
+    nativeColor: toOpaqueRgbChannels(background) ?? [10, 8, 18],
+  }
+}
+
 function cacheDesktopStartupAppearance(
   config: ThemeConfig,
   mode: ResolvedMode,
@@ -238,19 +257,17 @@ function cacheDesktopStartupAppearance(
 ) {
   if (!hasTauriDesktopBridge() || new URLSearchParams(window.location.search).has('desktopWidgetExtension')) return
 
-  const efficiencyMode = config.renderingMode === 'efficiency'
-  const configuredBackground = resolveDesktopSurfaceColor(config, vars, hasPaletteOverride)
-  const background = efficiencyMode ? (toOpaqueRgb(configuredBackground) ?? configuredBackground) : configuredBackground
-  const nativeColor = toOpaqueRgbChannels(background) ?? [10, 8, 18]
+  const surface = resolveDesktopSurface(config, vars, hasPaletteOverride)
   const snapshot = {
-    background,
+    background: surface.background,
+    surfaceMode: surface.surfaceMode,
     border: vars['--lumiverse-border'] || 'rgba(255, 255, 255, 0.08)',
     textMuted: vars['--lumiverse-text-muted'] || 'rgba(255, 255, 255, 0.64)',
     primary: vars['--lumiverse-primary'] || '#9370db',
-    blur: Boolean(!efficiencyMode && config.desktopBackground?.color && config.desktopBackground.blur),
+    blur: surface.blur,
     dark: mode === 'dark',
     blurIntensity: config.desktopBackground?.blurIntensity ?? 'balanced',
-    nativeColor,
+    nativeColor: surface.nativeColor,
     highRefresh: config.renderingMode === 'quality',
   }
   const serialized = JSON.stringify(snapshot)
@@ -271,7 +288,7 @@ function syncDesktopBackground(
 ) {
   const root = document.documentElement
   const background = config.desktopBackground
-  const efficiencyMode = config.renderingMode === 'efficiency'
+  const surface = resolveDesktopSurface(config, vars, hasPaletteOverride)
 
   root.setAttribute('data-rendering-mode', config.renderingMode ?? 'balanced')
 
@@ -293,14 +310,14 @@ function syncDesktopBackground(
     root.setAttribute('data-desktop-background', '')
     root.style.setProperty(
       '--lumiverse-desktop-background',
-      efficiencyMode ? (toOpaqueRgb(desktopSurfaceColor) ?? desktopSurfaceColor) : desktopSurfaceColor,
+      surface.background,
     )
   } else {
     root.removeAttribute('data-desktop-background')
     root.style.removeProperty('--lumiverse-desktop-background')
   }
 
-  if (!efficiencyMode && background?.color && background.blur) {
+  if (surface.blur && root.getAttribute('data-desktop-surface') !== 'opaque') {
     root.setAttribute('data-desktop-background-blur', '')
   } else {
     root.removeAttribute('data-desktop-background-blur')
@@ -310,10 +327,11 @@ function syncDesktopBackground(
   // independently hydrated theme reconfigure the primary window's material.
   if (new URLSearchParams(window.location.search).has('desktopWidgetExtension')) return
 
-  const blur = Boolean(!efficiencyMode && background?.color && background.blur)
+  const blur = surface.blur
   const dark = mode === 'dark'
   const blurIntensity = background?.blurIntensity ?? 'balanced'
-  const appearance = `${blur}:${dark}:${blurIntensity}`
+  const surfaceMode = surface.surfaceMode
+  const appearance = `${blur}:${dark}:${blurIntensity}:${surfaceMode}`
 
   if (appearance === requestedNativeAppearance) {
     debugDesktopAppearance('native-effect-unchanged', { blur, dark })
@@ -330,7 +348,16 @@ function syncDesktopBackground(
       if (requestedNativeAppearance !== appearance) return
 
       try {
-        await invoke('configure_frontend_appearance', { blur, dark, blurIntensity })
+        const status = await invoke<{ surfaceMode: DesktopSurfaceMode; restartRequired: boolean } | null>(
+          'configure_frontend_appearance', { blur, dark, blurIntensity, surfaceMode },
+        )
+        // Older desktop hosts return null. New hosts report the surface that
+        // was actually created; a reload cannot change its native flags.
+        if (status) {
+          root.setAttribute('data-desktop-surface', status.surfaceMode)
+          root.toggleAttribute('data-desktop-surface-restart', status.restartRequired)
+          if (status.surfaceMode === 'opaque') root.removeAttribute('data-desktop-background-blur')
+        }
         debugDesktopAppearance('native-effect-applied', { blur, dark, blurIntensity })
       } catch (error) {
         // Permit the next theme application to retry if the native window was
