@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { pushApi, type PushSubscriptionRecord } from '@/api/push'
 import { getIOSNotificationStatus, hasIOSNativeBridge, registerIOSPush } from '@/lib/ios-native'
+import { getIOSAppState, subscribeIOSAppState } from '@/lib/ios-app-state'
 
 export function useIOSPushSubscription(enabled: boolean) {
   const [checked, setChecked] = useState(false)
@@ -29,10 +30,17 @@ export function useIOSPushSubscription(enabled: boolean) {
   }, [])
   useEffect(() => {
     if (!enabled) return
-    const onResume = () => { if (document.visibilityState !== 'hidden') void refresh() }
+    const onResume = () => {
+      const appState = getIOSAppState()
+      if (appState ? appState === 'active' : document.visibilityState !== 'hidden') void refresh()
+    }
     void refresh()
     document.addEventListener('visibilitychange', onResume)
-    return () => document.removeEventListener('visibilitychange', onResume)
+    const unsubscribeAppState = subscribeIOSAppState(state => { if (state === 'active') onResume() })
+    return () => {
+      document.removeEventListener('visibilitychange', onResume)
+      unsubscribeAppState()
+    }
   }, [enabled, refresh])
 
   const subscribe = useCallback(async () => {

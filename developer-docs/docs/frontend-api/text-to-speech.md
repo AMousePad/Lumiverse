@@ -38,7 +38,7 @@ await tts.speak({ messageId: ctx.messages.getLatestMessageId()! })
 | --- | --- | --- |
 | `speak({ text }, { connectionId? })` | `media` | Speaks the text as given, with the connection's default voice. `connectionId` defaults to the user's TTS connection (Voice & Speech, else the default TTS profile). Nothing is saved. |
 | `speak({ messageId })` | `media` | Plays a message of the active chat like its Play button: the saved audio when the message has it, otherwise the host voice pipeline (per-character voices, narration rules). That pipeline saves the audio to the message, as the Play button does. |
-| `stop()` | `media` | Stops all host TTS playback: the audio engine and saved message audio, including chat auto-play. |
+| `stop()` | `media` | Stops all host TTS playback: the audio engine, saved message audio, and pending chat auto-play. |
 | `isSpeaking()` | Free | `true` while any host TTS audio plays or is being prepared for playback. |
 | `subscribe(listener)` | Free | Calls `listener(speaking)` when host TTS playback starts or stops. Returns an unsubscribe function. |
 
@@ -54,6 +54,7 @@ cannot start or when synthesis fails:
 | `TTS_CONNECTION_NOT_FOUND` | `connectionId` is not one of the user's TTS connections |
 | `TTS_MESSAGE_NOT_FOUND` | The message is not in the active chat |
 | `TTS_NOTHING_TO_SPEAK` | The message has no voice or no speakable text |
+| `TTS_AUDIO_LOAD_FAILED` | The saved message audio could not be fetched |
 
 List TTS connections with `ctx.connections.list({ kind: 'tts' })` where the host
 supports `connection-kinds-v1`.

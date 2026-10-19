@@ -75,7 +75,7 @@ test('missing provider credentials show a native setup error instead of browser 
   expect(current.registrationStatus).toBe('error')
   expect(current.registrationReason).toContain('APNs provider key')
   await expect(current.subscribe()).rejects.toThrow('APNs provider key')
-  expect(request.mock.calls.every(([action]) => action === 'notifications.status')).toBe(true)
+  expect(request.mock.calls.every(([action]) => action === 'notifications.status' || action === 'lifecycle.status')).toBe(true)
 })
 
 test('Personal Team builds report missing app signing before attempting registration', async () => {
@@ -85,4 +85,18 @@ test('Personal Team builds report missing app signing before attempting registra
   expect(current.registrationReason).toBe('IPA needs push signing')
   await expect(current.subscribe()).rejects.toThrow('IPA needs push signing')
   expect(subscribeIOS).not.toHaveBeenCalled()
+})
+
+test('native activation refreshes notification readiness while WebKit still reports hidden', async () => {
+  configured = false
+  await mount()
+  expect(current.registrationStatus).toBe('error')
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+  try {
+    configured = true
+    await act(async () => {
+      window.dispatchEvent(new dom.window.CustomEvent('lumiverse:ios-app-state', { detail: { state: 'active' } }))
+    })
+    expect(current.registrationStatus).toBe('ready')
+  } finally { Reflect.deleteProperty(document, 'visibilityState') }
 })

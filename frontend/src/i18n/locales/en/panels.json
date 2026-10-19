@@ -2985,7 +2985,8 @@
     "glassEffects": "Glass effects",
     "renderingMode": {
       "label": "Rendering",
-      "hint": "Efficiency removes blur; Quality enables high-refresh rendering on supported macOS displays after the desktop window restarts.",
+      "hint": "Efficiency uses an opaque window without desktop blur on all platforms. Restart the desktop app after changing window transparency. Quality also enables high-refresh rendering on supported macOS displays.",
+      "restartRequired": "Restart the desktop app to apply the window transparency change.",
       "efficiency": "Efficiency",
       "balanced": "Balanced",
       "quality": "Quality"

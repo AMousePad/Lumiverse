@@ -16,6 +16,13 @@ fn settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     app.path().app_data_dir().map(|path| path.join("connection.json")).map_err(|error| error.to_string())
 }
 
+fn saved_server(app: &tauri::AppHandle) -> Option<Url> {
+    std::fs::read(settings_path(app).ok()?).ok()
+        .and_then(|bytes| serde_json::from_slice::<ConnectionInfo>(&bytes).ok())
+        .and_then(|saved| saved.server)
+        .and_then(|server| client::normalize_server(&server, cfg!(debug_assertions)).ok())
+}
+
 fn require_connection_page(window: &WebviewWindow) -> Result<(), String> {
     if client::is_connection_page(&window.url().map_err(|error| error.to_string())?) { Ok(()) }
     else { Err("Only the packaged connection screen can change servers.".into()) }
@@ -24,20 +31,21 @@ fn require_connection_page(window: &WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 fn mobile_connection_info(window: WebviewWindow, app: tauri::AppHandle) -> Result<ConnectionInfo, String> {
     require_connection_page(&window)?;
-    let saved = std::fs::read(settings_path(&app)?).ok()
-        .and_then(|bytes| serde_json::from_slice::<ConnectionInfo>(&bytes).ok())
-        .and_then(|saved| saved.server)
-        .and_then(|server| client::normalize_server(&server, cfg!(debug_assertions)).ok());
+    let saved = saved_server(&app);
     Ok(ConnectionInfo { server: saved.map(|url| url.as_str().to_owned()) })
 }
 
 #[tauri::command]
-async fn mobile_connect(window: WebviewWindow, app: tauri::AppHandle, state: State<'_, ConnectionState>, server: String) -> Result<(), String> {
+async fn mobile_connect(window: WebviewWindow, app: tauri::AppHandle, state: State<'_, ConnectionState>, server: String, restore: Option<bool>) -> Result<(), String> {
     require_connection_page(&window)?;
     let _connection = state.connect.lock().await;
     require_connection_page(&window)?;
     let server = client::normalize_server(&server, cfg!(debug_assertions))?;
-    client::probe_server(&server).await?;
+    // Only the address already accepted and saved by this app may skip its
+    // network probe. New addresses still have to identify a Lumiverse server.
+    let restoring = restore == Some(true) && saved_server(&app).as_ref() == Some(&server);
+    let cached = tauri_plugin_lumiverse_ios::cache_available(&app).await;
+    if !restoring || !cached { client::probe_server(&server).await?; }
     // The saved address is separate from the server's cookies and account data.
     let path = settings_path(&app)?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|error| error.to_string())?;
@@ -46,6 +54,8 @@ async fn mobile_connect(window: WebviewWindow, app: tauri::AppHandle, state: Sta
     std::fs::write(&pending, bytes).map_err(|error| error.to_string())?;
     std::fs::rename(pending, path).map_err(|error| error.to_string())?;
     *state.server.lock().unwrap() = Some(server.clone());
+    if cached && tauri_plugin_lumiverse_ios::load_cached(&app, server.as_str()).await { return Ok(()); }
+    if restoring && cached { client::probe_server(&server).await?; }
     window.navigate(server).map_err(|error| error.to_string())
 }
 

@@ -41,19 +41,25 @@ export function createFrontendTTSAPI(deps: FrontendTTSDependencies) {
   const isCurrent = (session: number) => deps.getSession() === session && deps.isEngineSpeaking()
 
   const api: SpindleTTSAPI = {
-    async speak(input, options = {}) {
+    async speak(input: SpindleTTSSpeakInput, options: SpindleTTSSpeakOptions = {}) {
       authorize('ctx.tts.speak')
+      if (!input || typeof input !== 'object' || !options || typeof options !== 'object') {
+        throw new Error('TTS_INPUT_INVALID: pass a non-empty text or messageId')
+      }
       const text = 'text' in input ? input.text : undefined
       const messageId = 'messageId' in input ? input.messageId : undefined
-      if (isNonEmptyString(text) === isNonEmptyString(messageId)) {
+      if ((text !== undefined && messageId !== undefined) || isNonEmptyString(text) === isNonEmptyString(messageId)) {
         throw new Error('TTS_INPUT_INVALID: pass a non-empty text or messageId')
       }
       if (messageId !== undefined && options.connectionId !== undefined) {
         throw new Error('TTS_INPUT_INVALID: connectionId applies to text only')
       }
+      if (options.connectionId !== undefined && !isNonEmptyString(options.connectionId)) {
+        throw new Error('TTS_INPUT_INVALID: connectionId must be a non-empty string')
+      }
       const playback = deps.start(input, options)
       owned.add(playback.session)
-      const failure = playback.synthesized.then(() => undefined, (error: unknown) => error)
+      const failure = playback.synthesized.then(() => null, (error: unknown) => ({ error }))
       try {
         if (isCurrent(playback.session)) {
           await new Promise<void>((resolve) => {
@@ -72,8 +78,8 @@ export function createFrontendTTSAPI(deps: FrontendTTSDependencies) {
         playback.cancel()
         return
       }
-      const error = await failure
-      if (error) throw error
+      const failed = await failure
+      if (failed) throw failed.error
     },
     stop() {
       authorize('ctx.tts.stop')

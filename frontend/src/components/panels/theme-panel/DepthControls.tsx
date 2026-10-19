@@ -136,6 +136,18 @@ export default function DepthControls({
   const [localFontScale, setLocalFontScale] = useState(fontScale)
   const [localUiScale, setLocalUiScale] = useState(() => normalizeUiScale(uiScale))
   const resolvedDesktopBackground = parseDesktopBackground(desktopBackground?.color)
+  const [surfaceRestartRequired, setSurfaceRestartRequired] = useState(false)
+
+  useEffect(() => {
+    if (!showDesktopBackgroundControls) return
+    const root = document.documentElement
+    const update = () => setSurfaceRestartRequired(root.hasAttribute('data-desktop-surface-restart'))
+    update()
+    const observer = new MutationObserver(update)
+    observer.observe(root, { attributes: true, attributeFilter: ['data-desktop-surface-restart'] })
+    return () => observer.disconnect()
+  }, [showDesktopBackgroundControls])
+
 
   useEffect(() => { setLocalFontScale(fontScale) }, [fontScale])
   useEffect(() => { setLocalUiScale(normalizeUiScale(uiScale)) }, [uiScale])
@@ -220,6 +232,11 @@ export default function DepthControls({
                 <option value="quality">{t('renderingMode.quality')}</option>
               </select>
             </label>
+          )}
+          {surfaceRestartRequired && (
+            <p className={styles.renderingHint} role="status">
+              {t('renderingMode.restartRequired', 'Restart the desktop app to apply the window transparency change.')}
+            </p>
           )}
           <Toggle.Checkbox
             checked={Boolean(desktopBackground)}

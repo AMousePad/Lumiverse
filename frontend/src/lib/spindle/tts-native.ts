@@ -2,11 +2,9 @@ import { useStore } from '@/store'
 import {
   getPlaybackSession, isSpeaking, isTTSPlaybackActive, stop, stopAllTTSPlayback, subscribeTTSPlayback,
 } from '../ttsAudio'
-import { playSavedMessageAudio, startMessageTtsPlayback, startTextTtsPlayback } from '../ttsMessagePlayback'
+import { playSavedMessageAudio, startMessageTtsPlaybackSession, startTextTtsPlayback } from '../ttsMessagePlayback'
 import { resolveTtsConnectionId } from '../voiceResolution'
 import { createFrontendTTSAPI, type FrontendTTSDependencies } from './tts-api'
-
-const done = Promise.resolve()
 
 export function createNativeTTSAPI(deps: Pick<FrontendTTSDependencies, 'assertActive' | 'requirePermission' | 'onTeardown'>) {
   const start: FrontendTTSDependencies['start'] = (input, options) => {
@@ -19,11 +17,16 @@ export function createNativeTTSAPI(deps: Pick<FrontendTTSDependencies, 'assertAc
       const attachments = Array.isArray(message.extra?.attachments) ? message.extra.attachments : []
       const saved = attachments.find((attachment) => attachment?.type === 'audio'
         && (attachment.swipe_id === undefined || attachment.swipe_id === message.swipe_id))
-      if (saved?.image_id) playSavedMessageAudio(message.id, saved.image_id)
-      else if (!startMessageTtsPlayback({
+      if (saved?.image_id) {
+        const controller = new AbortController()
+        const synthesized = playSavedMessageAudio(message.id, saved.image_id, controller.signal)
+        return { session: getPlaybackSession(), synthesized, cancel: () => controller.abort() }
+      }
+      const playback = startMessageTtsPlaybackSession({
         messageId: message.id, messageName: message.name, messageContent: message.content, messageIsUser: message.is_user,
-      })) throw new Error('TTS_NOTHING_TO_SPEAK: no voice or no speakable text for this message')
-      return { session: getPlaybackSession(), synthesized: done, cancel() {} }
+      })
+      if (!playback) throw new Error('TTS_NOTHING_TO_SPEAK: no voice or no speakable text for this message')
+      return { session: getPlaybackSession(), ...playback }
     }
     const connectionId = options.connectionId ?? resolveTtsConnectionId(state.voiceSettings, state.ttsProfiles)
     if (!connectionId) throw new Error('TTS_UNAVAILABLE:connectionRequired')

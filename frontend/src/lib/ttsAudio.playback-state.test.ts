@@ -26,4 +26,15 @@ describe('host TTS playback state', () => {
     expect(notified).toBeGreaterThanOrEqual(4)
     unsubscribe()
   })
+
+  test('stopAll pauses tracked audio before the browser dispatches its play event', () => {
+    const el = new FakeAudio()
+    const untrack = trackTTSAudioElement(el as unknown as HTMLMediaElement)
+    el.paused = false
+    expect(isTTSPlaybackActive()).toBe(true)
+    stopAllTTSPlayback()
+    expect(el.paused).toBe(true)
+    expect(isTTSPlaybackActive()).toBe(false)
+    untrack()
+  })
 })

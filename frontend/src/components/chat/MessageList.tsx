@@ -220,7 +220,9 @@ function estimateOOCContribution(blocks: OOCBlock[], mode: OOCStyleType, bubbleW
 }
 
 export default function MessageList({ messages, chatId, isStreaming, findTarget = null, findQuery = '' }: MessageListProps) {
-  'use memo'
+  'use no memo'
+  // TanStack Virtual exposes a mutable instance. Compiler memoization can
+  // freeze its rendered range, so retain the explicit memoization below.
 
   const { t } = useTranslation('chat')
   const scrollRef = useRef<HTMLDivElement>(null)

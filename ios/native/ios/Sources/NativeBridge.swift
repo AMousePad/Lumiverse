@@ -9,9 +9,12 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
     private let speech = NativeSpeech()
     private var mediaDelegate: MediaPermissionDelegate?
     private var loading: NSKeyValueObservation?
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private let cache: NativeCache?
 
-    init(webview: WKWebView) {
+    init(webview: WKWebView, cache: NativeCache? = nil) {
         self.webview = webview
+        self.cache = cache
         super.init()
         let delegate = MediaPermissionDelegate(forwarding: webview.uiDelegate)
         mediaDelegate = delegate
@@ -21,6 +24,35 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
             if view.isLoading { self?.speech.cancel() }
         }
         IOSNotifications.shared.attach(webview: webview)
+        // This wrapper uses scenes. Observe the WebView's own scene so a
+        // foreground transition in another window cannot restore its presence.
+        for (name, state) in [(UIScene.didActivateNotification, "active"),
+                              (UIScene.willDeactivateNotification, "inactive"),
+                              (UIScene.didEnterBackgroundNotification, "background")] {
+            lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                guard let webview = self?.webview, let scene = notification.object as? UIScene,
+                      scene === webview.window?.windowScene else { return }
+                webview.callAsyncJavaScript("window.dispatchEvent(new CustomEvent('lumiverse:ios-app-state', {detail: detail}))",
+                    arguments: ["detail": ["state": state]], in: nil, in: .page, completionHandler: nil)
+            })
+        }
+    }
+
+    deinit { for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) } }
+
+    private func appState(in webview: WKWebView) -> String {
+        if let scene = webview.window?.windowScene {
+            switch scene.activationState {
+            case .foregroundActive: return "active"
+            case .foregroundInactive: return "inactive"
+            default: return "background"
+            }
+        }
+        switch UIApplication.shared.applicationState {
+        case .active: return "active"
+        case .inactive: return "inactive"
+        default: return "background"
+        }
     }
 
     static func origin(_ url: URL?) -> String? {
@@ -46,6 +78,9 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
         }
         let payload = body["payload"] as? [String: Any] ?? [:]
         switch action {
+        case "cache.status": replyHandler(cache?.status ?? ["available": false, "active": false], nil)
+        case "cache.ready": replyHandler(["accepted": cache?.markHealthy(buildId: payload["buildId"] as? String ?? "") ?? false], nil)
+        case "lifecycle.status": replyHandler(["state": appState(in: webview)], nil)
         case "notifications.status": IOSNotifications.shared.status { replyHandler($0, nil) }
         case "notifications.register": IOSNotifications.shared.register { result, error in replyHandler(result, error) }
         case "speech.start":

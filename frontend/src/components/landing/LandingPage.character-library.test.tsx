@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, jest, mock, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
-import { act, forwardRef, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import { act, forwardRef, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import type { ReactVirtualizerOptions, Virtualizer } from '@tanstack/react-virtual'
 import type { Root, createRoot as CreateRoot } from 'react-dom/client'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
@@ -12,6 +13,7 @@ import {
   clearLandingPageSnapshot,
   markLandingPageChatReturn,
   writeLandingPageSnapshot,
+  type LandingPageSnapshot,
 } from '@/lib/landingPageSnapshot'
 
 let createRoot: typeof CreateRoot
@@ -99,6 +101,7 @@ type SummaryPage = { data: Summary[]; total: number }
 type MockFn = ReturnType<typeof jest.fn>
 
 type StoreState = {
+  theme?: { fontScale: number }
   landingPageChatsDisplayed: number
   landingPageLayoutMode: 'cards' | 'compact'
   landingPageGalleryWidth: 'compact' | 'expanded'
@@ -280,6 +283,7 @@ mock.module('@/lib/imageDecodeCache', () => ({
 mock.module('@/lib/uiScale', () => ({
   measureLayoutHeight: () => 0,
   renderedPxToLayoutPx: (value: number) => value,
+  getUiScale: () => 1,
 }))
 mock.module('@/lib/avatarUrls', () => ({
   getCharacterAvatarLargeUrlById: (_id: string, imageId?: string | null) => imageId ? `/avatar-${imageId}.png` : '/avatar.png',
@@ -374,15 +378,27 @@ mock.module('motion/react', () => ({
 }))
 
 const measureChatRows = jest.fn()
+type ChatVirtualizerOptions = Partial<ReactVirtualizerOptions<HTMLDivElement, Element>> & {
+  count: number
+  getItemKey: (index: number) => string | number
+}
+const chatVirtualizerOptions: ChatVirtualizerOptions[] = []
 mock.module('@tanstack/react-virtual', () => ({
-  useVirtualizer: (options: { count: number; getItemKey: (index: number) => string | number }) => {
+  useVirtualizer: (options: ChatVirtualizerOptions) => {
+    chatVirtualizerOptions.push(options)
     const optionsRef = useRef(options)
     optionsRef.current = options
+    useEffect(() => {
+      const scroller = optionsRef.current.getScrollElement?.()
+      const offset = optionsRef.current.initialOffset
+      if (scroller) scroller.scrollTop = typeof offset === 'function' ? offset() : offset ?? 0
+    }, [])
     return useMemo(() => ({
       getVirtualItems: () => Array.from({ length: optionsRef.current.count }, (_, index) => ({ index, key: optionsRef.current.getItemKey(index), start: index * 100, end: index * 100 + 100, size: 100, lane: 0 })),
       getTotalSize: () => 100,
       measure: measureChatRows,
       measureElement: jest.fn(),
+      takeSnapshot: () => Array.from({ length: optionsRef.current.count }, (_, index) => ({ index, key: optionsRef.current.getItemKey(index), start: index * 100, end: index * 100 + 100, size: 100, lane: 0 })),
     }), [])
   },
 }))
@@ -460,6 +476,26 @@ function convertedGroupChat(id: string, name: string) {
 
 function page(data: Summary[], total = data.length): SummaryPage {
   return { data, total }
+}
+
+function measuredLandingSnapshot(layout: 'cards' | 'compact' = 'cards'): LandingPageSnapshot & { items: ReturnType<typeof recentChat>[] } {
+  const items = Array.from({ length: 24 }, (_, index) => recentChat(`character-${index}`, `Person ${index}`))
+  const columns = layout === 'cards' ? 4 : 2
+  const rowKeys = Array.from({ length: items.length / columns }, (_, index) => JSON.stringify(
+    items.slice(index * columns, (index + 1) * columns).map((item) => item.character_id),
+  ))
+  return {
+    userId: 'test-user-id', items, total: items.length, scrollTop: 420,
+    requestedTab: 'chats', searchQuery: '', sortField: 'recent', sortDirection: 'desc', pageSize: 12,
+    galleryWidth: 'compact', mainWidth: 960, chatViewportHeight: 700,
+    viewportWidth: domWindow.innerWidth, viewportHeight: domWindow.innerHeight,
+    virtualRows: {
+      geometry: { layout, width: 960, columns, gap: layout === 'cards' ? 20 : 12, rowEstimate: layout === 'cards' ? 320 : 98, uiScale: 1, fontScale: 1, viewportWidth: domWindow.innerWidth },
+      rowKeys,
+      scrollMargin: 120,
+      measurements: rowKeys.map((key, index) => ({ key, index, start: 120 + index * 100, size: 100, end: 220 + index * 100, lane: 0 })),
+    },
+  }
 }
 
 async function flush() {
@@ -580,6 +616,7 @@ afterEach(async () => {
   listMessages.mockReset()
   navigate.mockReset()
   measureChatRows.mockClear()
+  chatVirtualizerOptions.length = 0
   prefetchLandingImages.mockClear()
   wsHandlers.clear()
   wsOn.mockClear()
@@ -856,12 +893,17 @@ describe('LandingPage character library', () => {
     expect(leavingChats?.getAttribute('data-motion-animate')).toBe('visible')
     const storedSnapshot = JSON.parse(domWindow.sessionStorage.getItem('__lumiverse_landing_page_snapshot_v1') || '{}')
     expect(storedSnapshot.snapshot?.imageUrls).toEqual(['/avatar.png'])
+    expect(storedSnapshot.snapshot?.virtualRows?.measurements).toEqual([
+      { index: 0, key: '["character-1"]', start: 0, end: 100, size: 100, lane: 0 },
+    ])
+    expect(storedSnapshot.snapshot?.virtualRows?.geometry.layout).toBe('cards')
 
     const mounted = mountedRoots.find((entry) => entry.host === firstHost)!
     mountedRoots.splice(mountedRoots.indexOf(mounted), 1)
     await act(async () => mounted.root.unmount())
     firstHost.remove()
 
+    measureChatRows.mockClear()
     const restoredHost = await mountLanding()
 
     expect(restoredHost.textContent).toContain('Ava')
@@ -872,6 +914,9 @@ describe('LandingPage character library', () => {
     expect(restoredHost.querySelector('[data-entry-mode="chat-return"]')?.getAttribute('data-motion-animate')).toBe('{"opacity":1,"y":0,"scale":1}')
     expect(restoredHost.querySelector<HTMLElement>('[data-component="LandingPage"]')?.scrollTop).toBe(420)
     expect(listRecentGrouped).toHaveBeenCalledTimes(2)
+    expect(chatVirtualizerOptions.at(-1)?.initialOffset).toBe(420)
+    expect(chatVirtualizerOptions.at(-1)?.initialMeasurementsCache).toEqual(storedSnapshot.snapshot.virtualRows.measurements)
+    expect(measureChatRows).not.toHaveBeenCalled()
 
     await settleDeferred(refresh, page([recentChat('character-1', 'Ava')]))
   })
@@ -1027,6 +1072,108 @@ describe('LandingPage character library', () => {
     expect(domWindow.sessionStorage.getItem('__lumiverse_landing_page_snapshot_v1')).toBeNull()
 
     await settleDeferred(refresh, page([ava]))
+  })
+
+  for (const layout of ['cards', 'compact'] as const) {
+    test(`restores ${layout} measurements from session storage and consumes them only once`, async () => {
+      storeState = { ...createStoreState(false), landingPageLayoutMode: layout }
+      const saved = measuredLandingSnapshot(layout)
+      // Write only session storage to exercise the chat-route reload bridge.
+      domWindow.sessionStorage.setItem('__lumiverse_landing_page_snapshot_v1', JSON.stringify({ version: 1, snapshot: saved }))
+      const refresh = createDeferred<SummaryPage>()
+      listRecentGrouped.mockReturnValue(refresh.promise)
+      const host = await mountLanding()
+      expect(chatVirtualizerOptions[0]?.initialMeasurementsCache).toEqual(saved.virtualRows!.measurements)
+      expect(chatVirtualizerOptions[0]?.initialOffset).toBe(420)
+      expect(chatVirtualizerOptions[0]?.scrollMargin).toBe(120)
+      if (layout === 'compact') {
+        const options = chatVirtualizerOptions[0]
+        expect(options.measureElement!(document.createElement('div'), undefined, {
+          indexFromElement: () => 0, options,
+        } as unknown as Virtualizer<HTMLDivElement, Element>)).toBe(100)
+      }
+      expect(measureChatRows).not.toHaveBeenCalled()
+      expect(domWindow.sessionStorage.getItem('__lumiverse_landing_page_snapshot_v1')).toBeNull()
+
+      // A responsive width change still resets card measurements.
+      const main = host.querySelector('[data-component="LandingPageMain"]')!
+      Object.defineProperty(main, 'clientWidth', { configurable: true, value: 920 })
+      await act(async () => window.dispatchEvent(new domWindow.Event('resize')))
+      if (layout === 'cards') expect(measureChatRows).toHaveBeenCalledTimes(1)
+
+      // A later layout switch cannot replay the route-return offset or cache.
+      await act(async () => {
+        storeState = { ...storeState, landingPageLayoutMode: layout === 'cards' ? 'compact' : 'cards' }
+        notifyStore()
+      })
+      expect(chatVirtualizerOptions.at(-1)?.initialMeasurementsCache).toBeUndefined()
+      expect(chatVirtualizerOptions.at(-1)?.initialOffset).toBe(0)
+      await settleDeferred(refresh, page(saved.items))
+    })
+  }
+
+  test('keeps the virtual restore pending until bootstrap allows the list to mount', async () => {
+    storeState = { ...createStoreState(false), settingsLoaded: false }
+    const saved = measuredLandingSnapshot()
+    writeLandingPageSnapshot(saved)
+    const refresh = createDeferred<SummaryPage>()
+    listRecentGrouped.mockReturnValue(refresh.promise)
+    const host = await mountLanding()
+    expect(chatVirtualizerOptions).toHaveLength(0)
+    expect(host.querySelector('.skeletonCard')).not.toBeNull()
+    await act(async () => {
+      storeState = { ...storeState, settingsLoaded: true }
+      notifyStore()
+    })
+    expect(chatVirtualizerOptions[0]?.initialMeasurementsCache).toEqual(saved.virtualRows!.measurements)
+    expect(chatVirtualizerOptions[0]?.initialOffset).toBe(420)
+    expect(measureChatRows).not.toHaveBeenCalled()
+    await settleDeferred(refresh, page(saved.items))
+  })
+
+  test('falls back to estimates when a saved row cache is incompatible', async () => {
+    storeState = createStoreState(false)
+    const saved = measuredLandingSnapshot()
+    saved.virtualRows!.rowKeys.reverse()
+    writeLandingPageSnapshot(saved)
+    const refresh = createDeferred<SummaryPage>()
+    listRecentGrouped.mockReturnValue(refresh.promise)
+    await mountLanding()
+    expect(chatVirtualizerOptions[0]?.initialMeasurementsCache).toBeUndefined()
+    expect(chatVirtualizerOptions[0]?.initialOffset).toBe(420)
+    expect(measureChatRows).toHaveBeenCalledTimes(1)
+    await settleDeferred(refresh, page(saved.items))
+  })
+
+  test('invalidates restored compact heights when font scaling changes', async () => {
+    storeState = { ...createStoreState(false), landingPageLayoutMode: 'compact' }
+    const saved = measuredLandingSnapshot('compact')
+    writeLandingPageSnapshot(saved)
+    const refresh = createDeferred<SummaryPage>()
+    listRecentGrouped.mockReturnValue(refresh.promise)
+    await mountLanding()
+    expect(measureChatRows).not.toHaveBeenCalled()
+    await act(async () => {
+      storeState = { ...storeState, theme: { fontScale: 1.3 } }
+      notifyStore()
+    })
+    expect(measureChatRows).toHaveBeenCalledTimes(1)
+    const options = chatVirtualizerOptions.at(-1)!
+    expect(options.measureElement!(document.createElement('div'), undefined, {
+      indexFromElement: () => 0, options,
+    } as unknown as Virtualizer<HTMLDivElement, Element>)).toBe(98)
+    await settleDeferred(refresh, page(saved.items))
+  })
+
+  test('does not restore another account’s measured rows or offset', async () => {
+    storeState = createStoreState(false)
+    const saved = measuredLandingSnapshot()
+    writeLandingPageSnapshot({ ...saved, userId: 'different-user' })
+    listRecentGrouped.mockResolvedValue(page(saved.items))
+    await mountLanding()
+    await flush()
+    expect(chatVirtualizerOptions[0]?.initialMeasurementsCache).toBeUndefined()
+    expect(chatVirtualizerOptions[0]?.initialOffset).toBe(0)
   })
 
   test('restores the expanded gallery geometry instead of its default-width topology', async () => {

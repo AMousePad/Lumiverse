@@ -1,44 +1,12 @@
 import { defineConfig } from 'vite'
-import react, { reactCompilerPreset } from '@vitejs/plugin-react'
-import babel from '@rolldown/plugin-babel'
+import { createReactCompilerPlugins } from './scripts/react-compiler.ts'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 import pkg from './package.json' with { type: 'json' }
 
 export default defineConfig({
   plugins: [
-    babel({
-      presets: [
-        reactCompilerPreset({
-          target: '19',
-          // Gradual adoption: only compile components/hooks annotated with
-          // "use memo". This keeps build times fast while we opt files in
-          // one at a time. Switch to compilationMode: 'all' once the codebase
-          // is clean and the wins are proven.
-          compilationMode: 'annotation',
-        }),
-      ],
-      // Only run the React Compiler on files that can contain components/hooks.
-      // .tsx files are component/JSX code; src/hooks/*.ts are shared hooks.
-      // Specific hook files outside these directories are listed explicitly.
-      include: [
-        /\.tsx$/,
-        /src\/hooks\/[^/]+\.ts$/,
-        /src\/store\/index\.ts$/,
-        /src\/ws\/useWebSocket\.ts$/,
-        /src\/lib\/dndUiScale\.ts$/,
-        /src\/lib\/oocAvatarLookup\.ts$/,
-        /src\/lib\/wallpaperVideoCache\.ts$/,
-        /src\/lib\/i18n\/worldBookEntryLabels\.ts$/,
-        /src\/lib\/i18n\/loomOptionLabels\.ts$/,
-        /src\/lib\/spindle\/components-helper\.tsx$/,
-      ],
-      exclude: [
-        /node_modules/,
-        /src\/lib\/generated(?:ComponentCss|ComponentProps|CssVariables)\.ts$/,
-      ],
-    }),
-    react(),
+    ...createReactCompilerPlugins(),
     VitePWA({
       strategies: 'injectManifest',
       srcDir: 'src',
@@ -111,6 +79,7 @@ export default defineConfig({
       output: {
         codeSplitting: {
           groups: [{
+            debugName: 'i18n-locales',
             name(id) {
               const normalized = id.replace(/\\/g, '/')
               const match = normalized.match(/\/i18n\/locales\/([^/]+)\//)

@@ -6,6 +6,8 @@ import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import { refreshAppDataAfterImport } from '@/hooks/useAppInit'
 import { flushSettingsNow } from '@/store/slices/settings'
+import { useStore } from '@/store'
+import { pendingImportJob, trackImportJob } from '@/lib/import-recovery'
 import {
   userDataApi,
   type DecryptionTicket,
@@ -46,10 +48,16 @@ export default function DataPortability() {
 
   // ── Import state ──────────────────────────────────────────────────────
   const [file, setFile] = useState<File | null>(null)
-  const [importing, setImporting] = useState(false)
+  const [importing, setImporting] = useState(() => {
+    const userId = useStore.getState().user?.id
+    return Boolean(userId && pendingImportJob(userId))
+  })
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null)
   const [importUploadPct, setImportUploadPct] = useState<number | null>(null)
-  const [importJobId, setImportJobId] = useState<string | null>(null)
+  const [importJobId, setImportJobId] = useState<string | null>(() => {
+    const userId = useStore.getState().user?.id
+    return userId ? pendingImportJob(userId) : null
+  })
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null)
   const [importFileSummary, setImportFileSummary] = useState<FileSummary | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
@@ -229,6 +237,7 @@ export default function DataPortability() {
     setAwaitingTicket(null)
     setImporting(true)
     try {
+      const userId = useStore.getState().user?.id
       await flushSettingsNow()
       const { jobId } = await userDataApi.startImport(file, (pct) => {
         setImportUploadPct(pct)
@@ -241,6 +250,7 @@ export default function DataPortability() {
         }
       })
       setImportJobId(jobId)
+      if (userId) trackImportJob(userId, jobId)
       setImportUploadPct(null)
     } catch (err: any) {
       setImporting(false)

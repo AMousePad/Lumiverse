@@ -1,8 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain>127.0.0.1</domain>
-        <domain>localhost</domain>
-    </domain-config>
+    <!-- Users can explicitly select an HTTP self-hosted instance, including LAN hosts. -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

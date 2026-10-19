@@ -95,7 +95,10 @@ describe('ctx.tts bridge', () => {
     const f = fixture()
     await expect(f.tts.speak({ text: ' ' })).rejects.toThrow('TTS_INPUT_INVALID')
     await expect(f.tts.speak({ text: 'a', messageId: 'b' } as never)).rejects.toThrow('TTS_INPUT_INVALID')
-    await expect(f.tts.speak({ messageId: 'message-1' }, { connectionId: 'tts-1' })).rejects.toThrow('connectionId applies to text only')
+    await expect(f.tts.speak({ text: ' ', messageId: 'b' } as never)).rejects.toThrow('TTS_INPUT_INVALID')
+    await expect(f.tts.speak(null as never)).rejects.toThrow('TTS_INPUT_INVALID')
+    await expect(f.tts.speak({ text: 'Hello' }, { connectionId: '' })).rejects.toThrow('TTS_INPUT_INVALID')
+    await expect(f.tts.speak({ messageId: 'message-1' } as never, { connectionId: 'tts-1' })).rejects.toThrow('connectionId applies to text only')
     f.setGranted(false)
     await expect(f.tts.speak({ text: 'Hello' })).rejects.toThrow('PERMISSION_DENIED:media')
     expect(() => f.tts.stop()).toThrow('PERMISSION_DENIED:media')
@@ -142,5 +145,16 @@ describe('ctx.tts bridge', () => {
     await expect(pending).resolves.toBeUndefined()
     expect(f.listeners.size).toBe(0)
     expect(() => f.tts.isSpeaking()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+  })
+
+  test('revocation preserves a replacement playback owned by the host', async () => {
+    const f = fixture()
+    const spoken = f.tts.speak({ text: 'Mine' })
+    f.hostStart()
+    f.bridge.revoke()
+    expect(f.tts.isSpeaking()).toBe(true)
+    await spoken
+    expect(f.cancels).toEqual([1])
+    f.end()
   })
 })

@@ -31,8 +31,10 @@ let activeMessageId: string | null = null
 mock.module('@/lib/ttsAudio', () => ({
   getActiveMessageId: () => activeMessageId,
   getPlaybackSession: () => 0,
+  subscribeTTSPlayback: () => () => {},
   subscribeActiveMessage: () => () => {},
   stop: () => { activeMessageId = null },
+  stopAllTTSPlayback: () => { activeMessageId = null },
   speak: () => {},
   speakSegments: (_segments: unknown, id: string) => { activeMessageId = id },
   setTTSVolume: () => {}, setTTSSpeed: () => {}, unlockTTSAudio: () => {},
