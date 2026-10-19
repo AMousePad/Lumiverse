@@ -1,8 +1,7 @@
-import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent, type RefObject } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent, type Ref, type RefObject } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
-import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
 import {
   MessageSquarePlus,
   MessageSquare,
@@ -38,7 +37,10 @@ import { useScrollGate } from '@/hooks/useScrollGate'
 import { warmCharacterPalette } from '@/hooks/useCharacterTheme'
 import { holdImagesForTransition } from '@/lib/imageDecodeCache'
 import { useImagePrefetch } from '@/hooks/useImagePrefetch'
-import { measureLayoutHeight, renderedPxToLayoutPx } from '@/lib/uiScale'
+import { getUiScale, renderedPxToLayoutPx } from '@/lib/uiScale'
+import { useLandingVirtualizer } from '@/hooks/useLandingVirtualizer'
+import type { LandingVirtualizerHandle } from '@/lib/landingVirtualSnapshot'
+import { landingScrollOffset } from '@/lib/landingVirtualSnapshot'
 import LazyImage from '@/components/shared/LazyImage'
 import VirtualGrid from '@/components/shared/VirtualGrid'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
@@ -76,6 +78,7 @@ import {
   readLandingPageSnapshot,
   writeLandingPageSnapshot,
   type LandingPageSortField,
+  type LandingPageSnapshot,
 } from '@/lib/landingPageSnapshot'
 import { preloadChatNavigationSnapshot } from '@/lib/chatNavigationSnapshot'
 import { isMacTauriWebView, isTauriDesktop } from '@/lib/desktopWebView'
@@ -414,7 +417,6 @@ const CARD_MOBILE_MAX_COLUMNS = 2
 const COMPACT_MIN_WIDTH = 320
 const COMPACT_GAP = 12
 const COMPACT_ROW_ESTIMATE = 86
-const VIRTUAL_OVERSCAN = 4
 const MOBILE_PARALLAX_MAX_GAMMA_DELTA = 10
 const MOBILE_PARALLAX_MAX_BETA_DELTA = 14
 
@@ -820,7 +822,11 @@ interface VirtualizedChatRowsProps {
   virtualColumns: number
   virtualGap: number
   virtualRowEstimate: number
-  virtualScrollMargin: number
+  virtualScrollMargin: number | null
+  mainWidth: number
+  fontScale: number
+  initialSnapshot: LandingPageSnapshot | null
+  snapshotRef: Ref<LandingVirtualizerHandle>
   scrollRef: RefObject<HTMLDivElement | null>
   initialPageSize: number
   animateInitialEntries: boolean
@@ -846,6 +852,10 @@ function VirtualizedChatRows({
   virtualGap,
   virtualRowEstimate,
   virtualScrollMargin,
+  mainWidth,
+  fontScale,
+  initialSnapshot,
+  snapshotRef,
   scrollRef,
   initialPageSize,
   animateInitialEntries,
@@ -861,44 +871,22 @@ function VirtualizedChatRows({
   const prefetchImages = useImagePrefetch()
   const virtualRowCount = Math.ceil(items.length / virtualColumns)
   const characters = useStore((state) => state.characters)
-  const compactRowHeightsRef = useRef(new Map<string | number | bigint, number>())
-  const measureCompactRow = useCallback((
-    element: Element,
-    _entry: ResizeObserverEntry | undefined,
-    instance: Virtualizer<HTMLDivElement, Element>,
-  ) => {
-    const index = instance.indexFromElement(element)
-    const key = instance.options.getItemKey(index)
-    const cachedHeight = compactRowHeightsRef.current.get(key)
-    if (cachedHeight !== undefined) return cachedHeight
-
-    // Compact list rows do not reflow after they mount. Preserve their first
-    // layout height so later ResizeObserver deliveries cannot reposition an
-    // already-rendered row.
-    const height = measureLayoutHeight(element) || virtualRowEstimate
-    compactRowHeightsRef.current.set(key, height)
-    return height
-  }, [virtualRowEstimate])
-  const chatVirtualizer = useVirtualizer({
-    count: virtualRowCount,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => virtualRowEstimate,
-    overscan: VIRTUAL_OVERSCAN,
-    anchorTo: 'start',
-    scrollMargin: virtualScrollMargin,
-    ...(layoutMode === 'compact' ? { measureElement: measureCompactRow } : {}),
-    useFlushSync: false,
-    getItemKey: (index) => {
-      const start = index * virtualColumns
-      return items.slice(start, start + virtualColumns).map(getRecentChatKey).join('|') || index
+  const rowKeys = useMemo(() => Array.from({ length: virtualRowCount }, (_, index) => {
+    const start = index * virtualColumns
+    return JSON.stringify(items.slice(start, start + virtualColumns).map(getRecentChatKey))
+  }), [items, virtualColumns, virtualRowCount])
+  const { virtualizer: chatVirtualizer, scrollMargin } = useLandingVirtualizer({
+    geometry: {
+      layout: layoutMode, width: mainWidth, columns: virtualColumns, gap: virtualGap,
+      rowEstimate: virtualRowEstimate, uiScale: getUiScale(), fontScale, viewportWidth: window.innerWidth,
     },
+    rowKeys,
+    scrollRef,
+    scrollMargin: virtualScrollMargin,
+    savedSnapshot: initialSnapshot?.virtualRows,
+    initialOffset: initialSnapshot?.scrollTop,
+    snapshotRef,
   })
-
-  useEffect(() => {
-    // Card rows depend on their responsive column width. Compact rows keep
-    // their initial measured height and must not be reset to an estimate.
-    if (layoutMode === 'cards') chatVirtualizer.measure()
-  }, [chatVirtualizer, layoutMode, virtualColumns, virtualRowEstimate])
 
   const virtualItems = chatVirtualizer.getVirtualItems()
   const visibleStart = virtualItems.length > 0 ? virtualItems[0].index : -1
@@ -942,7 +930,7 @@ function VirtualizedChatRows({
         rows={virtualItems}
         columns={virtualColumns}
         gap={virtualGap}
-        scrollMargin={virtualScrollMargin}
+        scrollMargin={scrollMargin}
         className={styles.virtualRow}
         measureElement={chatVirtualizer.measureElement}
         getItemKey={getRecentChatKey}
@@ -977,6 +965,7 @@ function LandingPageNative() {
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const landingPageLayoutMode = useStore((s) => s.landingPageLayoutMode)
   const landingPageGalleryWidth = useStore((s) => s.landingPageGalleryWidth)
+  const fontScale = useStore((s) => s.theme?.fontScale ?? 1)
   const favorites = useStore((s) => s.favorites)
   const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
   const settingsLoaded = useStore((s) => s.settingsLoaded)
@@ -989,6 +978,7 @@ function LandingPageNative() {
   const suiteExtensionEnabled = useStore((s) => hasEnabledFrontendExtension(s.extensions, 'lumiverse_suite'))
   const extensions = useStore((s) => s.extensions)
   const [restoredSnapshot] = useState(() => readLandingPageSnapshot(authUser?.id))
+  const [virtualRestoreSnapshot, setVirtualRestoreSnapshot] = useState(restoredSnapshot)
   const [isChatReturn] = useState(() => consumeLandingPageChatReturn() || Boolean(restoredSnapshot))
   const hasRestoredChatReturn = Boolean(restoredSnapshot)
   const landingEntryMode = hasRestoredChatReturn
@@ -1243,6 +1233,11 @@ function LandingPageNative() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const mainRef = useRef<HTMLElement>(null)
   const virtualContainerRef = useRef<HTMLDivElement | null>(null)
+  const virtualSnapshotRef = useRef<LandingVirtualizerHandle | null>(null)
+  const bindVirtualSnapshot = useCallback((handle: LandingVirtualizerHandle | null) => {
+    virtualSnapshotRef.current = handle
+    if (handle) setVirtualRestoreSnapshot(null)
+  }, [])
   const [mainWidth, setMainWidth] = useState(() => {
     const geometry = restoredSnapshot ?? landingHint
     const canRestoreGeometry = geometry
@@ -1261,7 +1256,7 @@ function LandingPageNative() {
       ? (restoredSnapshot ?? landingHint).chatViewportHeight ?? 0
       : 0
   ))
-  const [virtualScrollMargin, setVirtualScrollMargin] = useState(0)
+  const [virtualScrollMargin, setVirtualScrollMargin] = useState<number | null>(null)
   const isExpandedGallery = effectiveGalleryWidth === 'expanded' && expandedWidthApplies
   const virtualLayout = settingsLoaded
     ? landingPageLayoutMode
@@ -1316,13 +1311,27 @@ function LandingPageNative() {
   }, [restoredSnapshot, settingsLoaded, snapshotGalleryWidth])
 
   useEffect(() => {
-    if (!restoredSnapshot || !scrollRef.current) return
+    if (!virtualRestoreSnapshot || !scrollRef.current) return
+    // Native rows restore through initialOffset. Extension-owned surfaces
+    // retain the existing DOM restoration seam. Wait through bootstrap if the
+    // native list cannot mount yet; consuming now would lose its first offset.
+    if (!virtualSnapshotRef.current && activeLandingTab === 'chats' && !chatsSurfaceReady) {
+      if (settingsLoaded && !loading && items.length === 0) setVirtualRestoreSnapshot(null)
+      return
+    }
+    // Only the first mount consumes route state. Later tab or card/list
+    // switches must not jump back to the original return offset.
+    if (virtualSnapshotRef.current) {
+      setVirtualRestoreSnapshot(null)
+      return
+    }
     const scroller = scrollRef.current
     const frame = window.requestAnimationFrame(() => {
-      scroller.scrollTop = restoredSnapshot.scrollTop
+      scroller.scrollTop = landingScrollOffset(virtualRestoreSnapshot.scrollTop)
+      setVirtualRestoreSnapshot(null)
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [restoredSnapshot])
+  }, [activeLandingTab, chatsSurfaceReady, items.length, loading, settingsLoaded, virtualRestoreSnapshot])
 
   useEffect(() => {
     setShowMobileMotionEnable(
@@ -1574,11 +1583,13 @@ function LandingPageNative() {
     if (chatNavigationTimerRef.current !== null) return
 
     if (authUser?.id) {
+      const virtualState = virtualSnapshotRef.current?.capture()
       writeLandingPageSnapshot({
         userId: authUser.id,
         items,
         total,
-        scrollTop: scrollRef.current?.scrollTop ?? 0,
+        scrollTop: virtualState?.offset ?? scrollRef.current?.scrollTop ?? 0,
+        virtualRows: virtualState?.rows,
         requestedTab: activeLandingTab,
         searchQuery,
         sortField,
@@ -2184,6 +2195,10 @@ function LandingPageNative() {
                 virtualGap={virtualGap}
                 virtualRowEstimate={virtualRowEstimate}
                 virtualScrollMargin={virtualScrollMargin}
+                mainWidth={mainWidth}
+                fontScale={fontScale}
+                initialSnapshot={virtualRestoreSnapshot}
+                snapshotRef={bindVirtualSnapshot}
                 scrollRef={scrollRef}
                 initialPageSize={chatPageSizeRef.current}
                 animateInitialEntries={animateInitialEntries}

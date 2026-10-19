@@ -599,12 +599,63 @@ describe('MessageContent long-message collapsing', () => {
 describe('MessageContent image reuse', () => {
   for (const island of [false, true]) {
     const imageRoot = () => island ? host.firstElementChild!.shadowRoot! : host
-    const render = async (html: string) => {
+    const render = async (html: string, isStreaming = false) => {
       const { ProseHtml, IsolatedHtml } = await import('./MessageContent')
       await act(async () => {
-        root?.render(island ? <IsolatedHtml html={html} isStreaming={false} /> : <ProseHtml html={html} />)
+        root?.render(island ? <IsolatedHtml html={html} isStreaming={isStreaming} /> : <ProseHtml html={html} />)
       })
     }
+    test(`streamed ${island ? 'island' : 'prose'} text never detaches existing media or animation containers`, async () => {
+      const frame = (tail: string) => '<style>.animated{animation:spin 1s infinite}</style>'
+        + `<div class="animated"><img src="/animated.gif"><video src="/clip.webm"></video><span>${tail}</span></div>`
+      await render(frame('one'), true)
+      const container = imageRoot().querySelector<HTMLElement>('.animated')!
+      const image = container.querySelector('img')!
+      const video = container.querySelector('video')!
+      const stylesheet = imageRoot().querySelector<HTMLStyleElement>('style:last-of-type')!
+      const text = container.querySelector('span')!.firstChild
+      const mutations: MutationRecord[] = []
+      const observer = new MutationObserver(records => mutations.push(...records))
+      observer.observe(imageRoot(), { subtree: true, childList: true, attributes: true, characterData: true })
+
+      for (const tail of ['one two', 'one two three', 'final']) await render(frame(tail), true)
+      await render(frame('final'), false)
+      mutations.push(...observer.takeRecords())
+      observer.disconnect()
+
+      expect(imageRoot().querySelector<HTMLElement>('.animated')).toBe(container)
+      expect(container.querySelector('img')).toBe(image)
+      expect(container.querySelector('video')).toBe(video)
+      expect(imageRoot().querySelector<HTMLStyleElement>('style:last-of-type')).toBe(stylesheet)
+      expect(container.querySelector('span')!.firstChild).toBe(text)
+      expect(text?.textContent).toBe('final')
+      // Identity alone is insufficient: detach/reinsert also restarts media
+      // and CSS animations. Streaming should produce text mutations only.
+      expect(mutations.length).toBeGreaterThan(0)
+      expect(mutations.every(record => record.type === 'characterData')).toBe(true)
+    })
+
+    test(`streaming preserves interaction state in ${island ? 'islands' : 'prose'} until source attributes change`, async () => {
+      const frame = (tail: string, style = 'color:red') => `<details><summary>More</summary><input value="initial"><button style="${style}">Action</button><span>${tail}</span></details>`
+      await render(frame('one'))
+      const details = imageRoot().querySelector('details')!
+      const input = imageRoot().querySelector('input')!
+      const button = imageRoot().querySelector('button')!
+      details.open = true
+      input.value = 'user value'
+      button.style.opacity = '0.5'
+
+      await render(frame('one two'))
+      expect(imageRoot().querySelector('details')).toBe(details)
+      expect(details.open).toBe(true)
+      expect(imageRoot().querySelector('input')).toBe(input)
+      expect(input.value).toBe('user value')
+      expect(button.style.opacity).toBe('0.5')
+
+      await render(frame('one two three', 'color:blue'))
+      expect(button.style.color).toBe('blue')
+    })
+
     test(`skips unchanged image attributes when surrounding ${island ? 'island' : 'prose'} content changes`, async () => {
       await render('<p>Before</p><img src="/scene.png" class="scene" alt="Scene" width="400">')
       const original = imageRoot().querySelector('img')!

@@ -2,6 +2,7 @@ mod bundled_server;
 mod capture;
 mod data_folder;
 mod desktop_updates;
+mod desktop_surface;
 mod discord_rpc;
 mod external_launch;
 mod frontend;
@@ -13,6 +14,7 @@ mod profile;
 mod remote_instance;
 mod runner;
 mod system_audio;
+mod tls;
 #[cfg(target_os = "linux")]
 mod wayland_background_effect;
 #[cfg(any(target_os = "linux", test))]
@@ -174,6 +176,7 @@ fn handle_macos_menu_event<R: tauri::Runtime>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    tls::initialize_provider();
     let mut context = tauri::generate_context!();
     let profile = profile::prepare(context.config_mut(), std::env::args().skip(1))
         .expect("invalid desktop profile arguments");

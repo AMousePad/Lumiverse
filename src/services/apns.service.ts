@@ -1,4 +1,4 @@
-import { createPrivateKey, createHash, sign, type KeyObject } from "node:crypto";
+import { createPrivateKey, createHash, sign, X509Certificate, type KeyObject } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { connect, type ClientHttp2Session } from "node:http2";
 import type { PushPayload } from "../types/push";
@@ -10,39 +10,62 @@ export interface APNsDestination {
   environment: APNsEnvironment;
   server_origin: string;
 }
-export interface APNsConfiguration { teamId: string; keyId: string; bundleId: string; privateKey: KeyObject }
+export interface APNsTokenConfiguration { teamId: string; keyId: string; bundleId: string; privateKey: KeyObject }
+export interface APNsCertificateConfiguration { bundleId: string; certificate: string; privateKey: KeyObject }
+export type APNsConfiguration = APNsTokenConfiguration | APNsCertificateConfiguration;
 
 let configuration: APNsConfiguration | undefined;
-let jwt: { configuration: APNsConfiguration; value: string; issuedAt: number } | undefined;
+let jwt: { configuration: APNsTokenConfiguration; value: string; issuedAt: number } | undefined;
 const sessions = new Map<string, ClientHttp2Session>();
 
 /** Keys belong on the server. Nothing returned by the public info route contains a key or token. */
 export function getAPNsConfiguration(): APNsConfiguration | null {
   if (configuration) return configuration;
-  const teamId = process.env.APNS_TEAM_ID, keyId = process.env.APNS_KEY_ID;
-  const keyPath = process.env.APNS_PRIVATE_KEY_PATH;
-  if (!teamId || !keyId || !keyPath) return null;
-  const bundleId = process.env.APNS_BUNDLE_ID || "chat.lumiverse.ios";
-  if (!/^[A-Z0-9]{10}$/.test(teamId) || !/^[A-Z0-9]{10}$/.test(keyId)
-    || !/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId)) throw new Error("Invalid APNs configuration");
-  const privateKey = createPrivateKey(readFileSync(keyPath));
+  const loaded = loadAPNsConfiguration(process.env);
+  if (loaded) configuration = loaded;
+  return loaded;
+}
+
+export function loadAPNsConfiguration(env: NodeJS.ProcessEnv): APNsConfiguration | null {
+  const teamId = env.APNS_TEAM_ID, keyId = env.APNS_KEY_ID;
+  const keyPath = env.APNS_PRIVATE_KEY_PATH;
+  const certificatePath = env.APNS_CERTIFICATE_PATH;
+  if (!certificatePath && (!teamId || !keyId || !keyPath)) return null;
+  const bundleId = env.APNS_BUNDLE_ID || "chat.lumiverse.ios";
+  if (!keyPath || !/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId)) throw new Error("Invalid APNs configuration");
+  const passphrase = env.APNS_PRIVATE_KEY_PASSPHRASE_FILE
+    ? readFileSync(env.APNS_PRIVATE_KEY_PASSPHRASE_FILE, "utf8").trimEnd()
+    : env.APNS_PRIVATE_KEY_PASSPHRASE;
+  const privateKey = createPrivateKey({ key: readFileSync(keyPath), ...(passphrase ? { passphrase } : {}) });
+  if (certificatePath) {
+    // Apple's downloaded .cer is DER; X509Certificate also accepts PEM.
+    const certificate = new X509Certificate(readFileSync(certificatePath));
+    const now = Date.now();
+    if (!certificate.checkPrivateKey(privateKey)
+      || now < Date.parse(certificate.validFrom) || now >= Date.parse(certificate.validTo))
+      throw new Error("APNs certificate must be current and match its private key");
+    const certificateBundleId = certificate.subject.split("\n").find(line => line.startsWith("UID="))?.slice(4);
+    if (certificateBundleId !== bundleId) throw new Error("APNs certificate does not match the configured bundle ID");
+    return { bundleId, certificate: certificate.toString(), privateKey };
+  }
+  if (!/^[A-Z0-9]{10}$/.test(teamId!) || !/^[A-Z0-9]{10}$/.test(keyId!)) throw new Error("Invalid APNs configuration");
   if (privateKey.asymmetricKeyType !== "ec" || privateKey.asymmetricKeyDetails?.namedCurve !== "prime256v1")
     throw new Error("APNs requires an ES256 (.p8) signing key");
-  return configuration = { teamId, keyId, bundleId, privateKey };
+  return { teamId: teamId!, keyId: keyId!, bundleId, privateKey };
 }
 
 export function getAPNsInfo(): { configured: boolean; bundleId: string; reason: string | null } {
   try {
     const config = getAPNsConfiguration();
     return { configured: !!config, bundleId: config?.bundleId || process.env.APNS_BUNDLE_ID || "chat.lumiverse.ios",
-      reason: config ? null : "The server needs an APNs signing key before it can deliver iPhone notifications." };
+      reason: config ? null : "The server needs an APNs signing key or certificate and matching private key before it can deliver iPhone notifications." };
   } catch {
     return { configured: false, bundleId: process.env.APNS_BUNDLE_ID || "chat.lumiverse.ios",
       reason: "The server's APNs configuration is invalid. Ask the server administrator to check it." };
   }
 }
 
-export function createAPNsJWT(config: APNsConfiguration, issuedAt = Math.floor(Date.now() / 1000)): string {
+export function createAPNsJWT(config: APNsTokenConfiguration, issuedAt = Math.floor(Date.now() / 1000)): string {
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const input = `${encode({ alg: "ES256", kid: config.keyId })}.${encode({ iss: config.teamId, iat: issuedAt })}`;
   const signature = sign("sha256", Buffer.from(input), { key: config.privateKey, dsaEncoding: "ieee-p1363" });
@@ -78,13 +101,17 @@ export async function sendAPNsNotification(destination: APNsDestination, notific
   const config = getAPNsConfiguration();
   if (!config || destination.bundle_id !== config.bundleId) return { sent: false };
   const now = Math.floor(Date.now() / 1000);
-  if (!jwt || jwt.configuration !== config || now - jwt.issuedAt >= 20 * 60 || now < jwt.issuedAt)
+  if ("teamId" in config && (!jwt || jwt.configuration !== config || now - jwt.issuedAt >= 20 * 60 || now < jwt.issuedAt))
     jwt = { configuration: config, value: createAPNsJWT(config, now), issuedAt: now };
   const authority = destination.environment === "development"
     ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
   let session = sessions.get(authority);
   if (!session || session.destroyed || session.closed) {
-    session = connect(authority);
+    session = connect(authority, "certificate" in config ? {
+      cert: config.certificate,
+      key: config.privateKey.export({ type: "pkcs8", format: "pem" }),
+      minVersion: "TLSv1.2",
+    } : undefined);
     sessions.set(authority, session);
     const connection = session;
     const forget = () => { if (sessions.get(authority) === connection) sessions.delete(authority); };
@@ -98,7 +125,8 @@ export async function sendAPNsNotification(destination: APNsDestination, notific
   const payload = buildAPNsPayload(notification, destination.server_origin);
   return new Promise((resolve, reject) => {
     const stream = session!.request({ ":method": "POST", ":path": `/3/device/${destination.device_token}`,
-      authorization: `bearer ${jwt!.value}`, "apns-topic": config.bundleId, "apns-push-type": "alert",
+      ...("teamId" in config ? { authorization: `bearer ${jwt!.value}` } : {}),
+      "apns-topic": config.bundleId, "apns-push-type": "alert",
       "apns-priority": "10", "apns-expiration": String(now + 3600),
       ...(notification.tag ? { "apns-collapse-id": createHash("sha256").update(notification.tag).digest("hex") } : {}) });
     let status = 0, body = "", ended = false;

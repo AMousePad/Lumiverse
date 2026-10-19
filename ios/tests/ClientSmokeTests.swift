@@ -14,6 +14,7 @@ final class ClientSmokeTests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["Native commands blocked"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.webViews.staticTexts["iOS mobile identity verified"].exists)
         XCTAssertTrue(app.webViews.staticTexts["Native permissions verified"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.webViews.staticTexts["Native audio verified"].waitForExistence(timeout: 10))
         app.webViews.buttons["Try native dictation"].tap()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let alert = springboard.alerts.firstMatch

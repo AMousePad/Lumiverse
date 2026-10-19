@@ -83,6 +83,7 @@ import { WorkerHostContentApi } from "./worker-host-content-api";
 import { WorkerHostMemoryApi } from "./worker-host-memory-api";
 import { WorkerHostImageGenApi } from "./worker-host-image-gen-api";
 import { WorkerHostDecisionsApi } from "./worker-host-decisions-api";
+import { WorkerHostEmbeddingsApi } from "./worker-host-embeddings-api";
 import { WorkerHostProcessApi } from "./worker-host-process-api";
 import { WorkerHostInteractionApi } from "./worker-host-interaction-api";
 import { WorkerHostPresentationApi } from "./worker-host-presentation-api";
@@ -983,6 +984,7 @@ export class WorkerHost {
   private readonly memoryApi: WorkerHostMemoryApi;
   private readonly imageGenApi: WorkerHostImageGenApi;
   private readonly decisionsApi: WorkerHostDecisionsApi;
+  private readonly embeddingsApi: WorkerHostEmbeddingsApi;
   private readonly processApi: WorkerHostProcessApi;
   private readonly interactionApi: WorkerHostInteractionApi;
   private readonly presentationApi: WorkerHostPresentationApi;
@@ -1043,6 +1045,12 @@ export class WorkerHost {
       post: (message) => this.postToWorker(message as RuntimeHostToWorker),
     });
     this.decisionsApi = new WorkerHostDecisionsApi({
+      hasPermission: (permission) => this.hasPermission(permission),
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
+      postResponse: (message) => this.postToWorker(message),
+    });
+    this.embeddingsApi = new WorkerHostEmbeddingsApi({
       hasPermission: (permission) => this.hasPermission(permission),
       resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
       enforceScopedUser: (userId) => this.enforceScopedUser(userId),
@@ -1322,6 +1330,7 @@ export class WorkerHost {
           "mcp-servers-v1": 1,
           "decisions-v1": 1,
           "decision-images-v1": 1,
+          "embeddings-v1": 1,
           "desktop-capture-worker-v1": 1,
         }),
         extensionInstallationId: this.extensionId,
@@ -1335,6 +1344,7 @@ export class WorkerHost {
 
   async stop(): Promise<void> {
     this.decisionsApi.dispose();
+    this.embeddingsApi.dispose();
     await this.filesApi.dispose();
     if (!this.runtime) return;
     const runtime = this.runtime;
@@ -1417,6 +1427,7 @@ export class WorkerHost {
 
   private cleanup(): void {
     this.decisionsApi.dispose();
+    this.embeddingsApi.dispose();
     void this.filesApi.dispose().catch(error => console.warn("[spindle-files] worker cleanup failed", error));
     this.desktopCaptureApi.dispose();
     this.stopRuntimeStatsSampling();
@@ -1923,6 +1934,11 @@ export class WorkerHost {
       case "decisions_evaluate":
       case "decisions_cancel":
         void this.decisionsApi.handle(msg);
+        break;
+      case "embeddings_connections_list":
+      case "embeddings_embed":
+      case "embeddings_cancel":
+        void this.embeddingsApi.handle(msg);
         break;
       case "connections_get":
         this.handleConnectionsGet(msg.requestId, msg.connectionId, msg.userId);

@@ -136,6 +136,10 @@ const HOST_SURFACE_ROWS: readonly AuthorityRow[] = [
 const DOMAIN_ROWS: readonly AuthorityRow[] = [
   free({ surface: 'ctx_member', id: 'ctx.client.getInfo', source: 'client.info', ctxLeaf: 'ctx.client.getInfo', freeBecause: 'pure-host-action: reads client identity and callable bridge metadata without invoking commands or prompting' }),
   free({ surface: 'ctx_member', id: 'ctx.stt.listProviders', source: 'stt.providers', ctxLeaf: 'ctx.stt.listProviders', freeBecause: 'pure-host-action: reads speech capability metadata without audio, credentials, or microphone access' }),
+  ...(['onHostActivity', 'isHostCapturing'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.stt.${method}`, source: 'stt.hostCapture', ctxLeaf: `ctx.stt.${method}`,
+    freeBecause: 'limb-e: the composer recording indicator shows the same on/off state in the shared DOM; no audio or transcript crosses the boundary',
+  })),
   free({ surface: 'ctx_member', id: 'ctx.systemAudio.isAvailable', source: 'systemAudio.availability', ctxLeaf: 'ctx.systemAudio.isAvailable', freeBecause: 'pure-host-action: reports whether a native adapter exists and is enabled, without opening it or prompting' }),
   gated('system_audio', {
     surface: 'ctx_member', id: 'ctx.systemAudio.start', source: 'systemAudio.start', ctxLeaf: 'ctx.systemAudio.start',
@@ -168,6 +172,18 @@ const DOMAIN_ROWS: readonly AuthorityRow[] = [
     ctxLeaf: `ctx.tokens.${method}`,
     freeBecause: 'rest: public authenticated tokenizer routes count bounded caller-supplied text without provider egress',
   })),
+  ...(['getState', 'onChange'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.composer.${method}`, source: 'composer.draft', ctxLeaf: `ctx.composer.${method}`,
+    freeBecause: 'limb-e: the draft is the value of the host chat textarea, which is readable in the shared document',
+  })),
+  ...(['setText', 'insertText', 'focus'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.composer.${method}`, source: 'composer.edit', ctxLeaf: `ctx.composer.${method}`,
+    freeBecause: 'pure-host-action: changes the transient draft or focus of the host chat textarea; nothing is sent or stored on the server until the user sends',
+  })),
+  gated('generation', {
+    surface: 'ctx_member', id: 'ctx.composer.send', source: 'composer.send', ctxLeaf: 'ctx.composer.send',
+    gatedBecause: 'Rule-B clause (a): runs the host send path, which writes the user message and starts credentialed provider generation',
+  }),
 ]
 
 const GEOMETRY_ROWS: readonly AuthorityRow[] = [

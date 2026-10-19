@@ -704,6 +704,7 @@
 .container[data-scrolling] .card,
 .container[data-scrolling] .listItem {
   transition: none;
+  animation: none;
 }
 
 .container[data-scrolling] .cardImage img,

@@ -1,0 +1,61 @@
+name: LumiverseNativeCacheProbe
+options:
+  bundleIdPrefix: chat.lumiverse.cacheprobe
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGNING_ALLOWED: NO
+    GENERATE_INFOPLIST_FILE: YES
+    TARGETED_DEVICE_FAMILY: "1,2"
+targets:
+  CacheProbe:
+    type: application
+    platform: iOS
+    sources:
+      - App.swift
+      - CachedShellProbeController.swift
+      - ../native/ios/Sources/NativeBridge.swift
+      - ../native/ios/Sources/NativeCache.swift
+      - ../native/ios/Sources/NativeSpeech.swift
+      - ../native/ios/Sources/IOSNotifications.swift
+      - path: ../native/src/mobile-init.js
+        buildPhase: resources
+      - path: ../../.tmp/ios-native-cache-probe/frontend
+        type: folder
+        buildPhase: resources
+    info:
+      path: ../../.tmp/ios-native-cache-probe/Info.plist
+      properties:
+        CFBundleDisplayName: Lumiverse Cache Probe
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.lumiverse.cacheprobe
+  NativeCacheTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: CacheProbe
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.lumiverse.cacheprobe.tests
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    scheme:
+      testTargets: [NativeCacheTests, NativeCacheLaunchTests]
+      gatherCoverageData: false
+  NativeCacheLaunchTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: CacheProbe
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.lumiverse.cacheprobe.uitests
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
