@@ -92,6 +92,7 @@ import { acknowledgeConnectionProfileSelection } from '@/lib/uiProductivityDefau
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import { readProductivityFeature } from '@/lib/spindle/productivity-feature-toggles'
 import { hasEnabledFrontendExtension } from '@/lib/spindle/frontend-extension-availability'
+import { useComposerBridge } from '@/lib/spindle/use-composer-bridge'
 import { useQuickToolbarActions } from '@/components/quick-toolbar/useQuickToolbarActions'
 import InputAreaCustomizeModal, {
   fromComposerExtraId,
@@ -2151,6 +2152,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       sendingRef.current = false
     }
   }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t, te])
+
+  useComposerBridge({ chatId, text, setText, textareaRef, handleSend, isGeneratingInChat, sendingRef })
 
   useEffect(() => {
     const handleRegexAction = async (event: Event) => {
