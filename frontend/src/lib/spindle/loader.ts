@@ -174,6 +174,8 @@ import {
 import { registerHostIntentHandler, type HostIntentHandler, type JsonValue } from './host-intent-registry'
 import { createNativeSTTAPI } from './stt-native'
 import { createNativeSystemAudioAPI } from './system-audio-native'
+import { SPINDLE_COMPOSER_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
+import { createFrontendComposerAPI } from './composer-api'
 
 declare const __APP_VERSION__: string
 
@@ -1424,6 +1426,7 @@ async function doLoadFrontendExtension(
       capabilities: Object.freeze({ ...SPINDLE_HOST_CAPABILITIES, ...THEME_AUTHORING_HOST_CAPABILITIES, ...SPINDLE_STT_HOST_CAPABILITIES, ...SPINDLE_SYSTEM_AUDIO_HOST_CAPABILITIES,
         ...CLIENT_HOST_CAPABILITIES,
         'frontend-session-origin-v1': 1,
+        ...SPINDLE_COMPOSER_HOST_CAPABILITIES,
       }),
       extensionInstallationId: extensionId,
       surfaces: createHostSurfaceAPI({
@@ -2181,6 +2184,11 @@ async function doLoadFrontendExtension(
       geometry: createFrontendGeometryAPI(),
       stt: speech.api,
       systemAudio: systemAudio.api,
+      composer: createFrontendComposerAPI({
+        assertActive: assertFrontendActive,
+        requirePermission: assertCanonicalPermission,
+        onTeardown,
+      }),
       onTeardown,
     })
 

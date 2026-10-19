@@ -44,6 +44,7 @@ import {
 } from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration, requestStreamGapRecovery } from '@/lib/generation-recovery'
+import { getIOSAppState, subscribeIOSAppState } from '@/lib/ios-app-state'
 import { checkForBundleUpdate } from '@/lib/swUpdater'
 import type {
   StreamTokenPayload,
@@ -665,6 +666,7 @@ export function useWebSocket() {
       wsClient.on(WS_RESUME_RECOVERY_COMPLETE, () => {
         notifyDeletionReconnect()
         store.getState().setWsResumeRecovering(false)
+        void reconcileActiveChatOnResume()
       }),
       wsClient.on(WS_RESUME_RECOVERY_FAILED, () => {
         store.getState().setWsResumeRecovering(false)
@@ -2235,8 +2237,12 @@ export function useWebSocket() {
     // deferred METRICS_READY event (TTFT/TPS/model/provider) or a stale final
     // message snapshot is refreshed from the authoritative saved row.
     let resumeReconcileInFlight = false
+    const isAppVisible = () => {
+      const iosAppState = getIOSAppState()
+      return iosAppState ? iosAppState === 'active' : document.visibilityState === 'visible'
+    }
     const reconcileActiveChatOnResume = async () => {
-      if (document.visibilityState !== 'visible') return
+      if (!isAppVisible()) return
       if (resumeReconcileInFlight) return
       resumeReconcileInFlight = true
       try {
@@ -2270,20 +2276,23 @@ export function useWebSocket() {
     const onResume = () => { void reconcileActiveChatOnResume() }
     document.addEventListener('visibilitychange', onResume)
     window.addEventListener('focus', onResume)
+    const unsubscribeIOSAppState = subscribeIOSAppState(state => {
+      if (state === 'active') onResume()
+    })
 
     // Mobile browsers occasionally deliver the full token stream but miss or
     // delay the terminal WS event. While a chat is streaming, poll the pooled
     // status endpoint at a low frequency so a dropped GENERATION_ENDED/STOPPED
     // cannot leave the stop button stuck indefinitely.
     const recoveryWatchdog = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
+      if (!isAppVisible()) return
       const state = store.getState()
       if (!state.isStreaming || !state.activeChatId) return
       recoverPooledGeneration(state.activeChatId).catch(() => { /* best-effort */ })
     }, 4000)
 
     const chatHeadReconcile = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
+      if (!isAppVisible()) return
       const heads = store.getState().chatHeads
       if (!heads.some((h) => h.status === 'assembling' || h.status === 'council' || h.status === 'council_failed' || h.status === 'reasoning' || h.status === 'streaming')) return
       store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
@@ -2340,6 +2349,7 @@ export function useWebSocket() {
     return () => {
       document.removeEventListener('visibilitychange', onResume)
       window.removeEventListener('focus', onResume)
+      unsubscribeIOSAppState()
       clearInterval(recoveryWatchdog)
       clearInterval(chatHeadReconcile)
       unsubDrawerTabs()

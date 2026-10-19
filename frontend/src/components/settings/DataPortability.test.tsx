@@ -8,6 +8,8 @@ const getImportStatus = mock()
 const skipTicket = mock(async () => ({}))
 const refresh = mock(async () => {})
 const t = (key: string) => key
+mock.module('@/store', () => ({ useStore: { getState: () => ({ user: { id: 'owner' } }) } }))
+mock.module('@/lib/import-recovery', () => ({ pendingImportJob: () => null, trackImportJob() {} }))
 mock.module('react-i18next', () => ({ useTranslation: () => ({ t }) }))
 mock.module('@/ws/client', () => ({ wsClient: { on: () => () => {} } }))
 mock.module('@/api/user-data', () => ({ userDataApi: { startImport, getImportStatus, skipTicket } }))

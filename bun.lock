@@ -24,7 +24,7 @@
         "hono": "^4.7.0",
         "js-tiktoken": "^1.0.16",
         "linkedom": "0.18.13",
-        "lumiverse-spindle-types": "github:prolix-oc/lumiverse-spindle-types#b9bf26a54a07356cf0aeb1b4e8a5ef041d2b3f83",
+        "lumiverse-spindle-types": "0.6.55",
         "mute-stream": "^3.0.0",
         "sharp": "^0.34.5",
         "ssh2-sftp-client": "^12.1.1",
@@ -716,7 +716,7 @@
 
     "lru-cache": ["lru-cache@11.2.7", "", {}, "sha512-aY/R+aEsRelme17KGQa/1ZSIpLpNYYrhcrepKTZgE+W3WM16YMCaPwOHLHsmopZHELU0Ojin1lPVxKR0MihncA=="],
 
-    "lumiverse-spindle-types": ["lumiverse-spindle-types@github:prolix-oc/lumiverse-spindle-types#b9bf26a", {}, "prolix-oc-lumiverse-spindle-types-b9bf26a", "sha512-pW6GR6ZrPkYJ30dQ41AvRc10SjSaGiFTi2f5G6uUE9xnk2dYpQNUi2OipLYDAYYmPq3xXtNE7t4UWzVWBscVvA=="],
+    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.55", "", {}, "sha512-OszVTzJ9ap2/59Mj7WEojP9pMradeCdJUGm6c+VGcJtUVdeFOp7jK3F/h5eokxpiMWi54puX1x29UgfPpYKohw=="],
 
     "math-intrinsics": ["math-intrinsics@1.1.0", "", {}, "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g=="],
 

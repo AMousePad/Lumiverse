@@ -2,6 +2,7 @@ import { activeTab } from '@/lib/active-tab'
 import { EventType } from './events'
 import { BASE_URL } from '@/api/client'
 import { frontendSessionId } from '@/lib/frontend-session'
+import { getIOSAppState, subscribeIOSAppState, type IOSAppState } from '@/lib/ios-app-state'
 import {
   getDesktopPresence,
   subscribeDesktopPresence,
@@ -508,6 +509,7 @@ export class WebSocketClient {
       this.pauseForBackground()
       this.sendVisibility(true)
     })
+    this.visibilityCleanup.push(subscribeIOSAppState(state => this.applyIOSAppState(state)))
     let desktopPresenceUnlisten: (() => void) | null = null
     let desktopPresenceStopped = false
     void subscribeDesktopPresence((presence) => {
@@ -539,9 +541,7 @@ export class WebSocketClient {
   private sendVisibility(forceHidden = false) {
     const pageVisible = !forceHidden && this.isDocumentVisible()
     const desktopPresence = this.desktopPresence ?? getDesktopPresence()
-    const visible = pageVisible && (
-      desktopPresence ? desktopPresence.active : document.hasFocus()
-    )
+    const visible = pageVisible && this.isDocumentFocused()
     if (this.recoverIfSocketAlreadyClosed()) {
       this.wasVisible = pageVisible
       return
@@ -627,13 +627,30 @@ export class WebSocketClient {
     this.sendVisibility()
   }
 
+  private applyIOSAppState(state: IOSAppState) {
+    if (state !== 'active') {
+      this.pauseForBackground()
+      this.sendVisibility(true)
+      return
+    }
+    // Always prove this foreground round trip, even if the background event
+    // never reached the suspended JS context or the switch took <15 seconds.
+    this.beginResumeRecovery()
+    this.wasVisible = false
+    this.resumeFromBackground()
+  }
+
   private isDocumentVisible() {
+    const iosAppState = getIOSAppState()
+    if (iosAppState) return iosAppState === 'active'
     const desktopPresence = this.desktopPresence ?? getDesktopPresence()
     if (desktopPresence) return desktopPresence.visible && !desktopPresence.minimized
     return document.visibilityState === 'visible'
   }
 
   private isDocumentFocused() {
+    const iosAppState = getIOSAppState()
+    if (iosAppState) return iosAppState === 'active'
     const desktopPresence = this.desktopPresence ?? getDesktopPresence()
     if (desktopPresence) return desktopPresence.active
     return this.isDocumentVisible() && document.hasFocus()

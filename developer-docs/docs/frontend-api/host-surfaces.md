@@ -54,6 +54,8 @@ Each `entity_action` entry carries `params`, a JSON Schema object (`type`, `prop
 | `apply_theme` | `{ themeId }` | `app_manipulation` | Applies a built-in theme preset or a saved theme, like the Theme panel. A built-in preset also clears extension theme overrides. `params.properties.themeId.oneOf` lists the ids with their names. Unknown ids throw `HOST_ACTION_NOT_FOUND:themeId`. |
 | `character_chat` | `{ characterId, mode }` | `chats` | `mode: 'latest'` opens the character's most recently updated chat, or starts a chat when there is none. `mode: 'new'` always starts a chat. Characters with alternate greetings show the greeting picker first. Unknown ids reject. |
 
+Await `invoke()` to observe failures. A saved-chat persona switch resolves after its metadata is saved and rejects if saving fails. A preset switch rejects with `HOST_ACTION_UNAVAILABLE:entity_action:switch_preset` if a newer selection supersedes it or preset recovery cannot select the requested preset.
+
 ```ts
 const themeAction = surfaces.list(['entity_action']).find((surface) => surface.id === 'apply_theme');
 const choice = themeAction?.params?.properties.themeId.oneOf?.find((option) => option.title === 'Emerald');

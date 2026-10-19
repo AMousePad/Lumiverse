@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, type ReactNode, type CSSProperties } from 'react'
+import { useEffect, useEffectEvent, useCallback, useRef, type ReactNode, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import styles from './ModalShell.module.css'
@@ -41,19 +41,19 @@ export function ModalShell({
   'data-component': dataComponent,
 }: ModalShellProps) {
   const backdropPointerDownRef = useRef<EventTarget | null>(null)
+  const handleEscape = useEffectEvent((e: KeyboardEvent) => {
+    if (closeOnEscape && e.key === 'Escape') onClose()
+  })
 
   useEffect(() => {
     if (!isOpen) return
-    const handleEscape = (e: KeyboardEvent) => {
-      if (closeOnEscape && e.key === 'Escape') onClose()
-    }
     document.addEventListener('keydown', handleEscape)
     document.body.style.overflow = 'hidden'
     return () => {
       document.removeEventListener('keydown', handleEscape)
       document.body.style.overflow = ''
     }
-  }, [isOpen, onClose, closeOnEscape])
+  }, [isOpen])
 
   const handleBackdropPointerDown = useCallback((e: React.PointerEvent) => {
     backdropPointerDownRef.current = e.target === e.currentTarget ? e.currentTarget : null

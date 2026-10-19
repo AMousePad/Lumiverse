@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import { ssoProvidersApi, type SsoLoginOption } from '@/api/sso-providers'
 import { startSsoPopup } from '@/lib/ssoPopup'
+import { isNativeIOS } from '@/lib/ios-native'
 import styles from './LoginPage.module.css'
 import clsx from 'clsx'
 
@@ -80,6 +81,7 @@ export default function LoginPage() {
         return
       }
       const result = await startSsoPopup({ providerId: provider.provider_id, flow: 'login', returnTo: '/' })
+      if (!result) return
       if (!result.ok) throw new Error(result.error || 'SSO authorization failed')
       await checkSession()
       navigate('/')
@@ -141,6 +143,7 @@ export default function LoginPage() {
   }, [focused])
 
   if (isAuthLoading || isAuthenticated) {
+    if (isNativeIOS()) return null
     return (
       <div className={styles.checking} role="status" aria-live="polite" aria-busy="true">
         <div className={styles.checkingSpinner} aria-label={t('checkingSession')} />

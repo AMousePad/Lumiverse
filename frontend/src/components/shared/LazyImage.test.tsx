@@ -44,6 +44,7 @@ afterEach(async () => {
   document.body.replaceChildren()
   document.documentElement.removeAttribute('data-tauri-desktop')
   document.documentElement.removeAttribute('data-platform')
+  document.documentElement.removeAttribute('data-tauri-mobile')
   if (originalIntersectionObserver) {
     Object.defineProperty(globalThis, 'IntersectionObserver', originalIntersectionObserver)
   } else {
@@ -104,6 +105,20 @@ function installTestIntersectionObserver() {
 }
 
 describe('LazyImage decoded-image presentation', () => {
+  test('Android virtualized images request immediately and reveal without replaying an opacity fade', async () => {
+    document.documentElement.setAttribute('data-tauri-mobile', 'android')
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    roots.push(root)
+    await act(async () => root.render(<LazyImage src="/android.webp" />))
+    const image = host.querySelector('img')!
+    expect(image.loading || image.getAttribute('loading')).toBe('eager')
+    expect(image.style.transition).not.toContain('opacity')
+    await act(async () => image.dispatchEvent(new domWindow.Event('load')))
+    expect(image.style.opacity).toBe('1')
+  })
+
   test('uses recent decode metadata as the normal browser fast path', async () => {
     const image = await renderCachedImage()
     expect(image.style.opacity).toBe('1')

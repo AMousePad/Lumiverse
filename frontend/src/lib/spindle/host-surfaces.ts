@@ -367,10 +367,12 @@ function defaultRuntime(
       if (!useStore.getState().personas.some((persona) => persona.id === personaId)) {
         throw new Error(`${HOST_ACTION_NOT_FOUND}:personaId`)
       }
-      selectPersona(personaId)
+      return selectPersona(personaId)
     },
     switchPreset: async (presetId) => {
-      await transitionActiveLoomPreset(presetId)
+      if (!await transitionActiveLoomPreset(presetId)) {
+        throw new Error('HOST_ACTION_UNAVAILABLE:entity_action:switch_preset')
+      }
     },
     applyTheme: (themeId) => {
       const state = useStore.getState()

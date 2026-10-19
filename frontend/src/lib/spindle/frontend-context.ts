@@ -1,4 +1,5 @@
 import type {
+  SpindleComposerAPI,
   SpindleDockPanelOptions as PublishedSpindleDockPanelOptions,
   SpindleFloatWidgetOptions as PublishedSpindleFloatWidgetOptions,
   SpindleSTTAPI,
@@ -152,6 +153,7 @@ export interface FrontendContextAdditions {
   tokens: FrontendTokensAPI
   stt: SpindleSTTAPI
   systemAudio: SpindleSystemAudioAPI
+  composer: SpindleComposerAPI
   onTeardown(handler: () => void): () => void
 }
 
@@ -162,6 +164,7 @@ export interface FrontendContextFactoryDependencies<Base extends object> {
   geometry?: SpindleGeometryAPI
   stt?: SpindleSTTAPI
   systemAudio?: SpindleSystemAudioAPI
+  composer?: SpindleComposerAPI
   onTeardown(handler: () => void): () => void
 }
 
@@ -197,6 +200,7 @@ export function createFrontendExtensionContext<Base extends {
     tokens: domain.tokens,
     stt: dependencies.stt,
     systemAudio: dependencies.systemAudio,
+    composer: dependencies.composer,
     onTeardown: dependencies.onTeardown,
   } as Base & FrontendContextAdditions
 }

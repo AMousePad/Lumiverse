@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 
 const calls: unknown[][] = []
+let generationEpoch = 0
+let stopCompletion: Promise<void> | undefined
 const store = {
   activeChatId: 'chat-1' as string | null,
   activeGenerationId: null as string | null,
@@ -9,13 +11,14 @@ const store = {
   mpIsHost: false,
   messages: [] as Array<{ id: string; is_user: boolean }>,
   stopStreaming: () => { calls.push(['stopStreaming']) },
+  getGenerationEpoch: () => generationEpoch,
 }
 
 mock.module('@/store', () => ({
   useStore: Object.assign(() => store, { getState: () => store, subscribe: () => () => {} }),
 }))
 mock.module('@/api/generate', () => ({
-  generateApi: { stop: async (...args: unknown[]) => { calls.push(['stop', ...args]) } },
+  generateApi: { stop: async (...args: unknown[]) => { calls.push(['stop', ...args]); await stopCompletion } },
 }))
 mock.module('@/hooks/useSwipeAction', () => ({
   executeSwipe: async (message: { id: string }, chatId: string, direction: string) => {
@@ -32,6 +35,8 @@ const run = (id: string) => COMMANDS.find((command) => command.id === id)!.run((
 
 beforeEach(() => {
   calls.length = 0
+  generationEpoch = 0
+  stopCompletion = undefined
   Object.assign(store, { activeChatId: 'chat-1', activeGenerationId: null, isStreaming: false, mpRoomId: null, mpIsHost: false, messages: [] })
 })
 
@@ -46,6 +51,40 @@ describe('generation-control commands', () => {
     store.isStreaming = true
     await run('action-stop-generation')
     expect(calls).toEqual([['stop', undefined, 'chat-1'], ['stopStreaming']])
+  })
+
+  test('a delayed stop does not clear the stream of another chat', async () => {
+    let completeStop!: () => void
+    stopCompletion = new Promise<void>((resolve) => { completeStop = resolve })
+    store.isStreaming = true
+    const stopping = run('action-stop-generation')
+    store.activeChatId = 'chat-2'
+    generationEpoch++
+    completeStop()
+    await stopping
+    expect(calls).toEqual([['stop', undefined, 'chat-1']])
+  })
+
+  test('a delayed stop does not clear a newer optimistic generation in the same chat', async () => {
+    let completeStop!: () => void
+    stopCompletion = new Promise<void>((resolve) => { completeStop = resolve })
+    store.isStreaming = true
+    const stopping = run('action-stop-generation')
+    generationEpoch++
+    completeStop()
+    await stopping
+    expect(calls).toEqual([['stop', undefined, 'chat-1']])
+  })
+
+  test('stop leaves an identified stream to finish through its generation events', async () => {
+    let completeStop!: () => void
+    stopCompletion = new Promise<void>((resolve) => { completeStop = resolve })
+    store.isStreaming = true
+    const stopping = run('action-stop-generation')
+    store.activeGenerationId = 'gen-1'
+    completeStop()
+    await stopping
+    expect(calls).toEqual([['stop', undefined, 'chat-1']])
   })
 
   test('stop does nothing for a room peer or without a chat', async () => {

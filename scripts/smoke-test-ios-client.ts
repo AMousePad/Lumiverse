@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { audioSmokeFixture, nativeAudioSmokeBundle } from './native-audio-smoke';
 
 const root = resolve(import.meta.dir, "..");
 const generated = join(root, "ios/tauri/src-tauri/gen/apple");
@@ -19,8 +20,16 @@ const deviceList = JSON.parse(await new Response(devices.stdout).text()) as { de
 if (await devices.exited !== 0 || !Object.values(deviceList.devices).flat().some(device => device.udid === simulator && device.name.startsWith("LumiverseClientSmoke")))
   throw new Error("Use a dedicated simulator named LumiverseClientSmoke; this test resets its Lumiverse installation.");
 let identityVerified = false, commandsBlocked = false, restoredCookie = false, nativePermissionsVerified = false, nativeFramesBlocked = false, speechPermissionHandled = false;
+let audioResult: { passed: boolean; error?: string } | undefined;
+const audioBundle = await nativeAudioSmokeBundle();
 const fixture = Bun.serve({ hostname: "127.0.0.1", port: 18763, async fetch(request) {
   const url = new URL(request.url);
+  if (url.pathname === '/audio-probe.js') return new Response(audioBundle, { headers: { 'Content-Type': 'text/javascript' } });
+  if (url.pathname === '/message-received.mp3') return new Response(audioSmokeFixture(), { headers: { 'Content-Type': 'audio/wav' } });
+  if (url.pathname === '/audio-check' && request.method === 'POST') {
+    audioResult = await request.json() as typeof audioResult;
+    return new Response(null, { status: 204 });
+  }
   if (url.pathname === "/api/v1/runtime-config") return Response.json({ safeThemeMode: false });
   if (url.pathname === '/speech-denied' && request.method === 'POST') {
     speechPermissionHandled = true;
@@ -45,6 +54,7 @@ const fixture = Bun.serve({ hostname: "127.0.0.1", port: 18763, async fetch(requ
   return new Response(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>
     <h1>Remote Lumiverse</h1><p id="identity"></p><p id="commands"></p><p id="permissions"></p>
     <button id="speech">Try native dictation</button><p id="speech-result"></p>
+    <p id="audio"></p><script defer src="/audio-probe.js"></script>
     <script>(async () => {
       await new Promise(resolve => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', resolve, {once:true}) : resolve());
       const identityVerified = window.__LUMIVERSE_MOBILE__ === true && window.__LUMIVERSE_PLATFORM__ === 'ios'
@@ -129,9 +139,10 @@ try {
     "CODE_SIGNING_ALLOWED=NO", "LUMIVERSE_IOS_EXPERIMENTAL_HIGH_REFRESH=0"]);
   if (!identityVerified || !commandsBlocked || !restoredCookie || !nativePermissionsVerified || !nativeFramesBlocked || !speechPermissionHandled)
     throw new Error("The remote page did not verify native identity, command isolation, permission bridge, frame isolation, and cookie persistence.");
-  const report = { passed: true, simulator, identityVerified, commandsBlocked, restoredCookie, nativePermissionsVerified, nativeFramesBlocked, speechPermissionHandled, resultBundle,
-    checks: ["server connection", "saved address across relaunch", "two-finger controls and native share sheet", "change server", "mobile identity", "remote command isolation", "persistent WebView cookies", "native permission bridge", "native subframe isolation", "native speech authorization and denial"],
+  if (!audioResult?.passed) throw new Error(`Native audio check failed: ${JSON.stringify(audioResult)}`);
+  const report = { passed: true, simulator, identityVerified, commandsBlocked, restoredCookie, nativePermissionsVerified, nativeFramesBlocked, speechPermissionHandled, audioResult, resultBundle,
+    checks: ["server connection", "saved address across relaunch", "two-finger controls and native share sheet", "change server", "mobile identity", "remote command isolation", "persistent WebView cookies", "native permission bridge", "native subframe isolation", "native speech authorization and denial", "notification and TTS audio without a silent primer or preceding gesture"],
     backend: "loopback fixture; live-server authentication and chat are not covered" };
   writeFileSync(join(out, "smoke-test.json"), JSON.stringify(report, null, 2) + "\n");
-  console.log("[ios] Ten client smoke checks passed.");
+  console.log("[ios] Eleven client smoke checks passed.");
 } finally { fixture.stop(true); }

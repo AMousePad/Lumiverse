@@ -1,4 +1,4 @@
-:root { font: 17px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; color: #ede9f5; background: #17141f; color-scheme: dark; }
+:root { font: 17px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; color: #ede9f5; background: #0a0812; color-scheme: dark; }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100svh; display: grid; place-items: center; padding: max(28px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); }
 main { max-width: 420px; width: 100%; }

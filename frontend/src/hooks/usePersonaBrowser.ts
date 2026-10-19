@@ -318,7 +318,9 @@ export function usePersonaBrowser() {
   const switchToPersona = useCallback(
     (id: string) => {
       const deactivating = isChatScoped ? persistedChatPersonaId === id : activePersonaId === id
-      selectPersona(deactivating ? null : id)
+      // selectPersona reports persistence failures to the user; host callers
+      // also receive the rejection through surfaces.invoke().
+      void selectPersona(deactivating ? null : id).catch(() => {})
     },
     [activePersonaId, isChatScoped, persistedChatPersonaId]
   )

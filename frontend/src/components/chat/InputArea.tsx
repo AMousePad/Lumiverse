@@ -75,6 +75,7 @@ import {
   type RegexActionActivation,
 } from '@/lib/regex/actionBus'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
+import { holdHostCapture } from '@/lib/sttHostCapture'
 import { isWhistleAvailable } from '@/lib/whistle/config'
 import { whistleClient } from '@/lib/whistle/client'
 import { composeChatSafeZones } from '@/lib/chatSurfaceLayout'
@@ -92,6 +93,7 @@ import { acknowledgeConnectionProfileSelection } from '@/lib/uiProductivityDefau
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import { readProductivityFeature } from '@/lib/spindle/productivity-feature-toggles'
 import { hasEnabledFrontendExtension } from '@/lib/spindle/frontend-extension-availability'
+import { useComposerBridge } from '@/lib/spindle/use-composer-bridge'
 import { useQuickToolbarActions } from '@/components/quick-toolbar/useQuickToolbarActions'
 import InputAreaCustomizeModal, {
   fromComposerExtraId,
@@ -1034,6 +1036,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   }, [voiceSettings.sttProvider, isSTTSupported])
   const isListeningToSTT = sttStatus === 'starting' || sttStatus === 'listening' || sttStatus === 'processing'
   const showSTTIndicator = isListeningToSTT
+  useEffect(() => isListeningToSTT ? holdHostCapture() : undefined, [isListeningToSTT])
   const sttIndicatorLabel = useMemo(() => {
     if (sttStatus === 'starting' && voiceSettings.sttProvider === 'whistle' && sttLoadingProgress !== null) {
       return t('input.sttWhistleLoading', { percent: Math.round(sttLoadingProgress * 100) })
@@ -2151,6 +2154,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       sendingRef.current = false
     }
   }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t, te])
+
+  useComposerBridge({ chatId, text, setText, textareaRef, handleSend, isGeneratingInChat, sendingRef })
 
   useEffect(() => {
     const handleRegexAction = async (event: Event) => {
