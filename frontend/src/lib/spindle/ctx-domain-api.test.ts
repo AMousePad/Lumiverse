@@ -55,6 +55,15 @@ function createHarness() {
   let state = {
     profiles: [profile()],
     activeProfileId: 'profile-1',
+    imageGenProfiles: [{ id: 'image-1', name: 'NovelAI', provider: 'novelai', api_url: 'https://image.example', model: 'nai-diffusion-4', is_default: false, has_api_key: true, default_parameters: { seed: 1 }, metadata: {} }],
+    activeImageGenConnectionId: 'image-1' as string | null,
+    ttsProfiles: [
+      { id: 'tts-1', name: 'Narrator', provider: 'openai_tts', api_url: '', model: 'tts-1', voice: 'alloy', is_default: false, has_api_key: true, default_parameters: {}, metadata: {} },
+      { id: 'tts-2', name: 'ElevenLabs', provider: 'elevenlabs', api_url: '', model: 'eleven_v3', voice: 'Rachel', is_default: true, has_api_key: true, default_parameters: {}, metadata: {} },
+    ],
+    sttProfiles: [{ id: 'stt-1', name: 'Whisper', provider: 'openai_stt', api_url: '', model: 'whisper-1', is_default: true, has_api_key: true, default_parameters: {}, metadata: {} }],
+    decisionProfiles: [{ id: 'decision-1', name: 'Jev', provider: 'typesafe', api_url: '', model: 'jev-latest', is_default: true, has_api_key: true, default_parameters: {}, metadata: {} }],
+    voiceSettings: { ttsConnectionId: null as string | null, sttConnectionId: null as string | null },
     messages: [message('message-1', 'hello')],
     setActiveProfile(id: string | null) {
       state = { ...state, activeProfileId: id }
@@ -148,6 +157,16 @@ function createHarness() {
         calls.push(`update:${id}:${String(input.name ?? '')}`)
         return { ...profile(), ...input }
       },
+      async embeddingConfig() {
+        calls.push('embedding-config')
+        return {
+          connectionProfiles: [
+            { id: 'embedding-1', provider: 'openai', model: 'text-embedding-3-small', api_url: 'https://user:pass@embed.example', dimensions: 1536, enabled: true, hasSecret: true },
+            { id: 'embedding-2', name: 'Local', provider: 'openai-compatible', model: 'nomic', api_url: '', dimensions: null, enabled: true },
+          ],
+          primaryProfileId: 'embedding-2',
+        }
+      },
     },
     chats: {
       async listForCharacter(characterId) {
@@ -221,6 +240,46 @@ describe('H10 domain API bridge', () => {
     expect(await domain.tokens.countTextBatch(['a', 'b'])).toEqual({ total_tokens: 4 })
     expect(harness.calls).toContain('messages:chat-1:200')
     expect(harness.calls.some((call) => call.includes('userId'))).toBe(false)
+  })
+
+  test('lists every connection kind as credential-free summaries with the host default marked active', async () => {
+    const harness = createHarness()
+    const domain = createFrontendDomainApi(harness.dependencies)
+
+    expect(await domain.connections.list({ kind: 'llm' })).toEqual([
+      { id: 'profile-1', kind: 'llm', name: 'Main', provider: 'openai', model: 'gpt-test', active: true },
+    ])
+    expect(await domain.connections.list({ kind: 'image' })).toEqual([
+      { id: 'image-1', kind: 'image', name: 'NovelAI', provider: 'novelai', model: 'nai-diffusion-4', active: true },
+    ])
+    // With no explicit TTS selection the host falls back to the default profile.
+    expect((await domain.connections.list({ kind: 'tts' })).map((row) => [row.id, row.voice, row.active])).toEqual([
+      ['tts-1', 'alloy', false],
+      ['tts-2', 'Rachel', true],
+    ])
+    // STT connections are only used once the user picks one.
+    expect((await domain.connections.list({ kind: 'stt' }))[0]).toMatchObject({ id: 'stt-1', active: false })
+    expect((await domain.connections.list({ kind: 'decision' }))[0]).toMatchObject({ id: 'decision-1', active: true })
+    expect(await domain.connections.list({ kind: 'embedding' })).toEqual([
+      { id: 'embedding-1', kind: 'embedding', name: 'openai', provider: 'openai', model: 'text-embedding-3-small', active: false },
+      { id: 'embedding-2', kind: 'embedding', name: 'Local', provider: 'openai-compatible', model: 'nomic', active: true },
+    ])
+
+    const state = harness.state()
+    state.voiceSettings = { ttsConnectionId: 'tts-1', sttConnectionId: 'stt-1' }
+    expect(await domain.connections.getActive('tts')).toEqual({ activeProfileId: 'tts-1', provider: 'openai_tts', model: 'tts-1' })
+    expect(await domain.connections.getActive('stt')).toEqual({ activeProfileId: 'stt-1', provider: 'openai_stt', model: 'whisper-1' })
+    state.activeImageGenConnectionId = null
+    expect(await domain.connections.getActive('image')).toEqual({ activeProfileId: null, provider: null, model: null })
+
+    // The no-argument forms keep their synchronous LLM behavior.
+    expect(Array.isArray(domain.connections.list())).toBe(true)
+    expect(domain.connections.getActive()).toEqual({ activeProfileId: 'profile-1', provider: 'openai', model: 'gpt-test' })
+    expect(harness.calls.some((call) => call.startsWith('permission:'))).toBe(false)
+
+    await expect(domain.connections.list({ kind: 'music' as never })).rejects.toThrow('CONNECTION_KIND_INVALID')
+    harness.setActive(false)
+    await expect(domain.connections.list({ kind: 'tts' })).rejects.toThrow('STALE_GENERATION')
   })
 
   test('recent chat reads stay free, bounded, and query-shaped', async () => {

@@ -83,6 +83,7 @@ nav = [
     { "Host Navigation and Actions" = "frontend-api/host-surfaces.md" },
     { "UI Scaling" = "frontend-api/ui-scaling.md" },
     { "Shared Components" = "frontend-api/shared-components.md" },
+    { "Connection Profiles" = "frontend-api/connections.md" },
     { "Speech-to-text" = "frontend-api/speech-to-text.md" },
     { "System audio" = "frontend-api/system-audio.md" },
     { "Backend Communication" = "frontend-api/backend-communication.md" },
