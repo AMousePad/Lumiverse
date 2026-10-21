@@ -55,6 +55,8 @@ import { regexScriptsRoutes } from "./routes/regex-scripts.routes";
 import { expressionsRoutes } from "./routes/expressions.routes";
 import { pushRoutes } from "./routes/push.routes";
 import { desktopNotificationTransportRoutes } from "./routes/desktop-notifications.routes";
+import { iosNotificationMediaRoutes } from "./routes/ios-notifications.routes";
+import { iosLiveActivityRoutes, iosLiveActivityTransportRoutes } from "./routes/ios-live-activities.routes";
 import { desktopApiRoutes } from "./routes/desktop-api.routes";
 import { memoryCortexRoutes } from "./routes/memory-cortex.routes";
 import { operatorRoutes } from "./routes/operator.routes";
@@ -392,6 +394,8 @@ app.route("/api/integrations/stream-deck/v1", streamDeckIntegrationRoutes);
 // browser-session auth so a desktop rebuild or WebView cookie loss does not
 // silently unregister the native destination.
 app.route("/api/desktop-notifications/v1", desktopNotificationTransportRoutes);
+app.route("/api/ios-notifications/v1", iosNotificationMediaRoutes);
+app.route("/api/ios-activities/v1", iosLiveActivityTransportRoutes);
 // OAuth-protected, read-only desktop API. It performs scope and live role
 // checks independently of the browser-session API below.
 app.route("/api/desktop/v1", desktopApiRoutes);
@@ -455,6 +459,7 @@ app.route("/api/v1/loadouts", loadoutsRoutes);
 app.route("/api/v1/regex-scripts", regexScriptsRoutes);
 app.route("/api/v1/characters/:characterId/expressions", expressionsRoutes);
 app.route("/api/v1/push", pushRoutes);
+app.route("/api/v1/push/ios/activities", iosLiveActivityRoutes);
 app.route("/api/v1/lumihub", lumihubRoutes);
 app.route("/api/v1/illarin", illarinRoutes);
 app.route("/api/v1/memory-cortex", memoryCortexRoutes);

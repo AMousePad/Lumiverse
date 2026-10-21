@@ -22,8 +22,10 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
         webview.configuration.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "lumiverseNative")
         loading = webview.observe(\.isLoading, options: [.new]) { [weak self] view, _ in
             if view.isLoading { self?.speech.cancel() }
+            if #available(iOS 16.1, *) { Task { @MainActor in await IOSLiveActivities.shared.selectedOriginChanged() } }
         }
         IOSNotifications.shared.attach(webview: webview)
+        if #available(iOS 16.1, *) { Task { @MainActor in IOSLiveActivities.shared.attach(webview) } }
         // This wrapper uses scenes. Observe the WebView's own scene so a
         // foreground transition in another window cannot restore its presence.
         for (name, state) in [(UIScene.didActivateNotification, "active"),
@@ -32,6 +34,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
             lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 guard let webview = self?.webview, let scene = notification.object as? UIScene,
                       scene === webview.window?.windowScene else { return }
+                if state == "active", #available(iOS 16.1, *) { Task { @MainActor in IOSLiveActivities.shared.retryPending() } }
                 webview.callAsyncJavaScript("window.dispatchEvent(new CustomEvent('lumiverse:ios-app-state', {detail: detail}))",
                     arguments: ["detail": ["state": state]], in: nil, in: .page, completionHandler: nil)
             })
@@ -56,10 +59,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
     }
 
     static func origin(_ url: URL?) -> String? {
-        guard let url = url, let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme),
-              let host = url.host?.lowercased(), host != "tauri.localhost" else { return nil }
-        let port = url.port ?? (scheme == "https" ? 443 : 80)
-        return "\(scheme)://\(host):\(port)"
+        NativeServerOrigin.canonical(url)
     }
 
     static func trusts(_ frame: WKFrameInfo, in webview: WKWebView) -> Bool {
@@ -83,6 +83,22 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "lifecycle.status": replyHandler(["state": appState(in: webview)], nil)
         case "notifications.status": IOSNotifications.shared.status { replyHandler($0, nil) }
         case "notifications.register": IOSNotifications.shared.register { result, error in replyHandler(result, error) }
+        case "activities.status", "activities.configure", "activities.start", "activities.reconcile":
+            guard #available(iOS 16.1, *) else { replyHandler(["available": false], nil); return }
+            Task { @MainActor in
+                switch action {
+                case "activities.configure":
+                    await IOSLiveActivities.shared.configure(accountId: payload["accountId"] as? String, enabled: payload["enabled"] as? Bool ?? false)
+                    replyHandler(IOSLiveActivities.shared.status(), nil)
+                case "activities.start":
+                    do { replyHandler(try await IOSLiveActivities.shared.start(payload), nil) }
+                    catch { replyHandler(nil, error.localizedDescription) }
+                case "activities.reconcile":
+                    await IOSLiveActivities.shared.reconcile(payload["snapshots"] as? [[String: Any]] ?? [])
+                    replyHandler(["accepted": true], nil)
+                default: replyHandler(IOSLiveActivities.shared.status(), nil)
+                }
+            }
         case "speech.start":
             guard let id = payload["id"] as? String, UUID(uuidString: id) != nil,
                   let language = payload["language"] as? String, language.count <= 80 else {

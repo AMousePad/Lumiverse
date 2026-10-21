@@ -19,6 +19,22 @@ pub fn init<R: tauri::Runtime>() -> TauriPlugin<R> {
             }
             Ok(())
         })
+        .on_event(|_app, _event| {
+            #[cfg(target_os = "ios")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                let app = _app.clone();
+                let urls = urls.clone();
+                tauri::async_runtime::spawn(async move {
+                    for url in urls {
+                        if url.scheme() == "lumiverse" && url.host_str() == Some("activity") {
+                            let _ = app.state::<NativeHandle<R>>().0.run_mobile_plugin_async::<bool>(
+                                "openActivityURL", std::collections::BTreeMap::from([("url", url.as_str())]),
+                            ).await;
+                        }
+                    }
+                });
+            }
+        })
         .build()
 }
 

@@ -12,6 +12,7 @@ import { useCharacterTheme } from '@/hooks/useCharacterTheme'
 import { useCustomCSSApplicator } from '@/hooks/useCustomCSSApplicator'
 import { useAppInit } from '@/hooks/useAppInit'
 import { useIOSPushSync } from '@/hooks/useIOSPushSync'
+import { useIOSLiveActivities } from '@/hooks/useIOSLiveActivities'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
@@ -83,6 +84,7 @@ function Application() {
   useCustomCSSApplicator()
   useAppInit()
   useIOSPushSync(useStore(s => s.isAuthenticated ? s.user?.id ?? null : null))
+  useIOSLiveActivities(useStore(s => s.isAuthenticated ? s.user?.id ?? null : s.isAuthLoading ? undefined : null))
   useDocumentTitle()
   useBadging()
   useTTSAutoPlay()

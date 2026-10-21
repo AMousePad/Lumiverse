@@ -10,7 +10,9 @@ const directory = mkdtempSync(join(tmpdir(), "lumiverse-apns-test-"));
 const keyPath = join(directory, "AuthKey.p8");
 writeFileSync(keyPath, privateKey.export({ type: "pkcs8", format: "pem" }));
 const variables = ["APNS_TEAM_ID", "APNS_KEY_ID", "APNS_PRIVATE_KEY_PATH", "APNS_BUNDLE_ID",
-  "APNS_CERTIFICATE_PATH", "APNS_PRIVATE_KEY_PASSPHRASE_FILE", "APNS_PRIVATE_KEY_PASSPHRASE"];
+  "APNS_CERTIFICATE_PATH", "APNS_PRIVATE_KEY_PASSPHRASE_FILE", "APNS_PRIVATE_KEY_PASSPHRASE",
+  "APNS_LIVE_ACTIVITY_PRIVATE_KEY_PATH", "APNS_LIVE_ACTIVITY_TEAM_ID", "APNS_LIVE_ACTIVITY_KEY_ID",
+  "APNS_LIVE_ACTIVITY_PRIVATE_KEY_PASSPHRASE_FILE", "APNS_LIVE_ACTIVITY_PRIVATE_KEY_PASSPHRASE"];
 const previous = Object.fromEntries(variables.map(key => [key, process.env[key]]));
 for (const key of variables) delete process.env[key];
 Object.assign(process.env, { APNS_TEAM_ID: "TEAM123456", APNS_KEY_ID: "KEY1234567", APNS_PRIVATE_KEY_PATH: keyPath, APNS_BUNDLE_ID: "chat.lumiverse.ios" });
@@ -32,7 +34,8 @@ class Session extends EventEmitter {
   }
 }
 mock.module("node:http2", () => ({ connect: (url: string) => { authority = url; return new Session() } }));
-const { createAPNsJWT, buildAPNsPayload, sendAPNsNotification, getAPNsInfo } = await import("./apns.service");
+mock.module("../crypto/init", () => ({ getEncryptionKeyBytes: () => new Uint8Array(32).fill(23) }));
+const { createAPNsJWT, buildAPNsPayload, sendAPNsNotification, getAPNsInfo, sendAPNsLiveActivity, getLiveActivityAPNsInfo } = await import("./apns.service");
 afterAll(() => {
   for (const key of variables) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key] }
   rmSync(directory, { recursive: true, force: true });
@@ -40,6 +43,55 @@ afterAll(() => {
 });
 
 describe("native APNs provider", () => {
+  test("sends ActivityKit updates and endings with independent APNs topics and priorities", async () => {
+    responseStatus = 200; responseBody = "";
+    const destination = { device_token: "12".repeat(32), bundle_id: "chat.lumiverse.ios", environment: "development" as const };
+    expect(getLiveActivityAPNsInfo().configured).toBe(true);
+    expect(await sendAPNsLiveActivity(destination, { phase: "streaming", label: "Writing response" }, 123456, false)).toEqual({ sent: true });
+    expect(lastHeaders).toMatchObject({ ":path": `/3/device/${destination.device_token}`, "apns-push-type": "liveactivity",
+      "apns-topic": "chat.lumiverse.ios.push-type.liveactivity", "apns-priority": "10" });
+    expect(lastHeaders.authorization).toMatch(/^bearer /);
+    const providerAuthorization = lastHeaders.authorization;
+    await sendAPNsNotification({ ...destination, server_origin: 'https://lumiverse.example' }, { title: 'Ready', body: 'Done' });
+    expect(lastHeaders.authorization).toBe(providerAuthorization);
+    await sendAPNsLiveActivity(destination, { phase: "streaming", label: "Writing response" }, 123456, false);
+    expect(lastHeaders.authorization).toBe(providerAuthorization);
+    expect(JSON.parse(lastPayload)).toEqual({ aps: { timestamp: 123456, event: "update",
+      "content-state": { phase: "streaming", label: "Writing response" }, "stale-date": 123756 } });
+    await sendAPNsLiveActivity(destination, { phase: "streaming", label: "Writing response" }, 123456, false, false);
+    expect(lastHeaders['apns-priority']).toBe("5"); // Unchanged heartbeat preserves the high-priority budget.
+    await sendAPNsLiveActivity(destination, { phase: "completed", label: "Response ready" }, 123457, true);
+    expect(lastHeaders['apns-priority']).toBe("10");
+    expect(JSON.parse(lastPayload).aps).toMatchObject({ event: "end", "dismissal-date": 123577 });
+    await sendAPNsLiveActivity(destination, { phase: "inputNeeded", label: "Input needed" }, 123458, false);
+    expect(lastHeaders['apns-priority']).toBe("10");
+    responseStatus = 400; responseBody = JSON.stringify({ reason: "BadDeviceToken" });
+    expect(await sendAPNsLiveActivity(destination, { phase: "streaming", label: "Writing response" }, 123459, false))
+      .toEqual({ sent: false, invalidToken: true });
+    responseStatus = 200; responseBody = "";
+  });
+  test("enriches character messages and preserves ordinary errors and generic alerts", () => {
+    const notification = { title: "Lumi", body: "Hello", data: { chatId: "chat-1", characterName: "Lumi" },
+      icon: "/api/v1/characters/char-1/avatar?size=sm" };
+    const payload = JSON.parse(buildAPNsPayload(notification, "https://lumiverse.example", "/api/ios-notifications/v1/avatar/signed"));
+    expect(payload.aps).toMatchObject({ "mutable-content": 1, "thread-id": "chat-1", alert: { title: "Lumi", body: "Hello" } });
+    expect(payload.communication).toEqual({ senderId: "char-1", senderName: "Lumi", avatarPath: "/api/ios-notifications/v1/avatar/signed" });
+    const formattedName = JSON.parse(buildAPNsPayload({ ...notification, data: { ...notification.data, characterName: '<b>Lumi</b>' } },
+      "https://lumiverse.example", "/signed"));
+    expect(formattedName.communication.senderName).toBe('Lumi');
+    for (const ordinary of [notification, { title: "Test", body: "Done" },
+      { ...notification, title: "Generation Failed", data: { ...notification.data, errorMessage: "Provider offline" } }]) {
+      const plain = JSON.parse(buildAPNsPayload(ordinary, "https://lumiverse.example"));
+      expect(plain.communication).toBeUndefined();
+      expect(plain.aps["mutable-content"]).toBeUndefined();
+      expect(plain.aps.alert.title).toBe(ordinary.title);
+    }
+    const error = JSON.parse(buildAPNsPayload({ ...notification, tag: "generation-error-chat-1" }, "https://lumiverse.example", "/signed"));
+    expect(error.communication).toBeUndefined();
+    const oversized = buildAPNsPayload({ ...notification, body: "\u0000".repeat(4000) }, "https://lumiverse.example", "/".repeat(5000));
+    expect(Buffer.byteLength(oversized)).toBeLessThanOrEqual(4096);
+    expect(JSON.parse(oversized).communication).toBeUndefined();
+  });
   test("creates a verifiable ES256 JWT with Apple's key and team fields", () => {
     const token = createAPNsJWT({ teamId: "TEAM123456", keyId: "KEY1234567", bundleId: "chat.lumiverse.ios", privateKey }, 1234567890);
     const [header, claims, signature] = token.split(".");
@@ -62,6 +114,13 @@ describe("native APNs provider", () => {
     expect(lastHeaders).toMatchObject({ ":method": "POST", ":path": `/3/device/${destination.device_token}`, "apns-topic": "chat.lumiverse.ios", "apns-push-type": "alert", "apns-priority": "10" });
     expect(lastHeaders.authorization).toMatch(/^bearer /);
     expect(JSON.parse(lastPayload)).toHaveProperty("serverOrigin", destination.server_origin);
+    expect(await sendAPNsNotification({ ...destination, id: "phone-1" }, { title: "Lumi", body: "Hello",
+      data: { chatId: "chat-1", characterName: "Lumi" }, icon: "/api/v1/characters/char-1/avatar?size=sm" })).toEqual({ sent: true });
+    const enriched = JSON.parse(lastPayload);
+    const avatar = new URL(enriched.communication.avatarPath, destination.server_origin);
+    const { verifyIOSNotificationAvatarPath } = await import("./ios-notification-avatar");
+    expect(verifyIOSNotificationAvatarPath("phone-1", "char-1", avatar.searchParams.get("expires")!, avatar.searchParams.get("signature")!)).toBe(true);
+    expect(enriched.aps["mutable-content"]).toBe(1);
     responseStatus = 410; responseBody = JSON.stringify({ reason: "Unregistered", timestamp: 1234567890000 });
     expect(await sendAPNsNotification({ ...destination, environment: "production" }, { title: "Ready", body: "Done" }))
       .toEqual({ sent: false, invalidatedAt: 1234567890000 });

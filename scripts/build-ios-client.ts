@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { zipSync, type Zippable } from "fflate";
-import { configureIOSPushEntitlements } from "./ios-entitlements";
+import { configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension } from "./ios-entitlements";
 import { buildIOSNativeCache } from "./build-ios-native-cache";
 
 const root = resolve(import.meta.dir, ".."), project = join(root, "ios/tauri");
@@ -81,6 +81,10 @@ const plist = Bun.spawn(["plutil", "-convert", "json", "-o", "-", join(project, 
 const properties = JSON.parse(await new Response(plist.stdout).text()) as Record<string, unknown>;
 if (await plist.exited !== 0) throw new Error("Could not read the iOS Info.plist.");
 properties.LumiversePushEnabled = pushNotifications;
+properties.NSSupportsLiveActivities = pushNotifications;
+if (pushNotifications) properties.LumiverseActivityAppGroup = `group.${(Bun.YAML.parse(spec) as any).settingGroups.app.base.PRODUCT_BUNDLE_IDENTIFIER}.activities`;
+if (pushNotifications) properties.CFBundleURLTypes = [{ CFBundleURLName: "Lumiverse Activities", CFBundleURLSchemes: ["lumiverse"] }];
+if (pushNotifications) properties.NSUserActivityTypes = ["INSendMessageIntent"];
 spec = spec.replace(/        # Lumiverse Info.plist\n[\s\S]*?        # End Lumiverse Info.plist\n/, "");
 const extraInfo = Object.entries(properties).map(([key, value]) => `        ${key}: ${JSON.stringify(value)}\n`).join("");
 spec = spec.replace("        LSRequiresIPhoneOS:", `        # Lumiverse Info.plist\n${extraInfo}        # End Lumiverse Info.plist\n        LSRequiresIPhoneOS:`);
@@ -89,6 +93,8 @@ spec = spec.replace("        LSRequiresIPhoneOS:", `        # Lumiverse Info.pli
 // XcodeGen rewrites this file from its `properties`; editing the generated plist
 // alone would silently remove the entitlement when the project is regenerated.
 spec = configureIOSPushEntitlements(spec, pushNotifications);
+spec = configureIOSNotificationExtension(spec, pushNotifications);
+spec = configureIOSLiveActivityExtension(spec, pushNotifications);
 writeFileSync(specPath, spec);
 await run(["xcodegen", "generate", "--spec", "project.yml"], generated);
 if (args.has("--prepare-only")) process.exit(0);
@@ -105,7 +111,10 @@ const derived = join(root, ".tmp/ios-xcode", (simulator ? "simulator" : "device"
     "-configuration", configuration, "-sdk", simulator ? "iphonesimulator" : "iphoneos",
     "-destination", simulator ? "generic/platform=iOS Simulator" : "generic/platform=iOS", "-derivedDataPath", derived,
     "LUMIVERSE_IOS_PREBUILT_RUST=1", `LUMIVERSE_IOS_EXPERIMENTAL_HIGH_REFRESH=${experimentalHighRefresh ? "1" : "0"}`];
-  if (unsigned) xcode.push("CODE_SIGNING_ALLOWED=NO");
+  // Simulator Keychain access needs an app identity. Ad-hoc signing needs no
+  // provisioning profile and keeps Live Activity enrollment usable in this build.
+  if (simulator) xcode.push("CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO");
+  else if (unsigned) xcode.push("CODE_SIGNING_ALLOWED=NO");
   else xcode.push(`DEVELOPMENT_TEAM=${team}`, "CODE_SIGN_STYLE=Automatic", "CODE_SIGN_IDENTITY=Apple Development",
     "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration");
   if (simulator) xcode.push("build");
@@ -147,7 +156,7 @@ if (simulator) {
       const candidate = join(path, entry.name);
       if (entry.isDirectory()) pack(candidate);
       else entries[`Payload/Lumiverse.app/${relative(app!, candidate)}`] = [readFileSync(candidate),
-        { os: 3, attrs: (entry.name === "Lumiverse" ? 0o100755 : 0o100644) << 16 }];
+        { os: 3, attrs: (0o100000 | (statSync(candidate).mode & 0o777)) << 16 }];
     }
   }
   pack(app);
@@ -161,6 +170,8 @@ if (simulator) {
   if (await signature.exited !== 0) throw new Error("Could not verify the archived application's signing entitlements.");
   const signedForPush = /<key>aps-environment<\/key>\s*<string>(development|production)<\/string>/.test(signedEntitlements);
   if (signedForPush !== pushNotifications) throw new Error("The signed app's APNs entitlement does not match this build's push configuration.");
+  const signedForCommunication = /<key>com.apple.developer.usernotifications.communication<\/key>\s*<true\s*\/>/.test(signedEntitlements);
+  if (signedForCommunication !== pushNotifications) throw new Error("The signed app's Communication Notifications entitlement does not match this build's push configuration.");
   const ipa = find(join(generated, "build/arm64/export"), ".ipa")[0];
   if (!ipa) throw new Error("Xcode did not export a signed IPA.");
   artifact = join(out, `lumiverse-ios-arm64${artifactSuffix}.ipa`); copyFileSync(ipa, artifact);

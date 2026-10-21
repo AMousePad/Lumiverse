@@ -8,6 +8,7 @@ final class ClientSmokeTests: XCTestCase {
         let field = app.webViews.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 15))
         field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
         field.typeText("http://127.0.0.1:18763")
         app.webViews.buttons["Connect"].tap()
         XCTAssertTrue(app.webViews.staticTexts["Remote Lumiverse"].waitForExistence(timeout: 20))
@@ -15,6 +16,50 @@ final class ClientSmokeTests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["iOS mobile identity verified"].exists)
         XCTAssertTrue(app.webViews.staticTexts["Native permissions verified"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.webViews.staticTexts["Native audio verified"].waitForExistence(timeout: 10))
+        app.webViews.buttons["Test Live Activity"].tap()
+        XCTAssertTrue(app.webViews.staticTexts["Live Activity preview ready"].waitForExistence(timeout: 15), app.webViews.debugDescription)
+        XCUIDevice.shared.press(.home)
+        let activitySpringboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        activitySpringboard.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.01))
+            .press(forDuration: 0.1, thenDragTo: activitySpringboard.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.8)))
+        XCTAssertTrue(activitySpringboard.staticTexts["Writing response"].waitForExistence(timeout: 10), activitySpringboard.debugDescription)
+        // Fresh disposable simulator installs show the one-time ActivityKit
+        // permission card. Dismiss it before taking presentation snapshots.
+        let allowActivity = activitySpringboard.buttons["Allow"].firstMatch
+        if allowActivity.exists { allowActivity.tap() }
+        let activityScreenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        activityScreenshot.name = "Lumiverse Lock Screen activity"
+        activityScreenshot.lifetime = .keepAlways
+        add(activityScreenshot)
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(activitySpringboard.icons["Lumiverse"].waitForExistence(timeout: 5))
+        // Home and Island expansion animate after the device button returns.
+        // Capture settled surfaces rather than an app-switching animation frame.
+        Thread.sleep(forTimeInterval: 1)
+        let islandScreenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        islandScreenshot.name = "Lumiverse compact Dynamic Island"
+        islandScreenshot.lifetime = .keepAlways
+        add(islandScreenshot)
+        activitySpringboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.035)).press(forDuration: 1)
+        XCTAssertTrue(activitySpringboard.staticTexts["Writing response"].waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 0.5)
+        let expandedScreenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        expandedScreenshot.name = "Lumiverse expanded Dynamic Island"
+        expandedScreenshot.lifetime = .keepAlways
+        add(expandedScreenshot)
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        let continueActivity = app.webViews.buttons["Continue Live Activity check"]
+        continueActivity.tap()
+        // SpringBoard's return animation can consume the first WebView tap.
+        // A successful click hides this button before doing any async work.
+        if !continueActivity.waitForNonExistence(timeout: 2) { continueActivity.tap() }
+        XCTAssertTrue(app.webViews.staticTexts["Live Activity verified"].waitForExistence(timeout: 15), app.webViews.debugDescription)
+        for label in ["Export blob", "Export blob", "Export from server"] {
+            app.webViews.buttons[label].tap()
+            XCTAssertTrue(app.alerts["Export saved"].waitForExistence(timeout: 15))
+            app.alerts["Export saved"].buttons["OK"].tap()
+        }
         app.webViews.buttons["Try native dictation"].tap()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let alert = springboard.alerts.firstMatch

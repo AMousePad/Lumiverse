@@ -7,6 +7,7 @@ import { usePushSubscription } from '@/hooks/usePushSubscription'
 import { Toggle } from '@/components/shared/Toggle'
 import styles from './NotificationSettings.module.css'
 import clsx from 'clsx'
+import IOSLiveActivitySettings from './IOSLiveActivitySettings'
 
 export default function NotificationSettings() {
   const { t } = useTranslation('settings')
@@ -98,6 +99,7 @@ export default function NotificationSettings() {
   if (!isSupported) {
     return (
       <div className={styles.container}>
+        <IOSLiveActivitySettings />
         <div className={styles.unsupported}>
           <BellOff size={16} />
           <span>
@@ -112,6 +114,7 @@ export default function NotificationSettings() {
 
   return (
     <div className={styles.container}>
+      <IOSLiveActivitySettings />
       <div className={styles.section}>
         <div className={styles.sectionHeader}>
           <Bell size={14} />

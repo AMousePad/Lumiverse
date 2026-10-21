@@ -90,6 +90,26 @@ origin, and boot-health flags; they contain no account or session data.
 
 ## Native push notifications
 
+Push-enabled builds also embed `LumiverseNotificationService`. Successful chat
+generation alerts can show the character's avatar using Apple's communication
+notification presentation. The signing profile must include both Push
+Notifications and Communication Notifications for the app identifier, and the
+extension needs its own bundle identifier (`chat.lumiverse.ios.NotificationService`)
+and provisioning profile. The build helper embeds and signs the extension;
+ordinary builds omit it and both capabilities. Rebuild the IPA and update the
+backend to use this feature. Real-device APNs presentation still needs validation
+with the provisioned app; compilation and backend tests do not establish it.
+
+Live Activity avatars also require the `group.chat.lumiverse.ios.activities` App
+Group on the host and `chat.lumiverse.ios.LiveActivity` extension. The build helper
+adds matching entitlements. Register and enable that group for both App IDs in
+Apple Developer provisioning when creating or refreshing their signing profiles.
+
+Avatar access uses a short-lived signed URL for the destination owner's
+character, without copying the app's login cookies into the extension. The
+original alert remains available if downloading the avatar or donating the
+communication intent fails. Failure alerts retain their diagnostic titles.
+
 The backend relays notifications directly to APNs over HTTP/2. The iOS app
 registers its device token with the signed-in backend; it does not need a
 background WebSocket or a separate relay service. Notification taps return to
@@ -149,3 +169,43 @@ authenticated callers without exposing certificates, keys, or device tokens.
 Generation notifications respect the user's event preferences and presence
 suppression. A successful APNs response means Apple accepted the alert; checking
 its appearance and chat navigation on the iPhone completes delivery verification.
+
+## Exports in Files
+
+The native wrapper streams blob exports and authenticated download responses
+through WebKit into its Documents directory. Finished exports appear under
+**Files → Browse → On My iPhone / iPad → Lumiverse**. The folder becomes useful
+after the first export. Duplicate names receive a numbered suffix; existing
+files are preserved. Failed transfers stay out of Documents. Both
+`UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` are enabled so
+Files can access these documents. The server address, native cache, and WebKit
+session data remain in their existing private storage locations.
+
+This applies to the native iOS wrapper; browser and Home Screen PWA downloads
+continue using their browser's destination.
+
+## Live Activities
+
+Push-enabled builds include a WidgetKit extension for generation status on the
+Lock Screen and Dynamic Island (iOS 16.1+). Activities start while Lumiverse is
+open and receive phase and terminal updates directly from the backend after the
+app is backgrounded. Notification settings includes a device-local toggle;
+ordinary push preferences remain independent. The widget shows character name
+and phase, with no message or reasoning text. iOS 15 keeps its existing behavior.
+
+Use the `.p8` setup above for Live Activities. If alerts already use a certificate,
+keep those settings and add a separate provider key:
+
+```dotenv
+APNS_TEAM_ID=YOUR_TEAM_ID
+APNS_KEY_ID=YOUR_KEY_ID
+APNS_LIVE_ACTIVITY_PRIVATE_KEY_PATH=/run/secrets/AuthKey_YOUR_KEY_ID.p8
+```
+
+Build with `--push-notifications`. Provision the host app and both embedded
+extension IDs, including `chat.lumiverse.ios.LiveActivity` (or the configured
+bundle ID plus `.LiveActivity`). Enable `group.chat.lumiverse.ios.activities`
+(or `group.{bundleId}.activities`) for both the host and Live Activity extension
+to share prefetched avatars. `/api/v1/push/ios/activities/info` reports provider readiness without
+exposing credentials. See the [Live Activities integration guide](ios-live-activities-plan.md)
+for enrollment, lifecycle, APNs delivery, and the physical-device verification matrix.

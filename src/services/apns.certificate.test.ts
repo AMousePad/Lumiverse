@@ -72,6 +72,17 @@ test('loads a DER certificate and its encrypted matching private key without tok
   expect(JSON.stringify(getAPNsInfo())).not.toContain('PRIVATE KEY')
 })
 
+test('selects an independent provider key for Live Activities while preserving certificate alerts', () => {
+  const activityKeyPath = join(directory, 'activity-key.p8')
+  writeFileSync(activityKeyPath, generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ format: 'pem', type: 'pkcs8' }))
+  expect(loadAPNsConfiguration(env, 'liveactivity')).toBeNull()
+  const both = { ...env, APNS_LIVE_ACTIVITY_PRIVATE_KEY_PATH: activityKeyPath, APNS_TEAM_ID: 'TEAM123456', APNS_KEY_ID: 'KEY1234567' }
+  expect(loadAPNsConfiguration(both)).toHaveProperty('certificate')
+  const activity = loadAPNsConfiguration(both, 'liveactivity')
+  expect(activity).toHaveProperty('teamId', 'TEAM123456')
+  expect(activity).not.toHaveProperty('certificate')
+})
+
 test('rejects a certificate for another app or an unrelated private key', () => {
   expect(() => loadAPNsConfiguration({ ...env, APNS_BUNDLE_ID: 'another.app' })).toThrow('bundle ID')
   const wrongKey = join(directory, 'wrong-key.pem')

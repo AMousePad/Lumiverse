@@ -40,6 +40,8 @@ final class IOSNotifications: NSObject, UNUserNotificationCenterDelegate {
         #endif
     }
 
+    var installation: [String: String] { ["deviceId": deviceId, "bundleId": bundleId, "environment": environment] }
+
     func attach(webview: WKWebView) {
         self.webview = webview
         UNUserNotificationCenter.current().delegate = self
