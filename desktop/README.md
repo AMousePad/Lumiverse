@@ -382,7 +382,7 @@ bun run build:linux-appimage --local --jobs 12 \
 This writes `<output-directory>/<build-id>/` and requires Docker access. The
 `build:linux-remote` command remains an alias for the same builder.
 
-### Nightly Linux release builds
+### Private Windows and nightly Linux release builds
 
 The public nightly workflow sends an immutable build request to the private
 `Lumiverse-Builds` repository. Its self-hosted Linux runner builds x64 and
@@ -390,13 +390,31 @@ emulated ARM64 AppImages in separate Ubuntu 22.04 containers and compiler
 caches, retaining the release tests and offline cross-user smoke checks.
 Only trusted `main` and `staging` workflow requests can reach this builder.
 
+Windows x64 and ARM64 compilation uses the private `lumiverse-windows-vm`
+runner for both nightly and stable releases. The same authenticated request
+pins the source SHA, release version, channel and updater public key. The VM
+builds the final unsigned NSIS installers, tests the x64 server, verifies PE
+architectures and returns checksums and provenance. A short hosted Windows
+ARM64 job runs the exact cross-built server on native ARM64 and records the
+server/installer hashes and private build identity. No signing keys reach the VM.
+
 The completed private run wakes the public completion workflow. GitHub-hosted
-jobs verify source, runtime provenance and checksums, sign the finalized images,
+jobs verify source, runtime provenance, native ARM64 qualification and checksums, sign the finalized payloads,
 and independently verify their updater signatures. Signing keys remain in the
 public repository's hosted jobs. Publication still requires all six platforms
 and successful hosted builds; neither completion order advances a partial feed.
-Hosted runners do not wait during Linux compilation. Stable releases and
-feature-branch builds retain their existing hosted platform routing.
+Hosted runners do not wait during private compilation. Stable Linux and macOS
+builds remain hosted, as do feature-branch diagnostic builds.
+
+The scheduler and completion workflow live on `main`; the nightly workflow
+explicitly checks out `staging` and passes its immutable SHA to every builder.
+Fingerprint verification uses the requested source's policy in a child process
+without credentials or dotenv loading, so different policies on `main` and
+`staging` do not reject the same source. Legacy Linux-only requests remain
+retryable while their artifacts are available. Updating these workflows does
+not dispatch a compile: releases start only on the existing schedule, explicit
+manual release dispatch, or stable release tag. Do not run those entry points
+when deploying workflow maintenance alone.
 
 Both repositories require an Actions secret named `LINUX_RELEASE_BRIDGE_TOKEN`:
 a fine-grained token limited to these two repositories with Actions read/write
