@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'src/db/**'
+      - 'src/utils/bun-cmd.ts'
+      - 'src/utils/subprocess-messages.ts'
+      - 'src/runtime/bun-runtime.ts'
       - 'src/services/**'
       - 'src/routes/**'
       - 'src/app.ts'
