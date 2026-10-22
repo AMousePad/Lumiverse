@@ -7,10 +7,7 @@
   margin: 0 0 16px;
   overflow: hidden;
   border-radius: var(--lcs-radius, 14px);
-  background:
-    radial-gradient(ellipse at 16% 8%, var(--lumiverse-primary-015, rgba(130, 100, 255, 0.15)), transparent 65%),
-    var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
-  /* The image and its framing dissolve together into the greeting prose. */
+  /* The artwork dissolves into the greeting prose. */
   -webkit-mask-image: linear-gradient(var(--greeting-fade), #000 0%, #000 70%, rgba(0, 0, 0, 0.88) 84%, transparent 100%);
   mask-image: linear-gradient(var(--greeting-fade), #000 0%, #000 70%, rgba(0, 0, 0, 0.88) 84%, transparent 100%);
 }
@@ -78,15 +75,10 @@
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  background:
-    linear-gradient(125deg, rgba(255, 255, 255, 0.07), transparent 30%, transparent 68%, var(--lumiverse-primary-010, rgba(130, 100, 255, 0.1))),
-    radial-gradient(ellipse at center, transparent 42%, rgba(0, 0, 0, 0.14) 100%);
-  box-shadow:
-    inset 0 0 0 1px var(--lcs-glass-border, rgba(255, 255, 255, 0.08)),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  background: radial-gradient(ellipse at center, transparent 42%, rgba(0, 0, 0, 0.14) 100%);
 }
 
-/* Expensive ambient blur and depth follow the app's glass-effects setting. */
+/* Ambient blur follows the app's glass-effects setting. */
 :global([data-glass]) .ambient {
   display: block;
   filter: blur(24px) saturate(1.15);
@@ -96,17 +88,8 @@
   opacity: 0.42;
 }
 
-:global([data-glass]) .finish {
-  box-shadow:
-    inset 0 0 0 1px var(--lcs-glass-border, rgba(255, 255, 255, 0.08)),
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    inset 0 0 44px rgba(0, 0, 0, 0.12);
-}
-
 :global([data-theme-mode='light']) .finish {
-  background:
-    linear-gradient(125deg, rgba(255, 255, 255, 0.14), transparent 32%, transparent 70%, var(--lumiverse-primary-010, rgba(130, 100, 255, 0.1))),
-    radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.08) 100%);
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.08) 100%);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -147,10 +130,6 @@
 :global([data-scrolling]) .artwork {
   transform: none !important;
   transition: none;
-}
-
-:global([data-scrolling]) .finish {
-  box-shadow: inset 0 0 0 1px var(--lcs-glass-border, rgba(255, 255, 255, 0.08));
 }
 
 @media (prefers-reduced-motion: reduce) {
