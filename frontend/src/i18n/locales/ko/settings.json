@@ -466,6 +466,14 @@
     "hfSaved": "토큰이 저장되었습니다."
   },
   "chat": {
+    "greetingImages": {
+      "title": "인사말 이미지",
+      "show": "인사말 이미지 표시",
+      "showHint": "선택한 인사말의 이미지를 첫 메시지에 자연스럽게 어우러지도록 표시합니다.",
+      "position": "이미지 위치",
+      "top": "메시지 위",
+      "bottom": "메시지 아래"
+    },
     "title": "채팅",
     "displayMode": "표시 모드",
     "minimal": "미니멀",

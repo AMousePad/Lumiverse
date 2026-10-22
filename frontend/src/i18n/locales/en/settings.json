@@ -463,6 +463,14 @@
     "hfSaved": "Token saved."
   },
   "chat": {
+    "greetingImages": {
+      "title": "Greeting Images",
+      "show": "Show greeting images",
+      "showHint": "Blend the selected greeting’s artwork into the starting message.",
+      "position": "Image placement",
+      "top": "Top of message",
+      "bottom": "Bottom of message"
+    },
     "title": "Chat",
     "displayMode": "Display mode",
     "minimal": "Minimal",

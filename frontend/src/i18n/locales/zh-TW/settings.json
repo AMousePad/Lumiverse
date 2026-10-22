@@ -429,6 +429,14 @@
     "hfSaved": "令牌已保存。"
   },
   "chat": {
+    "greetingImages": {
+      "title": "開場白圖片",
+      "show": "顯示開場白圖片",
+      "showHint": "將所選開場白的配圖自然融入起始訊息。",
+      "position": "圖片位置",
+      "top": "訊息頂部",
+      "bottom": "訊息底部"
+    },
     "title": "聊天",
     "displayMode": "顯示模式",
     "minimal": "極簡",

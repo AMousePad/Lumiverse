@@ -463,6 +463,14 @@
     "hfSaved": "Token gespeichert."
   },
   "chat": {
+    "greetingImages": {
+      "title": "Begrüßungsbilder",
+      "show": "Begrüßungsbilder anzeigen",
+      "showHint": "Das Bild der gewählten Begrüßung in die Startnachricht einblenden.",
+      "position": "Bildposition",
+      "top": "Über der Nachricht",
+      "bottom": "Unter der Nachricht"
+    },
     "title": "Chat",
     "displayMode": "Anzeigemodus",
     "minimal": "Minimal",
