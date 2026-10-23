@@ -1,4 +1,5 @@
 import java.util.Properties
+import groovy.json.JsonSlurper
 
 plugins {
     id("com.android.application")
@@ -13,6 +14,11 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Optional client configuration. Provider/service-account keys never enter the APK.
+val firebaseConfig = System.getenv("LUMIVERSE_ANDROID_FIREBASE_CONFIG")?.let { path ->
+    JsonSlurper().parse(file(path)) as Map<*, *>
+}
+
 android {
     compileSdk = 36
     buildToolsVersion = "36.1.0"
@@ -24,6 +30,17 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        firebaseConfig?.let { config ->
+            val project = config["project_info"] as Map<*, *>
+            val client = (config["client"] as List<*>).map { it as Map<*, *> }.firstOrNull {
+                val info = it["client_info"] as Map<*, *>
+                (info["android_client_info"] as Map<*, *>)["package_name"] == applicationId
+            } ?: error("Firebase configuration must contain the Android application package")
+            resValue("string", "google_app_id", (client["client_info"] as Map<*, *>)["mobilesdk_app_id"].toString())
+            resValue("string", "gcm_defaultSenderId", project["project_number"].toString())
+            resValue("string", "project_id", project["project_id"].toString())
+            resValue("string", "google_api_key", ((client["api_key"] as List<*>).first() as Map<*, *>)["current_key"].toString())
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -63,6 +80,8 @@ rust {
 }
 
 dependencies {
+    implementation("com.google.firebase:firebase-messaging:24.1.2")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")

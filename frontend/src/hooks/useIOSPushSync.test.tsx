@@ -16,6 +16,7 @@ let register: (() => Promise<typeof registration>) | undefined
 const subscribe = mock(async (_registration: unknown, _options: unknown) => {})
 const registerPush = mock(async () => register ? register() : registration)
 mock.module('@/api/push', () => ({ pushApi: {
+  getIOSInfo: async () => ({ configured: true, delivery: 'direct' }),
   listSubscriptions: async () => enrolled ? [{ type: 'ios_apns', device_id: registration.deviceId, bundle_id: registration.bundleId, environment: registration.environment }] : [],
   subscribeIOS: subscribe,
 } }))

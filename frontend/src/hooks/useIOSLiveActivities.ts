@@ -26,8 +26,10 @@ export function useIOSLiveActivities(userId: string | null | undefined) {
       if (signal.aborted) return
       const existing = new Set([...native.generationIds, ...native.suppressedGenerationIds])
       if (!snapshot.active.some(item => !existing.has(item.generationId))) return
-      const info = await get<{ configured: boolean; bundleId: string }>('/push/ios/activities/info', undefined, { signal })
+      const info = await get<{ configured: boolean; bundleId: string; delivery?: 'relay' | 'direct' }>(
+        '/push/ios/activities/info?bundleId=' + encodeURIComponent(native.bundleId), undefined, { signal })
       if (signal.aborted || !info.configured || info.bundleId !== native.bundleId) return
+      if (info.delivery === 'relay' && !native.relayEnrolled) return
       for (const item of snapshot.active) {
         if (signal.aborted || !isIOSForeground()) break
         if (existing.has(item.generationId)) continue

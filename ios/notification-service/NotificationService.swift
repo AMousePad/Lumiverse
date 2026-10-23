@@ -17,7 +17,28 @@ final class NotificationService: UNNotificationServiceExtension {
     private func receive(_ request: UNNotificationRequest, handler: @escaping (UNNotificationContent) -> Void) {
         self.handler = handler
         original = request.content
-        let info = request.content.userInfo
+        if let challenge = request.content.userInfo["relayChallenge"] as? [String: Any] {
+            Task { await NotificationSecurity.confirm(challenge); await MainActor.run { self.finish() } }
+            return
+        }
+        var content = request.content
+        if let encrypted = content.userInfo["encrypted"] as? [String: Any] {
+            let bundleId = Bundle.main.object(forInfoDictionaryKey: "LumiverseNotificationBundleID") as? String ?? "chat.lumiverse.ios"
+            var clear: [String: Any]?
+            for environment in ["production", "development"] {
+                if let result = try? NotificationSecurity.decrypt(encrypted, bundleId: bundleId, environment: environment) { clear = result; break }
+            }
+            guard let info = clear, let aps = info["aps"] as? [String: Any], let alert = aps["alert"] as? [String: String],
+                  let title = alert["title"], let body = alert["body"],
+                  let updated = content.mutableCopy() as? UNMutableNotificationContent else { finish(); return }
+            updated.title = title; updated.body = body; updated.userInfo = info
+            if let sound = aps["sound"] as? String, ["default", "lumiverse-complete.wav"].contains(sound) {
+                updated.sound = sound == "default" ? .default : UNNotificationSound(named: UNNotificationSoundName(rawValue: sound))
+            }
+            if let thread = aps["thread-id"] as? String, Self.validId(thread) { updated.threadIdentifier = thread }
+            content = updated; original = updated
+        }
+        let info = content.userInfo
         guard let server = info["serverOrigin"] as? String, let origin = URL(string: server),
               ["https", "http"].contains(origin.scheme?.lowercased() ?? ""), origin.host != nil,
               origin.user == nil, origin.password == nil,
@@ -45,7 +66,7 @@ final class NotificationService: UNNotificationServiceExtension {
                 nameComponents: nil, displayName: senderName, image: avatar,
                 contactIdentifier: nil, customIdentifier: identifier, aliases: nil, suggestionType: .none)
             let intent = INSendMessageIntent(recipients: nil, outgoingMessageType: .outgoingMessageText,
-                content: request.content.body, speakableGroupName: nil,
+                content: content.body, speakableGroupName: nil,
                 conversationIdentifier: "\(server)|chat:\(chatId)", serviceName: "Lumiverse", sender: person, attachments: nil)
             intent.setImage(avatar, forParameterNamed: \.sender)
             let interaction = INInteraction(intent: intent, response: nil)
@@ -54,7 +75,7 @@ final class NotificationService: UNNotificationServiceExtension {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     guard error == nil else { self.finish(); return }
-                    self.finish(content: try? request.content.updating(from: intent))
+                    self.finish(content: try? content.updating(from: intent))
                 }
             }
         }

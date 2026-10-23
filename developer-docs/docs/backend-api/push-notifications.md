@@ -7,7 +7,17 @@ Send OS-level push notifications to users' devices. Browser Web Push destination
 
 Notifications are automatically **suppressed** on the server when any of the user's connected sessions reports the app as visible. Presence is refreshed after each WebSocket connection and authentication, including PWA resume. User-triggered, per-destination test notifications bypass this suppression so they can be verified from the open Settings page.
 
-Registered destinations may be browser Web Push subscriptions, Lumiverse Desktop native destinations, or native iOS APNs destinations. The desktop companion's Rust host maintains the notification-only socket and heartbeat independently of its WebViews, then presents the payload through the operating system; it never joins the user's general event channel. iOS receives alert notifications directly through APNs while backgrounded or closed. Its backend provider credentials and signing setup are documented in the [iOS client guide](../getting-started/ios-client.md#native-push-notifications).
+Registered destinations may be browser Web Push subscriptions, Lumiverse Desktop native destinations, native iOS APNs destinations, or native Android destinations. The desktop companion's Rust host maintains the notification-only socket and heartbeat independently of its WebViews, then presents the payload through the operating system; it never joins the user's general event channel. iOS receives alert notifications through APNs while backgrounded or closed. The official app uses the encrypted Lumiverse relay by default; self-built IPAs can use their owner's provider credentials. See [iOS notification delivery](../getting-started/ios-notification-relay.md).
+
+Native Android destinations (`android_native`) use a notification-only socket
+for the embedded backend and FCM for remote servers. They participate in the same
+preferences, presence suppression, destination removal and test flow. Completion
+alerts can show the character avatar; error alerts preserve their failure details.
+See [Android notification setup](../getting-started/android-notifications.md) for
+APK configuration, provider credentials and local backend lifetime limits.
+Android currently renders title, body and owned character avatar thumbnails;
+`image` attachments are not rendered. Taps accept `/chat/{id}` and otherwise open
+the server's home page.
 
 Native iOS generation Live Activities use a separate, generation-scoped enrollment
 and ActivityKit update token. They continue receiving status updates regardless of
@@ -70,7 +80,7 @@ Check if push notifications are available for a user.
 
 **Returns:** `Promise<{ available: boolean; subscriptionCount: number }>`
 
-- `available`: `true` if the user has at least one registered browser, desktop, or iOS notification destination
+- `available`: `true` if the user has at least one registered browser, desktop, iOS, or Android notification destination
 - `subscriptionCount`: number of registered devices
 
 ## Attribution

@@ -8,6 +8,8 @@ import { notificationPlainText } from "../utils/notification-text";
 import { getActiveGeneration, stopGeneration } from "./generation/active-generation-registry";
 import { getSetting } from "./settings.service";
 import type { PushNotificationPreferences } from "../types/push";
+import { isAPNsRelayCredential } from "./apns-relay.service";
+import { openIOSNotificationSecret, sealIOSNotificationSecret } from "./apns-encryption";
 
 const labels = { assembling: "Preparing response", council: "Consulting council", waiting: "Waiting for model",
   reasoning: "Thinking", streaming: "Writing response", inputNeeded: "Input needed", completed: "Response ready",
@@ -23,6 +25,7 @@ interface Registration {
   environment: APNsEnvironment; server_origin: string; activity_id: string | null; push_token: string | null;
   token_registered_at: number; expires_at: number; desired_phase: ActivityPhase; delivered_phase: ActivityPhase | null;
   last_timestamp: number; next_attempt_at: number; attempts: number; ended_at: number | null; delivered_stage: number;
+  delivery_mode: "relay" | "direct"; relay_credential: string | null;
 }
 const soundStage = (phase: ActivityPhase) => ({ assembling: 0, council: 0, waiting: 0, reasoning: 1,
   streaming: 2, completed: 3, error: 4 } as Partial<Record<ActivityPhase, number>>)[phase] ?? -1;
@@ -40,7 +43,7 @@ export function liveActivitySnapshot(userId: string, generationIds: unknown) {
 
 /** The browser can mint a credential scoped to this generation and its activity. */
 export function prepareLiveActivity(userId: string, input: Record<string, unknown>) {
-  const info = getLiveActivityAPNsInfo();
+  const info = getLiveActivityAPNsInfo(typeof input.bundleId === "string" ? input.bundleId : undefined);
   if (!info.configured) throw new Error(info.reason!);
   const entry = identifier(input.generationId) ? getPoolEntry(input.generationId) : undefined;
   if (!entry || entry.userId !== userId) throw new Error("Generation not found");
@@ -49,6 +52,10 @@ export function prepareLiveActivity(userId: string, input: Record<string, unknow
   const origin = typeof input.serverOrigin === "string" ? new URL(input.serverOrigin) : null;
   if (!origin || !["https:", "http:"].includes(origin.protocol) || origin.origin !== input.serverOrigin
     || origin.username || origin.password || origin.origin.length > 512) throw new Error("Invalid activity server origin");
+  if (info.delivery === "relay" && !getDb().query(`SELECT 1 FROM ios_push_destinations WHERE user_id = ? AND device_id = ?
+    AND bundle_id = ? AND environment = ? AND server_origin = ? AND delivery_mode = 'relay'`).get(userId,
+    input.deviceId as string, info.bundleId, input.environment as string, origin.origin))
+    throw new Error("Enable notifications on this iPhone before starting relay Live Activities.");
   const now = Date.now(), expiresAt = now + 8 * 60 * 60 * 1000;
   const credential = randomBytes(32).toString("base64url"), id = crypto.randomUUID();
   const phase = poolActivityPhase(entry);
@@ -61,11 +68,11 @@ export function prepareLiveActivity(userId: string, input: Record<string, unknow
       .get(userId, input.deviceId as string) as { count: number };
     if (count.count >= 32) throw new Error("Too many Live Activities on this device");
     getDb().query(`INSERT INTO ios_live_activities (id, user_id, chat_id, generation_id, device_id, bundle_id,
-      environment, server_origin, credential_hash, expires_at, desired_phase) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      environment, server_origin, credential_hash, expires_at, desired_phase, delivery_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, userId, entry.chatId, entry.generationId, input.deviceId as string, info.bundleId,
-        input.environment as string, origin.origin, hash(credential), expiresAt, phase);
+        input.environment as string, origin.origin, hash(credential), expiresAt, phase, info.delivery || "direct");
   })();
-  return { registrationId: id, credential, expiresAt, accountId: userId, serverOrigin: origin.origin,
+  return { registrationId: id, credential, expiresAt, accountId: userId, serverOrigin: origin.origin, delivery: info.delivery || "direct",
     attributes: { generationId: entry.generationId, chatId: entry.chatId, serverOrigin: origin.origin, accountId: userId,
       characterName: notificationPlainText(entry.characterName, 60) || "Assistant", startedAt: entry.startedAt / 1000 },
     state: activityState(phase) };
@@ -87,15 +94,18 @@ export function refreshLiveActivity(id: string, credential: string, input: Recor
   if (!row) return null;
   if (!identifier(input.activityId) || (row.activity_id && row.activity_id !== input.activityId)
     || typeof input.pushToken !== "string" || !/^(?:[a-fA-F0-9]{2}){16,256}$/.test(input.pushToken)) throw new Error("Invalid activity token");
+  if (row.delivery_mode === "relay" && !isAPNsRelayCredential(input.relayCredential)) throw new Error("Missing activity relay enrollment");
   const entry = getPoolEntry(row.generation_id);
   const phase = entry?.userId === row.user_id ? poolActivityPhase(entry)
     : isTerminalActivityPhase(row.desired_phase) ? row.desired_phase : "interrupted";
   // Idempotent retries don't reset delivery backoff or invalidate an in-flight send.
   const token = input.pushToken.toLowerCase();
-  if (token !== row.push_token) {
+  if (token !== row.push_token || (row.delivery_mode === "relay" && (!row.relay_credential
+    || input.relayCredential !== openIOSNotificationSecret(row.relay_credential, `ios-activity:${id}`)))) {
     getDb().query(`UPDATE ios_live_activities SET activity_id = ?, push_token = ?, token_registered_at = ?, desired_phase = ?,
-      delivered_phase = NULL, attempts = 0, next_attempt_at = 0 WHERE id = ?`)
-      .run(input.activityId, token, Date.now(), phase, id);
+      delivered_phase = NULL, attempts = 0, next_attempt_at = 0, relay_credential = ? WHERE id = ?`)
+      .run(input.activityId, token, Date.now(), phase,
+        sealIOSNotificationSecret(row.delivery_mode === "relay" ? input.relayCredential as string : undefined, `ios-activity:${id}`), id);
   }
   void flushLiveActivities().catch(() => console.warn("[live-activities] Enrollment update deferred"));
   return { state: activityState(phase) };
@@ -179,7 +189,8 @@ async function flush() {
         const terminalAlert = isTerminalActivityPhase(phase) && activityAlert;
         // Alerting updates precede a silent end so ActivityKit plays the sound.
         const ending = isTerminalActivityPhase(phase) && !terminalAlert;
-        const result = await sendAPNsLiveActivity({ device_token: row.push_token!, bundle_id: row.bundle_id, environment: row.environment },
+        const result = await sendAPNsLiveActivity({ device_token: row.push_token!, bundle_id: row.bundle_id, environment: row.environment,
+          delivery_mode: row.delivery_mode, relay_credential: row.relay_credential ? openIOSNotificationSecret(row.relay_credential, `ios-activity:${row.id}`) : null },
           activityState(phase), timestamp, ending, phase !== row.delivered_phase, activityAlert);
         if (result.invalidToken || (result.invalidatedAt !== undefined && result.invalidatedAt >= row.token_registered_at)) {
           db.query("DELETE FROM ios_live_activities WHERE id = ? AND push_token = ? AND token_registered_at = ?")

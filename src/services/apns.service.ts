@@ -4,6 +4,9 @@ import { connect, type ClientHttp2Session } from "node:http2";
 import type { PushPayload } from "../types/push";
 import { issueIOSNotificationAvatarPath } from "./ios-notification-avatar";
 import { notificationPlainText } from "../utils/notification-text";
+import { getAPNsRoute } from "./apns-routing";
+import { encryptAPNsPayload, encryptedAPNsPayload, openIOSNotificationSecret } from "./apns-encryption";
+import { sendAPNsRelayNotification } from "./apns-relay.service";
 
 export type APNsEnvironment = "development" | "production";
 export const IOS_COMPLETION_SOUND = "lumiverse-complete.wav";
@@ -15,6 +18,10 @@ export interface APNsDestination {
   bundle_id: string;
   environment: APNsEnvironment;
   server_origin: string;
+  delivery_mode?: "relay" | "direct";
+  relay_credential?: string | null;
+  encryption_key?: string | null;
+  encryption_key_id?: string | null;
 }
 export interface APNsTokenConfiguration { teamId: string; keyId: string; bundleId: string; privateKey: KeyObject }
 export interface APNsCertificateConfiguration { bundleId: string; certificate: string; privateKey: KeyObject }
@@ -72,14 +79,19 @@ export function loadAPNsConfiguration(env: NodeJS.ProcessEnv, pushType: "alert" 
   return { teamId: teamId!, keyId: keyId!, bundleId, privateKey };
 }
 
-export function getAPNsInfo(): { configured: boolean; bundleId: string; reason: string | null } {
+export function getAPNsInfo(bundleId?: string): { configured: boolean; bundleId: string; reason: string | null;
+  delivery: "relay" | "direct" | null; relayUrl?: string; encryptionRequired?: boolean } {
+  const route = getAPNsRoute(bundleId);
+  if (route.mode === "relay") return { configured: true, bundleId: route.bundleId, reason: null,
+    delivery: "relay", relayUrl: route.relayUrl, encryptionRequired: true };
+  if (!route.mode) return { configured: false, bundleId: route.bundleId, reason: route.reason, delivery: null };
   try {
     const config = getAPNsConfiguration();
     return { configured: !!config, bundleId: config?.bundleId || process.env.APNS_BUNDLE_ID || "chat.lumiverse.ios",
-      reason: config ? null : "The server needs an APNs signing key or certificate and matching private key before it can deliver iPhone notifications." };
+      delivery: "direct", reason: config ? null : "The server needs an APNs signing key or certificate and matching private key before it can deliver iPhone notifications." };
   } catch {
     return { configured: false, bundleId: process.env.APNS_BUNDLE_ID || "chat.lumiverse.ios",
-      reason: "The server's APNs configuration is invalid. Ask the server administrator to check it." };
+      delivery: "direct", reason: "The server's APNs configuration is invalid. Ask the server administrator to check it." };
   }
 }
 
@@ -90,14 +102,17 @@ function getLiveConfiguration(): APNsTokenConfiguration | null {
   return liveConfiguration ?? null;
 }
 
-export function getLiveActivityAPNsInfo() {
+export function getLiveActivityAPNsInfo(bundleId?: string) {
+  const route = getAPNsRoute(bundleId);
+  if (route.mode === "relay") return { configured: true, bundleId: route.bundleId, reason: null, delivery: "relay" as const, relayUrl: route.relayUrl };
+  if (!route.mode) return { configured: false, bundleId: route.bundleId, reason: route.reason, delivery: null };
   try {
     const config = getLiveConfiguration();
     return { configured: !!config, bundleId: config?.bundleId || process.env.APNS_BUNDLE_ID || "chat.lumiverse.ios",
-      reason: config ? null : "Live Activities need an APNs ES256 provider key (.p8) on this server." };
+      delivery: "direct" as const, reason: config ? null : "Live Activities need an APNs ES256 provider key (.p8) on this server." };
   } catch {
     return { configured: false, bundleId: process.env.APNS_BUNDLE_ID || "chat.lumiverse.ios",
-      reason: "The server's Live Activities APNs key configuration is invalid." };
+      delivery: "direct" as const, reason: "The server's Live Activities APNs key configuration is invalid." };
   }
 }
 
@@ -109,7 +124,7 @@ export function createAPNsJWT(config: APNsTokenConfiguration, issuedAt = Math.fl
 }
 
 /** An alert payload needs no background mode and remains deliverable while the app is suspended. */
-export function buildAPNsPayload(notification: PushPayload, serverOrigin?: string, avatarPath?: string): string {
+export function buildAPNsPayload(notification: PushPayload, serverOrigin?: string, avatarPath?: string, maxBytes = 4096): string {
   const limit = (text: string, bytes: number) => {
     let result = "", size = 0;
     for (const character of text) {
@@ -136,12 +151,12 @@ export function buildAPNsPayload(notification: PushPayload, serverOrigin?: strin
     ...(serverOrigin ? { serverOrigin: limit(serverOrigin, 512) } : {}) };
   // JSON escaping can expand these bounded strings. Drop optional enrichment if
   // it alone exceeds APNs' limit, then shorten the original alert as needed.
-  if (Buffer.byteLength(JSON.stringify({ ...payload, aps: { ...payload.aps, alert: { title: "", body: "" } } })) > 4096) {
+  if (Buffer.byteLength(JSON.stringify({ ...payload, aps: { ...payload.aps, alert: { title: "", body: "" } } })) > maxBytes) {
     delete payload.communication;
     delete payload.aps["mutable-content"];
     delete payload.aps["thread-id"];
   }
-  while (Buffer.byteLength(JSON.stringify(payload)) > 4096) {
+  while (Buffer.byteLength(JSON.stringify(payload)) > maxBytes) {
     if (payload.aps.alert.body) payload.aps.alert.body = Array.from(payload.aps.alert.body).slice(0, -128).join("");
     else payload.aps.alert.title = Array.from(payload.aps.alert.title).slice(0, -32).join("");
   }
@@ -151,20 +166,37 @@ export function buildAPNsPayload(notification: PushPayload, serverOrigin?: strin
 export interface APNsDelivery { sent: boolean; invalidatedAt?: number; invalidToken?: boolean }
 
 export async function sendAPNsNotification(destination: APNsDestination, notification: PushPayload): Promise<APNsDelivery> {
-  const config = getAPNsConfiguration();
-  if (!config || destination.bundle_id !== config.bundleId) return { sent: false };
+  const route = getAPNsRoute(destination.bundle_id);
+  const mode = destination.delivery_mode ?? "direct";
+  if (route.mode !== mode) return { sent: false };
   const characterId = notification.icon?.match(/^\/api\/v1\/characters\/([A-Za-z0-9_-]{1,128})\/avatar\?size=sm$/)?.[1];
   let avatarPath: string | undefined;
   if (destination.id && characterId && notification.data?.characterName) {
     try { avatarPath = issueIOSNotificationAvatarPath(destination.id, characterId); } catch { /* Plain alert fallback. */ }
   }
-  return sendAPNsRequest(config, destination, buildAPNsPayload(notification, destination.server_origin, avatarPath), "alert", "10",
-    notification.tag ? createHash("sha256").update(notification.tag).digest("hex") : undefined);
+  const encryption = destination.encryption_key && destination.encryption_key_id
+    ? { key: openIOSNotificationSecret(destination.encryption_key, `ios-key:${destination.id}`), keyId: destination.encryption_key_id } : undefined;
+  const payload = buildAPNsPayload(notification, destination.server_origin, avatarPath, encryption ? 2600 : 4096);
+  const encrypted = encryption ? encryptAPNsPayload(payload, encryption, destination.bundle_id, destination.environment) : undefined;
+  const collapseId = notification.tag ? createHash("sha256").update(notification.tag).digest("hex") : undefined;
+  if (mode === "relay") {
+    if (!encrypted || !destination.relay_credential) return { sent: false };
+    return sendAPNsRelayNotification(destination.bundle_id, openIOSNotificationSecret(destination.relay_credential, `ios-relay:${destination.id}`),
+      { version: 1, type: "alert", encrypted, ...(collapseId ? { collapseId } : {}) });
+  }
+  const config = getAPNsConfiguration();
+  if (!config || destination.bundle_id !== config.bundleId) return { sent: false };
+  return sendAPNsRequest(config, destination, encrypted ? encryptedAPNsPayload(encrypted) : payload, "alert", "10", collapseId);
 }
 
 /** Content fields must match GenerationActivityAttributes.ContentState exactly. */
-export async function sendAPNsLiveActivity(destination: Pick<APNsDestination, "device_token" | "bundle_id" | "environment">,
+export async function sendAPNsLiveActivity(destination: Pick<APNsDestination, "device_token" | "bundle_id" | "environment" | "delivery_mode" | "relay_credential">,
   state: { phase: string; label: string }, timestamp: number, terminal: boolean, immediate = true, activityAlert = false): Promise<APNsDelivery> {
+  const route = getAPNsRoute(destination.bundle_id), mode = destination.delivery_mode ?? "direct";
+  if (route.mode !== mode) return { sent: false };
+  if (mode === "relay") return destination.relay_credential
+    ? sendAPNsRelayNotification(destination.bundle_id, destination.relay_credential, { version: 1, type: "liveactivity",
+      phase: state.phase, timestamp, terminal, immediate, alert: activityAlert }) : { sent: false };
   const config = getLiveConfiguration();
   if (!config || config.bundleId !== destination.bundle_id) return { sent: false };
   // ActivityKit alerts belong to updates. Ending the activity bypasses the

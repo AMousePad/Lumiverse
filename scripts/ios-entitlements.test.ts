@@ -1,5 +1,38 @@
 import { expect, test } from "bun:test";
-import { configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension } from "./ios-entitlements";
+import { configureIOSBundleIdentity, configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension } from "./ios-entitlements";
+
+test("self-built IPAs replace the generated host identity and signing groups together", () => {
+  let spec = `settingGroups:
+  app:
+    base:
+      PRODUCT_BUNDLE_IDENTIFIER: chat.lumiverse.ios
+targets:
+  app:
+    entitlements:
+      path: lumiverse-ios-client_iOS/lumiverse-ios-client_iOS.entitlements
+      properties:
+        keychain-access-groups: [other.group, "$(AppIdentifierPrefix)chat.lumiverse.ios.notifications"]
+        com.apple.security.application-groups: [group.other, group.chat.lumiverse.ios.activities]
+        aps-environment: development
+  SmokeTests:
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.lumiverse.ios.smoke
+  CacheTests:
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.lumiverse.ios.cache-integration
+`;
+  spec = configureIOSPushEntitlements(configureIOSBundleIdentity(spec, "chat.example.custom"), true);
+  const parsed = Bun.YAML.parse(spec) as any;
+  expect(parsed.settingGroups.app.base.PRODUCT_BUNDLE_IDENTIFIER).toBe("chat.example.custom");
+  expect(parsed.targets.app.entitlements.properties["keychain-access-groups"])
+    .toEqual(["other.group", "$(AppIdentifierPrefix)chat.example.custom.notifications"]);
+  expect(parsed.targets.app.entitlements.properties["com.apple.security.application-groups"])
+    .toEqual(["group.other", "group.chat.example.custom.activities"]);
+  expect(parsed.targets.SmokeTests.settings.base.PRODUCT_BUNDLE_IDENTIFIER).toBe("chat.lumiverse.ios.smoke");
+  expect(parsed.targets.CacheTests.settings.base.PRODUCT_BUNDLE_IDENTIFIER).toBe("chat.lumiverse.ios.cache-integration");
+});
 
 test("push signing survives project regeneration and can be removed for Personal Teams", () => {
   let spec = `targets:
@@ -16,6 +49,7 @@ test("push signing survives project regeneration and can be removed for Personal
     expect(parsed.targets.app.entitlements.properties).toEqual(enabled ? {
       "aps-environment": "development", "com.apple.developer.usernotifications.communication": true,
       "com.apple.security.application-groups": ["group.chat.lumiverse.ios.activities"],
+      "keychain-access-groups": ["$(AppIdentifierPrefix)chat.lumiverse.ios.notifications"],
     } : {});
     expect(spec.match(/      properties:/g)).toHaveLength(1);
     expect(spec).toContain("PRODUCT_NAME: Lumiverse");

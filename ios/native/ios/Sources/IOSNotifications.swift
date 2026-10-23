@@ -72,7 +72,7 @@ final class IOSNotifications: NSObject, UNUserNotificationCenterDelegate {
                 case .denied: permission = "denied"
                 default: permission = "default"
                 }
-                completion(["available": self.enabled && self.callbackError == nil, "permission": permission,
+                completion(["available": self.enabled && self.callbackError == nil, "permission": permission, "relayAvailable": true,
                     "deviceId": self.deviceId, "bundleId": self.bundleId, "environment": self.environment,
                     "reason": !self.enabled ? "This IPA was built without Push Notifications. Build and sign with the push capability enabled."
                         : (self.callbackError as Any? ?? NSNull())])
@@ -94,6 +94,29 @@ final class IOSNotifications: NSObject, UNUserNotificationCenterDelegate {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
                     UIApplication.shared.registerForRemoteNotifications()
                 }
+            }
+        }
+    }
+
+    func register(delivery: String, relayURL: String?, origin: String, completion: @escaping ([String: Any]?, String?) -> Void) {
+        guard ["direct", "relay"].contains(delivery), delivery != "relay" || relayURL == nil || relayURL == NotificationSecurity.relayURL.absoluteString else {
+            completion(nil, "This IPA is configured for a different notification relay."); return
+        }
+        register { [weak self] result, error in
+            guard let self = self, var result = result, error == nil, let token = result["deviceToken"] as? String else {
+                completion(nil, error ?? "APNs registration failed."); return
+            }
+            Task { @MainActor in
+                do {
+                    result["encryption"] = try NotificationSecurity.encryption(for: origin)
+                    result["delivery"] = delivery
+                    if delivery == "relay" {
+                        let relay = try await NotificationSecurity.enroll(token: token, bundleId: self.bundleId, environment: self.environment, origin: origin)
+                        result["relayCredential"] = relay.deliveryCredential
+                    }
+                    guard NativeServerOrigin.matches(origin, NativeBridge.origin(self.webview?.url)) else { throw NotificationSecurity.Failure.invalid }
+                    completion(result, nil)
+                } catch { completion(nil, error.localizedDescription) }
             }
         }
     }
@@ -139,6 +162,10 @@ final class IOSNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        if let challenge = notification.request.content.userInfo["relayChallenge"] as? [String: Any] {
+            Task { await NotificationSecurity.confirm(challenge); completionHandler([]) }
+            return
+        }
         completionHandler([.banner, .sound])
     }
 

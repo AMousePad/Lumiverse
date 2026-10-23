@@ -2,7 +2,7 @@
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { zipSync, type Zippable } from "fflate";
-import { configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension } from "./ios-entitlements";
+import { configureIOSBundleIdentity, configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension } from "./ios-entitlements";
 import { buildIOSNativeCache } from "./build-ios-native-cache";
 import { assertIOSPlatformEncryption, configureIOSDistribution, iosDistributionOptions, iosExportOptions } from "./ios-distribution";
 import { flattenIOSAppIcons } from "./ios-icons";
@@ -55,6 +55,7 @@ let spec = readFileSync(specPath, "utf8");
 // regenerated below with the same marketing version and build number.
 spec = configureIOSNotificationExtension(spec, false);
 spec = configureIOSLiveActivityExtension(spec, false);
+spec = configureIOSBundleIdentity(spec, config.identifier);
 spec = configureIOSDistribution(spec, version, distribution);
 spec = spec.replace(/      # Lumiverse native cache preview\n[\s\S]*?      # End Lumiverse native cache preview\n/g, "");
 if (nativeCachePreview) spec = spec.replace("      - path: LaunchScreen.storyboard", `      # Lumiverse native cache preview
@@ -101,6 +102,14 @@ properties.NSSupportsLiveActivities = pushNotifications;
 if (pushNotifications) properties.LumiverseActivityAppGroup = `group.${(Bun.YAML.parse(spec) as any).settingGroups.app.base.PRODUCT_BUNDLE_IDENTIFIER}.activities`;
 if (pushNotifications) properties.CFBundleURLTypes = [{ CFBundleURLName: "Lumiverse Activities", CFBundleURLSchemes: ["lumiverse"] }];
 if (pushNotifications) properties.NSUserActivityTypes = ["INSendMessageIntent"];
+if (pushNotifications) {
+  const bundleId = (Bun.YAML.parse(spec) as any).settingGroups.app.base.PRODUCT_BUNDLE_IDENTIFIER;
+  properties.LumiverseNotificationKeychainGroup = `$(AppIdentifierPrefix)${bundleId}.notifications`;
+  properties.LumiverseAPNsRelayURL = process.env.LUMIVERSE_APNS_RELAY_URL || "https://apn-relay.lumiverse.chat";
+  const relayURL = new URL(properties.LumiverseAPNsRelayURL as string);
+  if (relayURL.protocol !== "https:" || relayURL.origin !== properties.LumiverseAPNsRelayURL || relayURL.username || relayURL.password)
+    throw new Error("LUMIVERSE_APNS_RELAY_URL must be an HTTPS origin.");
+}
 spec = spec.replace(/        # Lumiverse Info.plist\n[\s\S]*?        # End Lumiverse Info.plist\n/, "");
 const extraInfo = Object.entries(properties).map(([key, value]) => `        ${key}: ${JSON.stringify(value)}\n`).join("");
 spec = spec.replace("        LSRequiresIPhoneOS:", `        # Lumiverse Info.plist\n${extraInfo}        # End Lumiverse Info.plist\n        LSRequiresIPhoneOS:`);
@@ -205,11 +214,13 @@ if (simulator) {
     await run(["python3", join(root, "scripts/check-ios-release.py"), "--artifact", ipas[0]!,
       "--app-store-connect", "--build-number", distribution.buildNumber!, "--version", version,
       "--bundle-id", config.identifier, ...(pushNotifications ? ["--push-notifications"] : []),
+      ...(pushNotifications ? ["--notification-relay-url", properties.LumiverseAPNsRelayURL as string] : []),
       ...(nativeCachePreview ? ["--native-cache-preview"] : [])], root);
   }
   artifact = join(out, `lumiverse-ios-arm64${artifactSuffix}.ipa`); copyFileSync(ipas[0]!, artifact);
 }
 const metadata = { artifact: relative(root, artifact), target: simulator ? "aarch64-apple-ios-sim" : "aarch64-apple-ios",
+  bundleId: config.identifier,
   signed: !unsigned, debug: args.has("--debug"), backend: "remote", version,
   distribution: distribution.appStoreConnect ? "app-store-connect" : "development",
   ...(distribution.buildNumber ? { buildNumber: distribution.buildNumber } : {}),

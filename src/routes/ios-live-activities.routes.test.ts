@@ -23,6 +23,8 @@ db.exec(`PRAGMA foreign_keys = ON;
 db.exec(await Bun.file(new URL("../db/migrations/127_ios_push_destinations.sql", import.meta.url)).text());
 db.exec(await Bun.file(new URL("../db/migrations/128_ios_live_activities.sql", import.meta.url)).text());
 db.exec(await Bun.file(new URL("../db/migrations/129_ios_activity_stage_sounds.sql", import.meta.url)).text());
+db.exec(await Bun.file(new URL("../db/migrations/131_ios_notification_delivery.sql", import.meta.url)).text());
+mock.module("../crypto/init", () => ({ getEncryptionKeyBytes: () => new Uint8Array(32).fill(41) }));
 mock.module("../db/connection", () => ({ getDb: () => db }));
 let notificationPreferences: { enabled?: boolean; events?: { generation_ended?: boolean; generation_error?: boolean } } | undefined;
 mock.module("../services/settings.service", () => ({ getSetting: () => ({ value: notificationPreferences }) }));

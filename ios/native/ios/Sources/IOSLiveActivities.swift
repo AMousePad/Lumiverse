@@ -13,6 +13,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
         let expiresAt: Double
         let accountId: String
         let serverOrigin: String
+        let delivery: String?
         var attributes: GenerationActivityAttributes
         let state: GenerationActivityAttributes.ContentState
         var activityId: String?
@@ -120,6 +121,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
             // unlike an activity that was actually shown and then dismissed.
             && ($0.activityId != nil || !$0.ended) }
         return ["available": supported && ActivityAuthorizationInfo().areActivitiesEnabled,
+            "relayEnrolled": NotificationSecurity.hasRelayRegistration(origin: NotificationSecurity.browserOrigin(webview?.url)),
             "generationIds": current.filter { !$0.ended }.map { $0.attributes.generationId },
             "suppressedGenerationIds": current.filter { $0.ended }.map { $0.attributes.generationId },
             "activities": current.filter { !$0.ended }.map { record -> [String: Any] in
@@ -362,7 +364,15 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 if !current.ended {
                     guard let token = current.pushToken, let activityId = current.activityId else { break }
-                    request.httpBody = try? JSONSerialization.data(withJSONObject: ["pushToken": token, "activityId": activityId])
+                    var body: [String: String] = ["pushToken": token, "activityId": activityId]
+                    if current.delivery == "relay" {
+                        do { body["relayCredential"] = try await NotificationSecurity.activityCredential(token: token, origin: current.serverOrigin) }
+                        catch {
+                            do { try await Task.sleep(nanoseconds: delay * 1_000_000_000) } catch { break }
+                            delay = min(delay * 2, 60); continue
+                        }
+                    }
+                    request.httpBody = try? JSONSerialization.data(withJSONObject: body)
                 }
                 do {
                     let (data, response) = try await self.session.data(for: request)

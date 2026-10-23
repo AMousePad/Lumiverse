@@ -21,6 +21,7 @@ export function setIOSLiveActivitiesEnabled(value: boolean) {
 }
 export interface IOSActivityStatus {
   available: boolean
+  relayEnrolled?: boolean
   generationIds: string[]
   suppressedGenerationIds: string[]
   deviceId: string

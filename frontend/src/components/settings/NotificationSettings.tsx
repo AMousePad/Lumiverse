@@ -232,7 +232,8 @@ export default function NotificationSettings() {
               <span className={styles.deviceName}>
                 {sub.type === 'tauri_desktop'
                   ? `${sub.label || 'Lumiverse Desktop'}${sub.platform ? ` · ${sub.platform}` : ''}`
-                  : sub.type === 'ios_apns' ? sub.label || 'Lumiverse iOS'
+                  : sub.type === 'ios_apns' ? `${sub.label || 'Lumiverse iOS'} · ${sub.delivery_mode === 'relay' ? 'Lumiverse relay' : 'Direct APNs'}`
+                  : sub.type === 'android_native' ? sub.label || 'Lumiverse Android'
                   : parseUserAgent(sub.user_agent, t)}
               </span>
               <span className={styles.deviceDate}>

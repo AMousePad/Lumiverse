@@ -1,6 +1,6 @@
 import sharp from "sharp";
 
-/** Both native presentations use the same owner's cropped, bounded avatar. */
+/** Native presentations use the same owner's cropped, bounded avatar. */
 export async function iosAvatarThumbnail(userId: string, characterId: string): Promise<Response> {
   const unavailable = (status: number) => new Response(null, { status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
   const [characters, files, images] = await Promise.all([

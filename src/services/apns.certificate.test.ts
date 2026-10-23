@@ -68,7 +68,7 @@ afterAll(async () => {
 
 test('loads a DER certificate and its encrypted matching private key without token credentials', () => {
   expect(loadAPNsConfiguration(env)).toHaveProperty('certificate')
-  expect(getAPNsInfo()).toEqual({ configured: true, bundleId: 'chat.lumiverse.ios', reason: null })
+  expect(getAPNsInfo()).toEqual({ configured: true, bundleId: 'chat.lumiverse.ios', reason: null, delivery: 'direct' })
   expect(JSON.stringify(getAPNsInfo())).not.toContain('PRIVATE KEY')
 })
 

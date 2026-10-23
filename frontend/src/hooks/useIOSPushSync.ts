@@ -13,7 +13,9 @@ export function useIOSPushSync(userId: string | null) {
       const rows = await pushApi.listSubscriptions({ signal })
       if (signal.aborted || !rows.some(row => row.type === 'ios_apns' && row.device_id === status.deviceId
         && row.bundle_id === status.bundleId && row.environment === status.environment)) return
-      const registration = await registerIOSPush()
+      const info = await pushApi.getIOSInfo(status.bundleId)
+      if (!info.configured || (info.delivery === 'relay' && !status.relayAvailable) || signal.aborted) return
+      const registration = await registerIOSPush(info.delivery || 'direct', info.relayUrl)
       if (!signal.aborted) await pushApi.subscribeIOS(registration, { signal })
     })
     window.addEventListener('lumiverse:ios-push-token', recovery.request)

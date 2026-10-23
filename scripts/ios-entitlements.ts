@@ -1,7 +1,21 @@
+/** Honor the source app identity when a self-hosted user changes Apple teams. */
+export function configureIOSBundleIdentity(spec: string, bundleId: string): string {
+  if (!/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId)) throw new Error("Invalid iOS bundle ID");
+  const previous = (Bun.YAML.parse(spec) as any)?.settingGroups?.app?.base?.PRODUCT_BUNDLE_IDENTIFIER;
+  if (previous !== bundleId) spec = configureIOSPushEntitlements(spec, false);
+  let matches = 0;
+  const result = spec.replace(/^(      PRODUCT_BUNDLE_IDENTIFIER:)[^\n]*/gm, (_match, anchor: string) => {
+    matches++; return `${anchor} ${bundleId}`;
+  });
+  if (matches !== 1) throw new Error("Missing or ambiguous iOS host bundle ID configuration");
+  return result;
+}
+
 /** XcodeGen regenerates the plist from this specification on every build. */
 export function configureIOSPushEntitlements(spec: string, enabled: boolean): string {
   const bundleId = (Bun.YAML.parse(spec) as any)?.settingGroups?.app?.base?.PRODUCT_BUNDLE_IDENTIFIER ?? "chat.lumiverse.ios";
   const activityGroup = `group.${bundleId}.activities`;
+  const notificationKeychainGroup = `$(AppIdentifierPrefix)${bundleId}.notifications`;
   let matches = 0;
   const result = spec.replace(/(    entitlements:\n      path: lumiverse-ios-client_iOS\/lumiverse-ios-client_iOS.entitlements\n)((?:      properties:[^\n]*\n(?:        [^\n]*\n)*)*)/,
     (_match, path: string, blocks: string) => {
@@ -17,12 +31,18 @@ export function configureIOSPushEntitlements(spec: string, enabled: boolean): st
         properties["com.apple.security.application-groups"] = [...new Set([
           ...((properties["com.apple.security.application-groups"] as string[] | undefined) ?? []), activityGroup,
         ])];
+        properties["keychain-access-groups"] = [...new Set([
+          ...((properties["keychain-access-groups"] as string[] | undefined) ?? []), notificationKeychainGroup,
+        ])];
       } else {
         delete properties["aps-environment"];
         delete properties["com.apple.developer.usernotifications.communication"];
         const groups = ((properties["com.apple.security.application-groups"] as string[] | undefined) ?? []).filter(group => group !== activityGroup);
         if (groups.length) properties["com.apple.security.application-groups"] = groups;
         else delete properties["com.apple.security.application-groups"];
+        const keychainGroups = ((properties["keychain-access-groups"] as string[] | undefined) ?? []).filter(group => group !== notificationKeychainGroup);
+        if (keychainGroups.length) properties["keychain-access-groups"] = keychainGroups;
+        else delete properties["keychain-access-groups"];
       }
       return `${path}      properties: ${JSON.stringify(properties)}\n`;
     });
@@ -66,6 +86,7 @@ ${anchor}`);
     platform: iOS
     deploymentTarget: "15.0"
     sources:
+      - path: ../../../../native/ios/Sources/NotificationSecurity.swift
       - path: ../../../../notification-service
         excludes: [PrivacyInfo.xcprivacy]
       - path: ../../../../notification-service/PrivacyInfo.xcprivacy
@@ -79,10 +100,17 @@ ${anchor}`);
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSUserActivityTypes: [INSendMessageIntent]
+        LumiverseNotificationKeychainGroup: "$(AppIdentifierPrefix)${bundleId}.notifications"
+        LumiverseNotificationBundleID: ${bundleId}
+        LumiverseAPNsRelayURL: ${(Bun.YAML.parse(spec) as any).targets["lumiverse-ios-client_iOS"].info.properties.LumiverseAPNsRelayURL || "https://apn-relay.lumiverse.chat"}
         NSAppTransportSecurity: {NSAllowsLocalNetworking: true}
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).NotificationService"
+    entitlements:
+      path: LumiverseNotificationService/LumiverseNotificationService.entitlements
+      properties:
+        keychain-access-groups: ["$(AppIdentifierPrefix)${bundleId}.notifications"]
     settings:
       groups: [app]
       base:

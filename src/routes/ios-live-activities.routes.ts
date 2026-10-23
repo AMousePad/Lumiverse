@@ -8,14 +8,18 @@ import { iosAvatarThumbnail } from "../services/ios-avatar-thumbnail";
 /** Mounted under browser authentication. Credentials are returned only when creating an activity. */
 const authenticated = new Hono();
 authenticated.use("*", bodyLimit({ maxSize: 8192 }), async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
-authenticated.get("/info", c => c.json(getLiveActivityAPNsInfo()));
+authenticated.get("/info", c => c.json(getLiveActivityAPNsInfo(c.req.query("bundleId"))));
 authenticated.post("/snapshot", async c => {
   try { return c.json(liveActivitySnapshot(c.get("userId"), (await c.req.json()).generationIds)); }
   catch { return c.json({ error: "Invalid activity snapshot request" }, 400); }
 });
 authenticated.post("/prepare", rateLimit({ bucket: "ios-activity-prepare", max: 60, windowMs: 60_000 }), async c => {
-  if (!getLiveActivityAPNsInfo().configured) return c.json({ error: getLiveActivityAPNsInfo().reason }, 503);
-  try { return c.json(prepareLiveActivity(c.get("userId"), await c.req.json()), 201); }
+  try {
+    const input = await c.req.json();
+    const info = getLiveActivityAPNsInfo(typeof input?.bundleId === "string" ? input.bundleId : undefined);
+    if (!info.configured) return c.json({ error: info.reason }, 503);
+    return c.json(prepareLiveActivity(c.get("userId"), input), 201);
+  }
   catch (error) { return c.json({ error: error instanceof Error ? error.message : "Invalid activity request" }, 400); }
 });
 

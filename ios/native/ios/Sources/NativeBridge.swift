@@ -85,7 +85,10 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "cache.ready": replyHandler(["accepted": cache?.markHealthy(buildId: payload["buildId"] as? String ?? "") ?? false], nil)
         case "lifecycle.status": replyHandler(["state": appState(in: webview)], nil)
         case "notifications.status": IOSNotifications.shared.status { replyHandler($0, nil) }
-        case "notifications.register": IOSNotifications.shared.register { result, error in replyHandler(result, error) }
+        case "notifications.register":
+            guard let origin = NotificationSecurity.browserOrigin(webview.url) else { replyHandler(nil, "Select a server first."); return }
+            IOSNotifications.shared.register(delivery: payload["delivery"] as? String ?? "direct", relayURL: payload["relayUrl"] as? String,
+                origin: origin) { result, error in replyHandler(result, error) }
         case "activities.status", "activities.configure", "activities.start", "activities.reconcile":
             guard #available(iOS 16.1, *) else { replyHandler(["available": false], nil); return }
             Task { @MainActor in

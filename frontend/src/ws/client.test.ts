@@ -382,6 +382,33 @@ describe('WebSocketClient push presence', () => {
   })
 })
 
+describe('WebSocketClient Android native lifecycle', () => {
+  test('native background releases presence and resume restores chat focus when WebView visibility is stale', () => {
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    const state = (active: boolean) => {
+      Object.assign(windowMock, { __LUMIVERSE_ANDROID_ACTIVE__: active })
+      windowMock.dispatchEvent(Object.assign(new Event('lumiverse:android-app-state'), { detail: { state: active ? 'active' : 'background' } }))
+    }
+    try {
+      Object.assign(windowMock, { __LUMIVERSE_ANDROID_ACTIVE__: true })
+      client.setFocusedChat('android-chat')
+      client.connect()
+      const socket = MockWebSocket.instances.at(-1)!
+      socket.open(); socket.sent = []
+      state(false)
+      expect(socket.sent.map(frame => JSON.parse(frame))).toContainEqual({ type: 'visibility', visible: false })
+      documentMock.visibilityState = 'hidden'; documentFocused = false; socket.sent = []
+      state(true)
+      const frames = socket.sent.map(frame => JSON.parse(frame))
+      expect(frames).toContainEqual({ type: 'visibility', visible: true })
+      expect(frames).toContainEqual({ type: 'stream_focus', chatId: 'android-chat' })
+    } finally {
+      client.disconnect(); Reflect.deleteProperty(windowMock, '__LUMIVERSE_ANDROID_ACTIVE__')
+      documentMock.visibilityState = 'visible'; documentFocused = true
+    }
+  })
+})
+
 describe('WebSocketClient iOS native lifecycle', () => {
   const emitState = (state: string) => windowMock.dispatchEvent(
     Object.assign(new Event('lumiverse:ios-app-state'), { detail: { state } }),

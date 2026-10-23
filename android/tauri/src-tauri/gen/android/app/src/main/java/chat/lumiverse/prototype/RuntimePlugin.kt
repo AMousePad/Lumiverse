@@ -44,6 +44,10 @@ class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
         webView.settings.allowContentAccess = false
         CookieManager.getInstance().setAcceptCookie(true)
         installControls(webView)
+        (activity as? MainActivity)?.let {
+            it.notificationBridge = NativeNotificationBridge(it, webView)
+            it.notificationNavigation = { openPendingNotification() }
+        }
     }
 
     @Command
@@ -75,8 +79,22 @@ class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
 
     private fun navigate(url: String) {
         val view = webView ?: return
+        val native = activity as? MainActivity
+        val local = preferences.getString("mode", null) == "local"
+        val origin = NativeNotifications.origin(url)
+        // Consume before selecting: a restarted embedded backend has a new port.
+        // Selection still clears its obsolete credential; the authenticated page reconciles it.
+        val target = origin?.let { selected -> NativeNotifications.consumeTap(activity, activity.intent, selected, local)?.let { selected + it } } ?: url
+        native?.notificationBridge?.select(url, local)
         entryHistoryIndex = view.copyBackForwardList().currentIndex + 1
-        view.loadUrl(url)
+        view.loadUrl(target)
+    }
+
+    private fun openPendingNotification() {
+        val view = webView ?: return
+        val origin = NativeNotifications.origin(view.url) ?: return
+        val path = NativeNotifications.consumeTap(activity, activity.intent, origin) ?: return
+        view.loadUrl(origin + path)
     }
 
     private fun startLocal(invoke: Invoke) {
@@ -106,6 +124,7 @@ class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private fun stopLocal() {
+        if (NativeNotifications.isLocal(activity)) LocalNotificationTransport.stop()
         localAttempt += 1
         runtime?.stop(); runtime = null
         pendingLocal?.reject("Connection changed."); pendingLocal = null
@@ -113,6 +132,7 @@ class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
 
     private fun showConnectionPage() {
         stopLocal()
+        NativeNotifications.clear(activity)
         navigate("$launcherUrl?changeServer=1")
     }
 
@@ -168,6 +188,7 @@ class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
         handler.removeCallbacksAndMessages(null)
         controls?.dismiss()
         stopLocal()
+        (activity as? MainActivity)?.let { it.notificationBridge?.destroy(); it.notificationBridge = null; it.notificationNavigation = null }
         webView = null
     }
 }

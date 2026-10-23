@@ -510,6 +510,10 @@ export class WebSocketClient {
       this.sendVisibility(true)
     })
     this.visibilityCleanup.push(subscribeIOSAppState(state => this.applyIOSAppState(state)))
+    addListener(window, 'lumiverse:android-app-state', event => {
+      const state = (event as CustomEvent<{ state?: IOSAppState }>).detail?.state
+      if (state === 'active' || state === 'background') this.applyIOSAppState(state)
+    })
     let desktopPresenceUnlisten: (() => void) | null = null
     let desktopPresenceStopped = false
     void subscribeDesktopPresence((presence) => {
@@ -641,6 +645,8 @@ export class WebSocketClient {
   }
 
   private isDocumentVisible() {
+    const androidActive = (window as Window & { __LUMIVERSE_ANDROID_ACTIVE__?: boolean }).__LUMIVERSE_ANDROID_ACTIVE__
+    if (androidActive !== undefined) return androidActive
     const iosAppState = getIOSAppState()
     if (iosAppState) return iosAppState === 'active'
     const desktopPresence = this.desktopPresence ?? getDesktopPresence()
@@ -649,6 +655,8 @@ export class WebSocketClient {
   }
 
   private isDocumentFocused() {
+    const androidActive = (window as Window & { __LUMIVERSE_ANDROID_ACTIVE__?: boolean }).__LUMIVERSE_ANDROID_ACTIVE__
+    if (androidActive !== undefined) return androidActive
     const iosAppState = getIOSAppState()
     if (iosAppState) return iosAppState === 'active'
     const desktopPresence = this.desktopPresence ?? getDesktopPresence()

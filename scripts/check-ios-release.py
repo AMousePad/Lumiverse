@@ -7,6 +7,7 @@ need to match the selected services and final App Store Connect privacy answers.
 """
 import argparse
 import datetime
+import fnmatch
 import json
 import plistlib
 from pathlib import Path
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from urllib.parse import urlsplit
 
 PRIVATE_SELECTORS = (b"_setEnabled:forFeature:", b"_isEnabledForFeature:",
                      b"PreferPageRenderingUpdatesNear60FPSEnabled")
@@ -92,8 +94,20 @@ def check_distribution_identity(info, entitlements, profile):
     return team
 
 
+def check_notification_keychain(info, entitlements, profile, bundle_id):
+    group = info.get("LumiverseNotificationKeychainGroup")
+    prefixes = profile.get("ApplicationIdentifierPrefix", [])
+    require(group in [prefix + "." + bundle_id + ".notifications" for prefix in prefixes],
+            "Notification Keychain group does not match the provisioning prefix")
+    require(group in entitlements.get("keychain-access-groups", []),
+            "Missing shared notification Keychain signing entitlement")
+    grants = profile.get("Entitlements", {}).get("keychain-access-groups", [])
+    require(any(fnmatch.fnmatchcase(group, grant) for grant in grants),
+            "Provisioning profile does not grant the notification Keychain group")
+
+
 def inspect_app(app, *, bundle_id="chat.lumiverse.ios", version=None, build_number=None,
-                push=False, native_cache=False, app_store=False):
+                push=False, native_cache=False, app_store=False, relay_url=None):
     info = read_plist(app / "Info.plist")
     require(info.get("CFBundleIdentifier") == bundle_id, "Unexpected host bundle identifier")
     require(info.get("ITSAppUsesNonExemptEncryption") is False,
@@ -112,6 +126,26 @@ def inspect_app(app, *, bundle_id="chat.lumiverse.ios", version=None, build_numb
     expected = {bundle_id + suffix for suffix in (".NotificationService", ".LiveActivity")} if push else set()
     found = [read_plist(ext / "Info.plist").get("CFBundleIdentifier") for ext in extensions]
     require(set(found) == expected and len(found) == len(expected), "Missing or unexpected embedded extensions")
+    if relay_url is not None:
+        require(push, "Notification relay verification requires push notifications")
+        url = urlsplit(relay_url)
+        require(url.scheme == "https" and url.hostname and not url.username and not url.password
+                and not url.path and not url.query and not url.fragment, "Relay URL must be an HTTPS origin")
+        require(info.get("LumiverseAPNsRelayURL") == relay_url, "Host notification relay URL mismatch")
+        group = info.get("LumiverseNotificationKeychainGroup")
+        require(isinstance(group, str) and group.endswith("." + bundle_id + ".notifications") and "$(" not in group,
+                "Missing or unresolved shared notification Keychain group")
+        service = next(ext for ext in extensions if read_plist(ext / "Info.plist")["CFBundleIdentifier"]
+                       == bundle_id + ".NotificationService")
+        service_info = read_plist(service / "Info.plist")
+        require(service_info.get("LumiverseAPNsRelayURL") == relay_url,
+                "Notification extension relay URL mismatch")
+        require(service_info.get("LumiverseNotificationKeychainGroup") == group,
+                "Host and notification extension Keychain groups differ")
+        require(service_info.get("LumiverseNotificationBundleID") == bundle_id,
+                "Notification extension decryption bundle ID mismatch")
+        require(not any(path.is_file() and path.suffix.lower() in (".p8", ".p12", ".pfx") for path in app.rglob("*")),
+                "Private provider/signing key packaged in the app")
     bundles = [app, *extensions]
     teams = set()
     for bundle in bundles:
@@ -131,6 +165,8 @@ def inspect_app(app, *, bundle_id="chat.lumiverse.ios", version=None, build_numb
             entitlements = plistlib.loads(command(["codesign", "-d", "--entitlements", ":-", str(bundle)]))
             profile = plistlib.loads(command(["security", "cms", "-D", "-i", str(bundle / "embedded.mobileprovision")]))
             teams.add(check_distribution_identity(child, entitlements, profile))
+            if relay_url is not None and (bundle == app or child["CFBundleIdentifier"].endswith(".NotificationService")):
+                check_notification_keychain(child, entitlements, profile, bundle_id)
             if bundle == app:
                 require(entitlements.get("aps-environment") == ("production" if push else None),
                         "Exported APNs environment must match the production push configuration")
@@ -157,6 +193,8 @@ def inspect_app(app, *, bundle_id="chat.lumiverse.ios", version=None, build_numb
             "bundles": [read_plist(b / "Info.plist")["CFBundleIdentifier"] for b in bundles],
             "appIconVerified": app_store,
             "usesNonExemptEncryption": info["ITSAppUsesNonExemptEncryption"],
+            "notificationRelayURL": relay_url,
+            "notificationKeychainSigningVerified": relay_url is not None and app_store,
             "distributionSigningVerified": app_store}
 
 
@@ -169,11 +207,13 @@ def main():
     parser.add_argument("--push-notifications", action="store_true")
     parser.add_argument("--native-cache-preview", action="store_true")
     parser.add_argument("--app-store-connect", action="store_true")
+    parser.add_argument("--notification-relay-url")
     args = parser.parse_args()
     require(not args.app_store_connect or (args.version and args.build_number),
             "Distribution verification requires --version and --build-number")
     options = dict(bundle_id=args.bundle_id, version=args.version, build_number=args.build_number,
-                   push=args.push_notifications, native_cache=args.native_cache_preview, app_store=args.app_store_connect)
+                   push=args.push_notifications, native_cache=args.native_cache_preview, app_store=args.app_store_connect,
+                   relay_url=args.notification_relay_url)
     if args.artifact.is_dir() and args.artifact.suffix == ".app":
         result = inspect_app(args.artifact, **options)
     else:

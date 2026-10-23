@@ -55,6 +55,7 @@ import { regexScriptsRoutes } from "./routes/regex-scripts.routes";
 import { expressionsRoutes } from "./routes/expressions.routes";
 import { pushRoutes } from "./routes/push.routes";
 import { desktopNotificationTransportRoutes } from "./routes/desktop-notifications.routes";
+import { androidNotificationTransportRoutes } from "./routes/android-notifications.routes";
 import { iosNotificationMediaRoutes } from "./routes/ios-notifications.routes";
 import { iosLiveActivityRoutes, iosLiveActivityTransportRoutes } from "./routes/ios-live-activities.routes";
 import { desktopApiRoutes } from "./routes/desktop-api.routes";
@@ -126,6 +127,7 @@ const PUBLIC_POST_PREFIXES = [
   "/api/v1/openrouter/oauth-landing",
   "/api/v1/nanogpt/oauth-landing",
   "/api/desktop-notifications/v1",
+  "/api/android-notifications/v1",
 ];
 app.use("/api/*", async (c, next) => {
   const clientId = getClientIp(c);
@@ -394,6 +396,7 @@ app.route("/api/integrations/stream-deck/v1", streamDeckIntegrationRoutes);
 // browser-session auth so a desktop rebuild or WebView cookie loss does not
 // silently unregister the native destination.
 app.route("/api/desktop-notifications/v1", desktopNotificationTransportRoutes);
+app.route("/api/android-notifications/v1", androidNotificationTransportRoutes);
 app.route("/api/ios-notifications/v1", iosNotificationMediaRoutes);
 app.route("/api/ios-activities/v1", iosLiveActivityTransportRoutes);
 // OAuth-protected, read-only desktop API. It performs scope and live role
