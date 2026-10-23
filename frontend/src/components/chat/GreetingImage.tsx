@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from 'react'
+import ImageLightbox from '@/components/shared/ImageLightbox'
 import { isMacTauriWebView } from '@/lib/desktopWebView'
 import { dispatchMessageContentLayout } from '@/lib/message-content-layout'
 import styles from './GreetingImage.module.css'
@@ -7,15 +8,20 @@ interface GreetingImageProps {
   src: string
   position: 'top' | 'bottom'
   alt: string
+  /** Lets the owning hook fall back to the authored inline image. */
+  onError?: () => void
+  /** Clears a previous failure once the current source paints successfully. */
+  onReady?: () => void
 }
 
-function GreetingImageFrame({ src, position, alt }: GreetingImageProps) {
+function GreetingImageFrame({ src, position, alt, onError, onReady }: GreetingImageProps) {
   const frameRef = useRef<HTMLElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
   const loadRequestRef = useRef(0)
   const revealFrameRef = useRef<number | null>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
   const [isLandscape, setIsLandscape] = useState(false)
+  const [lightboxOpen, setLightboxOpen] = useState(false)
   const requiresMountedDecode = isMacTauriWebView()
 
   useEffect(() => () => {
@@ -33,6 +39,8 @@ function GreetingImageFrame({ src, position, alt }: GreetingImageProps) {
       const usable = naturalWidth > 0 && naturalHeight > 0
       setIsLandscape(usable && naturalWidth > naturalHeight)
       setState(usable ? 'ready' : 'failed')
+      if (usable) onReady?.()
+      else onError?.()
     }
     if (!requiresMountedDecode || typeof image.decode !== 'function') {
       finish()
@@ -48,7 +56,7 @@ function GreetingImageFrame({ src, position, alt }: GreetingImageProps) {
         finish()
       })
     })
-  }, [requiresMountedDecode])
+  }, [onError, onReady, requiresMountedDecode])
 
   const handleError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
     if (imageRef.current !== event.currentTarget) return
@@ -56,7 +64,13 @@ function GreetingImageFrame({ src, position, alt }: GreetingImageProps) {
     if (revealFrameRef.current !== null) window.cancelAnimationFrame(revealFrameRef.current)
     revealFrameRef.current = null
     setState('failed')
-  }, [])
+    onError?.()
+  }, [onError])
+
+  const openLightbox = useCallback(() => {
+    if (state === 'ready') setLightboxOpen(true)
+  }, [state])
+  const closeLightbox = useCallback(() => setLightboxOpen(false), [])
 
   useEffect(() => {
     // Landscape artwork uses its intrinsic height; failed images collapse.
@@ -66,29 +80,32 @@ function GreetingImageFrame({ src, position, alt }: GreetingImageProps) {
   }, [state, position, isLandscape])
 
   return (
-    <figure
-      ref={frameRef}
-      className={styles.frame}
-      data-position={position}
-      data-state={state}
-      data-landscape={isLandscape || undefined}
-      data-mounted-decode={requiresMountedDecode || undefined}
-      hidden={state === 'failed'}
-      aria-busy={state === 'loading'}
-    >
-      <img className={styles.ambient} src={src} alt="" aria-hidden="true" decoding="async" loading="lazy" />
-      <img
-        ref={imageRef}
-        className={styles.artwork}
-        src={src}
-        alt={alt}
-        decoding="async"
-        loading="lazy"
-        onLoad={handleLoad}
-        onError={handleError}
-      />
-      <span className={styles.finish} aria-hidden="true" />
-    </figure>
+    <>
+      <figure
+        ref={frameRef}
+        className={styles.frame}
+        data-position={position}
+        data-state={state}
+        data-landscape={isLandscape || undefined}
+        data-mounted-decode={requiresMountedDecode || undefined}
+        hidden={state === 'failed'}
+        aria-busy={state === 'loading'}
+      >
+        <img className={styles.ambient} src={src} alt="" aria-hidden="true" decoding="async" loading="lazy" />
+        <img
+          ref={imageRef}
+          className={styles.artwork}
+          src={src}
+          alt={alt}
+          decoding="async"
+          loading="lazy"
+          onClick={openLightbox}
+          onLoad={handleLoad}
+          onError={handleError}
+        />
+      </figure>
+      {lightboxOpen && <ImageLightbox src={src} onClose={closeLightbox} />}
+    </>
   )
 }
 

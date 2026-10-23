@@ -5,7 +5,15 @@ import { JSDOM } from 'jsdom'
 import { MESSAGE_CONTENT_LAYOUT_EVENT } from '@/lib/message-content-layout'
 
 mock.module('./GreetingImage.module.css', () => ({
-  default: { frame: 'frame', artwork: 'artwork', ambient: 'ambient', finish: 'finish' },
+  default: { frame: 'frame', artwork: 'artwork', ambient: 'ambient' },
+}))
+
+mock.module('@/components/shared/ImageLightbox', () => ({
+  default: ({ src, onClose }: { src: string | null; onClose: () => void }) => (src ? (
+    <div data-testid="greeting-lightbox" data-src={src}>
+      <button type="button" onClick={onClose}>close</button>
+    </div>
+  ) : null),
 }))
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -61,8 +69,15 @@ afterAll(() => {
   }
 })
 
-async function render(src = '/opening.webp', position: 'top' | 'bottom' = 'top') {
-  await act(async () => root.render(<GreetingImage src={src} position={position} alt="Moonlit forest" />))
+async function render(
+  src = '/opening.webp',
+  position: 'top' | 'bottom' = 'top',
+  onError?: () => void,
+  onReady?: () => void,
+) {
+  await act(async () => root.render(
+    <GreetingImage src={src} position={position} alt="Moonlit forest" onError={onError} onReady={onReady} />,
+  ))
   return host.querySelector('figure')
 }
 
@@ -96,6 +111,40 @@ test('reserves a loading frame and reveals only the artwork after its load succe
   expect(figure.hasAttribute('data-landscape')).toBe(true)
   expect(figure.getAttribute('aria-busy')).toBe('false')
   expect(layoutChanges.at(-1)).toEqual({ state: 'ready', hidden: false, landscape: true, preserveScrollAnchor: true })
+})
+
+test('opens the loaded artwork in a lightbox and closes it again', async () => {
+  await render()
+  await act(async () => artwork().dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+  expect(host.querySelector('[data-testid="greeting-lightbox"]')).toBeNull()
+
+  await loadImage()
+  await act(async () => artwork().dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+  expect(host.querySelector('[data-testid="greeting-lightbox"]')?.getAttribute('data-src')).toBe('/opening.webp')
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="greeting-lightbox"] button')!.click())
+  expect(host.querySelector('[data-testid="greeting-lightbox"]')).toBeNull()
+})
+
+test('reports a successful load so the owner can clear a previous failure', async () => {
+  const onReady = mock(() => {})
+  const onError = mock(() => {})
+  await render('/opening.webp', 'top', onError, onReady)
+  await loadImage()
+  expect(onReady).toHaveBeenCalledTimes(1)
+  expect(onError).not.toHaveBeenCalled()
+})
+
+test('reports load errors and unusable dimensions to the owner', async () => {
+  const onError = mock(() => {})
+  await render('/missing.webp', 'top', onError)
+  await act(async () => artwork().dispatchEvent(new dom.window.Event('error')))
+  expect(onError).toHaveBeenCalledTimes(1)
+
+  const sizingError = mock(() => {})
+  await render('/broken.webp', 'top', sizingError)
+  await loadImage(artwork(), 0, 0)
+  expect(sizingError).toHaveBeenCalledTimes(1)
 })
 
 test('collapses a failed image and notifies the message list after the collapse commits', async () => {

@@ -107,6 +107,45 @@ export function getGreetingMessageCharacterId(
   return typeof owner === 'string' && owner.trim() ? owner : activeCharacterId
 }
 
+function greetingList(character: Character): Array<string | undefined> {
+  return [character.first_mes, ...(character.alternate_greetings || [])]
+}
+
+function normalizeGreetingContent(value: string): string {
+  return value.replace(/\r\n/g, '\n').trim()
+}
+
+function matchingGreetingIndices(character: Character, content: string): number[] {
+  const normalizedContent = normalizeGreetingContent(content)
+  return greetingList(character).flatMap((greeting, index) =>
+    typeof greeting === 'string' && normalizeGreetingContent(greeting) === normalizedContent
+      ? [index]
+      : [],
+  )
+}
+
+function isValidGreetingIndex(character: Character, value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= 0
+    && value < greetingList(character).length
+}
+
+/**
+ * Only a marked greeting, a stored greeting index, or content that still
+ * matches a greeting proves this message is the opening greeting. A first
+ * assistant reply (for example a regenerated opening) has none of these and
+ * must not inherit the character's greeting art.
+ */
+function hasGreetingIdentity(
+  character: Character,
+  message: Pick<Message, 'content' | 'extra'>,
+): boolean {
+  return message.extra?.greeting === true
+    || isValidGreetingIndex(character, message.extra?.greeting_index)
+    || matchingGreetingIndices(character, message.content).length > 0
+}
+
 /**
  * Recover the selected greeting after a character's greetings were reordered.
  * Stored metadata still identifies edited greetings and ambiguous duplicates.
@@ -116,16 +155,12 @@ export function resolveGreetingMessageIndex(
   message: Pick<Message, 'content' | 'extra'>,
   chatMetadata?: Record<string, any> | null,
 ): number {
-  const greetings = [character.first_mes, ...(character.alternate_greetings || [])]
+  const greetings = greetingList(character)
   const validIndex = (value: unknown): value is number =>
     typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < greetings.length
 
   const storedIndex = message.extra?.greeting_index
-  const normalize = (value: string) => value.replace(/\r\n/g, '\n').trim()
-  const normalizedContent = normalize(message.content)
-  const matchingIndices = greetings.flatMap((greeting, index) =>
-    typeof greeting === 'string' && normalize(greeting) === normalizedContent ? [index] : [],
-  )
+  const matchingIndices = matchingGreetingIndices(character, message.content)
   if (validIndex(storedIndex)) {
     return matchingIndices.length === 1 && matchingIndices[0] !== storedIndex
       ? matchingIndices[0]
@@ -150,6 +185,7 @@ export function getGreetingMessageImage(
   if (message.index_in_chat !== 0 || message.is_user) return null
   const owner = message.extra?.greeting_character_id
   if (typeof owner === 'string' && owner && owner !== character.id) return null
+  if (!hasGreetingIdentity(character, message)) return null
 
   const greetingIndex = resolveGreetingMessageIndex(character, message, chatMetadata)
   const assetMap = character.extensions?.risu_asset_map

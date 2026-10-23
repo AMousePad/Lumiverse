@@ -37,7 +37,13 @@ const opening = {
 
 function Probe({ message = opening, visible = true }: { message?: Message; visible?: boolean }) {
   const greeting = useGreetingMessageImage(message, message.content, visible)
-  return <div data-image={greeting.image?.url} data-position={greeting.position}>{greeting.content}</div>
+  return (
+    <>
+      <div data-image={greeting.image?.url} data-position={greeting.position}>{greeting.content}</div>
+      <button type="button" data-image-failure aria-label="Simulate image failure" onClick={greeting.handleImageError} />
+      <button type="button" data-image-ready aria-label="Simulate image ready" onClick={greeting.handleImageReady} />
+    </>
+  )
 }
 
 beforeEach(() => {
@@ -91,6 +97,17 @@ test('uses a group greeting owner instead of the currently active speaker', asyn
   expect(getCharacter).not.toHaveBeenCalled()
 })
 
+test('does not attach greeting art to an unmarked first assistant reply', async () => {
+  store.setState({ showGreetingImage: true, activeChatMetadata: { activeGreetingIndex: 0 } })
+  const generated = {
+    id: 'reply', chat_id: 'chat', index_in_chat: 0, is_user: false,
+    content: 'Generated opening', extra: {},
+  } as unknown as Message
+  expect((await render(generated)).hasAttribute('data-image')).toBe(false)
+  // Legacy chats without greeting metadata still resolve art from content.
+  expect((await render({ ...opening, extra: {} })).getAttribute('data-image')).toEndWith('/images/dawn')
+})
+
 test('removes a promoted inline image only from display content', async () => {
   const content = '![Dawn](gallery://dawn)\n\nWelcome'
   store.setState({
@@ -102,6 +119,22 @@ test('removes a promoted inline image only from display content', async () => {
   expect(message.content).toBe(content)
   await act(async () => { store.setState({ showGreetingImage: false }) })
   expect(host.textContent).toBe(content)
+})
+
+test('restores the inline image when promoted art fails, and strips it after a retry', async () => {
+  const content = '![Dawn](gallery://dawn)\n\nWelcome'
+  store.setState({
+    showGreetingImage: true,
+    characters: [{ ...character, extensions: { risu_asset_map: { 'gallery://dawn': 'dawn' } } }],
+  })
+  const element = await render({ ...opening, content })
+  expect(element.textContent).toBe('\n\nWelcome')
+
+  await act(async () => { host.querySelector<HTMLButtonElement>('[data-image-failure]')!.click() })
+  expect(element.textContent).toBe(content)
+
+  await act(async () => { host.querySelector<HTMLButtonElement>('[data-image-ready]')!.click() })
+  expect(element.textContent).toBe('\n\nWelcome')
 })
 
 test('ignores character requests that finish after switching to another greeting owner', async () => {

@@ -145,6 +145,24 @@ describe('greeting images', () => {
     expect(getGreetingMessageImage(makeCharacter({ extensions: {} }), makeMessage())).toBeNull()
   })
 
+  test('ignores an unmarked first assistant reply that is not the greeting', () => {
+    const regenerated = makeMessage({ content: 'Regenerated opening', extra: {} })
+    expect(getGreetingMessageImage(makeCharacter(), regenerated, { activeGreetingIndex: 0 })).toBeNull()
+    expect(getGreetingMessageImage(makeCharacter(), { ...regenerated, extra: { greeting: false } })).toBeNull()
+  })
+
+  test('keeps greeting art for marked, indexed, or content-matched legacy messages', () => {
+    expect(getGreetingMessageImage(makeCharacter(), makeMessage({
+      content: 'Regenerated opening',
+      extra: { greeting: true, greeting_index: 0 },
+    }))).not.toBeNull()
+    expect(getGreetingMessageImage(makeCharacter(), makeMessage({
+      content: 'Edited legacy greeting',
+      extra: { greeting_index: 1 },
+    }))).not.toBeNull()
+    expect(getGreetingMessageImage(makeCharacter(), makeMessage({ extra: {} }))).not.toBeNull()
+  })
+
   test('uses embedded gallery art when the greeting has no explicit association', () => {
     const content = '![Scene](gallery://opening)\nOpening text'
     const character = makeCharacter({

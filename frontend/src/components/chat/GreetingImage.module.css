@@ -7,9 +7,30 @@
   margin: 0 0 16px;
   overflow: hidden;
   border-radius: var(--lcs-radius, 14px);
-  /* The artwork dissolves into the greeting prose. */
-  -webkit-mask-image: linear-gradient(var(--greeting-fade), #000 0%, #000 70%, rgba(0, 0, 0, 0.88) 84%, transparent 100%);
-  mask-image: linear-gradient(var(--greeting-fade), #000 0%, #000 70%, rgba(0, 0, 0, 0.88) 84%, transparent 100%);
+  /* Ease the artwork into the greeting prose over the last 20%. The extra
+     stops keep the ramp gentle instead of compressing it into a dark band. */
+  -webkit-mask-image: linear-gradient(
+    var(--greeting-fade),
+    #000 0%,
+    #000 80%,
+    rgba(0, 0, 0, 0.96) 84%,
+    rgba(0, 0, 0, 0.88) 88%,
+    rgba(0, 0, 0, 0.74) 92%,
+    rgba(0, 0, 0, 0.52) 95%,
+    rgba(0, 0, 0, 0.26) 98%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    var(--greeting-fade),
+    #000 0%,
+    #000 80%,
+    rgba(0, 0, 0, 0.96) 84%,
+    rgba(0, 0, 0, 0.88) 88%,
+    rgba(0, 0, 0, 0.74) 92%,
+    rgba(0, 0, 0, 0.52) 95%,
+    rgba(0, 0, 0, 0.26) 98%,
+    transparent 100%
+  );
 }
 
 .frame[data-position='bottom'] {
@@ -37,8 +58,7 @@
   z-index: -1;
   object-fit: cover;
   pointer-events: none;
-  /* A still, softly expanded copy fills portrait/landscape letterboxing
-     without cropping the actual greeting artwork. */
+  /* A still, softly expanded copy fills portrait/square letterboxing. */
   transform: scale(1.13);
 }
 
@@ -46,19 +66,27 @@
   position: relative;
   object-fit: contain;
   object-position: center;
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
-  mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
 }
 
 /* Landscape art sets the message's media height from its natural proportions,
-   so the foreground reaches both edges instead of shrinking into a fixed box. */
+   so the foreground always reaches both edges instead of shrinking into a
+   fixed box. Do not cap the height here: capping a contained image also
+   narrows it, leaving dark letterbox strips beside the artwork. */
 .frame[data-landscape],
 .frame[data-landscape] .artwork {
   height: auto;
 }
 
+/* Landscape art fills the frame, so the ambient would only appear through the
+   edge fade as a second, dimmer blurred layer. Keep the fade clean and use the
+   ambient only for portrait/square letterboxing. */
+.frame[data-landscape] .ambient {
+  display: none;
+}
+
 .frame[data-state='ready'] .artwork {
   opacity: 1;
+  cursor: zoom-in;
 }
 
 .frame[data-mounted-decode] .artwork {
@@ -70,14 +98,6 @@
   visibility: visible;
 }
 
-.finish {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  background: radial-gradient(ellipse at center, transparent 42%, rgba(0, 0, 0, 0.14) 100%);
-}
-
 /* Ambient blur follows the app's glass-effects setting. */
 :global([data-glass]) .ambient {
   display: block;
@@ -86,10 +106,6 @@
 
 :global([data-glass]) .frame[data-state='ready'] .ambient {
   opacity: 0.42;
-}
-
-:global([data-theme-mode='light']) .finish {
-  background: radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.08) 100%);
 }
 
 @media (hover: hover) and (pointer: fine) {

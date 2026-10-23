@@ -484,7 +484,14 @@ export default function BubbleMessageDefault({
         <div className={styles.content}>
           <span data-spindle-mount="message_body_before" data-spindle-scope={`message:${message.id}:bubble:body-before`} style={{ display: 'contents' }} />
           {greeting.image && greeting.position === 'top' && (
-            <GreetingImage key={greeting.image.url} src={greeting.image.url} alt={greeting.image.alt} position="top" />
+            <GreetingImage
+              key={greeting.image.url}
+              src={greeting.image.url}
+              alt={greeting.image.alt}
+              position="top"
+              onError={greeting.handleImageError}
+              onReady={greeting.handleImageReady}
+            />
           )}
           {isEditing ? (
             <MessageEditArea
@@ -513,7 +520,14 @@ export default function BubbleMessageDefault({
             <StreamingIndicator />
           ) : null}
           {greeting.image && greeting.position === 'bottom' && (
-            <GreetingImage key={greeting.image.url} src={greeting.image.url} alt={greeting.image.alt} position="bottom" />
+            <GreetingImage
+              key={greeting.image.url}
+              src={greeting.image.url}
+              alt={greeting.image.alt}
+              position="bottom"
+              onError={greeting.handleImageError}
+              onReady={greeting.handleImageReady}
+            />
           )}
         </div>
         <span data-spindle-mount="message_body_after" data-spindle-scope={`message:${message.id}:bubble:body-after`} style={{ display: 'contents' }} />
