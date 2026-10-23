@@ -3126,6 +3126,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       data-component="InputArea"
       ref={containerRef}
       className={styles.container}
+      data-liquid-glass-surface=""
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}

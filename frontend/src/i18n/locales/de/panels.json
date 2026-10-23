@@ -2994,6 +2994,11 @@
     "fontScale": "Schriftgröße",
     "uiScale": "UI-Skalierung",
     "glassEffects": "Glaseffekte",
+    "liquidGlass": {
+      "label": "Flüssigglas",
+      "hint": "Bricht und verwischt den Hintergrund hinter Oberflächen. Erfordert Glaseffekte.",
+      "requiresGlass": "Zuerst Glaseffekte aktivieren"
+    },
     "renderingMode": {
       "label": "Darstellung",
       "hint": "Effizienz entfernt Unschärfe; Qualität aktiviert Rendering mit hoher Bildwiederholrate auf unterstützten macOS-Displays, nachdem das Desktop-Fenster neu gestartet wurde.",

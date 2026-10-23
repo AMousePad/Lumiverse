@@ -146,6 +146,13 @@
   --lcs-glass-blur: 8px;
   --lcs-glass-soft-blur: 6px;
   --lcs-glass-strong-blur: 12px;
+
+  /* Liquid Glass material — refraction layer over the frosted glass tokens.
+     Inert until `html[data-liquid-glass]` is set by the theme applicator. */
+  --lcs-liquid-tint: transparent;
+  --lcs-liquid-specular: transparent;
+  --lcs-liquid-rim: transparent;
+  --lcs-liquid-blur: 0px;
   --lcs-radius: 14px;
   --lcs-radius-sm: 8px;
   --lcs-radius-xs: 5px;

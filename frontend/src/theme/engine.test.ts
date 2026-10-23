@@ -65,5 +65,20 @@ describe('generateThemeVariables', () => {
     expect(GENERATED_VARS['--lcs-glass-bg']).toBeDefined()
     expect(GENERATED_VARS['--lcs-glass-bg-hover']).toBeDefined()
     expect(GENERATED_VARS['--lcs-glass-border-hover']).toBeDefined()
+    expect(GENERATED_VARS['--lcs-liquid-tint']).toBeDefined()
+    expect(GENERATED_VARS['--lcs-liquid-blur']).toBeDefined()
+  })
+
+  test('emits an inert liquid glass material unless the theme opts in', () => {
+    const off = generateThemeVariables({ ...DEFAULT_THEME, liquidGlass: false }, 'dark')
+    const on = generateThemeVariables({ ...DEFAULT_THEME, liquidGlass: true }, 'dark')
+
+    // The tokens always exist so a theme switch never has to add or remove
+    // variables; opting out just makes them paint nothing.
+    expect(off['--lcs-liquid-tint']).toBe('transparent')
+    expect(off['--lcs-liquid-blur']).toBe('0px')
+    expect(on['--lcs-liquid-tint']).not.toBe('transparent')
+    expect(on['--lcs-liquid-blur']).not.toBe('0px')
+    expect(on['--lcs-liquid-rim']).not.toBe('transparent')
   })
 })

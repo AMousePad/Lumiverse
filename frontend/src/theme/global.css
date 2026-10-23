@@ -112,6 +112,73 @@ html[data-rendering-mode='efficiency'] *::after {
   -webkit-backdrop-filter: none !important;
 }
 
+/* ── Liquid Glass material ──
+   The opt-in "liquid glass" look turns an opted-in surface into a refracting
+   pane, layered on top of the frosted `data-glass` treatment. Modelled on the
+   dashersw/liquid-glass-js and freefrontend studies the Appearance panel
+   cites, where the pane is the element itself:
+
+     surface { backdrop-filter: blur() saturate() [url(#filter)] }
+     surface::after { inset specular rim }
+
+   Surfaces opt in by carrying `data-liquid-glass-surface`. Everything is gated
+   on `html[data-liquid-glass]`, which the theme applicator only sets when the
+   effect is genuinely active (glass on, not efficiency mode, motion allowed),
+   so no rule here can run on its own.
+
+   The pane has to sit on the surface element rather than a pseudo-element: a
+   pseudo painted behind the surface would be hidden by the surface's own
+   background, and putting it in front would cover the content. That also means
+   the surface must be translucent for the refraction to read, so the material
+   replaces the surface background with the accent-tinted glass wash. The
+   `::after` sheen is safe to add: none of the opted-in surfaces use one. */
+html[data-liquid-glass] {
+  --lcs-liquid-filter: url(#liquid-glass-distort);
+}
+
+html[data-liquid-glass] [data-liquid-glass-surface] {
+  /* The pane has to replace the surface's own paint, not sit behind it: an
+     opaque background (or a 0.98-alpha gradient, as the modals use) would
+     hide the refraction entirely. So the material owns the surface's fill. */
+  background-image: none;
+  background-color: var(--lcs-liquid-tint, transparent);
+  backdrop-filter: blur(var(--lcs-liquid-blur, 10px)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--lcs-liquid-blur, 10px)) saturate(1.35);
+}
+
+/* Engines disagree on whether an SVG filter may appear inside backdrop-filter:
+   Chromium renders the displacement, others reject the function or accept it
+   without rendering (Chromium reports no support for the `-webkit-` form).
+   Keeping it in its own rule means an engine that cannot do it drops only this
+   declaration and still keeps the frosted pane above. */
+@supports (backdrop-filter: url(#liquid-glass-distort)) {
+  html[data-liquid-glass] [data-liquid-glass-surface] {
+    backdrop-filter: blur(var(--lcs-liquid-blur, 10px)) saturate(1.35) var(--lcs-liquid-filter);
+  }
+}
+
+html[data-liquid-glass] [data-liquid-glass-surface]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  /* Rim and specular only: a full-area tint here would wash over the surface's
+     content, so the tint lives on the element background instead. */
+  box-shadow:
+    inset 1px 1px 0 -1px var(--lcs-liquid-specular, transparent),
+    inset 0 0 3px 1px var(--lcs-liquid-rim, transparent);
+}
+
+/* The shared SVG defs host renders no box of its own. */
+.lumiverse-liquid-glass-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 /* Focus styles — subtle ring for interactive elements only */
 :focus-visible {
   outline: 1.5px solid var(--lumiverse-primary-050);

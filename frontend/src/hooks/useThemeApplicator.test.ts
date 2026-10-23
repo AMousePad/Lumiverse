@@ -11,7 +11,47 @@ mock.module('@/store', () => ({
   useStore: Object.assign(() => undefined, { getState: () => ({}) }),
 }))
 
-const { buildResolvedThemeVars, resolveDesktopSurfaceColor, resolveDesktopSurface } = await import('./useThemeApplicator')
+const { buildResolvedThemeVars, resolveDesktopSurfaceColor, resolveDesktopSurface, applyGlassAttributes } = await import('./useThemeApplicator')
+
+const glassBase = {
+  ...DEFAULT_THEME,
+  enableGlass: true,
+  liquidGlass: true,
+  renderingMode: 'balanced' as const,
+}
+
+describe('applyGlassAttributes', () => {
+  test('sets both glass attributes only when the layers are live', () => {
+    applyGlassAttributes(glassBase, false)
+    expect(document.documentElement.hasAttribute('data-glass')).toBe(true)
+    expect(document.documentElement.hasAttribute('data-liquid-glass')).toBe(true)
+  })
+
+  test('drops the refraction layer when the base glass layer is off', () => {
+    applyGlassAttributes({ ...glassBase, enableGlass: false }, false)
+    expect(document.documentElement.hasAttribute('data-glass')).toBe(false)
+    expect(document.documentElement.hasAttribute('data-liquid-glass')).toBe(false)
+  })
+
+  test('drops the refraction layer when reduced motion is requested', () => {
+    applyGlassAttributes(glassBase, true)
+    expect(document.documentElement.hasAttribute('data-glass')).toBe(false)
+    expect(document.documentElement.hasAttribute('data-liquid-glass')).toBe(false)
+  })
+
+  test('drops the refraction layer in efficiency mode', () => {
+    applyGlassAttributes({ ...glassBase, renderingMode: 'efficiency' }, false)
+    expect(document.documentElement.hasAttribute('data-glass')).toBe(false)
+    expect(document.documentElement.hasAttribute('data-liquid-glass')).toBe(false)
+  })
+
+  test('clears a previously set refraction attribute when it is turned off', () => {
+    applyGlassAttributes(glassBase, false)
+    expect(document.documentElement.hasAttribute('data-liquid-glass')).toBe(true)
+    applyGlassAttributes({ ...glassBase, liquidGlass: false }, false)
+    expect(document.documentElement.hasAttribute('data-liquid-glass')).toBe(false)
+  })
+})
 
 describe('toOpaqueRgb', () => {
   test('converts character-aware CSS Color 4 RGB values for native PWA chrome', () => {

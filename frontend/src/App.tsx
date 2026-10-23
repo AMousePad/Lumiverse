@@ -26,6 +26,7 @@ import WindowFileDropHost from '@/components/shared/WindowFileDropHost'
 import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
+import LiquidGlassFilters from '@/components/shared/LiquidGlassFilters'
 import useIsMobile from '@/hooks/useIsMobile'
 import { resolveChatWallpaper, resolveGlobalWallpaper } from '@/lib/wallpaper'
 import {
@@ -396,6 +397,7 @@ function Application() {
                 </div>
               )}
               <WallpaperLayer wallpaper={resolveGlobalWallpaper(wallpaper, isMobile)} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
+              <LiquidGlassFilters />
               <ErrorBoundary label="App">
                 {/* Mirrors react-router context out to detached drawer-tab roots */}
                 <RouterContextExporter />

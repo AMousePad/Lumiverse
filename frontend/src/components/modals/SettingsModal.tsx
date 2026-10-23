@@ -220,6 +220,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     <div className={styles.overlay} onClick={onClose}>
       <motion.div
         className={styles.modal}
+        data-liquid-glass-surface=""
         onClick={(e) => e.stopPropagation()}
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}

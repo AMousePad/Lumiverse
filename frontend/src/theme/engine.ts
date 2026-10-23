@@ -393,6 +393,24 @@ export function generateThemeVariables(
   vars['--lcs-transition'] = '220ms cubic-bezier(0.4, 0, 0.2, 1)'
   vars['--lcs-transition-fast'] = '120ms cubic-bezier(0.4, 0, 0.2, 1)'
 
+  // ── Liquid Glass material ──
+  // The refraction is drawn by the SVG displacement filter in
+  // LiquidGlassFilters; these tokens only carry the tint, highlight, and blur
+  // so the pane stays inside the active accent. They are always emitted (and
+  // stay inert while `data-liquid-glass` is absent) so a theme switch never has
+  // to add or remove variables.
+  const liquid = Boolean(config.liquidGlass)
+  vars['--lcs-liquid-tint'] = liquid
+    ? hsla(h, bgSat, isDark ? 9 : 96, isDark ? 0.42 : 0.5)
+    : 'transparent'
+  vars['--lcs-liquid-specular'] = liquid
+    ? (isDark ? 'rgba(255, 255, 255, 0.72)' : 'rgba(255, 255, 255, 0.9)')
+    : 'transparent'
+  vars['--lcs-liquid-rim'] = liquid
+    ? (isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(255, 255, 255, 0.55)')
+    : 'transparent'
+  vars['--lcs-liquid-blur'] = liquid ? '10px' : '0px'
+
   // ── Prose tokens ──
   if (isDark) {
     vars['--lumiverse-prose-italic'] = 'var(--lumiverse-text-muted)'

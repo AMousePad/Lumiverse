@@ -9,10 +9,12 @@ interface DepthControlsProps {
   slidersLocked?: boolean
   radiusScale: number
   enableGlass: boolean
+  liquidGlass: boolean
   fontScale: number
   uiScale: number
   onRadiusChange: (v: number) => void
   onGlassToggle: (v: boolean) => void
+  onLiquidGlassToggle: (v: boolean) => void
   onFontScaleChange: (v: number) => void
   onUiScaleChange: (v: number) => void
   showDesktopBackgroundControls?: boolean
@@ -117,10 +119,12 @@ export default function DepthControls({
   slidersLocked = false,
   radiusScale,
   enableGlass,
+  liquidGlass,
   fontScale,
   uiScale,
   onRadiusChange,
   onGlassToggle,
+  onLiquidGlassToggle,
   onFontScaleChange,
   onUiScaleChange,
   showDesktopBackgroundControls = false,
@@ -215,6 +219,22 @@ export default function DepthControls({
         onChange={onGlassToggle}
         label={t('glassEffects')}
       />
+
+      {/* Liquid glass — a refraction layer on top of the frosted glass layer,
+          so it is only selectable while that layer is on. */}
+      <div className={styles.switchRow}>
+        <span className={styles.switchText}>
+          <span className={styles.label}>{t('liquidGlass.label')}</span>
+          <span className={styles.hint}>{t('liquidGlass.hint')}</span>
+        </span>
+        <Toggle.Switch
+          checked={liquidGlass}
+          onChange={onLiquidGlassToggle}
+          disabled={!enableGlass}
+          aria-label={t('liquidGlass.label')}
+          title={enableGlass ? undefined : t('liquidGlass.requiresGlass')}
+        />
+      </div>
 
       {showDesktopBackgroundControls && onDesktopBackgroundChange && (
         <>

@@ -2994,6 +2994,11 @@
     "fontScale": "Font Scale",
     "uiScale": "UI Scale",
     "glassEffects": "Glass effects",
+    "liquidGlass": {
+      "label": "Liquid glass",
+      "hint": "Refracts and blurs the backdrop behind surfaces. Requires glass effects.",
+      "requiresGlass": "Turn on glass effects first"
+    },
     "renderingMode": {
       "label": "Rendering",
       "hint": "Efficiency uses an opaque window without desktop blur on all platforms. Restart the desktop app after changing window transparency. Quality also enables high-refresh rendering on supported macOS displays.",

@@ -2666,6 +2666,11 @@
     "fontScale": "Scala font",
     "uiScale": "Scala UI",
     "glassEffects": "Effetti vetro",
+    "liquidGlass": {
+      "label": "Vetro liquido",
+      "hint": "Rifrange e sfoca lo sfondo dietro le superfici. Richiede gli effetti vetro.",
+      "requiresGlass": "Attiva prima gli effetti vetro"
+    },
     "renderingMode": {
       "label": "Rendering",
       "hint": "Risparmio disattiva la sfocatura; Qualità abilita l'alta frequenza di aggiornamento sui display macOS supportati dopo il riavvio della finestra.",

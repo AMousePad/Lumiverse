@@ -390,7 +390,7 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
           </div>
         </button>}
 
-        <div className={styles.drawer} ref={drawerRef} data-lumiverse-surface="viewport-drawer">
+        <div className={styles.drawer} ref={drawerRef} data-lumiverse-surface="viewport-drawer" data-liquid-glass-surface="">
           {!isMobile && drawerOpen && !pinned && (
             <div
               className={styles.resizeHandle}

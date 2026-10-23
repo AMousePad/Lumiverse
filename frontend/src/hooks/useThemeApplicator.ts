@@ -6,6 +6,7 @@ import { activeDeviceThemeControls, resolveDeviceTheme, useDeviceThemeControls, 
 import { generateThemeVariables } from '@/theme/engine'
 import { DEFAULT_THEME, PRESETS } from '@/theme/presets'
 import { isOpaqueThemeColor, toOpaqueRgb, toOpaqueRgbChannels, withPreservedAlpha } from '@/theme/themeColor'
+import { isLiquidGlassActive } from '@/lib/liquidGlass'
 import type { CharacterThemeOverlay, ResolvedMode, ThemeConfig } from '@/types/theme'
 
 const THEME_TRANSITION_MS = 280
@@ -76,6 +77,32 @@ type Rgba = { r: number; g: number; b: number; a: number }
 export function resolveMode(config: ThemeConfig): ResolvedMode {
   if (config.mode !== 'system') return config.mode
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+/**
+ * Publish the resolved glass state on the root element. Components and global
+ * CSS key off these attributes instead of re-deriving the rules, so the
+ * frosted layer (`data-glass`) and the liquid layer (`data-liquid-glass`) can
+ * never drift out of sync with the theme config.
+ */
+export function applyGlassAttributes(
+  config: ThemeConfig,
+  prefersReducedMotion: boolean,
+): void {
+  const root = document.documentElement
+  const glassOn = config.enableGlass && config.renderingMode !== 'efficiency' && !prefersReducedMotion
+
+  if (glassOn) {
+    root.setAttribute('data-glass', '')
+  } else {
+    root.removeAttribute('data-glass')
+  }
+
+  if (isLiquidGlassActive(config, prefersReducedMotion)) {
+    root.setAttribute('data-liquid-glass', '')
+  } else {
+    root.removeAttribute('data-liquid-glass')
+  }
 }
 
 function applyVariables(vars: Record<string, string>) {
@@ -640,11 +667,7 @@ export function useThemeApplicator() {
 
       window.dispatchEvent(new Event('resize'))
 
-      if (config.enableGlass && config.renderingMode !== 'efficiency' && !motionMq.matches) {
-        root.setAttribute('data-glass', '')
-      } else {
-        root.removeAttribute('data-glass')
-      }
+      applyGlassAttributes(config, motionMq.matches)
 
       return { config }
     }
@@ -654,11 +677,7 @@ export function useThemeApplicator() {
 
     const updateGlass = () => {
       const latest = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, undefined, deviceControls)
-      if (latest.config.enableGlass && latest.config.renderingMode !== 'efficiency' && !motionMq.matches) {
-        root.setAttribute('data-glass', '')
-      } else {
-        root.removeAttribute('data-glass')
-      }
+      applyGlassAttributes(latest.config, motionMq.matches)
     }
     motionMq.addEventListener('change', updateGlass)
 

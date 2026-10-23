@@ -85,9 +85,20 @@ export default function ThemePanel() {
     [updateControls]
   )
 
+  // Liquid glass refracts the frosted glass layer, so it can never be the only
+  // one on: turning the base layer off drops the refraction flag with it,
+  // keeping the stored config truthful about what the applicator will render.
   const handleGlassToggle = useCallback(
-    (enableGlass: boolean) => updateControls({ enableGlass }),
-    [updateControls]
+    (enableGlass: boolean) => {
+      updateControls({ enableGlass })
+      if (!enableGlass) update({ liquidGlass: false })
+    },
+    [update, updateControls]
+  )
+
+  const handleLiquidGlassToggle = useCallback(
+    (liquidGlass: boolean) => update({ liquidGlass }),
+    [update]
   )
 
   const handleFontScaleChange = useCallback(
@@ -212,10 +223,12 @@ export default function ThemePanel() {
           slidersLocked={slidersLocked}
           radiusScale={appearance.radiusScale}
           enableGlass={appearance.enableGlass}
+          liquidGlass={Boolean(appearance.liquidGlass)}
           fontScale={appearance.fontScale}
           uiScale={appearance.uiScale ?? 1}
           onRadiusChange={handleRadiusChange}
           onGlassToggle={handleGlassToggle}
+          onLiquidGlassToggle={handleLiquidGlassToggle}
           onFontScaleChange={handleFontScaleChange}
           onUiScaleChange={handleUiScaleChange}
           showDesktopBackgroundControls={isTauriDesktop}

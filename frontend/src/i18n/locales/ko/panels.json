@@ -2994,6 +2994,11 @@
     "fontScale": "글꼴 크기 비율",
     "uiScale": "UI 크기 비율",
     "glassEffects": "유리 효과",
+    "liquidGlass": {
+      "label": "리퀴드 글래스",
+      "hint": "표면 뒤의 배경을 굴절시키고 흐리게 합니다. 글래스 효과가 필요합니다.",
+      "requiresGlass": "먼저 글래스 효과를 켜세요"
+    },
     "renderingMode": {
       "label": "렌더링",
       "hint": "효율 모드는 흐림 효과를 제거하며, 품질 모드는 데스크톱 창을 다시 시작한 후 지원되는 macOS 디스플레이에서 고주사율 렌더링을 활성화합니다.",

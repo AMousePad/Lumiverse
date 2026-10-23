@@ -2662,6 +2662,11 @@
     "fontScale": "Échelle de police",
     "uiScale": "Échelle UI",
     "glassEffects": "Effets de verre",
+    "liquidGlass": {
+      "label": "Verre liquide",
+      "hint": "Réfracte et floute l'arrière-plan derrière les surfaces. Nécessite les effets de verre.",
+      "requiresGlass": "Activez d'abord les effets de verre"
+    },
     "renderingMode": {
       "label": "Rendu",
       "hint": "Économie désactive le flou ; Qualité active le taux de rafraîchissement élevé sur les écrans macOS compatibles après le redémarrage de la fenêtre.",

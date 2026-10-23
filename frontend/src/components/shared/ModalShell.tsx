@@ -115,6 +115,7 @@ export function ModalShell({
           <motion.div
             className={clsx(styles.modal, fullscreen && styles.fullscreenModal, scrollable && styles.scrollable, className)}
             data-component={dataComponent}
+            data-liquid-glass-surface=""
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
