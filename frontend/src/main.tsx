@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router'
 import { initI18n } from '@/i18n'
 import { registerSW } from 'virtual:pwa-register'
-import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
+import { navigateFromNotification } from './lib/notificationNavigation'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
 import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
 import { installIOSTouchScrollGuard, preventPageTouchZoom } from './lib/iosTouchScroll'
@@ -66,7 +66,7 @@ registerSW({
 // Navigate when a push notification is clicked (SW posts NAVIGATE message)
 navigator.serviceWorker?.addEventListener('message', (event) => {
   if (event.data?.type === 'NAVIGATE') {
-    router.navigate(getSafeInAppNavigationUrl(event.data.url))
+    navigateFromNotification(window.location.href, event.data.url, path => { void router.navigate(path) })
   }
 })
 

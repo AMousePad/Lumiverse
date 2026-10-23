@@ -183,6 +183,7 @@ final class IOSNotifications: NSObject, UNUserNotificationCenterDelegate {
         guard let server = data["serverOrigin"] as? String, NativeBridge.origin(URL(string: server)) == current,
               let chatId = data["chatId"] as? String, chatId.range(of: "^[A-Za-z0-9_-]{1,128}$", options: .regularExpression) != nil,
               let url = URL(string: "/chat/\(chatId)", relativeTo: view.url)?.absoluteURL else { return }
+        guard !NativeChatNavigation.isCurrentChat(url, in: view.url) else { return }
         view.load(URLRequest(url: url))
     }
 }

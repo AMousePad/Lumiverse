@@ -2,7 +2,7 @@
 export function configureIOSBundleIdentity(spec: string, bundleId: string): string {
   if (!/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId)) throw new Error("Invalid iOS bundle ID");
   const previous = (Bun.YAML.parse(spec) as any)?.settingGroups?.app?.base?.PRODUCT_BUNDLE_IDENTIFIER;
-  if (previous !== bundleId) spec = configureIOSPushEntitlements(spec, false);
+  if (previous !== bundleId) spec = configureIOSWidgetExtension(configureIOSPushEntitlements(spec, false), false);
   let matches = 0;
   const result = spec.replace(/^(      PRODUCT_BUNDLE_IDENTIFIER:)[^\n]*/gm, (_match, anchor: string) => {
     matches++; return `${anchor} ${bundleId}`;
@@ -194,5 +194,82 @@ ${sourcesAnchor}`);
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
   # End Lumiverse live activity
+`;
+}
+
+/** Widgets have their own App Group and work without APNs/Live Activities. */
+export function configureIOSWidgetExtension(spec: string, enabled: boolean): string {
+  spec = spec.replace(/      # Lumiverse widget dependency\n[\s\S]*?      # End Lumiverse widget dependency\n/g, "")
+    .replace(/  # Lumiverse character widgets\n[\s\S]*?  # End Lumiverse character widgets\n/g, "");
+  const parsed = Bun.YAML.parse(spec) as any;
+  const bundleId = parsed.settingGroups?.app?.base?.PRODUCT_BUNDLE_IDENTIFIER ?? "chat.lumiverse.ios";
+  const group = `group.${bundleId}.widgets`;
+  let matches = 0;
+  spec = spec.replace(/(    entitlements:\n      path: lumiverse-ios-client_iOS\/lumiverse-ios-client_iOS.entitlements\n)((?:      properties:[^\n]*\n(?:        [^\n]*\n)*)*)/,
+    (_match, path: string, blocks: string) => {
+      matches++;
+      const properties: Record<string, unknown> = {};
+      for (const block of blocks.matchAll(/      properties:[^\n]*\n(?:        [^\n]*\n)*/g)) {
+        Object.assign(properties, (Bun.YAML.parse(block[0].replace(/^      /gm, "")) as any).properties || {});
+      }
+      const groups = ((properties["com.apple.security.application-groups"] as string[] | undefined) ?? []).filter(value => value !== group);
+      if (enabled) groups.push(group);
+      if (groups.length) properties["com.apple.security.application-groups"] = groups;
+      else delete properties["com.apple.security.application-groups"];
+      return `${path}      properties: ${JSON.stringify(properties)}\n`;
+    });
+  if (!enabled) return spec;
+  if (matches !== 1) throw new Error("Missing iOS host entitlements for widgets");
+  const info = parsed.targets["lumiverse-ios-client_iOS"]?.info.properties;
+  if (!/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId)
+    || !info || ![info.CFBundleShortVersionString, info.CFBundleVersion].every(value => /^\d+(?:\.\d+){0,2}$/.test(String(value))))
+    throw new Error("Invalid iOS widget application identity");
+  const anchor = "      - framework: libapp.a";
+  if (!spec.includes(anchor)) throw new Error("Missing iOS application dependencies");
+  spec = spec.replace(anchor, `      # Lumiverse widget dependency
+      - target: LumiverseWidgets
+        embed: true
+      # End Lumiverse widget dependency
+${anchor}`);
+  return spec + `
+  # Lumiverse character widgets
+  LumiverseWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../../../../widgets
+        excludes: [PrivacyInfo.xcprivacy]
+      - path: ../../../../widgets/PrivacyInfo.xcprivacy
+        buildPhase: resources
+      - ../../../../native/ios/Sources/CharacterWidgetModel.swift
+      - ../../../../native/ios/Sources/CharacterWidgetStore.swift
+      - ../../../../native/ios/Sources/CharacterWidgetRefresh.swift
+    entitlements:
+      path: LumiverseWidgets/LumiverseWidgets.entitlements
+      properties:
+        com.apple.security.application-groups: [${group}]
+        com.apple.developer.default-data-protection: NSFileProtectionComplete
+    info:
+      path: LumiverseWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Lumiverse Characters
+        LumiverseWidgetAppGroup: ${group}
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSAppTransportSecurity: {NSAllowsLocalNetworking: true}
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      groups: [app]
+      base:
+        PRODUCT_NAME: LumiverseWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: ${bundleId}.Widgets
+        MARKETING_VERSION: "${info.CFBundleShortVersionString}"
+        CURRENT_PROJECT_VERSION: "${info.CFBundleVersion}"
+        SWIFT_VERSION: "5.0"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+  # End Lumiverse character widgets
 `;
 }

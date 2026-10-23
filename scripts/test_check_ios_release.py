@@ -93,6 +93,31 @@ class ReleaseChecks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "frontend setting mismatch"):
             self.check(native_cache=True)
 
+    def test_widgets_are_independent_and_require_matching_group_scheme_and_version(self):
+        self.info.update(LumiverseWidgetsEnabled=True, LumiverseWidgetAppGroup="group.chat.lumiverse.ios.widgets",
+                         CFBundleURLTypes=[{"CFBundleURLSchemes": ["lumiverse"]}])
+        self.write_plist(self.app / "Info.plist", self.info)
+        with self.assertRaisesRegex(ValueError, "embedded extensions"):
+            self.check(widgets=True)
+        widget = self.app / "PlugIns/Widgets.appex"
+        child = {**self.info, "CFBundleIdentifier": "chat.lumiverse.ios.Widgets",
+                 "NSExtension": {"NSExtensionPointIdentifier": "com.apple.widgetkit-extension"}}
+        self.bundle(widget, child, {})
+        self.assertTrue(self.check(widgets=True)["passed"])
+        child["LumiverseWidgetAppGroup"] = "group.other"
+        self.write_plist(widget / "Info.plist", child)
+        with self.assertRaisesRegex(ValueError, "App Groups differ"):
+            self.check(widgets=True)
+        child["LumiverseWidgetAppGroup"] = self.info["LumiverseWidgetAppGroup"]
+        child["CFBundleVersion"] = "41"
+        self.write_plist(widget / "Info.plist", child)
+        with self.assertRaisesRegex(ValueError, "Version mismatch"):
+            self.check(widgets=True)
+        self.info["CFBundleURLTypes"] = []
+        self.write_plist(self.app / "Info.plist", self.info)
+        with self.assertRaisesRegex(ValueError, "widget URL scheme"):
+            self.check(widgets=True)
+
     def test_distribution_profiles_reject_development_ad_hoc_and_expiry(self):
         entitlements = {"application-identifier": "TEAM.chat.lumiverse.ios", "com.apple.developer.team-identifier": "TEAM"}
         profile = {"Entitlements": {"application-identifier": "TEAM.chat.lumiverse.ios"}, "TeamIdentifier": ["TEAM"],

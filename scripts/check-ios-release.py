@@ -107,7 +107,7 @@ def check_notification_keychain(info, entitlements, profile, bundle_id):
 
 
 def inspect_app(app, *, bundle_id="chat.lumiverse.ios", version=None, build_number=None,
-                push=False, native_cache=False, app_store=False, relay_url=None):
+                push=False, native_cache=False, app_store=False, relay_url=None, widgets=False):
     info = read_plist(app / "Info.plist")
     require(info.get("CFBundleIdentifier") == bundle_id, "Unexpected host bundle identifier")
     require(info.get("ITSAppUsesNonExemptEncryption") is False,
@@ -118,12 +118,19 @@ def inspect_app(app, *, bundle_id="chat.lumiverse.ios", version=None, build_numb
         require(info.get("CFBundleVersion") == build_number, "Host build number mismatch")
     require(info.get("LumiversePushEnabled", False) is push, "Host push build setting mismatch")
     require(info.get("NSSupportsLiveActivities", False) is push, "Host Live Activity setting mismatch")
+    require(info.get("LumiverseWidgetsEnabled", False) is widgets, "Host widget setting mismatch")
+    if widgets:
+        require(info.get("LumiverseWidgetAppGroup") == "group." + bundle_id + ".widgets", "Host widget App Group mismatch")
+        schemes = [scheme for entry in info.get("CFBundleURLTypes", []) for scheme in entry.get("CFBundleURLSchemes", [])]
+        require("lumiverse" in schemes, "Missing widget URL scheme")
     require((app / "ios-native-cache-preview/manifest.json").is_file() is native_cache,
             "Bundled frontend setting mismatch")
     if app_store:
         check_compiled_app_icons(app, info)
     extensions = sorted((app / "PlugIns").glob("*.appex"))
     expected = {bundle_id + suffix for suffix in (".NotificationService", ".LiveActivity")} if push else set()
+    if widgets:
+        expected.add(bundle_id + ".Widgets")
     found = [read_plist(ext / "Info.plist").get("CFBundleIdentifier") for ext in extensions]
     require(set(found) == expected and len(found) == len(expected), "Missing or unexpected embedded extensions")
     if relay_url is not None:
@@ -150,6 +157,9 @@ def inspect_app(app, *, bundle_id="chat.lumiverse.ios", version=None, build_numb
     teams = set()
     for bundle in bundles:
         child = read_plist(bundle / "Info.plist")
+        if child["CFBundleIdentifier"].endswith(".Widgets"):
+            require(child.get("LumiverseWidgetAppGroup") == info.get("LumiverseWidgetAppGroup"), "Widget App Groups differ")
+            require(child.get("NSExtension", {}).get("NSExtensionPointIdentifier") == "com.apple.widgetkit-extension", "Invalid widget extension point")
         require(child.get("CFBundleVersion") == info.get("CFBundleVersion")
                 and child.get("CFBundleShortVersionString") == info.get("CFBundleShortVersionString"),
                 f"Version mismatch in {bundle.name}")
@@ -175,6 +185,12 @@ def inspect_app(app, *, bundle_id="chat.lumiverse.ios", version=None, build_numb
             if push and (bundle == app or child["CFBundleIdentifier"].endswith(".LiveActivity")):
                 require("group." + bundle_id + ".activities" in entitlements.get("com.apple.security.application-groups", []),
                         f"Missing Live Activity App Group in {bundle.name}")
+            if widgets and (bundle == app or child["CFBundleIdentifier"].endswith(".Widgets")):
+                group = "group." + bundle_id + ".widgets"
+                require(group in entitlements.get("com.apple.security.application-groups", []), f"Missing widget App Group in {bundle.name}")
+                require(group in profile.get("Entitlements", {}).get("com.apple.security.application-groups", []), f"Widget App Group absent from provisioning profile in {bundle.name}")
+                if bundle != app:
+                    require(entitlements.get("com.apple.developer.default-data-protection") == "NSFileProtectionComplete", "Widget data protection mismatch")
     # Scan every packaged executable/library, not source files or only the host.
     for path in app.rglob("*"):
         if not path.is_file():
@@ -205,6 +221,7 @@ def main():
     parser.add_argument("--version")
     parser.add_argument("--build-number")
     parser.add_argument("--push-notifications", action="store_true")
+    parser.add_argument("--widgets", action="store_true")
     parser.add_argument("--native-cache-preview", action="store_true")
     parser.add_argument("--app-store-connect", action="store_true")
     parser.add_argument("--notification-relay-url")
@@ -213,7 +230,7 @@ def main():
             "Distribution verification requires --version and --build-number")
     options = dict(bundle_id=args.bundle_id, version=args.version, build_number=args.build_number,
                    push=args.push_notifications, native_cache=args.native_cache_preview, app_store=args.app_store_connect,
-                   relay_url=args.notification_relay_url)
+                   relay_url=args.notification_relay_url, widgets=args.widgets)
     if args.artifact.is_dir() and args.artifact.suffix == ".app":
         result = inspect_app(args.artifact, **options)
     else:

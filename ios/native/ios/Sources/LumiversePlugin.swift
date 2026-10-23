@@ -5,6 +5,10 @@ import WebKit
 /// UIKit controls and a narrowly scoped WebKit permission bridge.
 class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
     struct ActivityURL: Decodable { let url: String }
+    @objc public func openWidgetURL(_ invoke: Invoke) throws {
+        let args = try invoke.parseArgs(ActivityURL.self)
+        Task { @MainActor in IOSWidgets.shared.open(args.url); invoke.resolve(true) }
+    }
     @objc public func openActivityURL(_ invoke: Invoke) throws {
         let args = try invoke.parseArgs(ActivityURL.self)
         if #available(iOS 16.1, *) {

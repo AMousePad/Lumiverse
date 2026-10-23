@@ -31,6 +31,11 @@ pub fn init<R: tauri::Runtime>() -> TauriPlugin<R> {
                                 "openActivityURL", std::collections::BTreeMap::from([("url", url.as_str())]),
                             ).await;
                         }
+                        if url.scheme() == "lumiverse" && url.host_str() == Some("widget") {
+                            let _ = app.state::<NativeHandle<R>>().0.run_mobile_plugin_async::<bool>(
+                                "openWidgetURL", std::collections::BTreeMap::from([("url", url.as_str())]),
+                            ).await;
+                        }
                     }
                 });
             }

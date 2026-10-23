@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { configureIOSBundleIdentity, configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension } from "./ios-entitlements";
+import { configureIOSBundleIdentity, configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension, configureIOSWidgetExtension } from "./ios-entitlements";
 
 test("self-built IPAs replace the generated host identity and signing groups together", () => {
   let spec = `settingGroups:
@@ -150,4 +150,59 @@ targets:
       expect(parsed.targets.LumiverseLiveActivity.info.properties.LumiverseActivityAppGroup).toBe('group.chat.lumiverse.ios.activities');
     }
   }
+});
+
+test("widgets embed independently of push, retain host iOS 15 support, and regenerate idempotently", () => {
+  let spec = `settingGroups:
+  app:
+    base:
+      PRODUCT_BUNDLE_IDENTIFIER: chat.lumiverse.ios
+targets:
+  lumiverse-ios-client_iOS:
+    deploymentTarget: "15.0"
+    sources:
+      - path: lumiverse-ios-client_iOS
+    entitlements:
+      path: lumiverse-ios-client_iOS/lumiverse-ios-client_iOS.entitlements
+      properties: {com.apple.security.application-groups: [group.other]}
+    settings:
+      base:
+        ENABLE_BITCODE: false
+    info:
+      properties:
+        CFBundleShortVersionString: "1.2.3"
+        CFBundleVersion: "42"
+    dependencies:
+      - framework: libapp.a
+`;
+  for (const push of [false, true, false]) {
+    spec = configureIOSPushEntitlements(spec, push);
+    spec = configureIOSNotificationExtension(spec, push);
+    spec = configureIOSLiveActivityExtension(spec, push);
+    for (const enabled of [true, true, false, false, true]) {
+      spec = configureIOSWidgetExtension(spec, enabled);
+      const parsed = Bun.YAML.parse(spec) as any;
+      const host = parsed.targets['lumiverse-ios-client_iOS'];
+      expect(host.deploymentTarget).toBe('15.0');
+      expect(host.dependencies.filter((d: any) => d.target === 'LumiverseWidgets')).toHaveLength(enabled ? 1 : 0);
+      expect(!!parsed.targets.LumiverseWidgets).toBe(enabled);
+      expect(!!parsed.targets.LumiverseLiveActivity).toBe(push);
+      expect(host.entitlements.properties['aps-environment']).toBe(push ? 'development' : undefined);
+      const groups = host.entitlements.properties['com.apple.security.application-groups'];
+      expect(groups.includes('group.other')).toBe(true);
+      expect(groups.filter((g: string) => g.endsWith('.widgets'))).toEqual(enabled ? ['group.chat.lumiverse.ios.widgets'] : []);
+      if (enabled) {
+        expect(parsed.targets.LumiverseWidgets.deploymentTarget).toBe('16.0');
+        expect(parsed.targets.LumiverseWidgets.settings.base.CURRENT_PROJECT_VERSION).toBe('42');
+        expect(parsed.targets.LumiverseWidgets.info.properties.LumiverseWidgetAppGroup).toBe('group.chat.lumiverse.ios.widgets');
+        expect(parsed.targets.LumiverseWidgets.entitlements.properties['com.apple.developer.default-data-protection']).toBe('NSFileProtectionComplete');
+      }
+    }
+  }
+  spec = configureIOSBundleIdentity(spec, 'chat.example.custom');
+  spec = configureIOSWidgetExtension(spec, true);
+  const parsed = Bun.YAML.parse(spec) as any;
+  expect(parsed.targets.LumiverseWidgets.settings.base.PRODUCT_BUNDLE_IDENTIFIER).toBe('chat.example.custom.Widgets');
+  expect(parsed.targets['lumiverse-ios-client_iOS'].entitlements.properties['com.apple.security.application-groups'])
+    .toEqual(['group.other', 'group.chat.example.custom.widgets']);
 });

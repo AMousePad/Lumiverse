@@ -97,7 +97,8 @@ class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
         val view = webView ?: return
         val origin = NativeNotifications.origin(view.url) ?: return
         val path = NativeNotifications.consumeTap(activity, activity.intent, origin) ?: return
-        view.loadUrl(origin + path)
+        val target = origin + path
+        if (!NotificationPolicy.isCurrentChat(view.url, target)) view.loadUrl(target)
     }
 
     private fun startLocal(invoke: Invoke) {

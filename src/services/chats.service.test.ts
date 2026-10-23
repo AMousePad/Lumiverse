@@ -44,6 +44,14 @@ function initChatsTestDb(): void {
   initDatabase(":memory:");
   const db = getDb();
 
+  db.run(`CREATE TABLE settings (
+    user_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (user_id, key)
+  )`);
+
   db.run(`CREATE TABLE characters (
     id TEXT PRIMARY KEY,
     user_id TEXT,
@@ -381,6 +389,47 @@ describe("chat message search", () => {
 });
 
 describe("recent chats", () => {
+  test.each([
+    ["flat", listRecentChats],
+    ["grouped", listRecentChatsGrouped],
+  ] as const)("%s recent chats apply saved home visibility before totals and pagination", (_kind, list) => {
+    seedCharacter("c3", "Gamma");
+    seedChat("hidden-character", "c1", "Hidden", "{}", 400);
+    seedChat("hidden-chat", "c2", "Hidden chat", JSON.stringify({ hidden_from_recent: true }), 350);
+    seedChat("group", "c1", "Group", JSON.stringify({ group: true, character_ids: ["c1", "c2"] }), 300);
+    seedChat("visible", "c2", "Visible", "{}", 200);
+    seedChat("older", "c3", "Older", "{}", 100);
+    getDb().query("INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)")
+      .run("u1", "landingHiddenCharacterIds", JSON.stringify(["c1"]));
+    // Another account's exclusions cannot affect this user's page.
+    getDb().query("INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)")
+      .run("u2", "landingHiddenCharacterIds", JSON.stringify(["c2", "c3"]));
+
+    const first = list("u1", { limit: 1, offset: 0 });
+    expect(first.total).toBe(3);
+    expect(first.data[0]?.character_id).toBe("c1"); // Group remains visible.
+    const second = list("u1", { limit: 1, offset: 1 });
+    expect(second.total).toBe(3);
+    expect(second.data[0]?.character_id).toBe("c2");
+    expect(list("u1", { limit: 1, offset: 2 }).data[0]?.character_id).toBe("c3");
+  });
+
+  test("grouped client exclusions add to saved visibility and cannot unhide a saved character", () => {
+    seedCharacter("c3", "Gamma");
+    seedChat("hidden", "c1", "Hidden", "{}", 300);
+    seedChat("additional", "c2", "Additional", "{}", 200);
+    seedChat("visible", "c3", "Visible", "{}", 100);
+    getDb().query("INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)")
+      .run("u1", "landingHiddenCharacterIds", JSON.stringify(["c1"]));
+    expect(listRecentChatsGrouped("u1", { limit: 10, offset: 0 }, { hiddenCharacterIds: [] })
+      .data.map(row => row.character_id)).toEqual(["c2", "c3"]);
+    expect(listRecentChatsGrouped("u1", { limit: 10, offset: 0 }, { hiddenCharacterIds: ["c2"] })
+      .data.map(row => row.character_id)).toEqual(["c3"]);
+    getDb().query("UPDATE settings SET value = '[]' WHERE user_id = 'u1'").run();
+    expect(listRecentChatsGrouped("u1", { limit: 10, offset: 0 }).data.map(row => row.character_id))
+      .toEqual(["c1", "c2", "c3"]);
+  });
+
   test("loads recent chats with malformed metadata", () => {
     seedChat("bad", "c1", "Bad metadata", "not json", 200);
     seedChat("good", "c2", "Good metadata", "{}", 100);

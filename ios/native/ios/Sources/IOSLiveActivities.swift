@@ -435,6 +435,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
                 && NativeBridge.origin(URL(string: $0.serverOrigin)) == NativeBridge.origin(view.url) }),
               let url = URL(string: "/chat/" + record.attributes.chatId, relativeTo: view.url)?.absoluteURL else { return }
         pendingTap = nil
+        guard !NativeChatNavigation.isCurrentChat(url, in: view.url) else { return }
         view.load(URLRequest(url: url))
     }
     private static func identifier(_ value: String) -> Bool {

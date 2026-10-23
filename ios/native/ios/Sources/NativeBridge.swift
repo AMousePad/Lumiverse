@@ -22,9 +22,11 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
         webview.configuration.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "lumiverseNative")
         loading = webview.observe(\.isLoading, options: [.new]) { [weak self] view, _ in
             if view.isLoading { self?.speech.cancel() }
+            Task { @MainActor in IOSWidgets.shared.selectedOriginChanged() }
             if #available(iOS 16.1, *) { Task { @MainActor in await IOSLiveActivities.shared.selectedOriginChanged() } }
         }
         IOSNotifications.shared.attach(webview: webview)
+        Task { @MainActor in IOSWidgets.shared.attach(webview) }
         if #available(iOS 16.1, *) { Task { @MainActor in IOSLiveActivities.shared.attach(webview) } }
         // This wrapper uses scenes. Observe the WebView's own scene so a
         // foreground transition in another window cannot restore its presence.
@@ -84,6 +86,18 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "cache.status": replyHandler(cache?.status ?? ["available": false, "active": false], nil)
         case "cache.ready": replyHandler(["accepted": cache?.markHealthy(buildId: payload["buildId"] as? String ?? "") ?? false], nil)
         case "lifecycle.status": replyHandler(["state": appState(in: webview)], nil)
+        case "widgets.status", "widgets.configure", "widgets.refresh", "widgets.invalidate":
+            Task { @MainActor in
+                do {
+                    switch action {
+                    case "widgets.configure": try IOSWidgets.shared.configure(payload)
+                    case "widgets.refresh": await IOSWidgets.shared.refresh()
+                    case "widgets.invalidate": IOSWidgets.shared.invalidate()
+                    default: break
+                    }
+                    replyHandler(IOSWidgets.shared.status(), nil)
+                } catch { replyHandler(nil, "Could not configure character widgets.") }
+            }
         case "notifications.status": IOSNotifications.shared.status { replyHandler($0, nil) }
         case "notifications.register":
             guard let origin = NotificationSecurity.browserOrigin(webview.url) else { replyHandler(nil, "Select a server first."); return }

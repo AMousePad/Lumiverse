@@ -58,6 +58,7 @@ import { desktopNotificationTransportRoutes } from "./routes/desktop-notificatio
 import { androidNotificationTransportRoutes } from "./routes/android-notifications.routes";
 import { iosNotificationMediaRoutes } from "./routes/ios-notifications.routes";
 import { iosLiveActivityRoutes, iosLiveActivityTransportRoutes } from "./routes/ios-live-activities.routes";
+import { iosWidgetRoutes, iosWidgetTransportRoutes } from "./routes/ios-widgets.routes";
 import { desktopApiRoutes } from "./routes/desktop-api.routes";
 import { memoryCortexRoutes } from "./routes/memory-cortex.routes";
 import { operatorRoutes } from "./routes/operator.routes";
@@ -399,6 +400,7 @@ app.route("/api/desktop-notifications/v1", desktopNotificationTransportRoutes);
 app.route("/api/android-notifications/v1", androidNotificationTransportRoutes);
 app.route("/api/ios-notifications/v1", iosNotificationMediaRoutes);
 app.route("/api/ios-activities/v1", iosLiveActivityTransportRoutes);
+app.route("/api/ios-widgets/v1", iosWidgetTransportRoutes);
 // OAuth-protected, read-only desktop API. It performs scope and live role
 // checks independently of the browser-session API below.
 app.route("/api/desktop/v1", desktopApiRoutes);
@@ -418,6 +420,7 @@ app.get("/api/v1/runtime-config", (c) => {
 app.use("/api/v1/*", requireAuth);
 
 app.route("/api/v1/settings", settingsRoutes);
+app.route("/api/v1/ios-widgets", iosWidgetRoutes);
 app.route("/api/v1/docs", docsRoutes);
 app.route("/api/v1/characters", charactersRoutes);
 app.route("/api/v1/chats", chatsRoutes);

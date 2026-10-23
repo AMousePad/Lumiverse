@@ -2,7 +2,7 @@
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { zipSync, type Zippable } from "fflate";
-import { configureIOSBundleIdentity, configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension } from "./ios-entitlements";
+import { configureIOSBundleIdentity, configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension, configureIOSWidgetExtension } from "./ios-entitlements";
 import { buildIOSNativeCache } from "./build-ios-native-cache";
 import { assertIOSPlatformEncryption, configureIOSDistribution, iosDistributionOptions, iosExportOptions } from "./ios-distribution";
 import { flattenIOSAppIcons } from "./ios-icons";
@@ -16,8 +16,9 @@ const version: string = config.version;
 const simulator = args.has("--simulator"), unsigned = args.has("--unsigned") || simulator;
 const experimentalHighRefresh = args.has("--experimental-high-refresh");
 const pushNotifications = args.has("--push-notifications");
+const widgets = args.has("--widgets");
 const nativeCachePreview = args.has("--native-cache-preview");
-const artifactSuffix = (distribution.appStoreConnect ? "-app-store-connect" : "") + (nativeCachePreview ? "-native-cache-preview" : "") + (experimentalHighRefresh ? "-experimental-high-refresh" : "") + (pushNotifications ? "-push" : "");
+const artifactSuffix = (distribution.appStoreConnect ? "-app-store-connect" : "") + (nativeCachePreview ? "-native-cache-preview" : "") + (experimentalHighRefresh ? "-experimental-high-refresh" : "") + (pushNotifications ? "-push" : "") + (widgets ? "-widgets" : "");
 const archivePath = join(generated, "build/arm64", unsigned ? "Lumiverse-unsigned.xcarchive" : distribution.appStoreConnect ? "Lumiverse-app-store-connect.xcarchive" : "Lumiverse.xcarchive");
 const exportPath = join(generated, "build/arm64", distribution.appStoreConnect ? "export-app-store-connect" : "export");
 if (process.platform !== "darwin") throw new Error("iOS builds require macOS and Xcode.");
@@ -55,6 +56,7 @@ let spec = readFileSync(specPath, "utf8");
 // regenerated below with the same marketing version and build number.
 spec = configureIOSNotificationExtension(spec, false);
 spec = configureIOSLiveActivityExtension(spec, false);
+spec = configureIOSWidgetExtension(spec, false);
 spec = configureIOSBundleIdentity(spec, config.identifier);
 spec = configureIOSDistribution(spec, version, distribution);
 spec = spec.replace(/      # Lumiverse native cache preview\n[\s\S]*?      # End Lumiverse native cache preview\n/g, "");
@@ -98,9 +100,11 @@ const plist = Bun.spawn(["plutil", "-convert", "json", "-o", "-", join(project, 
 const properties = JSON.parse(await new Response(plist.stdout).text()) as Record<string, unknown>;
 if (await plist.exited !== 0) throw new Error("Could not read the iOS Info.plist.");
 properties.LumiversePushEnabled = pushNotifications;
+properties.LumiverseWidgetsEnabled = widgets;
+if (widgets) properties.LumiverseWidgetAppGroup = `group.${(Bun.YAML.parse(spec) as any).settingGroups.app.base.PRODUCT_BUNDLE_IDENTIFIER}.widgets`;
 properties.NSSupportsLiveActivities = pushNotifications;
 if (pushNotifications) properties.LumiverseActivityAppGroup = `group.${(Bun.YAML.parse(spec) as any).settingGroups.app.base.PRODUCT_BUNDLE_IDENTIFIER}.activities`;
-if (pushNotifications) properties.CFBundleURLTypes = [{ CFBundleURLName: "Lumiverse Activities", CFBundleURLSchemes: ["lumiverse"] }];
+if (pushNotifications || widgets) properties.CFBundleURLTypes = [{ CFBundleURLName: "Lumiverse", CFBundleURLSchemes: ["lumiverse"] }];
 if (pushNotifications) properties.NSUserActivityTypes = ["INSendMessageIntent"];
 if (pushNotifications) {
   const bundleId = (Bun.YAML.parse(spec) as any).settingGroups.app.base.PRODUCT_BUNDLE_IDENTIFIER;
@@ -120,6 +124,7 @@ spec = spec.replace("        LSRequiresIPhoneOS:", `        # Lumiverse Info.pli
 spec = configureIOSPushEntitlements(spec, pushNotifications);
 spec = configureIOSNotificationExtension(spec, pushNotifications);
 spec = configureIOSLiveActivityExtension(spec, pushNotifications);
+spec = configureIOSWidgetExtension(spec, widgets);
 writeFileSync(specPath, spec);
 await run(["xcodegen", "generate", "--spec", "project.yml"], generated);
 if (args.has("--prepare-only")) process.exit(0);
@@ -214,6 +219,7 @@ if (simulator) {
     await run(["python3", join(root, "scripts/check-ios-release.py"), "--artifact", ipas[0]!,
       "--app-store-connect", "--build-number", distribution.buildNumber!, "--version", version,
       "--bundle-id", config.identifier, ...(pushNotifications ? ["--push-notifications"] : []),
+      ...(widgets ? ["--widgets"] : []),
       ...(pushNotifications ? ["--notification-relay-url", properties.LumiverseAPNsRelayURL as string] : []),
       ...(nativeCachePreview ? ["--native-cache-preview"] : [])], root);
   }
@@ -226,6 +232,7 @@ const metadata = { artifact: relative(root, artifact), target: simulator ? "aarc
   ...(distribution.buildNumber ? { buildNumber: distribution.buildNumber } : {}),
   experimentalHighRefresh,
   pushNotifications,
+  widgets,
   nativeCachePreview,
   ...(nativeCacheManifest ? { nativeCacheManifest } : {}),
   ...(simulator ? {} : { sha256: new Bun.CryptoHasher("sha256").update(readFileSync(artifact)).digest("hex") }) };

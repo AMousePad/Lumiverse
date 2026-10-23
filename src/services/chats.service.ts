@@ -60,6 +60,20 @@ function isGroupMetadata(metadata: Record<string, any>): boolean {
   return metadata.group === true || metadata.group === 1;
 }
 
+/** Saved home visibility applies to every recent-chat consumer, including
+ * native widgets and integrations that don't send landing-page query options.
+ */
+function readHiddenRecentCharacterIds(userId: string, additionalIds: string[] = []): Set<string> {
+  const row = getDb().query("SELECT value FROM settings WHERE user_id = ? AND key = ?")
+    .get(userId, "landingHiddenCharacterIds") as { value: string } | null;
+  let saved: unknown;
+  try { saved = row ? JSON.parse(row.value) : []; } catch { saved = []; }
+  return new Set([
+    ...(Array.isArray(saved) ? saved.filter((id): id is string => typeof id === "string" && id.length > 0) : []),
+    ...additionalIds,
+  ]);
+}
+
 function getGroupMemberIds(metadata: Record<string, any>): string[] {
   return Array.isArray(metadata.character_ids)
     ? metadata.character_ids.filter((id): id is string => typeof id === "string" && id.length > 0)
@@ -692,6 +706,7 @@ export function listRecentChats(
   const searchTerm = options.search?.trim().toLowerCase() ?? '';
   const sort: RecentChatSort = options.sort ?? 'recent';
   const direction = options.direction ?? (sort === 'name' ? 'asc' : 'desc');
+  const hiddenCharacterIds = readHiddenRecentCharacterIds(userId);
 
   const rows = withRecentChatRecovery("loading recent chats", () =>
     db.query(`
@@ -712,7 +727,8 @@ export function listRecentChats(
 
   const parsedRows = rows
     .map((row: any) => ({ ...row, metadata: parseMetadataObject(row.metadata) }))
-    .filter((row: any) => !isHiddenFromRecent(row.metadata));
+    .filter((row: any) => !isHiddenFromRecent(row.metadata)
+      && (isGroupMetadata(row.metadata) || !hiddenCharacterIds.has(row.character_id)));
 
   const filteredRows = searchTerm
     ? parsedRows.filter((row: any) => {
@@ -821,7 +837,7 @@ export function listRecentChatsGrouped(
   const sort: GroupedRecentChatSort = options.sort ?? 'recent';
   const direction = options.direction ?? (sort === 'name' ? 'asc' : 'desc');
   const favoriteCharacterIds = new Set(options.favoriteCharacterIds ?? []);
-  const hiddenCharacterIds = new Set(options.hiddenCharacterIds ?? []);
+  const hiddenCharacterIds = readHiddenRecentCharacterIds(userId, options.hiddenCharacterIds);
   const isDefaultRecentSort = !searchTerm
     && favoriteCharacterIds.size === 0
     && sort === 'recent'
