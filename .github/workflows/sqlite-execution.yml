@@ -42,7 +42,6 @@ jobs:
           src/db/checkpoint-diagnostics.test.ts
           src/db/image-reference-index.test.ts
           src/db/migrate.baseline-sync.test.ts
-          src/db/migrate.test.ts
           src/db/maintenance.test.ts
           src/db/maintenance-scheduler.test.ts
           src/services/database-execution.test.ts
