@@ -6,6 +6,7 @@ import type {
   SpindleComposerInsertPosition,
   SpindleComposerState,
 } from 'lumiverse-spindle-types'
+import { scheduleMicrotask } from '@/lib/schedule-microtask'
 
 /** Implemented by the mounted InputArea. Text writes apply synchronously. */
 export interface ComposerController {
@@ -37,7 +38,7 @@ function readState(): SpindleComposerState {
 export function notifyComposerChanged(): void {
   if (notifyQueued) return
   notifyQueued = true
-  queueMicrotask(() => {
+  scheduleMicrotask(() => {
     notifyQueued = false
     const next = readState()
     if (next.mounted === published.mounted && next.chatId === published.chatId && next.text === published.text) return

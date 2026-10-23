@@ -1969,6 +1969,25 @@ BEGIN
   DELETE FROM image_reference_dirty WHERE source_type = 'settings' AND source_id = json_array(OLD.key, OLD.user_id);
 END;
 
+-- Android FCM destinations
+CREATE TABLE IF NOT EXISTS android_push_destinations (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL UNIQUE,
+  transport TEXT NOT NULL CHECK (transport IN ('local', 'fcm')),
+  device_token TEXT,
+  project_id TEXT,
+  server_origin TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL DEFAULT 'Lumiverse Android',
+  user_agent TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  registered_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_android_push_user ON android_push_destinations(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_android_push_token ON android_push_destinations(device_token) WHERE device_token IS NOT NULL;
+
 -- iOS APNs destinations
 CREATE TABLE IF NOT EXISTS ios_push_destinations (
   id TEXT PRIMARY KEY,
@@ -1983,6 +2002,10 @@ CREATE TABLE IF NOT EXISTS ios_push_destinations (
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   registered_at INTEGER NOT NULL,
+  delivery_mode TEXT NOT NULL DEFAULT 'direct' CHECK(delivery_mode IN ('direct', 'relay')),
+  relay_credential TEXT,
+  encryption_key TEXT,
+  encryption_key_id TEXT,
   UNIQUE (device_token, bundle_id, environment),
   UNIQUE (user_id, device_id, bundle_id, environment)
 );
@@ -2010,6 +2033,8 @@ CREATE TABLE ios_live_activities (
   attempts INTEGER NOT NULL DEFAULT 0,
   ended_at INTEGER,
   delivered_stage INTEGER NOT NULL DEFAULT -1,
+  delivery_mode TEXT NOT NULL DEFAULT 'direct' CHECK(delivery_mode IN ('direct', 'relay')),
+  relay_credential TEXT,
   UNIQUE(user_id, device_id, bundle_id, environment, generation_id)
 );
 CREATE INDEX idx_ios_live_activities_generation ON ios_live_activities(user_id, generation_id);

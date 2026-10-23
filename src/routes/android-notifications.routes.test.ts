@@ -4,7 +4,7 @@ import { Hono } from "hono";
 
 const db = new Database(":memory:");
 db.exec("PRAGMA foreign_keys=ON; CREATE TABLE user(id TEXT PRIMARY KEY); INSERT INTO user VALUES ('owner'),('other');");
-for (const file of ["035_push_subscriptions", "117_desktop_notification_destinations", "127_ios_push_destinations", "130_android_push_destinations"])
+for (const file of ["035_push_subscriptions", "117_desktop_notification_destinations", "127_ios_push_destinations", "128_ios_live_activities", "130_android_push_destinations", "131_ios_notification_delivery"])
   db.exec(await Bun.file(new URL(`../db/migrations/${file}.sql`, import.meta.url)).text());
 mock.module("../db/connection", () => ({ getDb: () => db }));
 mock.module("../crypto/init", () => ({ getEncryptionKeyBytes: () => new Uint8Array(32).fill(7) }));
