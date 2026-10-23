@@ -142,7 +142,12 @@ export async function listConnectionModels(userId: string, id: string): Promise<
 }
 export async function testConnection(userId: string, id: string): Promise<{ success: boolean; message: string; provider: string }> {
   const result = await listConnectionModels(userId, id);
-  return { success: !result.error, message: result.error || "API key and model catalog access verified. No decision was run.", provider: result.provider };
+  // Some catalogs (NanoGPT) are public, so this only proves catalog access, not the credential.
+  return {
+    success: !result.error,
+    message: result.error || "Model catalog access verified. No decision was run.",
+    provider: result.provider,
+  };
 }
 export async function runSampleDecision(userId: string, id: string): Promise<{ success: boolean; message: string; provider: string }> {
   const profile = getConnection(userId, id);
