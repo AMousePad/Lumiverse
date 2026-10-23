@@ -24,6 +24,8 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
     private var tokenTasks: [String: Task<Void, Never>] = [:]
     private var stateTasks: [String: Task<Void, Never>] = [:]
     private var uploadTasks: [String: Task<Void, Never>] = [:]
+    private var uploadAttempts: [String: UUID] = [:]
+    private var starting = Set<String>()
     private weak var webview: WKWebView?
     private var accountId: String?
     private var configuredOrigin: String?
@@ -61,12 +63,13 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
         } else if status != errSecSuccess { throw Failure.storage }
     }
     enum Failure: LocalizedError {
-        case unavailable, invalid, storage
+        case unavailable, invalid, storage, action
         var errorDescription: String? {
             switch self {
             case .unavailable: return "Live Activities are unavailable or disabled."
             case .invalid: return "Invalid Live Activity enrollment."
             case .storage: return "Could not securely save this Live Activity."
+            case .action: return "Could not stop the response. Check your connection and try again."
             }
         }
     }
@@ -77,30 +80,55 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
     func attach(_ webview: WKWebView) {
         self.webview = webview
         GenerationActivityAvatar.prune()
-        let activeIds = Set(Activity<GenerationActivityAttributes>.activities.map { $0.id })
-        for (id, record) in records where !record.ended && !activeIds.contains(record.activityId ?? "") {
+        restoreActivities()
+        retryPending()
+    }
+    // UIKit recovery runs even if WebKit misses a visibility event or its old
+    // registration request was suspended. Retry uploads immediately on return.
+    func resume() {
+        for task in uploadTasks.values { task.cancel() }
+        uploadTasks.removeAll()
+        uploadAttempts.removeAll()
+        restoreActivities()
+        retryPending()
+    }
+    private func restoreActivities() {
+        let activities = Activity<GenerationActivityAttributes>.activities
+        let activeIds = Set(activities.map { $0.id })
+        for (id, record) in records where !record.ended && !starting.contains(id) && !activeIds.contains(record.activityId ?? "") {
             records[id]?.ended = true
+            tokenTasks.removeValue(forKey: id)?.cancel()
+            stateTasks.removeValue(forKey: id)?.cancel()
         }
-        try? save()
-        // Resume token observation after a process restart without depending on JavaScript.
         for activity in Activity<GenerationActivityAttributes>.activities {
-            if let record = records.values.first(where: { $0.activityId == activity.id }), !record.ended {
-                observe(activity, registrationId: record.registrationId)
+            if let record = records.values.first(where: { $0.activityId == activity.id }) {
+                if record.ended { continue }
+                if activity.activityState == .ended || activity.activityState == .dismissed {
+                    records[record.registrationId]?.ended = true
+                    tokenTasks.removeValue(forKey: record.registrationId)?.cancel()
+                    stateTasks.removeValue(forKey: record.registrationId)?.cancel()
+                } else { observe(activity, registrationId: record.registrationId) }
             } else {
                 Task { await activity.end(using: nil, dismissalPolicy: .immediate) }
             }
         }
-        retryPending()
+        try? save()
     }
     func status() -> [String: Any] {
-        let current = records.values.filter { $0.accountId == accountId && NativeBridge.origin(URL(string: $0.serverOrigin)) == configuredOrigin }
+        let current = records.values.filter { $0.accountId == accountId && NativeBridge.origin(URL(string: $0.serverOrigin)) == configuredOrigin
+            // An abandoned start has no ActivityKit ID. It must remain retryable,
+            // unlike an activity that was actually shown and then dismissed.
+            && ($0.activityId != nil || !$0.ended) }
         return ["available": supported && ActivityAuthorizationInfo().areActivitiesEnabled,
             "generationIds": current.filter { !$0.ended }.map { $0.attributes.generationId },
             "suppressedGenerationIds": current.filter { $0.ended }.map { $0.attributes.generationId },
             "activities": current.filter { !$0.ended }.map { record -> [String: Any] in
                 let activity = Activity<GenerationActivityAttributes>.activities.first { $0.id == record.activityId }
+                var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+                GenerationActivityAvatar.accent(record.attributes.avatarKey).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
                 return ["generationId": record.attributes.generationId,
                     "phase": activity?.contentState.phase ?? record.state.phase,
+                    "avatarAccent": [red, green, blue].map { Int(($0 * 255).rounded()) },
                     "hasAvatar": GenerationActivityAvatar.file(record.attributes.avatarKey).map { FileManager.default.fileExists(atPath: $0.path) } ?? false]
             },
             "deviceId": IOSNotifications.shared.installation["deviceId"]!,
@@ -112,6 +140,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
         self.accountId = accountId
         configuredOrigin = origin
         self.enabled = enabled
+        restoreActivities()
         for (id, record) in records {
             if !enabled || accountId != record.accountId || origin != NativeBridge.origin(URL(string: record.serverOrigin))
                 || record.expiresAt <= Date().timeIntervalSince1970 * 1000 {
@@ -146,7 +175,9 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
               attrs.characterName.utf8.count <= 512, record.expiresAt > Date().timeIntervalSince1970 * 1000,
               record.expiresAt <= Date().timeIntervalSince1970 * 1000 + 8 * 3600 * 1000 + 60_000 else { throw Failure.invalid }
         if records.values.contains(where: { $0.accountId == record.accountId && $0.serverOrigin == record.serverOrigin
-            && $0.attributes.generationId == attrs.generationId }) { return ["started": false] }
+            && $0.attributes.generationId == attrs.generationId && ($0.activityId != nil || !$0.ended) }) { return ["started": false] }
+        starting.insert(record.registrationId)
+        defer { starting.remove(record.registrationId) }
         // Persist the revocation credential before asking ActivityKit for a token.
         records[record.registrationId] = record
         do {
@@ -172,6 +203,9 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
             observe(activity, registrationId: record.registrationId)
             return ["started": true]
         } catch {
+            // Failed requests (including backgrounding during avatar prefetch)
+            // aren't user dismissals. Don't suppress this generation forever.
+            records[record.registrationId]?.activityId = nil
             await finish(record.registrationId, state: nil, immediate: true)
             throw error
         }
@@ -208,7 +242,15 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
     }
     private func apply(_ state: GenerationActivityAttributes.ContentState, to id: String) async {
         guard let record = records[id], !record.ended else { return }
-        if state.terminal { await finish(id, state: state, immediate: false); return }
+        if state.terminal {
+            // WebSocket reconciliation can arrive before the ActivityKit push.
+            // Leave a background activity alive for its alerting completion
+            // update; the backend follows that update with a silent end.
+            if (state.phase == "completed" || state.phase == "error"), record.pushToken != nil,
+               UIApplication.shared.applicationState != .active { return }
+            await finish(id, state: state, immediate: false)
+            return
+        }
         guard let activity = Activity<GenerationActivityAttributes>.activities.first(where: { $0.id == record.activityId }) else { return }
         let current = activity.contentState
         guard !current.terminal, current.phase != state.phase else { return }
@@ -220,6 +262,13 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
         } else { await activity.update(using: state) }
     }
     private func observe(_ activity: Activity<GenerationActivityAttributes>, registrationId id: String) {
+        // Sample the current token on every recovery, even if the async token
+        // observer was already installed before suspension.
+        if let token = activity.pushToken {
+            records[id]?.pushToken = token.map { String(format: "%02x", $0) }.joined()
+            try? save()
+        }
+        upload(id)
         guard tokenTasks[id] == nil else { return }
         tokenTasks[id] = Task { [weak self] in
             for await token in activity.pushTokenUpdates {
@@ -241,20 +290,36 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
                 }
             }
         }
-        if let token = activity.pushToken {
-            records[id]?.pushToken = token.map { String(format: "%02x", $0) }.joined()
-            try? save()
-        }
-        upload(id)
     }
-    private func finish(_ id: String, state: GenerationActivityAttributes.ContentState?, immediate: Bool) async {
+    func stopGeneration(_ generationId: String) async throws {
+        guard let record = records.values.first(where: { $0.attributes.generationId == generationId && !$0.ended && !$0.revoked }),
+              let activity = Activity<GenerationActivityAttributes>.activities.first(where: { $0.id == record.activityId }),
+              !activity.contentState.terminal,
+              let url = URL(string: record.serverOrigin + "/api/ios-activities/v1/registrations/" + record.registrationId + "/stop") else { throw Failure.unavailable }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 8
+        request.setValue("Bearer " + record.credential, forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count <= 4096,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let stateData = try? JSONSerialization.data(withJSONObject: object["state"] ?? [:]),
+              let state = try? JSONDecoder().decode(GenerationActivityAttributes.ContentState.self, from: stateData) else { throw Failure.action }
+        if state.terminal { await finish(record.registrationId, state: state, immediate: false, linger: 15) }
+        else { await apply(state, to: record.registrationId) }
+    }
+    func hideGeneration(_ generationId: String) async {
+        guard let record = records.values.first(where: { $0.attributes.generationId == generationId && !$0.ended }) else { return }
+        await finish(record.registrationId, state: nil, immediate: true)
+    }
+    private func finish(_ id: String, state: GenerationActivityAttributes.ContentState?, immediate: Bool, linger: TimeInterval = 120) async {
         guard let record = records[id] else { return }
         records[id]?.ended = true
         try? save()
         tokenTasks.removeValue(forKey: id)?.cancel()
         stateTasks.removeValue(forKey: id)?.cancel()
         if let activity = Activity<GenerationActivityAttributes>.activities.first(where: { $0.id == record.activityId }) {
-            await activity.end(using: state, dismissalPolicy: immediate ? .immediate : .after(.now.addingTimeInterval(120)))
+            await activity.end(using: state, dismissalPolicy: immediate ? .immediate : .after(.now.addingTimeInterval(linger)))
         }
         if immediate { GenerationActivityAvatar.remove(record.attributes.avatarKey) }
         upload(id)
@@ -269,18 +334,23 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
     }
     private func upload(_ id: String) {
         guard uploadTasks[id] == nil, let record = records[id], !record.revoked, record.ended || record.pushToken != nil else { return }
+        let attempt = UUID()
+        uploadAttempts[id] = attempt
         uploadTasks[id] = Task { [weak self] in
             // Let an in-flight token registration finish during a foreground-to-lock transition.
             var background: UIBackgroundTaskIdentifier = .invalid
             background = UIApplication.shared.beginBackgroundTask(withName: "Live Activity token") { [weak self] in
                 Task { @MainActor in
-                    self?.uploadTasks[id]?.cancel()
+                    if self?.uploadAttempts[id] == attempt { self?.uploadTasks[id]?.cancel() }
                     if background != .invalid { UIApplication.shared.endBackgroundTask(background); background = .invalid }
                 }
             }
             defer {
                 if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
-                self?.uploadTasks[id] = nil
+                if self?.uploadAttempts[id] == attempt {
+                    self?.uploadTasks[id] = nil
+                    self?.uploadAttempts[id] = nil
+                }
             }
             var delay: UInt64 = 2
             while !Task.isCancelled, let self = self, let current = self.records[id], !current.revoked {

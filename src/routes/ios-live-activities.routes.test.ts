@@ -22,18 +22,22 @@ db.exec(`PRAGMA foreign_keys = ON;
   INSERT INTO chats VALUES ('chat-1'), ('chat-2');`);
 db.exec(await Bun.file(new URL("../db/migrations/127_ios_push_destinations.sql", import.meta.url)).text());
 db.exec(await Bun.file(new URL("../db/migrations/128_ios_live_activities.sql", import.meta.url)).text());
+db.exec(await Bun.file(new URL("../db/migrations/129_ios_activity_stage_sounds.sql", import.meta.url)).text());
 mock.module("../db/connection", () => ({ getDb: () => db }));
+let notificationPreferences: { enabled?: boolean; events?: { generation_ended?: boolean; generation_error?: boolean } } | undefined;
+mock.module("../services/settings.service", () => ({ getSetting: () => ({ value: notificationPreferences }) }));
 let configured = true;
-const deliveries: { token: string; state: { phase: string; label: string }; terminal: boolean; timestamp: number; immediate: boolean }[] = [];
+const deliveries: { token: string; state: { phase: string; label: string }; terminal: boolean; timestamp: number; immediate: boolean; activityAlert: boolean }[] = [];
 let respond: (() => Promise<{ sent: boolean; invalidatedAt?: number; invalidToken?: boolean }>) | undefined;
 mock.module("../services/apns.service", () => ({
   getLiveActivityAPNsInfo: () => ({ configured, bundleId: "chat.lumiverse.ios", reason: configured ? null : "Provider key required" }),
-  sendAPNsLiveActivity: async (dest: { device_token: string }, state: { phase: string; label: string }, timestamp: number, terminal: boolean, immediate: boolean) => {
-    deliveries.push({ token: dest.device_token, state, timestamp, terminal, immediate });
+  sendAPNsLiveActivity: async (dest: { device_token: string }, state: { phase: string; label: string }, timestamp: number, terminal: boolean, immediate: boolean, activityAlert: boolean) => {
+    deliveries.push({ token: dest.device_token, state, timestamp, terminal, immediate, activityAlert });
     return respond ? respond() : { sent: true };
   },
 }));
 const pool = await import("../services/generation-pool.service");
+const registry = await import("../services/generation/active-generation-registry");
 const service = await import("../services/ios-live-activities.service");
 const { iosLiveActivityRoutes, iosLiveActivityTransportRoutes } = await import("./ios-live-activities.routes");
 const { eventBus } = await import("../ws/bus");
@@ -56,16 +60,186 @@ beforeEach(async () => {
   await service.flushLiveActivities();
   db.exec("DELETE FROM ios_live_activities; DELETE FROM ios_push_destinations;");
   pool.clearAllPoolEntries();
+  registry.stopAllGenerations();
   pool.createPoolEntry({ generationId: "gen-1", userId: "owner", chatId: "chat-1", generationType: "normal" as any,
     characterName: "<b>Lumi</b>", characterId: "owned", model: "private-model", connectionName: "private-provider" });
   pool.getPoolEntry("gen-1")!.content = "private message";
   pool.getPoolEntry("gen-1")!.reasoning = "private reasoning";
   configured = true;
+  notificationPreferences = undefined;
   eventBus.removeSessionVisibility("owner", "another-device");
   respond = undefined;
   deliveries.length = 0;
 });
-afterAll(async () => { pool.stopPoolSweep(); db.close(); await rm(avatarDirectory, { recursive: true, force: true }); mock.restore(); });
+afterAll(async () => { registry.stopAllGenerations(); registry.stopGenerationSweep(); pool.stopPoolSweep(); db.close(); await rm(avatarDirectory, { recursive: true, force: true }); mock.restore(); });
+
+test("completion alerts sound once and respect notification preferences and foreground presence", async () => {
+  const { registrationId: id, credential } = await prepare();
+  // Enroll directly at completion to avoid the one-second ActivityKit ordering boundary.
+  pool.completePool("gen-1", "message-1");
+  service.refreshLiveActivity(id, credential, tokenBody());
+  await service.flushLiveActivities();
+  expect(deliveries).toHaveLength(1);
+  expect(deliveries[0]?.activityAlert).toBe(true);
+  expect(deliveries[0]?.terminal).toBe(false);
+  await service.flushLiveActivities();
+  expect(deliveries).toHaveLength(1);
+
+  const clock = spyOn(Date, "now");
+  const afterAlert = new Date().getTime();
+  try {
+    // The persisted delay survives another flush/restart and the final end
+    // never repeats the sound, including when an APNs end needs a retry.
+    clock.mockReturnValue(afterAlert + 9_000);
+    await service.flushLiveActivities();
+    expect(deliveries).toHaveLength(1);
+    clock.mockReturnValue(afterAlert + 11_000);
+    respond = async () => ({ sent: false });
+    await service.flushLiveActivities();
+    expect(deliveries.at(-1)).toMatchObject({ terminal: true, activityAlert: false, state: { phase: "completed" } });
+    clock.mockReturnValue(afterAlert + 14_000);
+    respond = undefined;
+    await service.flushLiveActivities();
+    expect(deliveries).toHaveLength(3);
+    expect(deliveries.filter(item => item.activityAlert)).toHaveLength(1);
+    expect((db.query("SELECT ended_at FROM ios_live_activities WHERE id = ?").get(id) as any).ended_at).not.toBeNull();
+    await service.flushLiveActivities();
+    expect(deliveries).toHaveLength(3);
+  } finally { clock.mockRestore(); respond = undefined; }
+
+  for (const [preferences, visible] of [[{ enabled: false }, false], [{ events: { generation_ended: false } }, false], [undefined, true]] as const) {
+    db.exec("DELETE FROM ios_live_activities");
+    deliveries.length = 0;
+    notificationPreferences = preferences;
+    eventBus.setUserVisibility("owner", "another-device", visible);
+    const enrollment = await prepare();
+    service.refreshLiveActivity(enrollment.registrationId, enrollment.credential, tokenBody());
+    await service.flushLiveActivities();
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.activityAlert).toBe(false);
+  }
+});
+
+test("failed activities retain one failure alert and honor the error event opt-out", async () => {
+  pool.errorPool("gen-1", "private provider error");
+  for (const enabled of [true, false]) {
+    db.exec("DELETE FROM ios_live_activities");
+    deliveries.length = 0;
+    notificationPreferences = { events: { generation_error: enabled } };
+    const enrollment = await prepare();
+    service.refreshLiveActivity(enrollment.registrationId, enrollment.credential, tokenBody());
+    await service.flushLiveActivities();
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.activityAlert).toBe(enabled);
+    expect(JSON.stringify(deliveries)).not.toContain("private provider error");
+  }
+});
+
+test("stage cues advance once, survive token rotation, and stay silent on heartbeats or regressions", async () => {
+  const clock = spyOn(Date, "now");
+  let now = new Date().getTime();
+  clock.mockImplementation(() => now);
+  try {
+    const { registrationId: id, credential } = await prepare();
+    service.refreshLiveActivity(id, credential, tokenBody());
+    await service.flushLiveActivities();
+    expect(deliveries.at(-1)?.activityAlert).toBe(true);
+    for (const phase of ["council", "waiting", "reasoning", "streaming", "reasoning", "streaming"] as const) {
+      now += 1000;
+      pool.setPoolStatus("gen-1", phase);
+      await service.flushLiveActivities();
+    }
+    expect(deliveries.filter(item => item.activityAlert).map(item => item.state.phase)).toEqual(["assembling", "reasoning", "streaming"]);
+    now += 241_000;
+    await service.flushLiveActivities();
+    expect(deliveries.at(-1)?.activityAlert).toBe(false);
+    now += 1000;
+    service.refreshLiveActivity(id, credential, tokenBody("cd".repeat(32)));
+    await service.flushLiveActivities();
+    expect(deliveries.at(-1)?.activityAlert).toBe(false);
+    expect((db.query("SELECT delivered_stage FROM ios_live_activities WHERE id = ?").get(id) as any).delivered_stage).toBe(2);
+    now += 1000;
+    pool.completePool("gen-1", "ready");
+    await service.flushLiveActivities();
+    expect(deliveries.filter(item => item.activityAlert).map(item => item.state.phase)).toEqual(["assembling", "reasoning", "streaming", "completed"]);
+  } finally { clock.mockRestore(); }
+});
+
+test("stage migration records prior progress so deployed activities do not replay earlier cues", async () => {
+  const legacy = new Database(":memory:");
+  try {
+    legacy.exec('CREATE TABLE user (id TEXT PRIMARY KEY); CREATE TABLE chats (id TEXT PRIMARY KEY); CREATE TABLE ios_push_destinations (user_id TEXT, device_id TEXT, bundle_id TEXT, environment TEXT);');
+    legacy.exec(await Bun.file(new URL("../db/migrations/128_ios_live_activities.sql", import.meta.url)).text());
+    for (const phase of [null, "assembling", "reasoning", "streaming", "completed", "error"]) {
+      legacy.query(`INSERT INTO ios_live_activities (id, user_id, chat_id, generation_id, device_id, bundle_id, environment, server_origin,
+        credential_hash, expires_at, desired_phase, delivered_phase) VALUES (?, 'owner', 'chat', ?, 'device', 'app', 'development', 'https://example.com', 'hash', 1, 'streaming', ?)`)
+        .run(String(phase), String(phase), phase);
+    }
+    legacy.exec(await Bun.file(new URL("../db/migrations/129_ios_activity_stage_sounds.sql", import.meta.url)).text());
+    expect(legacy.query("SELECT delivered_stage FROM ios_live_activities ORDER BY rowid").all()).toEqual(
+      [-1, 0, 1, 2, 3, 4].map(delivered_stage => ({ delivered_stage })));
+  } finally { legacy.close(); }
+});
+
+test("foreground and disabled stage cues are consumed without replaying when alerts become available", async () => {
+  const clock = spyOn(Date, "now");
+  let now = new Date().getTime();
+  clock.mockImplementation(() => now);
+  try {
+    notificationPreferences = { enabled: false };
+    const { registrationId: id, credential } = await prepare();
+    service.refreshLiveActivity(id, credential, tokenBody());
+    await service.flushLiveActivities();
+    notificationPreferences = undefined;
+    eventBus.setUserVisibility("owner", "another-device", true);
+    now += 1000;
+    pool.setPoolStatus("gen-1", "reasoning");
+    await service.flushLiveActivities();
+    eventBus.removeSessionVisibility("owner", "another-device");
+    now += 241_000;
+    await service.flushLiveActivities();
+    expect(deliveries.every(item => !item.activityAlert)).toBe(true);
+    now += 1000;
+    pool.setPoolStatus("gen-1", "streaming");
+    await service.flushLiveActivities();
+    expect(deliveries.filter(item => item.activityAlert).map(item => item.state.phase)).toEqual(["streaming"]);
+  } finally { clock.mockRestore(); }
+});
+
+test("widget stop aborts only the enrolled generation and preserves terminal results on retries", async () => {
+  const { registrationId: id, credential } = await prepare();
+  const controller = new AbortController(), other = new AbortController();
+  const completion = new Promise<void>(resolve => controller.signal.addEventListener('abort', () => { pool.stopPool('gen-1'); resolve(); }));
+  registry.registerActiveGeneration('gen-1', { userId: 'owner', chatId: 'chat-1', controller, completion, startedAt: Date.now(), lastTokenAt: Date.now() });
+  registry.registerActiveGeneration('newer-generation', { userId: 'owner', chatId: 'chat-1', controller: other, completion: Promise.resolve(), startedAt: Date.now(), lastTokenAt: Date.now() });
+  const path = `/native/registrations/${id}/stop`;
+  for (const bearer of [undefined, 'x'.repeat(43)]) expect((await request(path, 'POST', undefined, bearer)).status).toBe(401);
+  expect(controller.signal.aborted).toBe(false);
+  const result = await request(path, 'POST', { generationId: 'newer-generation', userId: 'other' }, credential);
+  expect(result.status).toBe(200);
+  expect(await result.json()).toEqual({ state: { phase: 'stopped', label: 'Generation stopped' } });
+  expect(controller.signal.aborted).toBe(true);
+  expect(other.signal.aborted).toBe(false);
+  expect((await request(path, 'POST', undefined, credential)).status).toBe(200);
+  pool.completePool('gen-1', 'message-1');
+  expect(await (await request(path, 'POST', undefined, credential)).json()).toEqual({ state: { phase: 'completed', label: 'Response ready' } });
+});
+
+test("widget stop rejects revoked, expired, foreign, or absent active generations", async () => {
+  const { registrationId: id, credential } = await prepare();
+  const controller = new AbortController();
+  const path = `/native/registrations/${id}/stop`;
+  expect((await request(path, 'POST', undefined, credential)).status).toBe(409);
+  registry.registerActiveGeneration('gen-1', { userId: 'other', chatId: 'chat-2', controller, completion: Promise.resolve(), startedAt: Date.now(), lastTokenAt: Date.now() });
+  expect((await request(path, 'POST', undefined, credential)).status).toBe(409);
+  expect(controller.signal.aborted).toBe(false);
+  db.query('UPDATE ios_live_activities SET expires_at = 1 WHERE id = ?').run(id);
+  expect((await request(path, 'POST', undefined, credential)).status).toBe(401);
+  const replacement = await prepare();
+  await request(`/native/registrations/${replacement.registrationId}`, 'DELETE', undefined, replacement.credential);
+  expect((await request(`/native/registrations/${replacement.registrationId}/stop`, 'POST', undefined, replacement.credential)).status).toBe(401);
+  expect(controller.signal.aborted).toBe(false);
+});
 
 test("avatar access is limited to this enrollment's character and revoked with its credential", async () => {
   const { registrationId: id, credential } = await prepare();
@@ -145,7 +319,7 @@ test("stopped and failed outcomes stay generic and invalidate on current token r
     service.refreshLiveActivity(id, credential, tokenBody());
     await service.flushLiveActivities();
     expect(deliveries[0]?.state.phase).toBe(phase);
-    expect(deliveries[0]?.terminal).toBe(true);
+    expect(deliveries[0]?.terminal).toBe(phase === "stopped");
     expect(JSON.stringify(deliveries)).not.toContain("private provider traceback");
   }
   db.exec("DELETE FROM ios_live_activities");

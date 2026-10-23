@@ -6,6 +6,9 @@ import { issueIOSNotificationAvatarPath } from "./ios-notification-avatar";
 import { notificationPlainText } from "../utils/notification-text";
 
 export type APNsEnvironment = "development" | "production";
+export const IOS_COMPLETION_SOUND = "lumiverse-complete.wav";
+const activitySounds: Record<string, string> = { assembling: "lumiverse-prepare.wav", council: "lumiverse-prepare.wav",
+  waiting: "lumiverse-prepare.wav", reasoning: "lumiverse-think.wav", streaming: "lumiverse-respond.wav", completed: IOS_COMPLETION_SOUND };
 export interface APNsDestination {
   id?: string;
   device_token: string;
@@ -123,7 +126,10 @@ export function buildAPNsPayload(notification: PushPayload, serverOrigin?: strin
   const communication = avatarPath && senderId && senderName && chatId && /^[A-Za-z0-9_-]{1,128}$/.test(chatId)
     && !notification.data?.errorMessage && !notification.data?.errorCode && !notification.tag?.startsWith("generation-error-")
     ? { senderId, senderName: limit(senderName, 256), avatarPath } : undefined;
-  const payload = { aps: { alert: { title: limit(notification.title, 256), body: limit(notification.body, 2048) }, sound: "default",
+  const completion = notification.tag?.startsWith("generation-") && !notification.tag.startsWith("generation-error-")
+    && !notification.data?.errorMessage && !notification.data?.errorCode;
+  const payload = { aps: { alert: { title: limit(notification.title, 256), body: limit(notification.body, 2048) },
+      sound: completion ? IOS_COMPLETION_SOUND : "default",
       ...(communication ? { "mutable-content": 1, "thread-id": chatId } : {}) },
     ...(communication ? { communication } : {}),
     ...(chatId && /^[A-Za-z0-9_-]{1,128}$/.test(chatId) ? { chatId } : {}),
@@ -158,10 +164,18 @@ export async function sendAPNsNotification(destination: APNsDestination, notific
 
 /** Content fields must match GenerationActivityAttributes.ContentState exactly. */
 export async function sendAPNsLiveActivity(destination: Pick<APNsDestination, "device_token" | "bundle_id" | "environment">,
-  state: { phase: string; label: string }, timestamp: number, terminal: boolean, immediate = true): Promise<APNsDelivery> {
+  state: { phase: string; label: string }, timestamp: number, terminal: boolean, immediate = true, activityAlert = false): Promise<APNsDelivery> {
   const config = getLiveConfiguration();
   if (!config || config.bundleId !== destination.bundle_id) return { sent: false };
+  // ActivityKit alerts belong to updates. Ending the activity bypasses the
+  // expanded presentation and its sound; the sender ends it separately later.
+  const alerting = !terminal && activityAlert;
+  const sound = activitySounds[state.phase];
   const payload = JSON.stringify({ aps: { timestamp, event: terminal ? "end" : "update", "content-state": state,
+    ...(sound && alerting
+      ? { alert: { title: state.label, body: state.phase === "completed" ? "Open Lumiverse to read the response." : "Your response is in progress.", sound } } : {}),
+    ...(state.phase === "error" && alerting
+      ? { alert: { title: "Generation failed", body: "Open Lumiverse to review the generation.", sound: "default" } } : {}),
     "stale-date": timestamp + 300, ...(terminal ? { "dismissal-date": timestamp + 120 } : {}) } });
   if (Buffer.byteLength(payload) > 2048) throw new Error("Live Activity content is too large");
   return sendAPNsRequest(config, destination, payload, "liveactivity", immediate || terminal || state.phase === "inputNeeded" ? "10" : "5");

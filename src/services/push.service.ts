@@ -24,6 +24,7 @@ import type {
 } from "../types/push";
 
 interface GenerationEndedPushPayload {
+  generationId?: string;
   chatId?: string;
   content?: string;
   error?: string;
@@ -40,6 +41,7 @@ export interface PushDispatchResult {
 interface PushDeliveryOptions {
   bypassPresence?: boolean;
   destinationId?: string;
+  generationId?: string;
 }
 
 const DEFAULT_PREFERENCES: PushNotificationPreferences = {
@@ -302,6 +304,15 @@ export async function sendPushToUser(
   const iosDelivery = Promise.allSettled(iosDestinations.map(async destination => {
     try {
       if (!options.bypassPresence && eventBus.isUserVisible(userId)) return;
+      // A prepared enrollment alone isn't an activity: ActivityKit must have
+      // created it and registered its token. Keep a just-ended activity covered
+      // too, because its terminal update and this dispatch run concurrently.
+      if (options.generationId && getDb().query(`SELECT 1 FROM ios_live_activities
+        WHERE user_id = ? AND generation_id = ? AND device_id = ? AND bundle_id = ? AND environment = ?
+          AND server_origin = ? AND activity_id IS NOT NULL AND push_token IS NOT NULL
+          AND expires_at > ? AND (ended_at IS NULL OR ended_at > ?) LIMIT 1`)
+        .get(userId, options.generationId, destination.device_id, destination.bundle_id, destination.environment,
+          destination.server_origin, Date.now(), Date.now() - 120_000)) return;
       const result = await sendAPNsNotification(destination, normalizedNotification);
       if (result.sent) sent++;
       else if (result.invalidatedAt !== undefined) {
@@ -518,7 +529,7 @@ export async function dispatchGenerationEndedPush(
   }
 
   const notification = await buildGenerationEndedNotification(userId, payload);
-  const sent = await sendPushToUser(userId, notification, options);
+  const sent = await sendPushToUser(userId, notification, { ...options, generationId: payload.generationId });
   return { sent };
 }
 

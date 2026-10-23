@@ -34,7 +34,10 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
             lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 guard let webview = self?.webview, let scene = notification.object as? UIScene,
                       scene === webview.window?.windowScene else { return }
-                if state == "active", #available(iOS 16.1, *) { Task { @MainActor in IOSLiveActivities.shared.retryPending() } }
+                if state == "active" {
+                    IOSNotifications.shared.refreshRegistration()
+                    if #available(iOS 16.1, *) { Task { @MainActor in IOSLiveActivities.shared.resume() } }
+                }
                 webview.callAsyncJavaScript("window.dispatchEvent(new CustomEvent('lumiverse:ios-app-state', {detail: detail}))",
                     arguments: ["detail": ["state": state]], in: nil, in: .page, completionHandler: nil)
             })

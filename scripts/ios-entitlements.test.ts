@@ -31,6 +31,8 @@ settingGroups:
       PRODUCT_BUNDLE_IDENTIFIER: chat.lumiverse.ios
 targets:
   lumiverse-ios-client_iOS:
+    sources:
+      - path: lumiverse-ios-client_iOS
     info:
       properties:
         CFBundleShortVersionString: "1.2.3"
@@ -45,11 +47,14 @@ targets:
     expect(!!parsed.targets.LumiverseNotificationService).toBe(enabled);
     expect(parsed.targets['lumiverse-ios-client_iOS'].dependencies.filter((d: any) => d.target === 'LumiverseNotificationService'))
       .toHaveLength(enabled ? 1 : 0);
+    expect(parsed.targets['lumiverse-ios-client_iOS'].sources.filter((s: any) => s.path === '../../../../sounds'))
+      .toEqual(enabled ? [{ path: '../../../../sounds', buildPhase: 'resources' }] : []);
     if (enabled) {
       expect(parsed.targets.LumiverseNotificationService.settings.base.PRODUCT_BUNDLE_IDENTIFIER).toBe('chat.lumiverse.ios.NotificationService');
       expect(parsed.targets.LumiverseNotificationService.info.properties.NSExtension.NSExtensionPointIdentifier).toBe('com.apple.usernotifications.service');
       expect(parsed.targets.LumiverseNotificationService.settings.base.MARKETING_VERSION).toBe('1.2.3');
       expect(parsed.targets.LumiverseNotificationService.settings.base.CURRENT_PROJECT_VERSION).toBe('42');
+      expect(parsed.targets.LumiverseNotificationService.sources).toContainEqual({ path: '../../../../sounds', buildPhase: 'resources' });
     }
   }
 });
@@ -75,6 +80,11 @@ test("Live Activities embed and sign alongside communication notifications, pres
 targets:
   lumiverse-ios-client_iOS:
     deploymentTarget: "15.0"
+    sources:
+      - path: lumiverse-ios-client_iOS
+    settings:
+      base:
+        ENABLE_BITCODE: false
     info:
       properties:
         CFBundleShortVersionString: "1.2.3"
@@ -88,6 +98,9 @@ targets:
     const parsed = Bun.YAML.parse(spec) as any;
     expect(parsed.targets['lumiverse-ios-client_iOS'].deploymentTarget).toBe('15.0');
     expect(!!parsed.targets.LumiverseLiveActivity).toBe(enabled);
+    expect(parsed.targets['lumiverse-ios-client_iOS'].sources.filter((s: any) => s.path === '../../../../activity-intents')).toHaveLength(enabled ? 1 : 0);
+    expect(parsed.targets['lumiverse-ios-client_iOS'].settings.base.SWIFT_OBJC_BRIDGING_HEADER)
+      .toBe(enabled ? '../../../../activity-intents/LumiverseActivityActions.h' : undefined);
     expect(parsed.targets['lumiverse-ios-client_iOS'].dependencies.filter((d: any) => d.target === 'LumiverseLiveActivity'))
       .toHaveLength(enabled ? 1 : 0);
     if (enabled) {
@@ -97,6 +110,8 @@ targets:
       expect(parsed.targets.LumiverseLiveActivity.settings.base.CURRENT_PROJECT_VERSION).toBe('42');
       expect(parsed.targets.LumiverseLiveActivity.info.properties.NSExtension.NSExtensionPointIdentifier).toBe('com.apple.widgetkit-extension');
       expect(parsed.targets.LumiverseLiveActivity.sources).toContain('../../../../native/ios/Sources/GenerationActivityAttributes.swift');
+      expect(parsed.targets.LumiverseLiveActivity.sources).toContain('../../../../activity-intents');
+      expect(parsed.targets.LumiverseLiveActivity.settings.base.SWIFT_ACTIVE_COMPILATION_CONDITIONS).toContain('LUMIVERSE_ACTIVITY_EXTENSION');
       expect(parsed.targets.LumiverseLiveActivity.entitlements.properties['com.apple.security.application-groups']).toEqual(['group.chat.lumiverse.ios.activities']);
       expect(parsed.targets.LumiverseLiveActivity.info.properties.LumiverseActivityAppGroup).toBe('group.chat.lumiverse.ios.activities');
     }

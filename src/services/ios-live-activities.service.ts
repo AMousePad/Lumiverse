@@ -5,6 +5,9 @@ import { EventType } from "../ws/events";
 import { getActivePoolsForUser, getPoolEntry, type PooledTokensEntry } from "./generation-pool.service";
 import { getLiveActivityAPNsInfo, sendAPNsLiveActivity, type APNsEnvironment } from "./apns.service";
 import { notificationPlainText } from "../utils/notification-text";
+import { getActiveGeneration, stopGeneration } from "./generation/active-generation-registry";
+import { getSetting } from "./settings.service";
+import type { PushNotificationPreferences } from "../types/push";
 
 const labels = { assembling: "Preparing response", council: "Consulting council", waiting: "Waiting for model",
   reasoning: "Thinking", streaming: "Writing response", inputNeeded: "Input needed", completed: "Response ready",
@@ -19,8 +22,10 @@ interface Registration {
   id: string; user_id: string; chat_id: string; generation_id: string; device_id: string; bundle_id: string;
   environment: APNsEnvironment; server_origin: string; activity_id: string | null; push_token: string | null;
   token_registered_at: number; expires_at: number; desired_phase: ActivityPhase; delivered_phase: ActivityPhase | null;
-  last_timestamp: number; next_attempt_at: number; attempts: number; ended_at: number | null;
+  last_timestamp: number; next_attempt_at: number; attempts: number; ended_at: number | null; delivered_stage: number;
 }
+const soundStage = (phase: ActivityPhase) => ({ assembling: 0, council: 0, waiting: 0, reasoning: 1,
+  streaming: 2, completed: 3, error: 4 } as Partial<Record<ActivityPhase, number>>)[phase] ?? -1;
 const identifier = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 export function liveActivitySnapshot(userId: string, generationIds: unknown) {
@@ -33,7 +38,7 @@ export function liveActivitySnapshot(userId: string, generationIds: unknown) {
     existing: generationIds.map(snapshot) };
 }
 
-/** The browser can mint a credential; it can only update/revoke this one generation's activity. */
+/** The browser can mint a credential scoped to this generation and its activity. */
 export function prepareLiveActivity(userId: string, input: Record<string, unknown>) {
   const info = getLiveActivityAPNsInfo();
   if (!info.configured) throw new Error(info.reason!);
@@ -100,6 +105,29 @@ export function revokeLiveActivity(id: string, credential: string): boolean {
   return !!row && getDb().query("DELETE FROM ios_live_activities WHERE id = ?").run(id).changes > 0;
 }
 
+/** A widget can stop only the generation bound to its enrollment, never a chat's newer generation. */
+export async function stopLiveActivityGeneration(id: string, credential: string) {
+  const row = authorized(id, credential);
+  if (!row) return null;
+  const snapshot = () => {
+    const entry = getPoolEntry(row.generation_id);
+    return activityState(entry?.userId === row.user_id && entry.chatId === row.chat_id ? poolActivityPhase(entry)
+      : isTerminalActivityPhase(row.desired_phase) ? row.desired_phase : "interrupted");
+  };
+  const state = snapshot();
+  if (isTerminalActivityPhase(state.phase)) return { state };
+  const active = getActiveGeneration(row.generation_id);
+  if (!active || active.userId !== row.user_id || active.chatId !== row.chat_id) throw new Error("Generation is no longer active");
+  if (!active.controller.signal.aborted) stopGeneration(row.user_id, row.generation_id);
+  // Let normal generation teardown save partial output and publish its terminal
+  // event. A slow provider must not keep a Lock Screen action waiting forever.
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([active.completion.catch(() => {}), new Promise<void>(resolve => { timeout = setTimeout(resolve, 2500); })]);
+  } finally { clearTimeout(timeout); }
+  return { state: snapshot() };
+}
+
 let flushing: Promise<void> | null = null;
 let flushRequested = false;
 let timestampTimer: ReturnType<typeof setTimeout> | undefined;
@@ -141,15 +169,25 @@ async function flush() {
       if (timestamp <= row.last_timestamp) { retryAtTimestampBoundary(row.last_timestamp); return; }
       db.query("UPDATE ios_live_activities SET desired_phase = ? WHERE id = ?").run(phase, row.id);
       try {
+        const preferences = getSetting(row.user_id, "pushNotificationPreferences")?.value as Partial<PushNotificationPreferences> | undefined;
+        const stage = soundStage(phase);
+        // Persist observed progress even when foreground/preferences mute a cue.
+        // Phase regressions, token refreshes and heartbeats must never replay it.
+        const activityAlert = stage > row.delivered_stage && row.delivered_phase !== phase && preferences?.enabled !== false
+          && preferences?.events?.[phase === "error" ? "generation_error" : "generation_ended"] !== false
+          && !eventBus.isUserVisible(row.user_id);
+        const terminalAlert = isTerminalActivityPhase(phase) && activityAlert;
+        // Alerting updates precede a silent end so ActivityKit plays the sound.
+        const ending = isTerminalActivityPhase(phase) && !terminalAlert;
         const result = await sendAPNsLiveActivity({ device_token: row.push_token!, bundle_id: row.bundle_id, environment: row.environment },
-          activityState(phase), timestamp, isTerminalActivityPhase(phase), phase !== row.delivered_phase);
+          activityState(phase), timestamp, ending, phase !== row.delivered_phase, activityAlert);
         if (result.invalidToken || (result.invalidatedAt !== undefined && result.invalidatedAt >= row.token_registered_at)) {
           db.query("DELETE FROM ios_live_activities WHERE id = ? AND push_token = ? AND token_registered_at = ?")
             .run(row.id, row.push_token, row.token_registered_at);
         } else if (result.sent) {
-          db.query(`UPDATE ios_live_activities SET delivered_phase = ?, last_timestamp = ?, attempts = 0, next_attempt_at = 0,
+          db.query(`UPDATE ios_live_activities SET delivered_phase = ?, delivered_stage = MAX(delivered_stage, ?), last_timestamp = ?, attempts = 0, next_attempt_at = ?,
             ended_at = ? WHERE id = ? AND push_token = ? AND token_registered_at = ?`)
-            .run(phase, timestamp, isTerminalActivityPhase(phase) ? Date.now() : null, row.id, row.push_token, row.token_registered_at);
+            .run(phase, stage, timestamp, terminalAlert ? Date.now() + 10_000 : 0, ending ? Date.now() : null, row.id, row.push_token, row.token_registered_at);
         } else retry(row);
       } catch { retry(row); }
     }));

@@ -11,6 +11,7 @@ let appState = 'active', enabled = true
 let native = { available: true, generationIds: [] as string[], suppressedGenerationIds: [] as string[], deviceId: 'installation-123456789', bundleId: 'chat.lumiverse.ios', environment: 'development' }
 let snapshot = { active: [] as { generationId: string }[], existing: [] as { generationId: string; state: { phase: string; label: string } }[] }
 let prepare: (() => Promise<Record<string, unknown>>) | undefined
+let configure: (() => Promise<unknown>) | undefined
 const stateListeners = new Set<(state: string) => void>()
 mock.module('@/api/client', () => ({
   get: async () => ({ configured: true, bundleId: native.bundleId }),
@@ -22,7 +23,11 @@ mock.module('@/api/client', () => ({
 }))
 mock.module('@/lib/ios-native', () => ({
   hasIOSNativeBridge: () => true,
-  iosNativeRequest: async (action: string, payload: any) => { nativeCalls.push({ action, payload }); return { started: true } },
+  iosNativeRequest: async (action: string, payload: any) => {
+    nativeCalls.push({ action, payload })
+    if (action === 'activities.configure' && configure) return configure()
+    return { started: true }
+  },
 }))
 mock.module('@/lib/ios-live-activities', () => ({ useIOSLiveActivitiesEnabled: () => enabled, getIOSActivityStatus: async () => native }))
 mock.module('@/lib/ios-app-state', () => ({
@@ -34,7 +39,7 @@ let root: Root
 let hook: typeof import('./useIOSLiveActivities').useIOSLiveActivities
 beforeAll(async () => { hook = (await import('./useIOSLiveActivities')).useIOSLiveActivities })
 beforeEach(async () => {
-  appState = 'active'; enabled = true; prepare = undefined
+  appState = 'active'; enabled = true; prepare = undefined; configure = undefined
   native = { ...native, generationIds: [], suppressedGenerationIds: [] }
   snapshot = { active: [], existing: [] }
   nativeCalls.length = 0; apiCalls.length = 0
@@ -92,4 +97,29 @@ test('an enrollment finishing after account change cannot start the previous acc
   release({ registrationId: 'old-registration' })
   await settle()
   expect(nativeCalls.some(call => call.action === 'activities.start')).toBe(false)
+})
+
+test('a failed initial configure recovers on network return without remounting', async () => {
+  snapshot.active = [{ generationId: 'recover' }]
+  configure = async () => { throw new Error('Lost WebKit reply') }
+  await render('owner'); await settle()
+  expect(apiCalls).toHaveLength(0)
+  configure = undefined
+  window.dispatchEvent(new dom.window.Event('online'))
+  await settle()
+  expect(nativeCalls.filter(call => call.action === 'activities.start')).toHaveLength(1)
+})
+
+test('foreground recovery replaces a suspended prepare and ignores its late enrollment', async () => {
+  snapshot.active = [{ generationId: 'recover' }]
+  let release!: (value: Record<string, unknown>) => void
+  prepare = () => new Promise(resolve => { release = resolve })
+  await render('owner'); await settle()
+  appState = 'background'; stateListeners.forEach(listener => listener(appState))
+  prepare = undefined
+  appState = 'active'; stateListeners.forEach(listener => listener(appState))
+  await settle()
+  expect(nativeCalls.filter(call => call.action === 'activities.start')).toHaveLength(1)
+  release({ registrationId: 'stale-registration' }); await settle()
+  expect(nativeCalls.filter(call => call.action === 'activities.start')).toHaveLength(1)
 })

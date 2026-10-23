@@ -35,7 +35,7 @@ class Session extends EventEmitter {
 }
 mock.module("node:http2", () => ({ connect: (url: string) => { authority = url; return new Session() } }));
 mock.module("../crypto/init", () => ({ getEncryptionKeyBytes: () => new Uint8Array(32).fill(23) }));
-const { createAPNsJWT, buildAPNsPayload, sendAPNsNotification, getAPNsInfo, sendAPNsLiveActivity, getLiveActivityAPNsInfo } = await import("./apns.service");
+const { createAPNsJWT, buildAPNsPayload, sendAPNsNotification, getAPNsInfo, sendAPNsLiveActivity, getLiveActivityAPNsInfo, IOS_COMPLETION_SOUND } = await import("./apns.service");
 afterAll(() => {
   for (const key of variables) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key] }
   rmSync(directory, { recursive: true, force: true });
@@ -43,6 +43,38 @@ afterAll(() => {
 });
 
 describe("native APNs provider", () => {
+  test("uses the synthesized tone for completion and leaves errors and generic alerts unchanged", async () => {
+    expect(JSON.parse(buildAPNsPayload({ title: "Lumi", body: "Ready", tag: "generation-chat-1" })).aps.sound).toBe(IOS_COMPLETION_SOUND);
+    for (const tag of [undefined, "generation-error-chat-1", "extension-alert"]) {
+      expect(JSON.parse(buildAPNsPayload({ title: "Alert", body: "Test", tag })).aps.sound).toBe("default");
+    }
+    expect(JSON.parse(buildAPNsPayload({ title: "Failed", body: "Error", tag: "generation-chat-1", data: { errorMessage: "Failed" } })).aps.sound).toBe("default");
+    responseStatus = 200; responseBody = "";
+    const destination = { device_token: "ab".repeat(32), bundle_id: "chat.lumiverse.ios", environment: "development" as const };
+    await sendAPNsLiveActivity(destination, { phase: "completed", label: "Response ready" }, 123456, false, true, true);
+    expect(JSON.parse(lastPayload).aps).toMatchObject({ event: "update", alert: { sound: IOS_COMPLETION_SOUND, title: "Response ready" } });
+    expect(JSON.parse(lastPayload).aps['dismissal-date']).toBeUndefined();
+    await sendAPNsLiveActivity(destination, { phase: "error", label: "Generation failed" }, 123456, false, true, true);
+    expect(JSON.parse(lastPayload).aps).toMatchObject({ event: "update", alert: { sound: "default", title: "Generation failed" } });
+    for (const [phase, enabled] of [["completed", false], ["stopped", true], ["error", false], ["streaming", false]] as const) {
+      await sendAPNsLiveActivity(destination, { phase, label: phase }, 123457, phase !== "streaming", true, enabled);
+      expect(JSON.parse(lastPayload).aps.alert).toBeUndefined();
+    }
+    await sendAPNsLiveActivity(destination, { phase: "completed", label: "Response ready" }, 123467, true, true, true);
+    expect(JSON.parse(lastPayload).aps).toMatchObject({ event: "end", 'dismissal-date': 123587 });
+    expect(JSON.parse(lastPayload).aps.alert).toBeUndefined();
+  });
+  test("stage alerts use their distinct bundled tones while heartbeats and end events stay silent", async () => {
+    const destination = { device_token: "ab".repeat(32), bundle_id: "chat.lumiverse.ios", environment: "development" as const };
+    for (const [phase, sound] of Object.entries({ assembling: "prepare", council: "prepare", waiting: "prepare", reasoning: "think", streaming: "respond" })) {
+      await sendAPNsLiveActivity(destination, { phase, label: phase }, 123456, false, true, true);
+      expect(JSON.parse(lastPayload).aps).toMatchObject({ event: "update", alert: { sound: `lumiverse-${sound}.wav` } });
+      await sendAPNsLiveActivity(destination, { phase, label: phase }, 123457, false, false, false);
+      expect(JSON.parse(lastPayload).aps.alert).toBeUndefined();
+      await sendAPNsLiveActivity(destination, { phase, label: phase }, 123458, true, true, true);
+      expect(JSON.parse(lastPayload).aps.alert).toBeUndefined();
+    }
+  });
   test("sends ActivityKit updates and endings with independent APNs topics and priorities", async () => {
     responseStatus = 200; responseBody = "";
     const destination = { device_token: "12".repeat(32), bundle_id: "chat.lumiverse.ios", environment: "development" as const };

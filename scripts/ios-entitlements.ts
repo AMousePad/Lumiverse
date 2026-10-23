@@ -33,6 +33,7 @@ export function configureIOSPushEntitlements(spec: string, enabled: boolean): st
 /** Keep the service extension embedded and signed across XcodeGen regeneration. */
 export function configureIOSNotificationExtension(spec: string, enabled: boolean): string {
   spec = spec.replace(/      # Lumiverse notification dependency\n[\s\S]*?      # End Lumiverse notification dependency\n/g, "")
+    .replace(/      # Lumiverse notification sound\n[\s\S]*?      # End Lumiverse notification sound\n/g, "")
     .replace(/  # Lumiverse notification service\n[\s\S]*?  # End Lumiverse notification service\n/g, "");
   if (!enabled) return spec;
   const parsed = Bun.YAML.parse(spec) as {
@@ -46,6 +47,13 @@ export function configureIOSNotificationExtension(spec: string, enabled: boolean
   if (![shortVersion, buildVersion].every(value => /^\d+(?:\.\d+){0,2}$/.test(value))) throw new Error("Invalid iOS application version");
   const anchor = "      - framework: libapp.a";
   if (!spec.includes(anchor)) throw new Error("Missing iOS application dependencies");
+  const sourceAnchor = "      - path: lumiverse-ios-client_iOS";
+  if (!spec.includes(sourceAnchor)) throw new Error("Missing iOS application sources");
+  spec = spec.replace(sourceAnchor, `      # Lumiverse notification sound
+      - path: ../../../../sounds
+        buildPhase: resources
+      # End Lumiverse notification sound
+${sourceAnchor}`);
   spec = spec.replace(anchor, `      # Lumiverse notification dependency
       - target: LumiverseNotificationService
         embed: true
@@ -57,7 +65,10 @@ ${anchor}`);
     type: app-extension
     platform: iOS
     deploymentTarget: "15.0"
-    sources: [../../../../notification-service]
+    sources:
+      - ../../../../notification-service
+      - path: ../../../../sounds
+        buildPhase: resources
     info:
       path: LumiverseNotificationService/Info.plist
       properties:
@@ -86,6 +97,8 @@ ${anchor}`);
 /** An extension with a newer deployment target leaves the iOS 15 host usable. */
 export function configureIOSLiveActivityExtension(spec: string, enabled: boolean): string {
   spec = spec.replace(/      # Lumiverse activity dependency\n[\s\S]*?      # End Lumiverse activity dependency\n/g, "")
+    .replace(/      # Lumiverse activity intents\n[\s\S]*?      # End Lumiverse activity intents\n/g, "")
+    .replace(/        # Lumiverse intent bridge\n[\s\S]*?        # End Lumiverse intent bridge\n/g, "")
     .replace(/  # Lumiverse live activity\n[\s\S]*?  # End Lumiverse live activity\n/g, "");
   if (!enabled) return spec;
   const parsed = Bun.YAML.parse(spec) as any;
@@ -101,6 +114,16 @@ export function configureIOSLiveActivityExtension(spec: string, enabled: boolean
         embed: true
       # End Lumiverse activity dependency
 ${anchor}`);
+  const sourcesAnchor = "      - path: lumiverse-ios-client_iOS";
+  if (!spec.includes(sourcesAnchor)) throw new Error("Missing iOS application sources");
+  spec = spec.replace(sourcesAnchor, `      # Lumiverse activity intents
+      - path: ../../../../activity-intents
+      # End Lumiverse activity intents
+${sourcesAnchor}`);
+  spec = spec.replace("        ENABLE_BITCODE:", `        # Lumiverse intent bridge
+        SWIFT_OBJC_BRIDGING_HEADER: ../../../../activity-intents/LumiverseActivityActions.h
+        # End Lumiverse intent bridge
+        ENABLE_BITCODE:`);
   return spec + `
   # Lumiverse live activity
   LumiverseLiveActivity:
@@ -109,6 +132,7 @@ ${anchor}`);
     deploymentTarget: "16.1"
     sources:
       - ../../../../live-activity
+      - ../../../../activity-intents
       - ../../../../native/ios/Sources/GenerationActivityAttributes.swift
       - ../../../../native/ios/Sources/GenerationActivityAvatar.swift
     entitlements:
@@ -128,6 +152,7 @@ ${anchor}`);
       groups: [app]
       base:
         PRODUCT_NAME: LumiverseLiveActivity
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) LUMIVERSE_ACTIVITY_EXTENSION"
         PRODUCT_BUNDLE_IDENTIFIER: ${bundleId}.LiveActivity
         MARKETING_VERSION: "${info.CFBundleShortVersionString}"
         CURRENT_PROJECT_VERSION: "${info.CFBundleVersion}"

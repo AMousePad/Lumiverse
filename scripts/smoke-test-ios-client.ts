@@ -30,14 +30,32 @@ const activitySmokeRequired = (Bun.YAML.parse(readFileSync(join(generated, "proj
   .targets['lumiverse-ios-client_iOS'].info.properties.NSSupportsLiveActivities === true;
 const smokeGenerationId = `smoke-${Date.now()}`;
 const audioBundle = await nativeAudioSmokeBundle();
-const activityAvatar = await sharp(join(root, 'frontend/public/icon.svg')).resize(128, 128).flatten({ background: '#231e30' }).jpeg().toBuffer();
+const avatarSVG = readFileSync(join(root, 'frontend/public/icon.svg'), 'utf8');
+const activityAvatar = await sharp(Buffer.from(avatarSVG.replaceAll('#BA87FF', '#6DDAD0').replaceAll('#9370DB', '#3EAFBD')))
+  .resize(128, 128).flatten({ background: '#182830' }).jpeg().toBuffer();
+const warmAvatar = await sharp(Buffer.from(avatarSVG.replaceAll('#BA87FF', '#F2B15F').replaceAll('#9370DB', '#D68A47')))
+  .resize(128, 128).flatten({ background: '#302518' }).jpeg().toBuffer();
+let activityStopRequests = 0;
+let resumeAvatarPending = false;
+let releaseResumeAvatar: (() => void) | undefined;
 const fixture = Bun.serve({ hostname: "127.0.0.1", port: 18763, async fetch(request) {
   const url = new URL(request.url);
   if (url.pathname.startsWith('/api/ios-activities/v1/registrations/')) {
-    if (url.pathname.endsWith('/avatar')) return new Response(activityAvatar, { headers: { 'Content-Type': 'image/jpeg' } });
+    if (url.pathname.endsWith('/stop') && request.method === 'POST') {
+      if (request.headers.get('Authorization') !== 'Bearer ' + 's'.repeat(43)) return new Response(null, {status:401});
+      activityStopRequests++;
+      return Response.json({ state: { phase: 'stopped', label: 'Generation stopped' } });
+    }
+    if (url.pathname.endsWith('-resume/avatar')) {
+      resumeAvatarPending = true;
+      await new Promise<void>(resolve => { releaseResumeAvatar = resolve });
+    }
+    if (url.pathname.endsWith('/avatar')) return new Response(url.pathname.includes('-warm/') ? warmAvatar : activityAvatar, { headers: { 'Content-Type': 'image/jpeg' } });
     if (request.method === 'DELETE') return new Response(null, { status: 204 });
-    return Response.json({ state: { phase: 'reasoning', label: 'Thinking' } });
+    return Response.json({ state: { phase: 'assembling', label: 'Preparing response' } });
   }
+  if (url.pathname === '/activity-actions') return Response.json({ stopRequests: activityStopRequests, resumeAvatarPending });
+  if (url.pathname === '/release-resume-avatar') { releaseResumeAvatar?.(); return new Response(null, { status: 204 }); }
   if (url.pathname === '/activity-check' && request.method === 'POST') {
     liveActivityResult = await request.json() as typeof liveActivityResult;
     console.log('[ios] Activity probe:', JSON.stringify(liveActivityResult));
@@ -80,7 +98,7 @@ const fixture = Bun.serve({ hostname: "127.0.0.1", port: 18763, async fetch(requ
     <button id="export-blob">Export blob</button><button id="export-server">Export from server</button>
     <button id="speech">Try native dictation</button><p id="speech-result"></p>
     <button id="activity">Test Live Activity</button><p id="activity-result"></p>
-    <button id="activity-continue" hidden>Continue Live Activity check</button>
+    <button id="activity-continue" hidden>Continue after Stop</button>
     <p id="audio"></p><script defer src="/audio-probe.js"></script>
     <script>(async () => {
       await new Promise(resolve => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', resolve, {once:true}) : resolve());
@@ -103,16 +121,48 @@ const fixture = Bun.serve({ hostname: "127.0.0.1", port: 18763, async fetch(requ
             if (${activitySmokeRequired}) throw new Error('Live Activities unavailable in a push-enabled simulator build');
             result = {passed:true,available:false};
           } else {
+            const continueCheck = label => new Promise(resolve => {
+              const button = document.getElementById('activity-continue');
+              button.textContent = label;
+              button.hidden = false;
+              button.onclick = () => { button.hidden = true; resolve(); };
+            });
             const generationId = '${smokeGenerationId}';
             const enrollment = {registrationId:crypto.randomUUID(),credential:'s'.repeat(43),expiresAt:Date.now()+3600000,
               accountId:'smoke-owner',serverOrigin:location.origin,
               attributes:{generationId,chatId:'smoke-chat',serverOrigin:location.origin,accountId:'smoke-owner',characterName:'Lucia Flowen – Night Emissary’s Midnight Tale',startedAt:Date.now()/1000},
-              state:{phase:'reasoning',label:'Thinking'}};
+              state:{phase:'assembling',label:'Preparing response'}};
+            // Hold the avatar fetch so XCTest can background us at the exact
+            // point that used to poison the generation's duplicate guard.
+            const resumeId = generationId + '-resume';
+            const attempt = bridge.request('activities.start', {...enrollment,registrationId:crypto.randomUUID()+'-resume',
+              attributes:{...enrollment.attributes,generationId:resumeId}}).then(() => false, () => true);
+            while (!(await (await fetch('/activity-actions')).json()).resumeAvatarPending) await new Promise(resolve => setTimeout(resolve, 25));
+            document.getElementById('activity-result').textContent = 'Live Activity background start pending';
+            const failedStart = await attempt;
+            while ((await bridge.request('lifecycle.status')).state !== 'active') await new Promise(resolve => setTimeout(resolve, 50));
+            const abandoned = await bridge.request('activities.status');
+            if (!failedStart || abandoned.generationIds.includes(resumeId) || abandoned.suppressedGenerationIds.includes(resumeId))
+              throw new Error('Background start was not retryable: '+JSON.stringify(abandoned));
+            const retried = await bridge.request('activities.start', {...enrollment,registrationId:crypto.randomUUID(),
+              attributes:{...enrollment.attributes,generationId:resumeId}});
+            if (!retried.started) throw new Error('Foreground restart of abandoned activity failed');
+            // Clear the recovery fixture immediately so its ended card cannot
+            // push the next card outside the SE's short notification viewport.
+            await bridge.request('activities.configure', {accountId:'smoke-owner',enabled:false});
+            await bridge.request('activities.configure', {accountId:'smoke-owner',enabled:true});
             const started = await bridge.request('activities.start', enrollment);
             const duplicate = await bridge.request('activities.start', enrollment);
             const active = await bridge.request('activities.status');
             if (!started.started || duplicate.started || !active.generationIds.includes(generationId)) throw new Error('Start or duplicate guard failed');
             if (!active.activities?.find(item => item.generationId === generationId)?.hasAvatar) throw new Error('Shared avatar prefetch failed');
+            const accent = active.activities.find(item => item.generationId === generationId).avatarAccent;
+            if (!accent || accent[1] < accent[0] + 30 || accent[2] < accent[0] + 30) throw new Error('Cool avatar accent not extracted: '+JSON.stringify(accent));
+            document.getElementById('activity-result').textContent = 'Live Activity preparing preview ready';
+            await continueCheck('Continue after Prepare');
+            await bridge.request('activities.reconcile', {snapshots:[{generationId,state:{phase:'reasoning',label:'Thinking'}}]});
+            document.getElementById('activity-result').textContent = 'Live Activity thinking preview ready';
+            await continueCheck('Continue after Think');
             await bridge.request('activities.reconcile', {snapshots:[{generationId,state:{phase:'streaming',label:'Writing response'}}]});
             await bridge.request('activities.reconcile', {snapshots:[{generationId,state:{phase:'reasoning',label:'Thinking'}}]});
             let writing;
@@ -124,16 +174,28 @@ const fixture = Bun.serve({ hostname: "127.0.0.1", port: 18763, async fetch(requ
             } while (Date.now() < phaseDeadline);
             if (writing.activities?.find(item => item.generationId === generationId)?.phase !== 'streaming') throw new Error('Phase update failed: '+JSON.stringify(writing));
             document.getElementById('activity-result').textContent = 'Live Activity preview ready';
-            await new Promise(resolve => {
-              const button = document.getElementById('activity-continue');
-              button.hidden = false;
-              button.onclick = () => { button.hidden = true; resolve(); };
-            });
-            await bridge.request('activities.reconcile', {snapshots:[{generationId,state:{phase:'completed',label:'Response ready'}}]});
+            await continueCheck('Continue after Stop');
+            const stopped = await bridge.request('activities.status');
+            if (!stopped.suppressedGenerationIds.includes(generationId)) throw new Error('Stop action did not end its activity');
+            if ((await (await fetch('/activity-actions')).json()).stopRequests !== 1) throw new Error('Stop intent did not reach the server exactly once');
+            const hideId = generationId + '-hide';
+            await bridge.request('activities.start', {...enrollment, registrationId:crypto.randomUUID(),attributes:{...enrollment.attributes,generationId:hideId}});
+            document.getElementById('activity-result').textContent = 'Live Activity hide preview ready';
+            await continueCheck('Continue after Hide');
+            const hidden = await bridge.request('activities.status');
+            if (!hidden.suppressedGenerationIds.includes(hideId)) throw new Error('Hide action did not dismiss its activity');
+            if ((await (await fetch('/activity-actions')).json()).stopRequests !== 1) throw new Error('Hide incorrectly stopped generation');
+            const completedId = generationId + '-completed';
+            await bridge.request('activities.start', {...enrollment, registrationId:crypto.randomUUID()+'-warm',attributes:{...enrollment.attributes,generationId:completedId}});
+            const warm = (await bridge.request('activities.status')).activities.find(item => item.generationId === completedId)?.avatarAccent;
+            if (!warm || warm[0] < warm[2] + 30) throw new Error('Warm avatar accent not extracted: '+JSON.stringify(warm));
+            await bridge.request('activities.reconcile', {snapshots:[{generationId:completedId,state:{phase:'completed',label:'Response ready'}}]});
             const ended = await bridge.request('activities.status');
-            if (ended.generationIds.includes(generationId) || !ended.suppressedGenerationIds.includes(generationId)) throw new Error('Terminal recovery failed');
+            if (ended.generationIds.includes(completedId) || !ended.suppressedGenerationIds.includes(completedId)) throw new Error('Terminal recovery failed');
+            document.getElementById('activity-result').textContent = 'Live Activity completed preview ready';
+            await continueCheck('Continue after Ready');
             await bridge.request('activities.configure', {accountId:null,enabled:false});
-            result = {passed:true,available:true,avatarVerified:true,phaseUpdateVerified:true};
+            result = {passed:true,available:true,avatarVerified:true,paletteVerified:true,phaseUpdateVerified:true,stopVerified:true,hideVerified:true,backgroundRecoveryVerified:true};
           }
         } catch (error) { result = {passed:false,error:String(error)}; }
         document.getElementById('activity-result').textContent = result.passed ? 'Live Activity verified' : 'Live Activity failed: '+result.error;
