@@ -133,7 +133,7 @@ html[data-rendering-mode='efficiency'] *::after {
    replaces the surface background with the accent-tinted glass wash. The
    `::after` sheen is safe to add: none of the opted-in surfaces use one. */
 html[data-liquid-glass] {
-  --lcs-liquid-filter: url(#liquid-glass-distort);
+  --lcs-liquid-lens: url(#liquid-glass-lens);
 }
 
 html[data-liquid-glass] [data-liquid-glass-surface] {
@@ -155,6 +155,17 @@ html[data-liquid-glass] [data-liquid-glass-surface] {
   html[data-liquid-glass] [data-liquid-glass-surface] {
     backdrop-filter: blur(var(--lcs-liquid-blur, 10px)) saturate(1.35) var(--lcs-liquid-filter);
   }
+
+  /* Every other glass surface in the app refracts too. Each of them already
+     ends its `backdrop-filter` with `var(--lcs-liquid-filter, )`, which is
+     empty until this rule fills it, so one declaration here upgrades all ~50
+     frosted surfaces at once without editing 37 stylesheets. The fill lives
+     inside the `@supports` probe, not in the ungated rule above, so an engine
+     that cannot displace a backdrop drops only this declaration and keeps its
+     plain blur instead of losing the whole `backdrop-filter`. */
+  html[data-liquid-glass] {
+    --lcs-liquid-filter: url(#liquid-glass-distort);
+  }
 }
 
 html[data-liquid-glass] [data-liquid-glass-surface]::after {
@@ -164,9 +175,12 @@ html[data-liquid-glass] [data-liquid-glass-surface]::after {
   border-radius: inherit;
   pointer-events: none;
   /* Rim and specular only: a full-area tint here would wash over the surface's
-     content, so the tint lives on the element background instead. */
+     content, so the tint lives on the element background instead. The two-part
+     highlight (a hard 1px lip plus a soft inner glow) is what the reference
+     glass uses to sell the curved edge. */
   box-shadow:
     inset 1px 1px 0 -1px var(--lcs-liquid-specular, transparent),
+    inset 0 0 5px 0 var(--lcs-liquid-specular, transparent),
     inset 0 0 3px 1px var(--lcs-liquid-rim, transparent);
 }
 
@@ -177,6 +191,68 @@ html[data-liquid-glass] [data-liquid-glass-surface]::after {
   height: 0;
   overflow: hidden;
   pointer-events: none;
+}
+
+/* ── Liquid Glass sliders ──
+   Every range input becomes a bead of glass on a rounded bar, following the
+   "Slider Button Liquid Glass" study: the thumb carries a radial lens filter
+   over its own backdrop blur plus a specular rim, so it reads as glass sliding
+   along the track. The track keeps the theme's own paint, so the accent still
+   marks progress — only the material changes.
+
+   Doing this on the native control rather than a rebuilt slider is what makes
+   it apply everywhere at once. It works because Chromium does apply
+   `backdrop-filter` to `::-webkit-slider-thumb` (verified), and because the
+   lens keys off `filter:` while the blur keys off `backdrop-filter:`, so the
+   two compose instead of competing for the single displacement slot. */
+html[data-liquid-glass] input[type='range'] {
+  --lcs-slider-thumb-w: 30px;
+  --lcs-slider-thumb-h: 18px;
+  --lcs-slider-track-h: 8px;
+}
+
+html[data-liquid-glass] input[type='range']::-webkit-slider-runnable-track {
+  height: var(--lcs-slider-track-h);
+  border-radius: 999px;
+}
+
+html[data-liquid-glass] input[type='range']::-moz-range-track {
+  height: var(--lcs-slider-track-h);
+  border-radius: 999px;
+}
+
+html[data-liquid-glass] input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--lcs-slider-thumb-w);
+  height: var(--lcs-slider-thumb-h);
+  border: none;
+  border-radius: 999px;
+  margin-top: calc((var(--lcs-slider-track-h) - var(--lcs-slider-thumb-h)) / 2);
+  background-color: var(--lcs-liquid-thumb-tint, transparent);
+  backdrop-filter: blur(var(--lcs-liquid-thumb-blur, 0.6px));
+  -webkit-backdrop-filter: blur(var(--lcs-liquid-thumb-blur, 0.6px));
+  filter: var(--lcs-liquid-lens, none);
+  box-shadow:
+    inset 1px 1px 0 var(--lcs-liquid-thumb-specular, transparent),
+    inset -1px -1px 0 var(--lcs-liquid-rim, transparent),
+    0 1px 4px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+}
+
+html[data-liquid-glass] input[type='range']::-moz-range-thumb {
+  width: var(--lcs-slider-thumb-w);
+  height: var(--lcs-slider-thumb-h);
+  border: none;
+  border-radius: 999px;
+  background-color: var(--lcs-liquid-thumb-tint, transparent);
+  backdrop-filter: blur(var(--lcs-liquid-thumb-blur, 0.6px));
+  filter: var(--lcs-liquid-lens, none);
+  box-shadow:
+    inset 1px 1px 0 var(--lcs-liquid-thumb-specular, transparent),
+    inset -1px -1px 0 var(--lcs-liquid-rim, transparent),
+    0 1px 4px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
 }
 
 /* Focus styles — subtle ring for interactive elements only */

@@ -91,7 +91,7 @@
       color-mix(in srgb, var(--lcs-glass-bg) 70%, var(--lumiverse-bg) 30%)
     );
   border-color: var(--lcs-glass-border);
-  backdrop-filter: blur(var(--lcs-glass-blur));
+  backdrop-filter: blur(var(--lcs-glass-blur)) var(--lcs-liquid-filter, );
   box-shadow:
     0 14px 34px var(--lumiverse-fill-heavy),
     var(--lumiverse-highlight-inset),
@@ -119,7 +119,7 @@
   color: var(--lumiverse-text, rgba(255, 255, 255, 0.92));
   font-size: 13px;
   font-weight: 600;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px) var(--lcs-liquid-filter, );
 }
 
 /* ── Action bar — regenerate / continue / stop ── */

@@ -20,7 +20,7 @@
    Message rows are virtualized, so mounted cards are already near the viewport;
    keeping this static avoids style/measurement feedback loops while scrolling. */
 :global([data-glass][data-chat-bg]) .card {
-  backdrop-filter: blur(var(--lcs-glass-blur));
+  backdrop-filter: blur(var(--lcs-glass-blur)) var(--lcs-liquid-filter, );
 }
 
 /* Accent bar — positioned via ::before */

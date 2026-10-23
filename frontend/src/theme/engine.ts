@@ -401,7 +401,7 @@ export function generateThemeVariables(
   // to add or remove variables.
   const liquid = Boolean(config.liquidGlass)
   vars['--lcs-liquid-tint'] = liquid
-    ? hsla(h, bgSat, isDark ? 9 : 96, isDark ? 0.42 : 0.5)
+    ? hsla(h, bgSat, isDark ? 9 : 96, isDark ? 0.26 : 0.34)
     : 'transparent'
   vars['--lcs-liquid-specular'] = liquid
     ? (isDark ? 'rgba(255, 255, 255, 0.72)' : 'rgba(255, 255, 255, 0.9)')
@@ -410,6 +410,17 @@ export function generateThemeVariables(
     ? (isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(255, 255, 255, 0.55)')
     : 'transparent'
   vars['--lcs-liquid-blur'] = liquid ? '10px' : '0px'
+
+  // Slider thumbs read as beads of glass rather than panes: a much lighter wash
+  // than a surface (a 0.26-alpha tint on a 24px lozenge just looks muddy), a
+  // stronger specular, and a small backdrop blur under the lens filter.
+  vars['--lcs-liquid-thumb-tint'] = liquid
+    ? hsla(h, bgSat, isDark ? 30 : 99, isDark ? 0.18 : 0.34)
+    : 'transparent'
+  vars['--lcs-liquid-thumb-specular'] = liquid
+    ? (isDark ? 'rgba(255, 255, 255, 0.85)' : 'rgba(255, 255, 255, 0.95)')
+    : 'transparent'
+  vars['--lcs-liquid-thumb-blur'] = liquid ? '0.6px' : '0px'
 
   // ── Prose tokens ──
   if (isDark) {

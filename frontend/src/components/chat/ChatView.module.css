@@ -273,8 +273,8 @@
 }
 
 :global([data-glass]) .cortexNotice {
-  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px)) var(--lcs-liquid-filter, );
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px)) var(--lcs-liquid-filter, );
 }
 
 .cortexNoticeError {
@@ -499,7 +499,7 @@
   max-width: 100% !important;
   z-index: 9999 !important;
   background: rgba(24, 24, 27, 0.94) !important;
-  backdrop-filter: blur(12px) !important;
+  backdrop-filter: blur(12px) var(--lcs-liquid-filter, ) !important;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45) !important;
   box-sizing: border-box !important;
@@ -705,7 +705,7 @@
 }
 
 :global([data-glass]) .portraitTab {
-  backdrop-filter: blur(var(--lcs-glass-blur));
+  backdrop-filter: blur(var(--lcs-glass-blur)) var(--lcs-liquid-filter, );
 }
 
 .portraitTab:hover {

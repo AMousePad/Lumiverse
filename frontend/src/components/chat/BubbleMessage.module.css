@@ -98,7 +98,7 @@
 /* Only apply backdrop-filter when glass is enabled AND there's a non-solid
    background (image/video/scene). Blurring a solid color is pure GPU waste. */
 :global([data-glass][data-chat-bg]) .card {
-  backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) saturate(1.2);
+  backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) saturate(1.2) var(--lcs-liquid-filter, );
 }
 
 .card.streaming {
