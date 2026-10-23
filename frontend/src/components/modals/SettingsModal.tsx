@@ -916,6 +916,8 @@ function ChatSettings() {
   const { t: tc } = useTranslation('common')
   const { t: tChat } = useTranslation('chat', { keyPrefix: 'quickMenu' })
   const displayMode = useStore((s) => s.chatDisplayMode)
+  const showGreetingImage = useStore((s) => s.showGreetingImage)
+  const greetingImagePosition = useStore((s) => s.greetingImagePosition)
   const minimalUseFullAvatar = useStore((s) => s.minimalUseFullAvatar ?? false)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
@@ -1092,6 +1094,32 @@ function ChatSettings() {
             </div>
           </div>
         </>
+      )}
+
+      <h3 id={sectionAnchorId('chat', 'greetingImages')} className={sectionTitleClass} style={{ marginTop: 12 }}>{t('chat.greetingImages.title')}</h3>
+      <Toggle.Checkbox
+        checked={showGreetingImage}
+        onChange={(checked) => setSetting('showGreetingImage', checked)}
+        label={t('chat.greetingImages.show')}
+        hint={t('chat.greetingImages.showHint')}
+      />
+      {showGreetingImage && (
+        <div className={styles.field}>
+          <label id="greeting-image-position-label" className={styles.fieldLabel}>{t('chat.greetingImages.position')}</label>
+          <div className={styles.segmented} role="group" aria-labelledby="greeting-image-position-label">
+            {(['top', 'bottom'] as const).map((position) => (
+              <button
+                key={position}
+                type="button"
+                className={clsx(styles.segmentedBtn, greetingImagePosition === position && styles.segmentedBtnActive)}
+                aria-pressed={greetingImagePosition === position}
+                onClick={() => setSetting('greetingImagePosition', position)}
+              >
+                {t(`chat.greetingImages.${position}`)}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
 
       <h3 id={sectionAnchorId('chat', 'width')} className={sectionTitleClass} style={{ marginTop: 12 }}>{t('chat.widthTitle')}</h3>

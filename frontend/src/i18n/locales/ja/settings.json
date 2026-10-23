@@ -429,6 +429,14 @@
     "hfSaved": "トークンを保存しました。"
   },
   "chat": {
+    "greetingImages": {
+      "title": "挨拶の画像",
+      "show": "挨拶の画像を表示",
+      "showHint": "選択した挨拶の画像を最初のメッセージになじませて表示します。",
+      "position": "画像の位置",
+      "top": "メッセージの上",
+      "bottom": "メッセージの下"
+    },
     "title": "チャット",
     "displayMode": "表示モード",
     "minimal": "最小限",

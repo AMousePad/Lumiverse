@@ -429,6 +429,14 @@
     "hfSaved": "Jeton enregistré."
   },
   "chat": {
+    "greetingImages": {
+      "title": "Images d’accueil",
+      "show": "Afficher les images d’accueil",
+      "showHint": "Intègre l’illustration de l’accueil sélectionné au message initial.",
+      "position": "Position de l’image",
+      "top": "Au-dessus du message",
+      "bottom": "Sous le message"
+    },
     "title": "Chat",
     "displayMode": "Mode d'affichage",
     "minimal": "Minimal",

@@ -114,6 +114,8 @@ interface StartupSettings {
   activeProfileId?: string | null;
   toastPosition?: "top-right" | "top-left" | "bottom-right" | "bottom-left" | "top" | "bottom";
   defaultImpersonationMode?: "prompts" | "preset" | "oneliner";
+  showGreetingImage?: boolean;
+  greetingImagePosition?: "top" | "bottom";
 }
 
 const LIST_LIMIT_CONNECTIONS = 100;
@@ -140,6 +142,8 @@ export const STARTUP_SETTINGS_KEYS = [
   "activeProfileId",
   "toastPosition",
   "defaultImpersonationMode",
+  "showGreetingImage",
+  "greetingImagePosition",
 ] as const;
 
 /**
@@ -279,6 +283,15 @@ export function getStartupSettings(userId: string): StartupSettings {
     || defaultImpersonationMode === "oneliner"
   ) {
     startupSettings.defaultImpersonationMode = defaultImpersonationMode;
+  }
+
+  const showGreetingImage = rows.get("showGreetingImage");
+  if (typeof showGreetingImage === "boolean") {
+    startupSettings.showGreetingImage = showGreetingImage;
+  }
+  const greetingImagePosition = rows.get("greetingImagePosition");
+  if (greetingImagePosition === "top" || greetingImagePosition === "bottom") {
+    startupSettings.greetingImagePosition = greetingImagePosition;
   }
 
   return startupSettings;

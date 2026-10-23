@@ -345,6 +345,14 @@
     "hfSaved": "Token salvato."
   },
   "chat": {
+    "greetingImages": {
+      "title": "Immagini di saluto",
+      "show": "Mostra le immagini di saluto",
+      "showHint": "Integra l’immagine del saluto selezionato nel messaggio iniziale.",
+      "position": "Posizione dell’immagine",
+      "top": "Sopra il messaggio",
+      "bottom": "Sotto il messaggio"
+    },
     "title": "Chat",
     "displayMode": "Modalità di visualizzazione",
     "minimal": "Minimale",

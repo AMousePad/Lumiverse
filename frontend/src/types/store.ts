@@ -147,6 +147,8 @@ export interface StartupSettings {
   activeProfileId?: string | null
   toastPosition?: ToastPosition
   defaultImpersonationMode?: ImpersonationPreference
+  showGreetingImage?: boolean
+  greetingImagePosition?: 'top' | 'bottom'
 }
 
 export interface CharactersSlice {
@@ -760,6 +762,9 @@ export interface SettingsSlice {
   personasPerPage: number
   messagesPerPage: number
   chatDisplayMode: 'minimal' | 'immersive' | 'bubble'
+  /** Show the selected greeting's artwork with the starting message. Opt-in. */
+  showGreetingImage: boolean
+  greetingImagePosition: 'top' | 'bottom'
   longMessageCollapseEnabled: boolean
   longMessageCollapsePreset: LongMessageCollapsePreset
   longMessageCollapseCustomHeight: number

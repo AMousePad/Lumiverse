@@ -345,6 +345,14 @@
     "hfSaved": "令牌已保存。"
   },
   "chat": {
+    "greetingImages": {
+      "title": "开场白图片",
+      "show": "显示开场白图片",
+      "showHint": "将所选开场白的配图自然融入起始消息。",
+      "position": "图片位置",
+      "top": "消息顶部",
+      "bottom": "消息底部"
+    },
     "title": "聊天",
     "displayMode": "显示模式",
     "minimal": "极简",
