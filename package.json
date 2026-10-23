@@ -71,6 +71,7 @@
     "test:ios-client": "bun run scripts/smoke-test-ios-client.ts",
     "probe:ios-native-cache": "bun run scripts/probe-ios-native-cache.ts",
     "check:ios-frame-pacing": "bun run scripts/check-ios-frame-pacing.ts",
+    "check:ios-release": "python3 scripts/check-ios-release.py",
     "build:lancedb:android-native": "bun run scripts/build-lancedb-android-native.ts",
     "build:sharp:android-native": "bun run scripts/build-sharp-android-native.ts",
     "test:android-prototype": "bun run scripts/smoke-test-android-prototype.ts",

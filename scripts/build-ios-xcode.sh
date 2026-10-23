@@ -2,6 +2,11 @@
 # Xcode's Run action must work without a Tauri CLI process or shell startup files.
 set -eu
 
+if [ "${LUMIVERSE_IOS_APP_STORE_CONNECT:-0}" = "1" ] && [ "${LUMIVERSE_IOS_EXPERIMENTAL_HIGH_REFRESH:-0}" != "0" ]; then
+  echo "error: App Store Connect builds cannot use experimental private WebKit APIs." >&2
+  exit 1
+fi
+
 if [ "${LUMIVERSE_IOS_PREBUILT_RUST:-0}" = "1" ]; then
   exit 0
 fi

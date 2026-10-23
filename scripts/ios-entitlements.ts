@@ -66,7 +66,10 @@ ${anchor}`);
     platform: iOS
     deploymentTarget: "15.0"
     sources:
-      - ../../../../notification-service
+      - path: ../../../../notification-service
+        excludes: [PrivacyInfo.xcprivacy]
+      - path: ../../../../notification-service/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: ../../../../sounds
         buildPhase: resources
     info:
@@ -131,7 +134,10 @@ ${sourcesAnchor}`);
     platform: iOS
     deploymentTarget: "16.1"
     sources:
-      - ../../../../live-activity
+      - path: ../../../../live-activity
+        excludes: [PrivacyInfo.xcprivacy]
+      - path: ../../../../live-activity/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - ../../../../activity-intents
       - ../../../../native/ios/Sources/GenerationActivityAttributes.swift
       - ../../../../native/ios/Sources/GenerationActivityAvatar.swift

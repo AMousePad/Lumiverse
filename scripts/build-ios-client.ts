@@ -4,15 +4,22 @@ import { join, relative, resolve } from "node:path";
 import { zipSync, type Zippable } from "fflate";
 import { configureIOSPushEntitlements, configureIOSNotificationExtension, configureIOSLiveActivityExtension } from "./ios-entitlements";
 import { buildIOSNativeCache } from "./build-ios-native-cache";
+import { assertIOSPlatformEncryption, configureIOSDistribution, iosDistributionOptions, iosExportOptions } from "./ios-distribution";
+import { flattenIOSAppIcons } from "./ios-icons";
 
 const root = resolve(import.meta.dir, ".."), project = join(root, "ios/tauri");
 const generated = join(project, "src-tauri/gen/apple");
 const args = new Set(process.argv.slice(2));
+const distribution = iosDistributionOptions(process.argv.slice(2));
+const config = JSON.parse(readFileSync(join(project, "src-tauri/tauri.conf.json"), "utf8"));
+const version: string = config.version;
 const simulator = args.has("--simulator"), unsigned = args.has("--unsigned") || simulator;
 const experimentalHighRefresh = args.has("--experimental-high-refresh");
 const pushNotifications = args.has("--push-notifications");
 const nativeCachePreview = args.has("--native-cache-preview");
-const artifactSuffix = (nativeCachePreview ? "-native-cache-preview" : "") + (experimentalHighRefresh ? "-experimental-high-refresh" : "") + (pushNotifications ? "-push" : "");
+const artifactSuffix = (distribution.appStoreConnect ? "-app-store-connect" : "") + (nativeCachePreview ? "-native-cache-preview" : "") + (experimentalHighRefresh ? "-experimental-high-refresh" : "") + (pushNotifications ? "-push" : "");
+const archivePath = join(generated, "build/arm64", unsigned ? "Lumiverse-unsigned.xcarchive" : distribution.appStoreConnect ? "Lumiverse-app-store-connect.xcarchive" : "Lumiverse.xcarchive");
+const exportPath = join(generated, "build/arm64", distribution.appStoreConnect ? "export-app-store-connect" : "export");
 if (process.platform !== "darwin") throw new Error("iOS builds require macOS and Xcode.");
 const cli = join(root, "desktop/node_modules/@tauri-apps/cli/tauri.js");
 if (!existsSync(cli)) throw new Error("Install the locked desktop CLI first: bun install --cwd desktop --frozen-lockfile");
@@ -41,8 +48,14 @@ copyFileSync(join(root, "frontend/public/icon.svg"), join(project, "ui/icon.svg"
 const icons = join(root, ".tmp/ios-icons");
 await run(["node", cli, "icon", join(root, "frontend/public/icon.svg"), "--output", icons, "--ios-color", "#231e30"]);
 cpSync(join(icons, "ios"), join(generated, "Assets.xcassets/AppIcon.appiconset"), { recursive: true });
+await flattenIOSAppIcons(join(generated, "Assets.xcassets/AppIcon.appiconset"));
 const specPath = join(generated, "project.yml");
 let spec = readFileSync(specPath, "utf8");
+// Remove old extension targets before updating the host version. They are
+// regenerated below with the same marketing version and build number.
+spec = configureIOSNotificationExtension(spec, false);
+spec = configureIOSLiveActivityExtension(spec, false);
+spec = configureIOSDistribution(spec, version, distribution);
 spec = spec.replace(/      # Lumiverse native cache preview\n[\s\S]*?      # End Lumiverse native cache preview\n/g, "");
 if (nativeCachePreview) spec = spec.replace("      - path: LaunchScreen.storyboard", `      # Lumiverse native cache preview
       - path: ../../../../../.tmp/ios-native-cache-preview
@@ -67,6 +80,9 @@ if (!spec.includes("ENABLE_USER_SCRIPT_SANDBOXING:"))
 spec = spec.replace(/        LUMIVERSE_IOS_EXPERIMENTAL_HIGH_REFRESH:.*\n/g, "");
 spec = spec.replace("        ENABLE_BITCODE:",
   `        LUMIVERSE_IOS_EXPERIMENTAL_HIGH_REFRESH: "${experimentalHighRefresh ? "1" : "0"}"\n        ENABLE_BITCODE:`);
+spec = spec.replace(/        LUMIVERSE_IOS_APP_STORE_CONNECT:.*\n/g, "");
+spec = spec.replace("        ENABLE_BITCODE:",
+  `        LUMIVERSE_IOS_APP_STORE_CONNECT: "${distribution.appStoreConnect ? "1" : "0"}"\n        ENABLE_BITCODE:`);
 // The static library is a linker input, never a copied application resource.
 spec = spec.replace(/      - path: Externals(?:\n        buildPhase: \w+)?/,
   "      - path: Externals\n        buildPhase: none");
@@ -101,8 +117,17 @@ if (args.has("--prepare-only")) process.exit(0);
 const configuration = args.has("--debug") ? "debug" : "release";
 const derived = join(root, ".tmp/ios-xcode", (simulator ? "simulator" : "device") + artifactSuffix);
 {
+  // Info.ios.plist declares exempt encryption. Reject known bundled providers
+  // rather than silently retaining that declaration after dependency changes.
+  const dependencies = Bun.spawn(["cargo", "tree", "--locked", "--manifest-path", "src-tauri/Cargo.toml",
+    "--target", simulator ? "aarch64-apple-ios-sim" : "aarch64-apple-ios", "--edges", "normal",
+    "--prefix", "none", "--format", "{p}"], { cwd: project, env, stdout: "pipe", stderr: "inherit" });
+  const dependencyTree = await new Response(dependencies.stdout).text();
+  if (await dependencies.exited !== 0) throw new Error("Could not audit iOS encryption dependencies.");
+  assertIOSPlatformEncryption(dependencyTree);
   // Compile once, then let Xcode package the same Rust/Swift application for
-  // simulator, unsigned device, or provisioned development distribution.
+  // simulator or device archive. App Store export re-signs the development
+  // archive with distribution profiles; verify the exported IPA, not the archive.
   await run(["/bin/sh", join(root, "scripts/build-ios-xcode.sh")], project, {
     SRCROOT: generated, PLATFORM_NAME: simulator ? "iphonesimulator" : "iphoneos",
     CONFIGURATION: configuration, ARCHS: "arm64", LUMIVERSE_IOS_PREBUILT_RUST: "0",
@@ -118,16 +143,18 @@ const derived = join(root, ".tmp/ios-xcode", (simulator ? "simulator" : "device"
   else xcode.push(`DEVELOPMENT_TEAM=${team}`, "CODE_SIGN_STYLE=Automatic", "CODE_SIGN_IDENTITY=Apple Development",
     "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration");
   if (simulator) xcode.push("build");
-  else xcode.push("-archivePath", join(generated, "build/arm64", unsigned ? "Lumiverse-unsigned.xcarchive" : "Lumiverse.xcarchive"), "archive");
+  else xcode.push("-archivePath", archivePath, "archive");
   await run(xcode, generated);
   if (!unsigned) {
     const exportOptions = join(generated, "LumiverseExportOptions.plist");
-    writeFileSync(exportOptions, `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>
-<key>method</key><string>debugging</string><key>signingStyle</key><string>automatic</string>
-<key>teamID</key><string>${team}</string><key>manageAppVersionAndBuildNumber</key><false/>
-</dict></plist>\n`);
-    await run(["xcodebuild", "-quiet", "-exportArchive", "-archivePath", join(generated, "build/arm64/Lumiverse.xcarchive"),
-      "-exportOptionsPlist", exportOptions, "-exportPath", join(generated, "build/arm64/export"), "-allowProvisioningUpdates"], generated);
+    writeFileSync(exportOptions, iosExportOptions(team!, distribution));
+    // Never select an IPA left over from another configuration or failed export.
+    rmSync(exportPath, { recursive: true, force: true });
+    await run(["xcodebuild", "-quiet", "-exportArchive", "-archivePath", archivePath,
+      "-exportOptionsPlist", exportOptions, "-exportPath", exportPath, "-allowProvisioningUpdates"], generated,
+      // Xcode's /usr/bin/rsync starts a second rsync via PATH. Homebrew rsync
+      // rejects Apple's extended-attributes option and breaks IPA packaging.
+      { PATH: `/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH ?? ""}` });
   }
 }
 
@@ -147,8 +174,7 @@ if (simulator) {
   rmSync(artifact, { recursive: true, force: true });
   cpSync(app, artifact, { recursive: true });
 } else if (unsigned) {
-  const archive = join(generated, "build/arm64/Lumiverse-unsigned.xcarchive");
-  const app = find(join(archive, "Products/Applications"), ".app")[0];
+  const app = find(join(archivePath, "Products/Applications"), ".app")[0];
   if (!app) throw new Error("Xcode did not produce an application archive.");
   const entries: Zippable = {};
   function pack(path: string) {
@@ -163,7 +189,7 @@ if (simulator) {
   artifact = join(out, `lumiverse-ios-arm64-unsigned${artifactSuffix}.ipa`);
   writeFileSync(artifact, zipSync(entries, { level: 6 }));
 } else {
-  const app = join(generated, "build/arm64/Lumiverse.xcarchive/Products/Applications/Lumiverse.app");
+  const app = join(archivePath, "Products/Applications/Lumiverse.app");
   const signature = Bun.spawn(["codesign", "-d", "--entitlements", ":-", app], { env, stdout: "pipe", stderr: "pipe" });
   const signedEntitlements = await new Response(signature.stdout).text();
   await new Response(signature.stderr).text();
@@ -172,12 +198,21 @@ if (simulator) {
   if (signedForPush !== pushNotifications) throw new Error("The signed app's APNs entitlement does not match this build's push configuration.");
   const signedForCommunication = /<key>com.apple.developer.usernotifications.communication<\/key>\s*<true\s*\/>/.test(signedEntitlements);
   if (signedForCommunication !== pushNotifications) throw new Error("The signed app's Communication Notifications entitlement does not match this build's push configuration.");
-  const ipa = find(join(generated, "build/arm64/export"), ".ipa")[0];
-  if (!ipa) throw new Error("Xcode did not export a signed IPA.");
-  artifact = join(out, `lumiverse-ios-arm64${artifactSuffix}.ipa`); copyFileSync(ipa, artifact);
+  const ipas = find(exportPath, ".ipa");
+  if (ipas.length !== 1) throw new Error("Xcode must export exactly one signed IPA.");
+  if (distribution.appStoreConnect) {
+    // Validate the fresh export before replacing the last successful candidate.
+    await run(["python3", join(root, "scripts/check-ios-release.py"), "--artifact", ipas[0]!,
+      "--app-store-connect", "--build-number", distribution.buildNumber!, "--version", version,
+      "--bundle-id", config.identifier, ...(pushNotifications ? ["--push-notifications"] : []),
+      ...(nativeCachePreview ? ["--native-cache-preview"] : [])], root);
+  }
+  artifact = join(out, `lumiverse-ios-arm64${artifactSuffix}.ipa`); copyFileSync(ipas[0]!, artifact);
 }
 const metadata = { artifact: relative(root, artifact), target: simulator ? "aarch64-apple-ios-sim" : "aarch64-apple-ios",
-  signed: !unsigned, debug: args.has("--debug"), backend: "remote", version: "0.3.1",
+  signed: !unsigned, debug: args.has("--debug"), backend: "remote", version,
+  distribution: distribution.appStoreConnect ? "app-store-connect" : "development",
+  ...(distribution.buildNumber ? { buildNumber: distribution.buildNumber } : {}),
   experimentalHighRefresh,
   pushNotifications,
   nativeCachePreview,

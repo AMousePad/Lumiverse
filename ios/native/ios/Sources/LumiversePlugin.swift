@@ -92,6 +92,18 @@ class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
 
     @objc func cacheAvailable(_ invoke: Invoke) { invoke.resolve(NativeCache.available) }
 
+    @objc func probeServer(_ invoke: Invoke) throws {
+        struct Arguments: Decodable { let server: String }
+        let args = try invoke.parseArgs(Arguments.self)
+        guard let server = URL(string: args.server) else { invoke.reject("Enter a complete server address."); return }
+        NativeServerProbe.check(server: server) { result in
+            switch result {
+            case .success: invoke.resolve(true)
+            case .failure(let error): invoke.reject(error.localizedDescription)
+            }
+        }
+    }
+
     @objc func loadCached(_ invoke: Invoke) throws {
         struct Arguments: Decodable { let server: String }
         let args = try invoke.parseArgs(Arguments.self)

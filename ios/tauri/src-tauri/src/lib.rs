@@ -45,7 +45,7 @@ async fn mobile_connect(window: WebviewWindow, app: tauri::AppHandle, state: Sta
     // network probe. New addresses still have to identify a Lumiverse server.
     let restoring = restore == Some(true) && saved_server(&app).as_ref() == Some(&server);
     let cached = tauri_plugin_lumiverse_ios::cache_available(&app).await;
-    if !restoring || !cached { client::probe_server(&server).await?; }
+    if !restoring || !cached { tauri_plugin_lumiverse_ios::probe_server(&app, server.as_str()).await?; }
     // The saved address is separate from the server's cookies and account data.
     let path = settings_path(&app)?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|error| error.to_string())?;
@@ -55,7 +55,7 @@ async fn mobile_connect(window: WebviewWindow, app: tauri::AppHandle, state: Sta
     std::fs::rename(pending, path).map_err(|error| error.to_string())?;
     *state.server.lock().unwrap() = Some(server.clone());
     if cached && tauri_plugin_lumiverse_ios::load_cached(&app, server.as_str()).await { return Ok(()); }
-    if restoring && cached { client::probe_server(&server).await?; }
+    if restoring && cached { tauri_plugin_lumiverse_ios::probe_server(&app, server.as_str()).await?; }
     window.navigate(server).map_err(|error| error.to_string())
 }
 

@@ -39,6 +39,18 @@ pub fn init<R: tauri::Runtime>() -> TauriPlugin<R> {
 }
 
 /// Internal Rust-to-Swift calls; these are not commands exposed to remote pages.
+pub async fn probe_server<R: tauri::Runtime>(_app: &tauri::AppHandle<R>, _server: &str) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    {
+        _app.state::<NativeHandle<R>>().0.run_mobile_plugin_async::<bool>(
+            "probeServer", std::collections::BTreeMap::from([("server", _server)]),
+        ).await.map_err(|error| error.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "ios"))]
+    Err("The native server check is only available on iOS.".into())
+}
+
 pub async fn cache_available<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> bool {
     #[cfg(target_os = "ios")]
     return _app.state::<NativeHandle<R>>().0
