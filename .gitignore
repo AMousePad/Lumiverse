@@ -89,6 +89,7 @@ frontend/.dist-build-*/
 frontend/.dist-backup-*/
 *.tsbuildinfo
 desktop/tools/verify-updater
+internal-docs/
 
 # =============================================================================
 # Zensical docs build output

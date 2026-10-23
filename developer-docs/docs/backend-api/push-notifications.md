@@ -9,6 +9,12 @@ Notifications are automatically **suppressed** on the server when any of the use
 
 Registered destinations may be browser Web Push subscriptions, Lumiverse Desktop native destinations, or native iOS APNs destinations. The desktop companion's Rust host maintains the notification-only socket and heartbeat independently of its WebViews, then presents the payload through the operating system; it never joins the user's general event channel. iOS receives alert notifications directly through APNs while backgrounded or closed. Its backend provider credentials and signing setup are documented in the [iOS client guide](../getting-started/ios-client.md#native-push-notifications).
 
+Native iOS generation Live Activities use a separate, generation-scoped enrollment
+and ActivityKit update token. They continue receiving status updates regardless of
+ordinary alert preferences or session visibility. Their restricted native token
+transport and browser enrollment endpoints are documented in the
+[Live Activities integration guide](../getting-started/ios-live-activities-plan.md#backend-enrollment-contract).
+
 Once a push has been sent, the service worker displays it even if the app returns to the foreground before delivery. [WebKit requires every received push to display a notification](https://webkit.org/blog/12945/meet-web-push/); silently discarding it can revoke the subscription.
 
 ## Usage
@@ -126,6 +132,25 @@ The desktop companion downloads `image` in its native Rust host and presents it 
 - Built-in generation-complete notifications automatically use the chat character's avatar as their thumbnail when one is available.
 - An unavailable or invalid image never suppresses the notification: delivery falls back to title and body only.
 - The final placement, crop, and size are controlled by macOS, Windows, or the Linux notification daemon. The Lumiverse application identity icon remains unchanged, especially on macOS where it cannot be replaced per notification.
+
+### Native iOS character avatars
+
+Successful built-in chat generation notifications include an APNs communication
+sender and a short-lived avatar URL. The signed iOS notification service extension
+uses the sender image with `INSendMessageIntent`. iOS controls its presentation;
+the application identity remains Lumiverse. Errors and notifications without a
+character keep their ordinary alert title and body.
+
+`GET /api/ios-notifications/v1/avatar/{destinationId}/{characterId}?expires={unixSeconds}&signature={hmac}`
+returns a bounded JPEG thumbnail for the destination owner's character. This route
+does not require a login cookie: its signature grants access only to that exact
+destination, character, and expiry (at most 65 minutes). The URL is a bearer
+capability and must not be logged or reused as general media authorization.
+An invalid, modified, or expired signature returns 401; a deleted destination or
+unowned/missing avatar returns 404; an unsupported or oversized image returns 415.
+Responses use `Cache-Control: no-store`. The extension rejects redirects and
+cross-origin media and falls back to the original alert on download or intent
+failure. Existing iOS builds continue receiving ordinary alerts.
 
 ## Example: Character "Bugging" the User
 

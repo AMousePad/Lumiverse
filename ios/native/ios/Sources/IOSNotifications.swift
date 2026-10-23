@@ -40,6 +40,8 @@ final class IOSNotifications: NSObject, UNUserNotificationCenterDelegate {
         #endif
     }
 
+    var installation: [String: String] { ["deviceId": deviceId, "bundleId": bundleId, "environment": environment] }
+
     func attach(webview: WKWebView) {
         self.webview = webview
         UNUserNotificationCenter.current().delegate = self
@@ -47,7 +49,12 @@ final class IOSNotifications: NSObject, UNUserNotificationCenterDelegate {
         urlObservation = webview.observe(\.isLoading, options: [.new]) { [weak self] view, _ in
             if !view.isLoading { self?.openPendingTap() }
         }
-        // Re-request the current token each launch, without presenting an authorization prompt.
+        refreshRegistration()
+    }
+
+    // Launch and foreground recovery both ask APNs for its current token.
+    // This never requests permission or creates a server-side subscription.
+    func refreshRegistration() {
         if enabled { status { [weak self] status in
             if status["permission"] as? String == "granted", self?.callbackError == nil {
                 UIApplication.shared.registerForRemoteNotifications()

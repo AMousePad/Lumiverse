@@ -263,6 +263,8 @@ installMemoryPressureHandler();
 // Register push notification EventBus listeners
 const { initPushListeners } = await import("./services/push.service");
 initPushListeners();
+const { initLiveActivityListeners } = await import("./services/ios-live-activities.service");
+initLiveActivityListeners();
 
 // Register background image-generation fallback listeners
 const { initImageGenAutoListeners } = await import("./services/image-gen-auto.service");

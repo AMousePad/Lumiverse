@@ -2,9 +2,15 @@ import { createPrivateKey, createHash, sign, X509Certificate, type KeyObject } f
 import { readFileSync } from "node:fs";
 import { connect, type ClientHttp2Session } from "node:http2";
 import type { PushPayload } from "../types/push";
+import { issueIOSNotificationAvatarPath } from "./ios-notification-avatar";
+import { notificationPlainText } from "../utils/notification-text";
 
 export type APNsEnvironment = "development" | "production";
+export const IOS_COMPLETION_SOUND = "lumiverse-complete.wav";
+const activitySounds: Record<string, string> = { assembling: "lumiverse-prepare.wav", council: "lumiverse-prepare.wav",
+  waiting: "lumiverse-prepare.wav", reasoning: "lumiverse-think.wav", streaming: "lumiverse-respond.wav", completed: IOS_COMPLETION_SOUND };
 export interface APNsDestination {
+  id?: string;
   device_token: string;
   bundle_id: string;
   environment: APNsEnvironment;
@@ -15,7 +21,8 @@ export interface APNsCertificateConfiguration { bundleId: string; certificate: s
 export type APNsConfiguration = APNsTokenConfiguration | APNsCertificateConfiguration;
 
 let configuration: APNsConfiguration | undefined;
-let jwt: { configuration: APNsTokenConfiguration; value: string; issuedAt: number } | undefined;
+let liveConfiguration: APNsTokenConfiguration | undefined;
+const jwts = new Map<string, { value: string; issuedAt: number }>();
 const sessions = new Map<string, ClientHttp2Session>();
 
 /** Keys belong on the server. Nothing returned by the public info route contains a key or token. */
@@ -26,7 +33,18 @@ export function getAPNsConfiguration(): APNsConfiguration | null {
   return loaded;
 }
 
-export function loadAPNsConfiguration(env: NodeJS.ProcessEnv): APNsConfiguration | null {
+export function loadAPNsConfiguration(env: NodeJS.ProcessEnv, pushType: "alert" | "liveactivity" = "alert"): APNsConfiguration | null {
+  if (pushType === "liveactivity") {
+    // A certificate's private key isn't an APNs provider key. Allow both kinds
+    // of delivery on servers that already use certificate-authenticated alerts.
+    const keyPath = env.APNS_LIVE_ACTIVITY_PRIVATE_KEY_PATH || (!env.APNS_CERTIFICATE_PATH ? env.APNS_PRIVATE_KEY_PATH : undefined);
+    if (!keyPath) return null;
+    return loadAPNsConfiguration({ ...env, APNS_CERTIFICATE_PATH: undefined, APNS_PRIVATE_KEY_PATH: keyPath,
+      APNS_TEAM_ID: env.APNS_LIVE_ACTIVITY_TEAM_ID || env.APNS_TEAM_ID,
+      APNS_KEY_ID: env.APNS_LIVE_ACTIVITY_KEY_ID || env.APNS_KEY_ID,
+      APNS_PRIVATE_KEY_PASSPHRASE: env.APNS_LIVE_ACTIVITY_PRIVATE_KEY_PASSPHRASE || (!env.APNS_CERTIFICATE_PATH ? env.APNS_PRIVATE_KEY_PASSPHRASE : undefined),
+      APNS_PRIVATE_KEY_PASSPHRASE_FILE: env.APNS_LIVE_ACTIVITY_PRIVATE_KEY_PASSPHRASE_FILE || (!env.APNS_CERTIFICATE_PATH ? env.APNS_PRIVATE_KEY_PASSPHRASE_FILE : undefined) });
+  }
   const teamId = env.APNS_TEAM_ID, keyId = env.APNS_KEY_ID;
   const keyPath = env.APNS_PRIVATE_KEY_PATH;
   const certificatePath = env.APNS_CERTIFICATE_PATH;
@@ -65,6 +83,24 @@ export function getAPNsInfo(): { configured: boolean; bundleId: string; reason: 
   }
 }
 
+function getLiveConfiguration(): APNsTokenConfiguration | null {
+  if (liveConfiguration) return liveConfiguration;
+  const loaded = loadAPNsConfiguration(process.env, "liveactivity");
+  if (loaded && "teamId" in loaded) liveConfiguration = loaded;
+  return liveConfiguration ?? null;
+}
+
+export function getLiveActivityAPNsInfo() {
+  try {
+    const config = getLiveConfiguration();
+    return { configured: !!config, bundleId: config?.bundleId || process.env.APNS_BUNDLE_ID || "chat.lumiverse.ios",
+      reason: config ? null : "Live Activities need an APNs ES256 provider key (.p8) on this server." };
+  } catch {
+    return { configured: false, bundleId: process.env.APNS_BUNDLE_ID || "chat.lumiverse.ios",
+      reason: "The server's Live Activities APNs key configuration is invalid." };
+  }
+}
+
 export function createAPNsJWT(config: APNsTokenConfiguration, issuedAt = Math.floor(Date.now() / 1000)): string {
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const input = `${encode({ alg: "ES256", kid: config.keyId })}.${encode({ iss: config.teamId, iat: issuedAt })}`;
@@ -73,7 +109,7 @@ export function createAPNsJWT(config: APNsTokenConfiguration, issuedAt = Math.fl
 }
 
 /** An alert payload needs no background mode and remains deliverable while the app is suspended. */
-export function buildAPNsPayload(notification: PushPayload, serverOrigin?: string): string {
+export function buildAPNsPayload(notification: PushPayload, serverOrigin?: string, avatarPath?: string): string {
   const limit = (text: string, bytes: number) => {
     let result = "", size = 0;
     for (const character of text) {
@@ -85,9 +121,26 @@ export function buildAPNsPayload(notification: PushPayload, serverOrigin?: strin
   };
   const chatId = notification.data?.chatId ?? notification.data?.url?.match(/^\/chat\/([A-Za-z0-9_-]{1,128})$/)?.[1];
   // Navigation is constructed from an identifier, never from an arbitrary push URL.
-  const payload = { aps: { alert: { title: limit(notification.title, 256), body: limit(notification.body, 2048) }, sound: "default" },
+  const senderName = notificationPlainText(notification.data?.characterName, 100);
+  const senderId = notification.icon?.match(/^\/api\/v1\/characters\/([A-Za-z0-9_-]{1,128})\/avatar\?size=sm$/)?.[1];
+  const communication = avatarPath && senderId && senderName && chatId && /^[A-Za-z0-9_-]{1,128}$/.test(chatId)
+    && !notification.data?.errorMessage && !notification.data?.errorCode && !notification.tag?.startsWith("generation-error-")
+    ? { senderId, senderName: limit(senderName, 256), avatarPath } : undefined;
+  const completion = notification.tag?.startsWith("generation-") && !notification.tag.startsWith("generation-error-")
+    && !notification.data?.errorMessage && !notification.data?.errorCode;
+  const payload = { aps: { alert: { title: limit(notification.title, 256), body: limit(notification.body, 2048) },
+      sound: completion ? IOS_COMPLETION_SOUND : "default",
+      ...(communication ? { "mutable-content": 1, "thread-id": chatId } : {}) },
+    ...(communication ? { communication } : {}),
     ...(chatId && /^[A-Za-z0-9_-]{1,128}$/.test(chatId) ? { chatId } : {}),
     ...(serverOrigin ? { serverOrigin: limit(serverOrigin, 512) } : {}) };
+  // JSON escaping can expand these bounded strings. Drop optional enrichment if
+  // it alone exceeds APNs' limit, then shorten the original alert as needed.
+  if (Buffer.byteLength(JSON.stringify({ ...payload, aps: { ...payload.aps, alert: { title: "", body: "" } } })) > 4096) {
+    delete payload.communication;
+    delete payload.aps["mutable-content"];
+    delete payload.aps["thread-id"];
+  }
   while (Buffer.byteLength(JSON.stringify(payload)) > 4096) {
     if (payload.aps.alert.body) payload.aps.alert.body = Array.from(payload.aps.alert.body).slice(0, -128).join("");
     else payload.aps.alert.title = Array.from(payload.aps.alert.title).slice(0, -32).join("");
@@ -95,26 +148,67 @@ export function buildAPNsPayload(notification: PushPayload, serverOrigin?: strin
   return JSON.stringify(payload);
 }
 
-export interface APNsDelivery { sent: boolean; invalidatedAt?: number }
+export interface APNsDelivery { sent: boolean; invalidatedAt?: number; invalidToken?: boolean }
 
 export async function sendAPNsNotification(destination: APNsDestination, notification: PushPayload): Promise<APNsDelivery> {
   const config = getAPNsConfiguration();
   if (!config || destination.bundle_id !== config.bundleId) return { sent: false };
+  const characterId = notification.icon?.match(/^\/api\/v1\/characters\/([A-Za-z0-9_-]{1,128})\/avatar\?size=sm$/)?.[1];
+  let avatarPath: string | undefined;
+  if (destination.id && characterId && notification.data?.characterName) {
+    try { avatarPath = issueIOSNotificationAvatarPath(destination.id, characterId); } catch { /* Plain alert fallback. */ }
+  }
+  return sendAPNsRequest(config, destination, buildAPNsPayload(notification, destination.server_origin, avatarPath), "alert", "10",
+    notification.tag ? createHash("sha256").update(notification.tag).digest("hex") : undefined);
+}
+
+/** Content fields must match GenerationActivityAttributes.ContentState exactly. */
+export async function sendAPNsLiveActivity(destination: Pick<APNsDestination, "device_token" | "bundle_id" | "environment">,
+  state: { phase: string; label: string }, timestamp: number, terminal: boolean, immediate = true, activityAlert = false): Promise<APNsDelivery> {
+  const config = getLiveConfiguration();
+  if (!config || config.bundleId !== destination.bundle_id) return { sent: false };
+  // ActivityKit alerts belong to updates. Ending the activity bypasses the
+  // expanded presentation and its sound; the sender ends it separately later.
+  const alerting = !terminal && activityAlert;
+  const sound = activitySounds[state.phase];
+  const payload = JSON.stringify({ aps: { timestamp, event: terminal ? "end" : "update", "content-state": state,
+    ...(sound && alerting
+      ? { alert: { title: state.label, body: state.phase === "completed" ? "Open Lumiverse to read the response." : "Your response is in progress.", sound } } : {}),
+    ...(state.phase === "error" && alerting
+      ? { alert: { title: "Generation failed", body: "Open Lumiverse to review the generation.", sound: "default" } } : {}),
+    "stale-date": timestamp + 300, ...(terminal ? { "dismissal-date": timestamp + 120 } : {}) } });
+  if (Buffer.byteLength(payload) > 2048) throw new Error("Live Activity content is too large");
+  return sendAPNsRequest(config, destination, payload, "liveactivity", immediate || terminal || state.phase === "inputNeeded" ? "10" : "5");
+}
+
+async function sendAPNsRequest(config: APNsConfiguration, destination: Pick<APNsDestination, "device_token" | "bundle_id" | "environment">,
+  payload: string, pushType: "alert" | "liveactivity", priority: string, collapseId?: string): Promise<APNsDelivery> {
   const now = Math.floor(Date.now() / 1000);
-  if ("teamId" in config && (!jwt || jwt.configuration !== config || now - jwt.issuedAt >= 20 * 60 || now < jwt.issuedAt))
-    jwt = { configuration: config, value: createAPNsJWT(config, now), issuedAt: now };
+  let authorization: string | undefined;
+  if ("teamId" in config) {
+    // Alerts and activities may share a provider key. Alternating push types
+    // must not regenerate JWTs and trigger TooManyProviderTokenUpdates.
+    const credentialId = `${config.teamId}:${config.keyId}`;
+    let jwt = jwts.get(credentialId);
+    if (!jwt || now - jwt.issuedAt >= 20 * 60 || now < jwt.issuedAt) {
+      jwt = { value: createAPNsJWT(config, now), issuedAt: now };
+      jwts.set(credentialId, jwt);
+    }
+    authorization = `bearer ${jwt.value}`;
+  }
   const authority = destination.environment === "development"
     ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
-  let session = sessions.get(authority);
+  const sessionKey = `${authority}:${"certificate" in config ? "certificate" : `token:${config.teamId}:${config.keyId}`}`;
+  let session = sessions.get(sessionKey);
   if (!session || session.destroyed || session.closed) {
     session = connect(authority, "certificate" in config ? {
       cert: config.certificate,
       key: config.privateKey.export({ type: "pkcs8", format: "pem" }),
       minVersion: "TLSv1.2",
     } : undefined);
-    sessions.set(authority, session);
+    sessions.set(sessionKey, session);
     const connection = session;
-    const forget = () => { if (sessions.get(authority) === connection) sessions.delete(authority); };
+    const forget = () => { if (sessions.get(sessionKey) === connection) sessions.delete(sessionKey); };
     connection.on("error", () => { forget(); connection.destroy(); });
     connection.on("goaway", () => { forget(); connection.close(); });
     connection.on("close", forget);
@@ -122,13 +216,12 @@ export async function sendAPNsNotification(destination: APNsDestination, notific
     // An idle provider connection should not keep command-line processes alive.
     connection.unref();
   }
-  const payload = buildAPNsPayload(notification, destination.server_origin);
   return new Promise((resolve, reject) => {
     const stream = session!.request({ ":method": "POST", ":path": `/3/device/${destination.device_token}`,
-      ...("teamId" in config ? { authorization: `bearer ${jwt!.value}` } : {}),
-      "apns-topic": config.bundleId, "apns-push-type": "alert",
-      "apns-priority": "10", "apns-expiration": String(now + 3600),
-      ...(notification.tag ? { "apns-collapse-id": createHash("sha256").update(notification.tag).digest("hex") } : {}) });
+      ...(authorization ? { authorization } : {}),
+      "apns-topic": config.bundleId + (pushType === "liveactivity" ? ".push-type.liveactivity" : ""), "apns-push-type": pushType,
+      "apns-priority": priority, "apns-expiration": String(now + (pushType === "liveactivity" ? 300 : 3600)),
+      ...(collapseId ? { "apns-collapse-id": collapseId } : {}) });
     let status = 0, body = "", ended = false;
     const timer = setTimeout(() => stream.destroy(new Error("APNs request timed out")), 15_000);
     stream.on("response", headers => { status = Number(headers[":status"]); });
@@ -143,6 +236,8 @@ export async function sendAPNsNotification(destination: APNsDestination, notific
       try { error = JSON.parse(body); } catch { /* Non-JSON errors are not logged. */ }
       if (status === 410 && error.reason === "Unregistered" && typeof error.timestamp === "number" && Number.isFinite(error.timestamp)) {
         resolve({ sent: false, invalidatedAt: error.timestamp });
+      } else if (pushType === "liveactivity" && ["BadDeviceToken", "DeviceTokenNotForTopic"].includes(error.reason ?? "")) {
+        resolve({ sent: false, invalidToken: true });
       } else {
         // Never include device tokens, JWTs, or arbitrary response bodies in logs.
         console.warn(`[apns] Delivery rejected (${status}, ${String(error.reason || "unknown").replace(/[^A-Za-z]/g, "").slice(0, 80)})`);

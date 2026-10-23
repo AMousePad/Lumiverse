@@ -4,8 +4,16 @@ import WebKit
 
 /// UIKit controls and a narrowly scoped WebKit permission bridge.
 class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
+    struct ActivityURL: Decodable { let url: String }
+    @objc public func openActivityURL(_ invoke: Invoke) throws {
+        let args = try invoke.parseArgs(ActivityURL.self)
+        if #available(iOS 16.1, *) {
+            Task { @MainActor in IOSLiveActivities.shared.open(args.url); invoke.resolve(true) }
+        } else { invoke.resolve(false) }
+    }
     private var nativeBridge: NativeBridge?
     private var nativeCache: NativeCache?
+    private var downloads: NativeDownloads?
     private weak var webview: WKWebView?
     private var observation: NSKeyValueObservation?
     private var menuGesture: UILongPressGestureRecognizer?
@@ -25,6 +33,7 @@ class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
         let cache = NativeCache(webview: webview)
         nativeCache = cache
         nativeBridge = NativeBridge(webview: webview, cache: cache)
+        downloads = NativeDownloads(webview: webview)
         #if LUMIVERSE_EXPERIMENTAL_HIGH_REFRESH
         refreshStatus = HighRefreshExperiment.apply(to: webview.configuration.preferences)
         NSLog("[Lumiverse] Experimental high refresh: %@", String(describing: refreshStatus))

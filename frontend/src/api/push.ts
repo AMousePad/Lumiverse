@@ -1,4 +1,4 @@
-import { get, post, del } from './client'
+import { get, post, del, type RequestOptions } from './client'
 
 export interface PushSubscriptionRecord {
   type: 'web_push' | 'tauri_desktop' | 'ios_apns'
@@ -32,9 +32,9 @@ export const pushApi = {
   getIOSInfo() {
     return get<{ configured: boolean; bundleId: string; reason: string | null }>('/push/ios/info')
   },
-  subscribeIOS(input: { deviceId: string; deviceToken: string; bundleId: string; environment: 'development' | 'production' }) {
+  subscribeIOS(input: { deviceId: string; deviceToken: string; bundleId: string; environment: 'development' | 'production' }, options?: RequestOptions) {
     return post<PushSubscriptionRecord>('/push/ios', { ...input, serverOrigin: window.location.origin,
-      label: 'Lumiverse iOS', userAgent: navigator.userAgent })
+      label: 'Lumiverse iOS', userAgent: navigator.userAgent }, options)
   },
   getVapidPublicKey() {
     return get<{ publicKey: string }>('/push/vapid-public-key')
@@ -44,8 +44,8 @@ export const pushApi = {
     return get<{ serverInstanceId: string }>('/push/desktop/info')
   },
 
-  listSubscriptions() {
-    return get<PushSubscriptionRecord[]>('/push/subscriptions')
+  listSubscriptions(options?: RequestOptions) {
+    return get<PushSubscriptionRecord[]>('/push/subscriptions', undefined, options)
   },
 
   subscribe(subscription: PushSubscriptionJSON) {
