@@ -56,7 +56,7 @@ final class NativeServerProbe: NSObject, URLSessionDataDelegate, @unchecked Send
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(nil)
-        fail("The server redirected its startup endpoint. Enter its final HTTPS address.")
+        fail("The server redirected its startup endpoint. Enter its final server address.")
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
@@ -78,7 +78,7 @@ final class NativeServerProbe: NSObject, URLSessionDataDelegate, @unchecked Send
         guard (200..<300).contains(response.statusCode) else {
             completionHandler(.cancel)
             fail((300..<400).contains(response.statusCode)
-                ? "The server redirected its startup endpoint. Enter its final HTTPS address."
+                ? "The server redirected its startup endpoint. Enter its final server address."
                 : "The server's startup endpoint is unavailable (HTTP \(response.statusCode)).")
             return
         }

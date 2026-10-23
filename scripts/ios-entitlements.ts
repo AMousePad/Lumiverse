@@ -103,7 +103,7 @@ ${anchor}`);
         LumiverseNotificationKeychainGroup: "$(AppIdentifierPrefix)${bundleId}.notifications"
         LumiverseNotificationBundleID: ${bundleId}
         LumiverseAPNsRelayURL: ${(Bun.YAML.parse(spec) as any).targets["lumiverse-ios-client_iOS"].info.properties.LumiverseAPNsRelayURL || "https://apn-relay.lumiverse.chat"}
-        NSAppTransportSecurity: {NSAllowsLocalNetworking: true}
+        NSAppTransportSecurity: {NSAllowsArbitraryLoads: true}
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).NotificationService"
@@ -257,7 +257,7 @@ ${anchor}`);
         LumiverseWidgetAppGroup: ${group}
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        NSAppTransportSecurity: {NSAllowsLocalNetworking: true}
+        NSAppTransportSecurity: {NSAllowsArbitraryLoads: true}
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

@@ -1,12 +1,11 @@
 use tauri::Url;
 
-pub fn normalize_server(value: &str, allow_loopback_http: bool) -> Result<Url, String> {
+pub fn normalize_server(value: &str, allow_insecure_http: bool) -> Result<Url, String> {
     if value.len() > 2048 { return Err("The server address is too long.".into()); }
     let url = Url::parse(value.trim()).map_err(|_| "Enter a complete server address, such as https://lumiverse.example.com.")?;
     let host = url.host_str().ok_or("The server address needs a hostname.")?;
-    let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]");
-    if url.scheme() != "https" && !(allow_loopback_http && loopback && url.scheme() == "http") {
-        return Err("Use an HTTPS server address.".into());
+    if url.scheme() != "https" && !(allow_insecure_http && url.scheme() == "http") {
+        return Err("Use HTTPS, or enable Allow insecure HTTP for this server.".into());
     }
     if !url.username().is_empty() || url.password().is_some() || host.contains('*')
         || url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
@@ -45,13 +44,15 @@ mod tests {
         }
     }
     #[test]
-    fn http_is_limited_to_debug_loopback() {
-        for host in ["localhost", "127.0.0.1", "[::1]"] {
+    fn http_requires_explicit_permission_for_every_host() {
+        for host in ["localhost", "127.0.0.1", "[::1]", "192.168.1.2", "server.local", "example.com"] {
             assert!(normalize_server(&format!("http://{host}:8080"), true).is_ok());
             assert!(normalize_server(&format!("http://{host}:8080"), false).is_err());
         }
-        assert!(normalize_server("http://192.168.1.2:8080", true).is_err());
-        assert!(normalize_server("http://localhost.example.com", true).is_err());
+        assert_eq!(normalize_server(" HTTP://EXAMPLE.com:80/ ", true).unwrap().as_str(), "http://example.com/");
+        for value in ["http://user:secret@example.com", "http://example.com/path", "http://example.com?token=x", "file:///etc/passwd"] {
+            assert!(normalize_server(value, true).is_err(), "{value}");
+        }
     }
     #[test]
     fn navigation_stays_on_the_selected_origin_or_packaged_connection_screen() {
@@ -64,5 +65,10 @@ mod tests {
             assert!(!navigation_allowed(&Url::parse(value).unwrap(), Some(&server)), "{value}");
         }
         assert!(!navigation_allowed(&server, None));
+        let http = normalize_server("http://example.com:8080", true).unwrap();
+        assert!(navigation_allowed(&Url::parse("http://example.com:8080/chat/one").unwrap(), Some(&http)));
+        for value in ["http://other.example.com:8080", "http://example.com:8081", "https://example.com:8080"] {
+            assert!(!navigation_allowed(&Url::parse(value).unwrap(), Some(&http)), "{value}");
+        }
     }
 }

@@ -86,6 +86,7 @@ targets:
     if (enabled) {
       expect(parsed.targets.LumiverseNotificationService.settings.base.PRODUCT_BUNDLE_IDENTIFIER).toBe('chat.lumiverse.ios.NotificationService');
       expect(parsed.targets.LumiverseNotificationService.info.properties.NSExtension.NSExtensionPointIdentifier).toBe('com.apple.usernotifications.service');
+      expect(parsed.targets.LumiverseNotificationService.info.properties.NSAppTransportSecurity).toEqual({ NSAllowsArbitraryLoads: true });
       expect(parsed.targets.LumiverseNotificationService.settings.base.MARKETING_VERSION).toBe('1.2.3');
       expect(parsed.targets.LumiverseNotificationService.settings.base.CURRENT_PROJECT_VERSION).toBe('42');
       expect(parsed.targets.LumiverseNotificationService.sources).toContainEqual({ path: '../../../../sounds', buildPhase: 'resources' });
@@ -195,6 +196,7 @@ targets:
         expect(parsed.targets.LumiverseWidgets.deploymentTarget).toBe('16.0');
         expect(parsed.targets.LumiverseWidgets.settings.base.CURRENT_PROJECT_VERSION).toBe('42');
         expect(parsed.targets.LumiverseWidgets.info.properties.LumiverseWidgetAppGroup).toBe('group.chat.lumiverse.ios.widgets');
+        expect(parsed.targets.LumiverseWidgets.info.properties.NSAppTransportSecurity).toEqual({ NSAllowsArbitraryLoads: true });
         expect(parsed.targets.LumiverseWidgets.entitlements.properties['com.apple.developer.default-data-protection']).toBe('NSFileProtectionComplete');
       }
     }

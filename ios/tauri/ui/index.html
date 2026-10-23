@@ -17,6 +17,10 @@
       <form id="connection-form">
         <label for="server">Server address</label>
         <input id="server" name="server" type="url" inputmode="url" autocomplete="url" autocapitalize="none" spellcheck="false" placeholder="https://lumiverse.example.com" required>
+        <div id="http-settings" hidden>
+          <label class="http-option" for="allow-insecure-http"><input id="allow-insecure-http" type="checkbox" aria-describedby="http-warning">Allow insecure HTTP for this server</label>
+          <p id="http-warning" class="detail">HTTP does not encrypt your sign-in or conversations. Use it only on a network you trust, such as your LAN or VPN. Some browser features require HTTPS.</p>
+        </div>
         <button id="connect" type="submit">Connect</button>
       </form>
       <p id="status" role="status" aria-live="polite"></p>

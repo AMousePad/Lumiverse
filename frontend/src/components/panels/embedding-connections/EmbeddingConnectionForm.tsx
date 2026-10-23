@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { uuidv4 } from '@/lib/uuid'
 import { Button, FormField, Select, TextInput } from '@/components/shared/FormComponents'
 import NumericInput from '@/components/shared/NumericInput'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
@@ -97,7 +98,7 @@ export default function EmbeddingConnectionForm({ providers, profile, onSave, on
   const submit = () => {
     if (!name.trim() || !model.trim()) return
     onSave({
-      id: profile?.id || crypto.randomUUID(),
+      id: profile?.id || uuidv4(),
       name: name.trim(),
       provider,
       api_url: apiUrl.trim() || DEFAULTS[provider]?.api_url || '',

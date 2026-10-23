@@ -1,4 +1,5 @@
 import { activeTab } from '@/lib/active-tab'
+import { uuidv4 } from '@/lib/uuid'
 import { EventType } from './events'
 import { BASE_URL } from '@/api/client'
 import { frontendSessionId } from '@/lib/frontend-session'
@@ -324,7 +325,7 @@ export class WebSocketClient {
   private sendPingFrame(resumeProof = false): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false
     try {
-      const id = resumeProof ? crypto.randomUUID() : undefined
+      const id = resumeProof ? uuidv4() : undefined
       if (id) this.resumeProbeId = id
       this.ws.send(JSON.stringify({ type: 'ping', ...(id ? { id } : {}) }))
       return true

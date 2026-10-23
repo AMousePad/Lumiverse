@@ -1,4 +1,5 @@
 import { ssoProvidersApi } from '@/api/sso-providers'
+import { uuidv4 } from '@/lib/uuid'
 import { hasTauriDesktopBridge, isTauriMobile } from '@/lib/desktopWebView'
 import { getSafeHttpOrHttpsUrl } from '@/lib/navigationSafety'
 import {
@@ -60,7 +61,7 @@ function isResult(value: unknown, flowId: string): value is SsoPopupResult {
 
 /** A null result means the current page is redirecting to the provider. */
 export function startSsoPopup({ providerId, flow, returnTo = '/' }: SsoPopupOptions): Promise<SsoPopupResult | null> {
-  const flowId = crypto.randomUUID()
+  const flowId = uuidv4()
   const redirect = usesSameWindowSso()
   const callbackURL = completionUrl(flow, providerId, flowId, returnTo, redirect)
 

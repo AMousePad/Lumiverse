@@ -94,6 +94,15 @@ def check_distribution_identity(info, entitlements, profile):
     return team
 
 
+def check_http_transport(info):
+    # The selected server is runtime user input, shared by WebKit and URLSession.
+    # These more specific keys make iOS ignore NSAllowsArbitraryLoads entirely.
+    ats = info.get("NSAppTransportSecurity", {})
+    require(ats.get("NSAllowsArbitraryLoads") is True and not any(key in ats for key in (
+        "NSAllowsLocalNetworking", "NSAllowsArbitraryLoadsInWebContent", "NSAllowsArbitraryLoadsForMedia")),
+        f"HTTP transport exception missing or overridden in {info.get('CFBundleIdentifier')}")
+
+
 def check_notification_keychain(info, entitlements, profile, bundle_id):
     group = info.get("LumiverseNotificationKeychainGroup")
     prefixes = profile.get("ApplicationIdentifierPrefix", [])
@@ -157,6 +166,8 @@ def inspect_app(app, *, bundle_id="chat.lumiverse.ios", version=None, build_numb
     teams = set()
     for bundle in bundles:
         child = read_plist(bundle / "Info.plist")
+        if bundle == app or child["CFBundleIdentifier"].endswith((".Widgets", ".NotificationService")):
+            check_http_transport(child)
         if child["CFBundleIdentifier"].endswith(".Widgets"):
             require(child.get("LumiverseWidgetAppGroup") == info.get("LumiverseWidgetAppGroup"), "Widget App Groups differ")
             require(child.get("NSExtension", {}).get("NSExtensionPointIdentifier") == "com.apple.widgetkit-extension", "Invalid widget extension point")

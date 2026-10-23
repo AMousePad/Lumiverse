@@ -15,6 +15,7 @@ final class ClientSmokeTests: XCTestCase {
         // On a fresh simulator, the launch animation can also consume this tap.
         if !app.keyboards.firstMatch.waitForExistence(timeout: 2) { field.tap() }
         field.typeText("http://127.0.0.1:18763")
+        app.webViews.switches["Allow insecure HTTP for this server"].tap()
         app.webViews.buttons["Connect"].tap()
         XCTAssertTrue(app.webViews.staticTexts["Remote Lumiverse"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.webViews.staticTexts["Native commands blocked"].waitForExistence(timeout: 10))

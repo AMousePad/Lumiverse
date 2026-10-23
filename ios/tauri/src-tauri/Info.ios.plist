@@ -34,7 +34,10 @@
   <string>Connect to your Lumiverse server on your local network.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
-    <key>NSAllowsLocalNetworking</key><true/>
+    <!-- User-selected HTTP hosts also use URLSession for startup, downloads,
+         Live Activities, and widgets. Narrower ATS keys override this key.
+         The packaged connection page requires consent for each HTTP server. -->
+    <key>NSAllowsArbitraryLoads</key><true/>
   </dict>
 </dict>
 </plist>

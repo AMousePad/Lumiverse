@@ -19,7 +19,8 @@ class ReleaseChecks(unittest.TestCase):
         self.app = Path(self.temp.name) / "Lumiverse.app"
         self.info = {"CFBundleIdentifier": "chat.lumiverse.ios", "CFBundleExecutable": "Lumiverse",
                      "CFBundleVersion": "42", "CFBundleShortVersionString": "0.3.1",
-                     "ITSAppUsesNonExemptEncryption": False}
+                     "ITSAppUsesNonExemptEncryption": False,
+                     "NSAppTransportSecurity": {"NSAllowsArbitraryLoads": True}}
         self.bundle(self.app, self.info, {release.FILE_TIMESTAMP: "C617.1", release.USER_DEFAULTS: "CA92.1"})
 
     def write_plist(self, path, value):
@@ -92,6 +93,14 @@ class ReleaseChecks(unittest.TestCase):
     def test_native_cache_must_match_request(self):
         with self.assertRaisesRegex(ValueError, "frontend setting mismatch"):
             self.check(native_cache=True)
+
+    def test_http_transport_works_for_native_requests_as_well_as_web_views(self):
+        release.check_http_transport(self.info)
+        for ats in ({}, {"NSAllowsArbitraryLoadsInWebContent": True},
+                    {"NSAllowsArbitraryLoads": True, "NSAllowsLocalNetworking": False},
+                    {"NSAllowsArbitraryLoads": True, "NSAllowsArbitraryLoadsInWebContent": True}):
+            with self.assertRaisesRegex(ValueError, "HTTP transport exception"):
+                release.check_http_transport({**self.info, "NSAppTransportSecurity": ats})
 
     def test_widgets_are_independent_and_require_matching_group_scheme_and_version(self):
         self.info.update(LumiverseWidgetsEnabled=True, LumiverseWidgetAppGroup="group.chat.lumiverse.ios.widgets",

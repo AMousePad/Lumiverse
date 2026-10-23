@@ -33,6 +33,7 @@ final class NativeCacheIntegrationTests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 15))
         field.tap()
         field.typeText("http://127.0.0.1:18765")
+        app.webViews.switches["Allow insecure HTTP for this server"].tap()
         app.webViews.buttons["Connect"].tap()
         assertCachedLogin(app)
 

@@ -1,4 +1,5 @@
 import { getTauriMobilePlatform } from './desktopWebView'
+import { uuidv4 } from './uuid'
 
 interface MessageBridge { postMessage(message: string): void; onmessage?: (event: { data: string }) => void }
 const pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>()
@@ -23,7 +24,7 @@ export function androidNativeRequest<T>(action: string, payload: Record<string, 
     }
   }
   return new Promise<T>((resolve, reject) => {
-    const id = crypto.randomUUID()
+    const id = uuidv4()
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('Native notification request timed out.')) }, 30_000)
     pending.set(id, { resolve: value => resolve(value as T), reject, timer })
     try { native.postMessage(JSON.stringify({ id, action, payload })) }

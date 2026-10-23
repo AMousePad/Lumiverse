@@ -18,7 +18,11 @@ const dom = new JSDOM('', { url: 'https://lumiverse.example/login' })
 const previousWindow = globalThis.window
 const previousCrypto = globalThis.crypto
 Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window })
-Object.defineProperty(dom.window.crypto, 'randomUUID', { configurable: true, value: () => FLOW_ID })
+// HTTP pages expose getRandomValues but not randomUUID.
+Object.defineProperty(dom.window.crypto, 'randomUUID', { configurable: true, value: undefined })
+Object.defineProperty(dom.window.crypto, 'getRandomValues', { configurable: true, value: (bytes: Uint8Array) => {
+  bytes.fill(0x11); bytes[8] = 0x01; return bytes
+} })
 Object.defineProperty(globalThis, 'crypto', { configurable: true, value: dom.window.crypto })
 
 const { startSsoPopup } = await import('./ssoPopup')

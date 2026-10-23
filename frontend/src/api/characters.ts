@@ -1,5 +1,6 @@
 import { get, post, put, del, upload, uploadRaw, uploadWithProgress, getBlob, BASE_URL, type RequestOptions } from './client'
 import { triggerBlobDownload } from '@/lib/downloads'
+import { uuidv4 } from '@/lib/uuid'
 import { completeDeletion } from '@/lib/deletion-completion'
 import type { DeletionOperation } from '@/lib/deletion-events'
 
@@ -74,7 +75,7 @@ export const charactersApi = {
   },
 
   delete(id: string) {
-    const operationId = crypto.randomUUID()
+    const operationId = uuidv4()
     return completeDeletion({
       operationId, entityId: id,
       request: (signal) => del<DeletionOperation>(`/characters/${encodeURIComponent(id)}?operation_id=${operationId}`, { signal }),
