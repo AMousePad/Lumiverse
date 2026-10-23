@@ -13,6 +13,7 @@ import { isDesktopFloatingWidgetWindow } from './lib/desktop-floating-widget'
 import { useStore } from './store'
 import { useIOSWidgets } from './hooks/useIOSWidgets'
 import WidgetCharacterPage from './components/WidgetCharacterPage'
+import LiquidGlassLab from './components/experimental/LiquidGlassLab'
 
 function WindowShell() {
   useIOSWidgets(useStore(s => s.isAuthenticated ? s.user?.id ?? null : s.isAuthLoading ? undefined : null))
@@ -53,6 +54,7 @@ const routes = [
           { path: 'characters', element: <CharacterBrowser /> },
           { path: 'characters/:id', element: <CharacterProfile /> },
           { path: 'widget/character/:id', element: <WidgetCharacterPage /> },
+          { path: 'lab/liquid-glass', element: <LiquidGlassLab /> },
         ],
       },
     ],
