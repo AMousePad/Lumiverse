@@ -28,6 +28,7 @@ class ConnectionArgs {
 class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
     private var runtime: RuntimeHost? = null
     private var webView: WebView? = null
+    private var downloads: NativeDownloads? = null
     private var launcherUrl = "http://tauri.localhost/index.html"
     private var entryHistoryIndex = 0
     private var localAttempt = 0
@@ -44,6 +45,7 @@ class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
         webView.settings.allowContentAccess = false
         CookieManager.getInstance().setAcceptCookie(true)
         installControls(webView)
+        downloads = NativeDownloads(activity, webView)
         (activity as? MainActivity)?.let {
             it.notificationBridge = NativeNotificationBridge(it, webView)
             it.notificationNavigation = { openPendingNotification() }
@@ -86,6 +88,7 @@ class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
         // Selection still clears its obsolete credential; the authenticated page reconciles it.
         val target = origin?.let { selected -> NativeNotifications.consumeTap(activity, activity.intent, selected, local)?.let { selected + it } } ?: url
         native?.notificationBridge?.select(url, local)
+        downloads?.select(url)
         entryHistoryIndex = view.copyBackForwardList().currentIndex + 1
         view.loadUrl(target)
     }
@@ -187,6 +190,7 @@ class RuntimePlugin(private val activity: Activity) : Plugin(activity) {
     override fun onDestroy(activity: AppCompatActivity) {
         handler.removeCallbacksAndMessages(null)
         controls?.dismiss()
+        downloads?.destroy(); downloads = null
         stopLocal()
         (activity as? MainActivity)?.let { it.notificationBridge?.destroy(); it.notificationBridge = null; it.notificationNavigation = null }
         webView = null

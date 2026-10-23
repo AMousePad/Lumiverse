@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import styles from './ModalShell.module.css'
 import clsx from 'clsx'
+import useIsMobile from '@/hooks/useIsMobile'
 
 interface ModalShellProps {
   isOpen: boolean
@@ -17,6 +18,8 @@ interface ModalShellProps {
   style?: CSSProperties
   /** Use the available viewport without desktop size caps. */
   fullscreen?: boolean
+  /** Short prompts can retain a compact dialog on mobile. Editors fill the window. */
+  mobilePresentation?: 'fullscreen' | 'dialog'
   /** Allow a modal body with form controls to scroll when the viewport is short. */
   scrollable?: boolean
   modalId?: string
@@ -35,11 +38,14 @@ export function ModalShell({
   children,
   className,
   style,
-  fullscreen = false,
+  fullscreen: requestedFullscreen = false,
+  mobilePresentation = 'fullscreen',
   scrollable = false,
   modalId = 'shell',
   'data-component': dataComponent,
 }: ModalShellProps) {
+  const isMobile = useIsMobile()
+  const fullscreen = requestedFullscreen || (isMobile && mobilePresentation === 'fullscreen')
   const backdropPointerDownRef = useRef<EventTarget | null>(null)
   const handleEscape = useEffectEvent((e: KeyboardEvent) => {
     if (closeOnEscape && e.key === 'Escape') onClose()
@@ -96,9 +102,13 @@ export function ModalShell({
             // A caller's viewport-unit limit also needs to fit the available
             // backdrop at larger UI scales and while a keyboard is open.
             style={{
-              maxWidth: fullscreen ? undefined : maxWidth,
-              maxHeight: fullscreen ? undefined : `min(${typeof maxHeight === 'number' ? `${maxHeight}px` : maxHeight}, 100%)`,
               ...style,
+              width: fullscreen ? '100%' : style?.width,
+              height: fullscreen ? '100%' : style?.height,
+              minWidth: fullscreen ? 0 : style?.minWidth,
+              minHeight: fullscreen ? 0 : style?.minHeight,
+              maxWidth: fullscreen ? 'none' : isMobile ? '100%' : style?.maxWidth ?? maxWidth,
+              maxHeight: fullscreen ? 'none' : style?.maxHeight ?? `min(${typeof maxHeight === 'number' ? `${maxHeight}px` : maxHeight}, 100%)`,
             }}
           >
             <span data-spindle-mount="modal_header_actions" data-spindle-scope={`modal:${modalId}:header-actions`} style={{ display: 'contents' }} />

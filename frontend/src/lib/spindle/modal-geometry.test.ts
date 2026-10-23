@@ -6,6 +6,16 @@ import {
 } from './modal-geometry'
 
 describe('Spindle modal geometry', () => {
+  test('mobile workspaces fill the viewport at every scale, including landscape and keyboard resize', () => {
+    for (const scale of [0.5, 0.8, 1, 1.25, 1.5]) {
+      for (const [width, height] of [[390, 800], [800, 390], [390, 350]]) {
+        const geometry = resolveSpindleModalGeometry({ width: 420, maxHeight: 520 }, { width, height, uiScale: scale, mobile: true })
+        expect(geometry.width * scale).toBeCloseTo(width!)
+        expect(geometry.height! * scale).toBeCloseTo(height!)
+        expect(geometry.maxHeight * scale).toBeCloseTo(height!)
+      }
+    }
+  })
   test('clamps large modals in layout space instead of shrinking the viewport twice', () => {
     const full = resolveSpindleModalGeometry(
       { width: 1200, maxHeight: 900 },

@@ -26,6 +26,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
     private var stateTasks: [String: Task<Void, Never>] = [:]
     private var uploadTasks: [String: Task<Void, Never>] = [:]
     private var uploadAttempts: [String: UUID] = [:]
+    private let handoff = LiveActivityHandoff()
     private var starting = Set<String>()
     private weak var webview: WKWebView?
     private var accountId: String?
@@ -185,6 +186,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
         do {
             try save()
             guard !record.state.terminal else { await finish(record.registrationId, state: record.state, immediate: true); return ["started": false] }
+            guard protectHandoff(record.registrationId) else { throw Failure.unavailable }
             if let key = await fetchAvatar(record) {
                 records[record.registrationId]?.attributes.avatarKey = key
             }
@@ -196,7 +198,10 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
             let activityAttributes = records[record.registrationId]!.attributes
             let activity: Activity<GenerationActivityAttributes>
             if #available(iOS 16.2, *) {
-                activity = try Activity.request(attributes: activityAttributes, content: ActivityContent(state: record.state, staleDate: .now.addingTimeInterval(300)), pushType: .token)
+                // Until the server has the token, the initial phase is only a
+                // provisional snapshot. Don't display it as current for minutes
+                // if iOS denies/expires the registration handoff.
+                activity = try Activity.request(attributes: activityAttributes, content: ActivityContent(state: record.state, staleDate: .now.addingTimeInterval(30)), pushType: .token)
             } else {
                 activity = try Activity.request(attributes: activityAttributes, contentState: record.state, pushType: .token)
             }
@@ -242,7 +247,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
         }
         openPendingTap()
     }
-    private func apply(_ state: GenerationActivityAttributes.ContentState, to id: String) async {
+    private func apply(_ state: GenerationActivityAttributes.ContentState, to id: String, refreshStaleDate: Bool = false) async {
         guard let record = records[id], !record.ended else { return }
         if state.terminal {
             // WebSocket reconciliation can arrive before the ActivityKit push.
@@ -255,7 +260,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
         }
         guard let activity = Activity<GenerationActivityAttributes>.activities.first(where: { $0.id == record.activityId }) else { return }
         let current = activity.contentState
-        guard !current.terminal, current.phase != state.phase else { return }
+        guard !current.terminal, refreshStaleDate || current.phase != state.phase else { return }
         // A foreground snapshot may have been captured just before a newer push.
         let phases = ["assembling", "council", "waiting", "reasoning", "streaming"]
         if let before = phases.firstIndex(of: current.phase), let after = phases.firstIndex(of: state.phase), after < before { return }
@@ -316,6 +321,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
     }
     private func finish(_ id: String, state: GenerationActivityAttributes.ContentState?, immediate: Bool, linger: TimeInterval = 120) async {
         guard let record = records[id] else { return }
+        handoff.end(id)
         records[id]?.ended = true
         try? save()
         tokenTasks.removeValue(forKey: id)?.cancel()
@@ -329,27 +335,39 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
     func retryPending() {
         for (id, record) in records {
             if record.expiresAt <= Date().timeIntervalSince1970 * 1000 {
+                handoff.end(id)
                 records.removeValue(forKey: id)
             } else if record.ended || record.pushToken != nil { upload(id) }
         }
         try? save()
     }
+    @discardableResult
+    private func protectHandoff(_ id: String) -> Bool {
+        handoff.begin(id) { [weak self] in
+            guard let self = self else { return }
+            self.uploadTasks[id]?.cancel()
+            self.tokenTasks.removeValue(forKey: id)?.cancel()
+            // A card with no confirmed server delivery route must not remain
+            // on Preparing indefinitely. Keep revocation retryable and let the
+            // foreground snapshot start a replacement, rather than suppress it.
+            Task { @MainActor in
+                await self.finish(id, state: nil, immediate: true)
+                self.records[id]?.activityId = nil
+                try? self.save()
+            }
+        }
+    }
     private func upload(_ id: String) {
         guard uploadTasks[id] == nil, let record = records[id], !record.revoked, record.ended || record.pushToken != nil else { return }
+        // Acquire synchronously, before scheduling network work, and reuse the
+        // assertion already held since Activity.request when this is a new card.
+        protectHandoff(id)
         let attempt = UUID()
         uploadAttempts[id] = attempt
         uploadTasks[id] = Task { [weak self] in
-            // Let an in-flight token registration finish during a foreground-to-lock transition.
-            var background: UIBackgroundTaskIdentifier = .invalid
-            background = UIApplication.shared.beginBackgroundTask(withName: "Live Activity token") { [weak self] in
-                Task { @MainActor in
-                    if self?.uploadAttempts[id] == attempt { self?.uploadTasks[id]?.cancel() }
-                    if background != .invalid { UIApplication.shared.endBackgroundTask(background); background = .invalid }
-                }
-            }
             defer {
-                if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
                 if self?.uploadAttempts[id] == attempt {
+                    self?.handoff.end(id)
                     self?.uploadTasks[id] = nil
                     self?.uploadAttempts[id] = nil
                 }
@@ -387,7 +405,7 @@ final class IOSLiveActivities: NSObject, URLSessionTaskDelegate {
                         if data.count < 4096, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                            let stateData = try? JSONSerialization.data(withJSONObject: object["state"] ?? [:]),
                            let state = try? JSONDecoder().decode(GenerationActivityAttributes.ContentState.self, from: stateData) {
-                            await self.apply(state, to: id)
+                            await self.apply(state, to: id, refreshStaleDate: true)
                             if state.terminal { continue }
                         }
                         // A rotation that arrived while the request was in flight must follow it.

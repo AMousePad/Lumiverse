@@ -1,4 +1,5 @@
 import { getUiScale } from '@/lib/uiScale'
+import { isMobileViewportOrDevice } from '@/lib/mobile'
 
 export interface SpindleModalGeometryOptions {
   width?: number
@@ -9,11 +10,14 @@ export interface SpindleModalViewport {
   width: number
   height: number
   uiScale: number
+  mobile?: boolean
 }
 
 export interface SpindleModalGeometry {
   width: number
   maxHeight: number
+  height?: number
+  fullscreen?: boolean
 }
 
 export const DEFAULT_SPINDLE_MODAL_WIDTH = 420
@@ -43,6 +47,7 @@ export function resolveSpindleModalGeometry(
   const uiScale = validScale(viewport.uiScale)
   const layoutViewportWidth = Math.max(0, positiveFinite(viewport.width, 0) / uiScale)
   const layoutViewportHeight = Math.max(0, positiveFinite(viewport.height, 0) / uiScale)
+  if (viewport.mobile) return { width: layoutViewportWidth, maxHeight: layoutViewportHeight, height: layoutViewportHeight, fullscreen: true }
   const availableWidth = Math.max(0, layoutViewportWidth - SPINDLE_MODAL_VIEWPORT_GUTTER)
   const availableHeight = Math.max(0, layoutViewportHeight - SPINDLE_MODAL_VIEWPORT_GUTTER)
 
@@ -71,5 +76,6 @@ export function resolveCurrentSpindleModalGeometry(
     width: readViewportPixelVar('--app-viewport-width', fallbackWidth),
     height: readViewportPixelVar('--app-viewport-height', fallbackHeight),
     uiScale: getUiScale(),
+    mobile: isMobileViewportOrDevice(),
   })
 }

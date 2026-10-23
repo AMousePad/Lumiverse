@@ -278,6 +278,19 @@ test("enrollment is owner-scoped, short-lived, bounded and excludes chat content
   expect((await request("/browser/prepare", "POST", input)).status).toBe(503);
 });
 
+test("a token arriving after backgrounding catches up to the current phase instead of the prepared snapshot", async () => {
+  const enrollment = await prepare();
+  expect(enrollment.state.phase).toBe("assembling");
+  // ActivityKit token issuance and relay enrollment can outlive the initial
+  // foreground snapshot. The native registration reply must catch up directly.
+  pool.setPoolStatus("gen-1", "reasoning");
+  const response = await request(`/native/registrations/${enrollment.registrationId}`, "PUT", tokenBody(), enrollment.credential);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ state: { phase: "reasoning", label: "Thinking" } });
+  await service.flushLiveActivities();
+  expect(deliveries.map(delivery => delivery.state.phase)).toEqual(["reasoning"]);
+});
+
 test("native token refresh needs only its scoped credential; it cannot change activity or user", async () => {
   const { registrationId: id, credential } = await prepare();
   expect((await request(`/native/registrations/${id}`, "PUT", tokenBody())).status).toBe(401);

@@ -1779,15 +1779,21 @@ async function doLoadFrontendExtension(
           const backdrop = document.createElement('div')
           Object.assign(backdrop.style, {
             position: 'fixed', inset: '0', zIndex: '10003',
+            width: 'var(--app-scaled-viewport-width)', height: 'var(--app-scaled-viewport-height)',
             background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           })
 
           const container = document.createElement('div')
           const geometry = resolveCurrentSpindleModalGeometry(options)
+          const syncGeometry = () => {
+            const current = resolveCurrentSpindleModalGeometry(options)
+            Object.assign(container.style, { width: `${current.width}px`, maxHeight: `${current.maxHeight}px`, height: current.height === undefined ? '' : `${current.height}px`, borderRadius: current.fullscreen ? '0' : '12px' })
+          }
           Object.assign(container.style, {
             width: `${geometry.width}px`, maxHeight: `${geometry.maxHeight}px`,
-            background: 'var(--lumiverse-bg)', borderRadius: '12px',
+            height: geometry.height === undefined ? '' : `${geometry.height}px`,
+            background: 'var(--lumiverse-bg)', borderRadius: geometry.fullscreen ? '0' : '12px',
             border: '1px solid var(--lumiverse-border)',
             display: 'flex', flexDirection: 'column', overflow: 'hidden',
           })
@@ -1828,6 +1834,10 @@ async function doLoadFrontendExtension(
           }
 
           document.body.appendChild(backdrop)
+          const geometryObserver = new MutationObserver(syncGeometry)
+          geometryObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
+          window.addEventListener('resize', syncGeometry)
+          window.visualViewport?.addEventListener('resize', syncGeometry)
 
           const handle = {
             root,
@@ -1839,6 +1849,9 @@ async function doLoadFrontendExtension(
               unregisterRoot()
               destroyComponentsForTarget(root)
               backdrop.remove()
+              geometryObserver.disconnect()
+              window.removeEventListener('resize', syncGeometry)
+              window.visualViewport?.removeEventListener('resize', syncGeometry)
               modalDisposers.delete(handle.dismiss)
               for (const h of dismissHandlers) { try { h() } catch {} }
               dismissHandlers.clear()

@@ -32,11 +32,11 @@ for (const name of (process.env.UI_SCALE_BROWSERS ?? 'chromium,firefox,webkit').
   const browser = await playwright[name].launch({ headless: true })
   const previousCases = cases
   try {
-    for (const mode of ['web', 'desktop', 'linux', 'pwa', 'ios-pwa']) {
+    for (const mode of ['web', 'desktop', 'linux', 'pwa', 'ios-pwa', 'android']) {
       for (const width of [1200, 390, 320]) {
         if (process.env.UI_SCALE_FILTER && !`${name}/${mode}/${width}`.includes(process.env.UI_SCALE_FILTER)) continue
         const height = 800
-        const page = await browser.newPage({ viewport: { width, height }, reducedMotion: 'reduce' })
+        const page = await browser.newPage({ viewport: { width, height }, reducedMotion: 'reduce', ...(mode === 'android' ? { isMobile: true, hasTouch: true } : {}) })
         page.setDefaultTimeout(10_000)
         const errors = []
         page.on('pageerror', error => errors.push(error.message))
@@ -46,7 +46,8 @@ for (const name of (process.env.UI_SCALE_BROWSERS ?? 'chromium,firefox,webkit').
         const attributes = mode === 'linux' ? 'data-tauri-desktop data-platform="linux"'
           : mode === 'desktop' ? 'data-tauri-desktop'
           : mode === 'ios-pwa' ? 'data-pwa data-ios-pwa'
-          : mode === 'pwa' ? 'data-pwa' : ''
+          : mode === 'pwa' ? 'data-pwa'
+          : mode === 'android' ? 'data-tauri-mobile="android" data-platform="android"' : ''
         await page.setContent(`<html ${attributes}><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${modeCss}</style></head><body><div id="root"></div></body></html>`)
         await page.addScriptTag({ content: js })
         await page.waitForFunction(() => !!window.uiScaleFixture)
@@ -94,8 +95,29 @@ for (const name of (process.env.UI_SCALE_BROWSERS ?? 'chromium,firefox,webkit').
           near(backdrop.height, height, `${label} backdrop height`)
           const modal = await page.locator('#modal-content').evaluate(el => el.parentElement.getBoundingClientRect().toJSON())
           assert.ok(modal.left >= 0 && modal.right <= width && modal.top >= 0 && modal.bottom <= height, `${label} tall modal fits`)
+          if (width <= 600 || mode === 'android') {
+            near(modal.width, width, `${label} mobile modal fills width`)
+            near(modal.height, height, `${label} mobile modal fills height`)
+          }
           await page.keyboard.press('Escape')
           await page.locator('#modal-content').waitFor({ state: 'detached' })
+
+          if (width <= 600 || mode === 'android') {
+            await change(page, 'setCompact', true)
+            await change(page, 'setModal', true)
+            await page.waitForTimeout(250)
+            const compact = await page.locator('#modal-content').evaluate(el => el.parentElement.getBoundingClientRect().toJSON())
+            near(compact.width, width - 24, `${label} compact dialog keeps mobile width`)
+            assert.ok(compact.height < height / 2, `${label} short prompt keeps natural height`)
+            await change(page, 'setModal', false)
+            await page.locator('#modal-content').waitFor({ state: 'detached' })
+            await change(page, 'setCompact', false)
+            await change(page, 'setSettings', true)
+            const settings = await rect(page, '#settings-fixture')
+            near(settings.width, width, `${label} mobile settings width`)
+            near(settings.height, height, `${label} mobile settings height`)
+            await change(page, 'setSettings', false)
+          }
 
           await change(page, 'setMenu', { x: width - 4, y: height - 4 })
           await page.waitForTimeout(180) // ContextMenu's scale entrance animation.

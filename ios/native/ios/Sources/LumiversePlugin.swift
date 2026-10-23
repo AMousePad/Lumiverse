@@ -30,6 +30,7 @@ class LumiversePlugin: Plugin, UIGestureRecognizerDelegate {
 
     @objc public override func load(webview: WKWebView) {
         self.webview = webview
+        WebViewRendering.configure(webview)
         let cache = NativeCache(webview: webview)
         nativeCache = cache
         nativeBridge = NativeBridge(webview: webview, cache: cache)
