@@ -189,8 +189,7 @@ function SpindleModal() {
         style={{
           width: geometry.width,
           maxHeight: geometry.maxHeight,
-          height: geometry.height,
-          background: 'var(--lumiverse-bg)', borderRadius: geometry.fullscreen ? 0 : 12,
+          background: 'var(--lumiverse-bg)', borderRadius: 12,
           border: '1px solid var(--lumiverse-border)',
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
         }}

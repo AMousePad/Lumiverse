@@ -714,6 +714,20 @@
   }
 }
 
+@container duo-chat (max-width: 768px) {
+  .card { padding-top: 34px; }
+  .header { padding: 12px 12px 0; gap: 8px; }
+  .headerLeft,
+  .user:not(.userLeft) .headerLeft {
+    align-items: flex-start;
+    max-width: 100%;
+  }
+  .content { padding: 10px 12px 14px; }
+  .actionsPill { top: 8px; right: 12px; }
+  .user .actionsPill { left: 12px; }
+  .userLeft.user .actionsPill { right: 12px; left: auto; }
+}
+
 @media (hover: none) and (pointer: coarse) {
   .card,
   .hidden {

@@ -46,6 +46,27 @@
   padding-bottom: calc(10px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)) / var(--lumiverse-ui-scale, 1));
 }
 
+:global([data-duo-drawer-side='right'] [data-duo-chat]) .container {
+  --composer-right-edge-radius: 0px;
+  right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+:global([data-duo-drawer-side='left'] [data-duo-chat]) .container {
+  --composer-left-edge-radius: 0px;
+  left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* A Duo pane can be phone-sized while the complete WebView is wider. */
+:global([data-duo-chat]) .textarea,
+:global([data-duo-chat]) .textareaMirror {
+  font-size: max(16px, calc(14px * var(--lumiverse-font-scale, 1)));
+  padding: 8px 14px;
+}
+
 :global(html[data-pwa]:not([data-ios-pwa]):not([data-tauri-mobile='ios'])) .container {
   /* Chromium/Android PWA: .app is now edge-to-edge (no bottom padding), so
      pin the bar's glass to the screen edge and lift only its content above

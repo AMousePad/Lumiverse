@@ -40,6 +40,31 @@
   transform: translateX(0);
 }
 
+.wrapper.wrapperPinned {
+  position: absolute;
+  right: auto;
+  bottom: auto;
+  transform: none;
+  transition: none;
+  min-width: 0;
+  min-height: 0;
+  overflow: clip;
+}
+
+.wrapperPinned .drawer {
+  width: 100%;
+  min-width: 0;
+  box-shadow: none;
+}
+
+:global(html[data-tauri-mobile='ios']) .wrapperRight:not(.wrapperPinned) {
+  right: calc(env(safe-area-inset-right, 0px) / var(--lumiverse-ui-scale, 1));
+}
+
+:global(html[data-tauri-mobile='ios']) .wrapperLeft:not(.wrapperPinned) {
+  left: calc(env(safe-area-inset-left, 0px) / var(--lumiverse-ui-scale, 1));
+}
+
 /* ── Flush drawer tab ── */
 
 .drawerTab {

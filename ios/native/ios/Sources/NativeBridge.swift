@@ -11,11 +11,13 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
     private var loading: NSKeyValueObservation?
     private var lifecycleObservers: [NSObjectProtocol] = []
     private let cache: NativeCache?
+    private var layout: IOSLayout?
 
     init(webview: WKWebView, cache: NativeCache? = nil) {
         self.webview = webview
         self.cache = cache
         super.init()
+        layout = IOSLayout(webview: webview)
         let delegate = MediaPermissionDelegate(forwarding: webview.uiDelegate)
         mediaDelegate = delegate
         webview.uiDelegate = delegate
@@ -86,6 +88,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "cache.status": replyHandler(cache?.status ?? ["available": false, "active": false], nil)
         case "cache.ready": replyHandler(["accepted": cache?.markHealthy(buildId: payload["buildId"] as? String ?? "") ?? false], nil)
         case "lifecycle.status": replyHandler(["state": appState(in: webview)], nil)
+        case "layout.status": replyHandler(layout?.snapshot() ?? [:], nil)
         case "widgets.status", "widgets.configure", "widgets.refresh", "widgets.invalidate":
             Task { @MainActor in
                 do {

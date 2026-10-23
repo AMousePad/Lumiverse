@@ -18,7 +18,7 @@ interface ModalShellProps {
   style?: CSSProperties
   /** Use the available viewport without desktop size caps. */
   fullscreen?: boolean
-  /** Short prompts can retain a compact dialog on mobile. Editors fill the window. */
+  /** Fullscreen on mobile is opt-in, independently of the viewport size. */
   mobilePresentation?: 'fullscreen' | 'dialog'
   /** Allow a modal body with form controls to scroll when the viewport is short. */
   scrollable?: boolean
@@ -39,13 +39,22 @@ export function ModalShell({
   className,
   style,
   fullscreen: requestedFullscreen = false,
-  mobilePresentation = 'fullscreen',
+  mobilePresentation = 'dialog',
   scrollable = false,
   modalId = 'shell',
   'data-component': dataComponent,
 }: ModalShellProps) {
   const isMobile = useIsMobile()
   const fullscreen = requestedFullscreen || (isMobile && mobilePresentation === 'fullscreen')
+  const modalLimit = (value: string | number) => {
+    const length = typeof value === 'number' ? `${value}px` : value
+    if (length === 'none') return '100%'
+    // Viewport and fixed-pixel caps must not shrink a second time under body
+    // zoom. Existing layout-space limits and caller-resolved CSS variables
+    // already account for zoom; percentages refer to the padded backdrop.
+    const alreadyScaled = /--lumiverse-ui-scale|--app-scaled-viewport|%/.test(length) || /^var\(/.test(length.trim())
+    return `min(${isMobile && !alreadyScaled ? `calc((${length}) / var(--lumiverse-ui-scale, 1))` : length}, 100%)`
+  }
   const backdropPointerDownRef = useRef<EventTarget | null>(null)
   const handleEscape = useEffectEvent((e: KeyboardEvent) => {
     if (closeOnEscape && e.key === 'Escape') onClose()
@@ -103,12 +112,12 @@ export function ModalShell({
             // backdrop at larger UI scales and while a keyboard is open.
             style={{
               ...style,
-              width: fullscreen ? '100%' : style?.width,
+              width: fullscreen || isMobile ? '100%' : style?.width,
               height: fullscreen ? '100%' : style?.height,
-              minWidth: fullscreen ? 0 : style?.minWidth,
-              minHeight: fullscreen ? 0 : style?.minHeight,
-              maxWidth: fullscreen ? 'none' : isMobile ? '100%' : style?.maxWidth ?? maxWidth,
-              maxHeight: fullscreen ? 'none' : style?.maxHeight ?? `min(${typeof maxHeight === 'number' ? `${maxHeight}px` : maxHeight}, 100%)`,
+              minWidth: fullscreen || isMobile ? 0 : style?.minWidth,
+              minHeight: fullscreen || isMobile ? 0 : style?.minHeight,
+              maxWidth: fullscreen ? 'none' : modalLimit(style?.maxWidth ?? maxWidth),
+              maxHeight: fullscreen ? 'none' : modalLimit(style?.maxHeight ?? maxHeight),
             }}
           >
             <span data-spindle-mount="modal_header_actions" data-spindle-scope={`modal:${modalId}:header-actions`} style={{ display: 'contents' }} />

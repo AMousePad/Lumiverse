@@ -165,13 +165,19 @@ try {
   for (const scale of scales) {
     await evaluate(`window.uiScaleFixture.setScale(${scale}); window.uiScaleFixture.setModal(true); true`)
     await Bun.sleep(350)
-    const result = await evaluate<{ width: number; height: number; viewportWidth: number; viewportHeight: number }>(`(() => { const r=document.getElementById('modal-content').parentElement.getBoundingClientRect(); return {width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight} })()`)
-    assert.ok(Math.abs(result.width - result.viewportWidth) < 1, `Modal width at ${scale}: ${JSON.stringify(result)}`)
-    assert.ok(Math.abs(result.height - result.viewportHeight) < 1, `Modal height at ${scale}: ${JSON.stringify(result)}`)
+    const result = await evaluate<{ width: number; height: number; left: number; top: number; right: number; bottom: number; viewportWidth: number; viewportHeight: number }>(`(() => { const r=document.getElementById('modal-content').parentElement.getBoundingClientRect(); return {...r.toJSON(),viewportWidth:innerWidth,viewportHeight:innerHeight} })()`)
+    assert.ok(Math.abs(result.width - Math.min(560, result.viewportWidth - 24)) < 1, `Contained modal width at ${scale}: ${JSON.stringify(result)}`)
+    assert.ok(result.height <= result.viewportHeight * 0.9 + 1 && result.height > 0, `Contained modal height cap at ${scale}: ${JSON.stringify(result)}`)
+    assert.ok(result.left >= 11 && result.right <= result.viewportWidth - 11 && result.top >= 11 && result.bottom <= result.viewportHeight - 11, `Visible modal margins at ${scale}: ${JSON.stringify(result)}`)
+    await evaluate('window.uiScaleFixture.setCompact(true); true')
+    await Bun.sleep(100)
+    const compactHeight = await evaluate<number>("document.getElementById('modal-content').parentElement.getBoundingClientRect().height")
+    assert.ok(compactHeight < result.viewportHeight / 2, `Short prompt keeps its natural height at ${scale}`)
+    await evaluate('window.uiScaleFixture.setCompact(false); true')
     geometry.push({ scale, ...result })
   }
   await Bun.write(join(import.meta.dir, '../dist/android/smoke-test-exports.json'), JSON.stringify({ testedAt: new Date().toISOString(), serial, files: await files(), authenticatedDownloads: authenticated, scales: geometry, passed: true }, null, 2) + '\n')
-  console.log('Native WebView fullscreen modal coverage at 50%, 80%, 100%, 125%, 150%: passed')
+  console.log('Native WebView contained modal sizing at 50%, 80%, 100%, 125%, 150%: passed')
 } catch (error) {
   console.log('Native replies:', await evaluate('window.exportReplies').catch(() => null))
   console.log('Export directory:', await files().catch(() => []))

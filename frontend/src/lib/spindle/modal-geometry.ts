@@ -16,8 +16,6 @@ export interface SpindleModalViewport {
 export interface SpindleModalGeometry {
   width: number
   maxHeight: number
-  height?: number
-  fullscreen?: boolean
 }
 
 export const DEFAULT_SPINDLE_MODAL_WIDTH = 420
@@ -45,15 +43,15 @@ export function resolveSpindleModalGeometry(
   viewport: SpindleModalViewport,
 ): SpindleModalGeometry {
   const uiScale = validScale(viewport.uiScale)
-  const layoutViewportWidth = Math.max(0, positiveFinite(viewport.width, 0) / uiScale)
-  const layoutViewportHeight = Math.max(0, positiveFinite(viewport.height, 0) / uiScale)
-  if (viewport.mobile) return { width: layoutViewportWidth, maxHeight: layoutViewportHeight, height: layoutViewportHeight, fullscreen: true }
-  const availableWidth = Math.max(0, layoutViewportWidth - SPINDLE_MODAL_VIEWPORT_GUTTER)
-  const availableHeight = Math.max(0, layoutViewportHeight - SPINDLE_MODAL_VIEWPORT_GUTTER)
+  const gutter = viewport.mobile ? 24 : SPINDLE_MODAL_VIEWPORT_GUTTER
+  const availableWidth = Math.max(0, (positiveFinite(viewport.width, 0) - gutter) / uiScale)
+  const availableHeight = Math.max(0, (positiveFinite(viewport.height, 0) - gutter) / uiScale)
+  // Mobile dialogs keep their requested footprint while their controls scale.
+  const sizeScale = viewport.mobile ? uiScale : 1
 
   return {
-    width: Math.min(positiveFinite(options?.width, DEFAULT_SPINDLE_MODAL_WIDTH), availableWidth),
-    maxHeight: Math.min(positiveFinite(options?.maxHeight, DEFAULT_SPINDLE_MODAL_MAX_HEIGHT), availableHeight),
+    width: Math.min(positiveFinite(options?.width, DEFAULT_SPINDLE_MODAL_WIDTH) / sizeScale, availableWidth),
+    maxHeight: Math.min(positiveFinite(options?.maxHeight, DEFAULT_SPINDLE_MODAL_MAX_HEIGHT) / sizeScale, availableHeight),
   }
 }
 

@@ -1788,12 +1788,11 @@ async function doLoadFrontendExtension(
           const geometry = resolveCurrentSpindleModalGeometry(options)
           const syncGeometry = () => {
             const current = resolveCurrentSpindleModalGeometry(options)
-            Object.assign(container.style, { width: `${current.width}px`, maxHeight: `${current.maxHeight}px`, height: current.height === undefined ? '' : `${current.height}px`, borderRadius: current.fullscreen ? '0' : '12px' })
+            Object.assign(container.style, { width: `${current.width}px`, maxHeight: `${current.maxHeight}px` })
           }
           Object.assign(container.style, {
             width: `${geometry.width}px`, maxHeight: `${geometry.maxHeight}px`,
-            height: geometry.height === undefined ? '' : `${geometry.height}px`,
-            background: 'var(--lumiverse-bg)', borderRadius: geometry.fullscreen ? '0' : '12px',
+            background: 'var(--lumiverse-bg)', borderRadius: '12px',
             border: '1px solid var(--lumiverse-border)',
             display: 'flex', flexDirection: 'column', overflow: 'hidden',
           })

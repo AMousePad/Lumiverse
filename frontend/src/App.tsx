@@ -56,6 +56,8 @@ import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-exten
 import { installTauriSystemAudioSource } from '@/lib/spindle/system-audio-tauri'
 import { createDesktopDownloadFeedback, type DesktopDownloadEvent } from '@/lib/desktop-download-feedback'
 import { toast } from '@/lib/toast'
+import { useIOSDuoLayout } from '@/hooks/useIOSDuoLayout'
+import { duoChatStyle } from '@/lib/ios-duo-layout'
 
 const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
 
@@ -121,6 +123,8 @@ function Application() {
   }, [t])
 
   const isMobile = useIsMobile()
+  const drawerSide = useStore((s) => s.drawerSettings.side)
+  const duoLayout = useIOSDuoLayout(drawerSide)
   const customCSSDockUnavailable = useIsMobile(CUSTOM_CSS_DOCK_BREAKPOINT)
   const customCSSDockOpen = useStore((s) => s.customCSSDockOpen)
   const customCSSDockSize = useStore((s) => s.customCSSDockSize)
@@ -372,13 +376,16 @@ function Application() {
       <LazyMotion features={domAnimation} strict={false}>
         <MotionConfig reducedMotion="user">
           <div
-            className={styles.app}
+            className={duoLayout ? `${styles.app} ${styles.duoApp}` : styles.app}
             data-app-root=""
+            data-duo-layout={duoLayout?.axis}
+            data-duo-drawer-side={duoLayout?.axis === 'horizontal' ? drawerSide : undefined}
             style={{
               '--spindle-dock-left': `${dockInsets.left}px`,
               '--spindle-dock-right': `${dockInsets.right}px`,
               '--spindle-dock-top': `${dockInsets.top}px`,
               '--spindle-dock-bottom': `${dockInsets.bottom}px`,
+              '--duo-window-keyboard-inset-bottom': 'var(--app-keyboard-inset-bottom, 0px)',
             } as React.CSSProperties}
           >
               {safeTheme.active && (
@@ -390,10 +397,14 @@ function Application() {
               <ErrorBoundary label="App">
                 {/* Mirrors react-router context out to detached drawer-tab roots */}
                 <RouterContextExporter />
-                <main className={styles.main}>
+                <main
+                  className={duoLayout ? `${styles.main} ${styles.duoMain}` : styles.main}
+                  data-duo-chat={duoLayout ? '' : undefined}
+                  style={duoLayout ? duoChatStyle(duoLayout) as React.CSSProperties : undefined}
+                >
                   <Outlet />
                 </main>
-                <ViewportDrawer />
+                <ViewportDrawer duoLayout={duoLayout} />
                 {!isDesktopFloatingWidgetWindow() && <WindowFileDropHost />}
                 {editingCharacterId && <CharacterEditorPage />}
                 <ModalContainer />

@@ -31,6 +31,9 @@ function Fixture() {
   const [modal, setModal] = useState(false)
   const [compact, setCompact] = useState(false)
   const [settings, setSettings] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
+  const [maxWidth, setMaxWidth] = useState<string | number>(560)
+  const [maxHeight, setMaxHeight] = useState<string | number>('90vh')
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [value, setValue] = useState('first')
 
@@ -41,7 +44,7 @@ function Fixture() {
   }, [scale])
 
   useLayoutEffect(() => {
-    Object.assign(window, { uiScaleFixture: { setScale, setShell, setModal, setMenu, setCompact, setSettings } })
+    Object.assign(window, { uiScaleFixture: { setScale, setShell, setModal, setMenu, setCompact, setSettings, setFullscreen, setMaxWidth, setMaxHeight } })
   }, [])
 
   return <>
@@ -65,7 +68,7 @@ function Fixture() {
       <div id="full-portal" style={{ position: 'fixed', inset: 0, pointerEvents: 'none' }} />
       <div id="center-portal" style={{ position: 'fixed', left: '50%', top: '50%', width: 100, height: 40, transform: 'translate(-50%, -50%)', pointerEvents: 'none' }} />
     </>, document.body)}
-    <ModalShell isOpen={modal} onClose={() => setModal(false)} mobilePresentation={compact ? 'dialog' : 'fullscreen'} maxHeight="90vh" scrollable><div id="modal-content" style={{ height: compact ? 120 : 1200, flexShrink: 0 }}>Modal</div></ModalShell>
+    <ModalShell isOpen={modal} onClose={() => setModal(false)} fullscreen={fullscreen} maxWidth={compact ? 420 : maxWidth} maxHeight={maxHeight} scrollable><div id="modal-content" style={{ height: compact ? 120 : 1200, flexShrink: 0 }}>Modal</div></ModalShell>
     {settings && createPortal(<div className={settingsStyles.overlay}><div id="settings-fixture" className={settingsStyles.modal}>Settings</div></div>, document.body)}
     <ContextMenu position={menu} onClose={() => setMenu(null)} items={[{ key: 'item', label: 'Menu item', onClick: () => setMenu(null) }]} />
   </>

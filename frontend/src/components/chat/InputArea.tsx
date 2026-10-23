@@ -3290,9 +3290,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       style={(() => {
         const s: CSSProperties = {}
         if (screenCornerRadius) {
-          s.borderRadius = inputFocused
-            ? 'var(--lcs-radius, 14px)'
-            : `var(--lcs-radius, 14px) var(--lcs-radius, 14px) ${screenCornerRadius}px ${screenCornerRadius}px`
+          const topRadius = 'var(--lcs-radius, 14px)'
+          const bottomRadius = inputFocused ? topRadius : `${screenCornerRadius}px`
+          s.borderRadius = `var(--composer-left-edge-radius, ${topRadius}) var(--composer-right-edge-radius, ${topRadius}) var(--composer-right-edge-radius, ${bottomRadius}) var(--composer-left-edge-radius, ${bottomRadius})`
         }
         if (hideForMobileEdit) s.display = 'none'
         return Object.keys(s).length ? s : undefined

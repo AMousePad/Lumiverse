@@ -30,11 +30,13 @@ import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-exten
 import { useDrawerTabDrag } from '@/hooks/useDrawerTabDrag'
 import { useDrawerResize } from '@/hooks/useDrawerResize'
 import { getUiScale } from '@/lib/uiScale'
+import { duoPaneStyle, type DuoLayout } from '@/lib/ios-duo-layout'
 
-export default function ViewportDrawer() {
+export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLayout | null }) {
   const { t } = useTranslation('panels')
   const { t: ts } = useTranslation('settings')
   const drawerOpen = useStore((s) => s.drawerOpen)
+  const pinned = duoLayout !== null
   const drawerTab = useStore((s) => s.drawerTab)
   const openDrawer = useStore((s) => s.openDrawer)
   const closeDrawer = useStore((s) => s.closeDrawer)
@@ -69,7 +71,7 @@ export default function ViewportDrawer() {
     const app = document.querySelector<HTMLElement>('[data-app-root]')
     if (!drawer || !app) return
     const sync = () => {
-      const width = drawerOpen && !isMobile ? drawer.getBoundingClientRect().width / getUiScale() : 0
+      const width = drawerOpen && !isMobile && !pinned ? drawer.getBoundingClientRect().width / getUiScale() : 0
       app.style.setProperty('--chat-drawer-left', drawerSettings.side === 'left' ? `${width}px` : '0px')
       app.style.setProperty('--chat-drawer-right', drawerSettings.side === 'right' ? `${width}px` : '0px')
     }
@@ -82,7 +84,7 @@ export default function ViewportDrawer() {
       app.style.removeProperty('--chat-drawer-left')
       app.style.removeProperty('--chat-drawer-right')
     }
-  }, [drawerOpen, drawerSettings.side, isMobile, settingsLoaded])
+  }, [drawerOpen, drawerSettings.side, isMobile, settingsLoaded, pinned])
 
   const updateTabListScroll = useCallback(() => {
     const el = tabListRef.current
@@ -343,7 +345,7 @@ export default function ViewportDrawer() {
   return (
     <>
       <AnimatePresence>
-        {isMobile && drawerOpen && (
+        {isMobile && drawerOpen && !pinned && (
           <motion.div
             className={styles.backdrop}
             initial={{ opacity: 0 }}
@@ -359,11 +361,15 @@ export default function ViewportDrawer() {
           styles.wrapper,
           isCompact && styles.wrapperCompact,
           isRight ? styles.wrapperRight : styles.wrapperLeft,
-          drawerOpen && styles.wrapperOpen,
+          (drawerOpen || pinned) && styles.wrapperOpen,
+          pinned && styles.wrapperPinned,
         )}
-        style={{ '--drawer-panel-w': panelWidthCSS } as React.CSSProperties}
+        style={{ '--drawer-panel-w': pinned ? '100%' : panelWidthCSS, ...(duoLayout ? duoPaneStyle(duoLayout.drawer, duoLayout) : {}) } as React.CSSProperties}
+        role={pinned ? 'complementary' : undefined}
+        aria-label={pinned ? t('viewportDrawer.navigation', { defaultValue: 'Navigation' }) : undefined}
+        data-duo-drawer={pinned ? '' : undefined}
       >
-        <button
+        {!pinned && <button
           type="button"
           className={clsx(
             styles.drawerTab,
@@ -382,10 +388,10 @@ export default function ViewportDrawer() {
           <div className={styles.tabIconBox}>
             <Sparkles size={isCompact ? 14 : 16} />
           </div>
-        </button>
+        </button>}
 
         <div className={styles.drawer} ref={drawerRef} data-lumiverse-surface="viewport-drawer">
-          {!isMobile && drawerOpen && (
+          {!isMobile && drawerOpen && !pinned && (
             <div
               className={styles.resizeHandle}
               role="separator"
@@ -487,7 +493,7 @@ export default function ViewportDrawer() {
               <span className={styles.headerActions}>
                 <span data-spindle-mount="drawer_header_actions" data-spindle-scope="drawer:header-actions" style={{ display: 'contents' }} />
               </span>
-              <CloseButton onClick={closeDrawer} />
+              {!pinned && <CloseButton onClick={closeDrawer} />}
             </div>
             <div
               className={clsx(
