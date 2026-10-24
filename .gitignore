@@ -101,6 +101,13 @@ vendor/
 !frontend/src/lib/whistle/vendor/needle.js
 !frontend/src/lib/whistle/vendor/LICENSE
 
+# dashersw/liquid-glass-js, vendored verbatim as the reference for the
+# liquid-glass material's shader maths. It is not on npm, so the source has to
+# live in-tree; without these negations the root `vendor/` rule above swallows it.
+!frontend/vendor/
+!frontend/vendor/liquid-glass-js/
+!frontend/vendor/liquid-glass-js/**
+
 # Desktop tray app build artifacts (desktop/)
 desktop/dist/
 desktop/src-tauri/target/

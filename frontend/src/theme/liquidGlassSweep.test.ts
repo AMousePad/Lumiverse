@@ -18,6 +18,11 @@ import { join } from 'node:path'
  *     un-refracted — invisible in review.
  *  3. No declaration may carry it twice, which would stack two displacement
  *     passes on one element.
+ *  4. The SVG defs host must keep a real box. Chromium clips a filter's output
+ *     to its host viewport, so collapsing the host to 0x0 makes `feImage`
+ *     produce nothing and turns the displacement into a uniform translation of
+ *     the entire backdrop — the "everything is shifted" artefact. See the
+ *     host-box test below.
  */
 
 const themeDir = import.meta.dir
@@ -65,7 +70,7 @@ describe('liquid glass refraction sweep', () => {
 
   test('fills the token only inside the @supports probe, so unsupported engines keep their blur', () => {
     const css = read('theme/global.css')
-    const start = css.indexOf('@supports (backdrop-filter: url(#liquid-glass-distort))')
+    const start = css.indexOf('@supports (backdrop-filter: url(#liquid-glass-lens))')
     expect(start).toBeGreaterThanOrEqual(0)
 
     // The ungated `html[data-liquid-glass]` rule may only carry the lens.
@@ -73,7 +78,7 @@ describe('liquid glass refraction sweep', () => {
     const ungatedBody = css.slice(ungated, css.indexOf('}', ungated))
     expect(ungatedBody).not.toContain('--lcs-liquid-filter')
 
-    const fill = css.indexOf('--lcs-liquid-filter: url(#liquid-glass-distort)')
+    const fill = css.indexOf('--lcs-liquid-filter: url(#liquid-glass-lens)')
     expect(fill).toBeGreaterThan(start)
 
     // The fill must be within the probe's block: find the matching brace.
@@ -103,5 +108,36 @@ describe('liquid glass refraction sweep', () => {
       }
     }
     expect(doubled).toEqual([])
+  })
+
+  test('gives the SVG defs host a real box, so feImage is not clipped away', () => {
+    const css = read('theme/global.css')
+    const rule = css.match(/\.lumiverse-liquid-glass-defs\s*\{([^}]*)\}/)
+    expect(rule).not.toBeNull()
+    const body = rule![1]
+    // A zero-sized host is the failure mode: the browser clips the filter's
+    // output to it and the normal map comes back empty.
+    expect(body).not.toMatch(/width:\s*0(px)?\s*;/)
+    expect(body).not.toMatch(/height:\s*0(px)?\s*;/)
+    expect(body).toMatch(/position:\s*fixed/)
+    expect(body).toMatch(/width:\s*100%/)
+    expect(body).toMatch(/height:\s*100%/)
+    // It must never intercept pointer events.
+    expect(body).toMatch(/pointer-events:\s*none/)
+  })
+
+  test('sizes the filter region to the element, and fills it in bounding-box units', () => {
+    // Two things keep the map on the surface. `backdrop-filter` is clipped to
+    // the element, so a region wider than the element is discarded. And
+    // `feImage` resolves percentages against the viewport under the default
+    // user-space units, so a `100%` image would be viewport-sized and each
+    // surface would show only the slice it sits on — `primitiveUnits`
+    // objectBoundingBox with a 1x1 image is what pins the map to the element.
+    const tsx = readFileSync(join(srcDir, 'components/shared/LiquidGlassFilters.tsx'), 'utf8')
+    expect(tsx).toMatch(/id="liquid-glass-lens"/)
+    expect(tsx).toMatch(/x="0"\s+y="0"\s+width="100%"\s+height="100%"/)
+    expect(tsx).toMatch(/primitiveUnits="objectBoundingBox"/)
+    expect(tsx).toMatch(/width="1"\s+height="1"/)
+    expect(tsx).not.toMatch(/x="-25%"/)
   })
 })

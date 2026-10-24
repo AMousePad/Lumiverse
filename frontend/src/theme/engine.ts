@@ -1,6 +1,7 @@
 import type { ThemeConfig, ResolvedMode } from '@/types/theme'
 import { DEFAULT_THEME } from '@/theme/presets'
 import { normalizeUiScale } from '@/lib/uiScale'
+import { LIQUID_GLASS_CONTROLS } from '@/lib/liquidGlass'
 
 // ── Color helpers ──
 
@@ -400,8 +401,10 @@ export function generateThemeVariables(
   // stay inert while `data-liquid-glass` is absent) so a theme switch never has
   // to add or remove variables.
   const liquid = Boolean(config.liquidGlass)
+  // Tint opacity and blur radius are two of the ten Liquid Glass controls, so
+  // they come from the material's own values rather than being restated here.
   vars['--lcs-liquid-tint'] = liquid
-    ? hsla(h, bgSat, isDark ? 9 : 96, isDark ? 0.26 : 0.34)
+    ? hsla(h, bgSat, isDark ? 9 : 96, LIQUID_GLASS_CONTROLS.tintOpacity)
     : 'transparent'
   vars['--lcs-liquid-specular'] = liquid
     ? (isDark ? 'rgba(255, 255, 255, 0.72)' : 'rgba(255, 255, 255, 0.9)')
@@ -409,7 +412,7 @@ export function generateThemeVariables(
   vars['--lcs-liquid-rim'] = liquid
     ? (isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(255, 255, 255, 0.55)')
     : 'transparent'
-  vars['--lcs-liquid-blur'] = liquid ? '10px' : '0px'
+  vars['--lcs-liquid-blur'] = liquid ? `${LIQUID_GLASS_CONTROLS.blurRadius}px` : '0px'
 
   // Slider thumbs read as beads of glass rather than panes: a much lighter wash
   // than a surface (a 0.26-alpha tint on a 24px lozenge just looks muddy), a

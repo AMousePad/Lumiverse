@@ -1,27 +1,28 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '@/store'
-import { isLiquidGlassActive, LENS_NORMAL_MAP } from '@/lib/liquidGlass'
+import { isLiquidGlassActive, liquidGlassNormalMapUri, LENS_SCALE } from '@/lib/liquidGlass'
 
 /**
  * SVG filter definitions for the liquid-glass material.
  *
- * The filters are inlined once for the whole document and referenced by id from
- * CSS. They have to live in the DOM rather than a stylesheet because CSS has no
- * way to declare `feTurbulence`, `feImage`, or `feDisplacementMap` primitives.
+ * The filter is inlined once for the whole document and referenced by id from
+ * CSS, because CSS has no way to declare `feDisplacementMap`.
  *
- * Two filters, both ported from the references the Appearance panel cites:
+ * The normal map is generated rather than declared: it is the coverage field of
+ * `dashersw/liquid-glass-js`, evaluated in JavaScript and encoded as a PNG data
+ * URI. It has to be an image because an SVG filter used as a `backdrop-filter`
+ * has no `SourceAlpha` to differentiate — the backdrop is not an element, so
+ * there is no shape to take a gradient of. `feImage` is the one shape input such
+ * a filter does honour, and `feDisplacementMap` then refracts the backdrop
+ * through whatever it supplies.
  *
- * - `liquid-glass-distort` refracts a whole surface backdrop through fractal
- *   noise, giving a pane its lens edge (dashersw/liquid-glass-js; the "Apple
- *   Liquid Glass UI" study uses the same turbulence/scale-70 recipe).
- * - `liquid-glass-lens` is a small radial normal map that bulges a slider thumb
- *   like a bead of glass, from the "Slider Button Liquid Glass" study. It keys
- *   off `filter:`, not `backdrop-filter:`, so it composes with the thumb's own
- *   backdrop blur instead of competing with it for the one displacement slot.
+ * The filter is applied by CSS as `backdrop-filter`, never as `filter`: only
+ * `backdrop-filter` reaches what is behind an element, and `filter` would
+ * displace the surface's own text instead.
  *
- * Rendered only while the effect is active so the filter chains cost nothing
- * when the user has not opted in. `url(#…)` on a missing id is a no-op, so the
- * markup is safe to unmount at any time.
+ * Rendered only while the effect is active, so the chain costs nothing when the
+ * user has not opted in. `url(#…)` on a missing id is a no-op, so the markup is
+ * safe to unmount at any time.
  */
 export default function LiquidGlassFilters() {
   const theme = useStore((s) => s.theme)
@@ -37,31 +38,44 @@ export default function LiquidGlassFilters() {
 
   if (!isLiquidGlassActive(theme, reducedMotion)) return null
 
+  const normalMap = liquidGlassNormalMapUri()
+  if (!normalMap) return null
+
   return (
     <svg className="lumiverse-liquid-glass-defs" aria-hidden="true" focusable="false">
       <defs>
-        <filter id="liquid-glass-distort" x="-20%" y="-20%" width="140%" height="140%" colorInterpolationFilters="sRGB">
-          <feTurbulence type="fractalNoise" baseFrequency="0.008 0.008" numOctaves="2" seed="92" result="noise" />
-          <feGaussianBlur in="noise" stdDeviation="2" result="softNoise" />
-          <feDisplacementMap
-            in="SourceGraphic"
-            in2="softNoise"
-            scale="70"
-            xChannelSelector="R"
-            yChannelSelector="G"
-          />
-        </filter>
-        <filter id="liquid-glass-lens" x="-50%" y="-50%" width="200%" height="200%">
+        {/* The region is the element itself, and `objectBoundingBox` primitives
+            make the map fill it.
+
+            Both parts are load-bearing. `backdrop-filter` is clipped to the
+            element's border box, so a region larger than the element is
+            discarded. And `feImage` resolves percentages against the *viewport*,
+            not the element: with the default user-space units a `100%` image is
+            viewport-sized, so every surface shows whichever slice of the map it
+            happens to sit on and only elements at the viewport edge get a rim.
+            `primitiveUnits="objectBoundingBox"` makes the image exactly 1x1 of
+            the element, so the lens lands on the surface wherever it is. */}
+        <filter
+          id="liquid-glass-lens"
+          x="0"
+          y="0"
+          width="100%"
+          height="100%"
+          primitiveUnits="objectBoundingBox"
+        >
           <feImage
             x="0"
             y="0"
+            width="1"
+            height="1"
+            preserveAspectRatio="none"
             result="normalMap"
-            href={LENS_NORMAL_MAP}
+            href={normalMap}
           />
           <feDisplacementMap
             in="SourceGraphic"
             in2="normalMap"
-            scale="-252"
+            scale={LENS_SCALE}
             xChannelSelector="R"
             yChannelSelector="G"
           />
