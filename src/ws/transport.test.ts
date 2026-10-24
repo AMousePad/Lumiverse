@@ -101,7 +101,7 @@ test("native stream pub/sub evicts a slow subscriber without losing fast-client 
   })));
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: app.fetch,
     websocket: { ...websocket, backpressureLimit: 64 * 1024 } });
-  eventBus.setServer(server as import("bun").Server<unknown>);
+  eventBus.setServer(server as import("bun").Server<unknown>, 64 * 1024);
   const origin = `ws://127.0.0.1:${server.port}/ws?id=`;
   const fast = client(origin + "fast"), slow = client(origin + "slow");
   const otherChat = client(origin + "other-chat"), otherUser = client(origin + "other-user");
@@ -117,7 +117,7 @@ test("native stream pub/sub evicts a slow subscriber without losing fast-client 
   }
   try {
     await until(() => raw.size === 4 && [fast, slow, otherChat, otherUser].every(({ ws }) => ws.readyState === WebSocket.OPEN));
-    (slow.ws as WebSocket & { pause(): boolean }).pause();
+    expect((slow.ws as WebSocket & { pause(): boolean }).pause()).toBe(true);
     while (emitted < 1024 && !closed.has("slow")) {
       emitSegment();
       // Let the fast subscriber drain; never wait for the stalled subscriber.
