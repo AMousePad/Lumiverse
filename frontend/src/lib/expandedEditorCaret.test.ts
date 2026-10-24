@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import { getExpandedEditorCaretRect, installExpandedEditorCaretReveal, revealExpandedEditorCaret } from './expandedEditorCaret'
+import { getKeyboardViewport, KEYBOARD_VIEWPORT_EVENT } from './keyboardViewport'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { pretendToBeVisual: true })
 const frames = new Map<number, FrameRequestCallback>()
@@ -50,6 +51,9 @@ dom.window.Range.prototype.getBoundingClientRect = function () {
   return rect(fieldTop() + (caretOffset - mirror.scrollTop) * scale, 20 * scale)
 }
 beforeEach(() => {
+  document.documentElement.removeAttribute('data-tauri-mobile')
+  document.documentElement.removeAttribute('data-ios-pwa')
+  document.documentElement.removeAttribute('style')
   textarea = document.createElement('textarea')
   mirror = document.createElement('pre')
   textarea.value = 'first second last'
@@ -61,6 +65,7 @@ beforeEach(() => {
   caretOffset = 530
   viewport.height = 400
   viewport.offsetTop = 0
+  Object.assign(viewport, { scale: 1 })
   disconnected = false
   textarea.getBoundingClientRect = () => rect(fieldTop(), fieldHeight * scale)
   Object.defineProperty(textarea, 'offsetHeight', { get: () => fieldHeight })
@@ -78,6 +83,51 @@ afterAll(() => {
 })
 
 describe('expanded editor caret visibility', () => {
+  test('uses normalized iOS bounds for caret scrolling despite a stale native pan', () => {
+    document.documentElement.setAttribute('data-tauri-mobile', 'ios')
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '400px')
+    document.documentElement.style.setProperty('--app-visual-viewport-offset-top', '0px')
+    viewport.offsetTop = 140
+    revealExpandedEditorCaret(textarea, mirror)
+    expect(getExpandedEditorCaretRect(textarea, mirror)!.bottom).toBe(388)
+    expect(textarea.scrollTop).toBe(262)
+  })
+
+  test('waits for committed viewport variables even when the fullscreen field never resizes', () => {
+    document.documentElement.setAttribute('data-ios-pwa', '')
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '800px')
+    uninstall = installExpandedEditorCaretReveal(textarea, mirror)
+    textarea.focus()
+    flush()
+    expect(textarea.scrollTop).toBe(0)
+    viewport.dispatchEvent(new dom.window.Event('resize'))
+    flush()
+    expect(textarea.scrollTop).toBe(0)
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '400px')
+    window.dispatchEvent(new dom.window.Event(KEYBOARD_VIEWPORT_EVENT))
+    flush()
+    expect(textarea.scrollTop).toBe(262)
+    // Duplicate commits must not undo a reading scroll.
+    textarea.scrollTop = 0
+    window.dispatchEvent(new dom.window.Event(KEYBOARD_VIEWPORT_EVENT))
+    flush()
+    expect(textarea.scrollTop).toBe(0)
+  })
+
+  test('uses actual visual bounds until the initial iOS pixel measurements are available', () => {
+    document.documentElement.setAttribute('data-tauri-mobile', 'ios')
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '100dvh')
+    expect(getKeyboardViewport()).toEqual({ top: 0, bottom: 400 })
+  })
+
+  test('retains real visual bounds while pinch-zoomed on iOS', () => {
+    document.documentElement.setAttribute('data-tauri-mobile', 'ios')
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '800px')
+    Object.assign(viewport, { scale: 2, offsetTop: 100 })
+    expect(getKeyboardViewport()).toEqual({ top: 100, bottom: 500 })
+    Object.assign(viewport, { scale: 1 })
+  })
+
   test('reveals an occluded caret, not the bottom of the field', () => {
     revealExpandedEditorCaret(textarea, mirror)
     expect(textarea.scrollTop).toBe(262)

@@ -195,6 +195,15 @@ select:focus-visible,
 
 }
 
+/* Native Android resizes the WebView for the IME. Lock its document to those
+   bounds just as the standalone PWA does, so focus cannot pan the shell. */
+html[data-tauri-mobile='android'] {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* ── iOS PWA viewport compensation ──
    With viewport-fit=cover + black-translucent status bar, content renders
    behind the status bar (starts at y=0), but height:100% on <html> still

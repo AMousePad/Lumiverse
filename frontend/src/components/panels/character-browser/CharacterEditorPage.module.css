@@ -1459,6 +1459,7 @@
 
 @media (max-width: 600px) {
   .backdrop {
+    height: calc(var(--app-fullscreen-height, var(--app-shell-height, 100dvh)) / var(--lumiverse-ui-scale, 1));
     padding: 0;
   }
 

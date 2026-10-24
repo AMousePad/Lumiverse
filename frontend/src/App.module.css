@@ -81,7 +81,8 @@
    pads its own interactive content above the nav bar instead (see
    InputArea / MessageSelectBar). No-op on desktop Chromium PWAs where the
    inset is 0. */
-:global(html[data-pwa]:not([data-ios-pwa]):not([data-tauri-mobile='ios'])) .app {
+:global(html[data-pwa]:not([data-ios-pwa]):not([data-tauri-mobile='ios'])) .app,
+:global(html[data-tauri-mobile='android']) .app {
   padding-bottom: var(--spindle-dock-bottom, 0px);
 }
 

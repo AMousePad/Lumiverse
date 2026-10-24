@@ -67,14 +67,16 @@
   padding: 8px 14px;
 }
 
-:global(html[data-pwa]:not([data-ios-pwa]):not([data-tauri-mobile='ios'])) .container {
+:global(html[data-pwa]:not([data-ios-pwa]):not([data-tauri-mobile='ios'])) .container,
+:global(html[data-tauri-mobile='android']) .container {
   /* Chromium/Android PWA: .app is now edge-to-edge (no bottom padding), so
      pin the bar's glass to the screen edge and lift only its content above
      the gesture nav bar. Unlike iOS, Android sets
      interactive-widget=resizes-content (see main.tsx), so the dvh-sized
      shell shrinks above the keyboard and the bar rides up on its own — no
      --app-keyboard-inset-bottom lift needed. env(safe-area-inset-bottom)
-     collapses to 0 when the keyboard hides the nav bar. */
+     collapses to 0 when the keyboard hides the nav bar. Native Android's
+     host reserves IME space in the WebView bounds for the same behavior. */
   bottom: 0;
   padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
 }
@@ -1248,7 +1250,8 @@
     padding-bottom: calc(8px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)) / var(--lumiverse-ui-scale, 1));
   }
 
-  :global(html[data-pwa]:not([data-ios-pwa]):not([data-tauri-mobile='ios'])) .container {
+  :global(html[data-pwa]:not([data-ios-pwa]):not([data-tauri-mobile='ios'])) .container,
+  :global(html[data-tauri-mobile='android']) .container {
     bottom: 0;
     padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
   }
