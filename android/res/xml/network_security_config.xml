@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <!-- Users can explicitly select an HTTP self-hosted instance, including LAN hosts. -->
-    <base-config cleartextTrafficPermitted="true" />
-</network-security-config>

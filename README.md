@@ -12,6 +12,7 @@ Please also review the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 - [User guides](https://lumiverse.chat/guides)
 - [Extension developer docs](https://docs.lumiverse.chat)
+- [Native iOS and Android projects](developer-docs/docs/getting-started/mobile-projects.md)
 
 ## Get the Repository
 
