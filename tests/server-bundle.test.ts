@@ -7,7 +7,8 @@ import { defaultBundleDirectories, parseBundleOptions, validateSettings, type Se
 import { extractServerBundle } from "../src/runtime/bundle-cache";
 import { hasConfiguredOwner, startBundleSetup, type BundleSetup } from "../src/runtime/bundle-setup";
 import { verifyPassword } from "../src/crypto/password";
-import { collectBundleFiles, writeBundleArchive } from "../scripts/build-server";
+import { collectBundleFiles, serverBuildTarget, verifyWindowsRuntime, writeBundleArchive } from "../scripts/build-server";
+import { desktopServerTarget } from "../scripts/build-desktop-server";
 import { JSDOM } from "jsdom";
 import { BUNDLE_SETUP_PAGE } from "../src/runtime/bundle-setup-page";
 
@@ -17,6 +18,34 @@ function directory(): string { const path = mkdtempSync(join(tmpdir(), "lumivers
 afterEach(() => { for (const listener of listeners.splice(0)) listener.stop(); for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe("server bundle runtime", () => {
+  test("selects ARM64 server, runtime, and sidecar metadata when cross-building Windows", () => {
+    expect(serverBuildTarget(undefined, "win32", "x64")).toEqual({ platform: "win32", arch: "x64", cross: false });
+    expect(serverBuildTarget("aarch64-pc-windows-msvc", "win32", "x64")).toEqual({ platform: "win32", arch: "arm64", cross: true });
+    expect(desktopServerTarget(["--reuse-server", "--target", "aarch64-pc-windows-msvc"], "win32", "x64"))
+      .toEqual({ platform: "win32", arch: "arm64", cross: true, target: "aarch64-pc-windows-msvc" });
+    expect(desktopServerTarget(["--target=aarch64-pc-windows-msvc"], "win32", "x64").arch).toBe("arm64");
+    expect(desktopServerTarget(["--target", "aarch64-apple-darwin"], "darwin", "arm64").cross).toBe(false);
+    expect(() => serverBuildTarget("aarch64-pc-windows-msvc", "linux", "x64")).toThrow("Windows");
+    expect(() => serverBuildTarget("i686-pc-windows-msvc", "win32", "x64")).toThrow();
+    expect(() => desktopServerTarget(["--target"], "win32", "x64")).toThrow("needs");
+    expect(() => desktopServerTarget(["--target="], "win32", "x64")).toThrow("needs");
+  });
+
+  test("rejects a wrong-architecture or malformed embedded Windows runtime", () => {
+    const bytes = new Uint8Array(70);
+    const view = new DataView(bytes.buffer);
+    view.setUint16(0, 0x5a4d, true);
+    view.setUint32(0x3c, 64, true);
+    view.setUint32(64, 0x00004550, true);
+    view.setUint16(68, 0xaa64, true);
+    expect(() => verifyWindowsRuntime(bytes, "arm64")).not.toThrow();
+    expect(() => verifyWindowsRuntime(bytes, "x64")).toThrow("architecture");
+    expect(() => verifyWindowsRuntime(bytes.slice(0, 69), "arm64")).toThrow();
+    view.setUint32(0x3c, 0xffffffff, true);
+    expect(() => verifyWindowsRuntime(bytes, "arm64")).toThrow();
+    expect(() => verifyWindowsRuntime(new Uint8Array(), "arm64")).toThrow("header");
+  });
+
   test("archives file bytes rather than empty file-backed blobs", async () => {
     const base = directory();
     writeFileSync(join(base, "binary.node"), Buffer.from([0, 1, 2, 255]));

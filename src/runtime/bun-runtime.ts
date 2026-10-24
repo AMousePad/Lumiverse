@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve, win32 } from "node:path";
 
-export const MINIMUM_BUN_VERSION = "1.4.2";
+export const MINIMUM_BUN_VERSION = "1.4.4";
 export const BUN_EXECUTABLE_ENV = "LUMIVERSE_BUN_EXECUTABLE";
 
 interface RuntimeEnvironment {
@@ -34,10 +34,12 @@ export function requiredBunVersion(projectRoot: string): string {
     };
     const engine = typeof manifest.engines?.bun === "string" ? manifest.engines.bun : "";
     const engineMatch = engine.match(/(\d+\.\d+\.\d+)/);
-    if (engineMatch?.[1]) return engineMatch[1];
     const manager = typeof manifest.packageManager === "string" ? manifest.packageManager : "";
     const managerMatch = manager.match(/^bun@(\d+\.\d+\.\d+)/);
-    if (managerMatch?.[1]) return managerMatch[1];
+    const declared = engineMatch?.[1] || managerMatch?.[1];
+    // A pulled manifest can raise the floor for an older runner, but an old
+    // or partially updated manifest cannot lower this runtime's safety floor.
+    if (declared && meetsBunVersion(declared, MINIMUM_BUN_VERSION)) return declared;
   } catch {
     // The compiled-in floor still gives a useful failure when the manifest is
     // temporarily unreadable during a checkout operation.

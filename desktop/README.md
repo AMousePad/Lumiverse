@@ -255,7 +255,7 @@ Running it does **not** require Cargo, a Rust toolchain, a system WebKitGTK
 package, or system GStreamer plugins. Fully bundled stable/nightly releases
 include the server and Bun; they need neither a checkout nor an installed Bun
 runtime. Checkout-only feature artifacts
-require [Bun](https://bun.sh) ≥ 1.4.2 and a Lumiverse checkout. Both can connect
+require [Bun](https://bun.sh) ≥ 1.4.4 and a Lumiverse checkout. Both can connect
 to a remote HTTPS instance.
 
 Download the artifact matching the machine (`amd64`/`x86_64` for most PCs or
@@ -313,7 +313,7 @@ bun run build:linux-appimage root@linux-builder --jobs 12 \
 
 An existing SSH profile also works as the host argument. The SSH identity must
 have Docker access, and the host key must already be trusted. The build runs as
-an unprivileged user inside Ubuntu 22.04, with Bun 1.4.2, Rust 1.95.0, and Node
+an unprivileged user inside Ubuntu 22.04, with Bun 1.4.4, Rust 1.95.0, and Node
 22.16.0. This preserves the nightly's OS/glibc baseline when the remote host is
 Arch or another newer distribution. Native package versions are recorded in
 the returned runtime manifest.
@@ -403,6 +403,17 @@ jobs verify source, runtime provenance, native ARM64 qualification and checksums
 and independently verify their updater signatures. Signing keys remain in the
 public repository's hosted jobs. Publication still requires all six platforms
 and successful hosted builds; neither completion order advances a partial feed.
+
+Private build handoffs and diagnostic artifacts have one-day retention. Once
+the signed release and channel feed publish successfully, the completion job
+removes that request's private handoffs immediately. Failed or incomplete
+releases keep their handoffs for retries within that day. The private controller
+also prunes completed build artifacts older than a day before compilation and
+every six hours. These are Actions artifacts; Cargo/Bun compiler caches and
+published installers remain available. GitHub bills artifact storage separately
+from cache storage, so clearing compiler caches does not resolve an artifact
+storage quota failure. Deletion stops further storage accrual but does not erase
+usage already accrued during the billing period.
 Hosted runners do not wait during private compilation. Stable Linux and macOS
 builds remain hosted, as do feature-branch diagnostic builds.
 
@@ -430,7 +441,7 @@ Run `bun run desktop:doctor` from the repository root to check all build
 requirements at once. It reports what is missing and the exact command to
 install it.
 
-- [Bun](https://bun.sh) ≥ 1.4.2 (also required by the server itself)
+- [Bun](https://bun.sh) ≥ 1.4.4 (also required by the server itself)
 - [Rust](https://rustup.rs) stable (Tauri v2 builds the native shell)
 
 Platform-specific build requirements:

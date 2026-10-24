@@ -71,17 +71,25 @@ export class BridgeAPI {
   constructor(readonly token: string, readonly repository: string, readonly transport: typeof fetch = fetch) {
     if (!token) throw new Error("LINUX_RELEASE_BRIDGE_TOKEN is required for cross-repository Actions access");
   }
-  async response(path: string, body?: unknown) {
+  async response(path: string, body?: unknown, method = body === undefined ? "GET" : "POST") {
     const response = await this.transport(`https://api.github.com/repos/${this.repository}${path}`, {
-      method: body === undefined ? "GET" : "POST", headers: {
+      method, headers: {
         Authorization: `Bearer ${this.token}`, Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28", ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (!response.ok) throw new Error(`GitHub Actions request failed (${response.status}): ${path}`);
+    if (!response.ok) throw Object.assign(new Error(`GitHub Actions request failed (${response.status}): ${path}`), { status: response.status });
     return response;
   }
   async json<T>(path: string, body?: unknown): Promise<T> { return (await this.response(path, body)).json() as Promise<T>; }
+  async deleteArtifact(id: number): Promise<void> {
+    if (!Number.isSafeInteger(id) || id < 1) throw new Error("Invalid artifact identity");
+    try { await this.response(`/actions/artifacts/${id}`, undefined, "DELETE"); }
+    catch (error) {
+      // Linux, Windows and scheduled maintenance can select the same handoff.
+      if ((error as { status?: number }).status !== 404) throw error;
+    }
+  }
   async artifacts(run: string): Promise<Artifact[]> {
     const artifacts: Artifact[] = [];
     for (let page = 1; ; page++) {
@@ -90,6 +98,30 @@ export class BridgeAPI {
       if (batch.artifacts.length < 100) return artifacts;
     }
   }
+}
+/** Published installers replace these temporary private signing handoffs. */
+export async function cleanupPublishedBuildArtifacts(privateApi: BridgeAPI, releaseApi: ReleaseAPI, request: LinuxReleaseRequest) {
+  if (privateApi.repository !== BUILDER_REPOSITORY || releaseApi.repository !== SOURCE_REPOSITORY) throw new Error("Unexpected release cleanup repositories");
+  const release = await releaseApi.release(request.tag);
+  if (!release || release.draft || !release.body.includes(`<!-- lumiverse-bundled:${request.sha}:${request.fingerprint} -->`)) {
+    throw new Error("Keep build artifacts until the matching signed release is published");
+  }
+  const handoffs: Artifact[] = [];
+  for (const builder of requestedBuilders(request)) {
+    const run = await resolveBuilderRun(privateApi, request, builder);
+    if (run.ready !== "true") throw new Error("Keep artifacts while a private builder is still running");
+    const names = new Set([outputArtifactName(request, builder), ...(builder === "windows" ? [qualificationArtifactName(request)] : [])]);
+    for (const artifact of await privateApi.artifacts(run.builder_run!)) {
+      if (!names.has(artifact.name)) continue;
+      handoffs.push(artifact);
+    }
+  }
+  let bytes = 0;
+  for (const artifact of handoffs) {
+    await privateApi.deleteArtifact(artifact.id);
+    bytes += artifact.size_in_bytes;
+  }
+  return { count: handoffs.length, bytes };
 }
 export async function resolveBuilderRun(api: BridgeAPI, request: LinuxReleaseRequest, builder: PrivateBuilder = "linux"): Promise<{ ready: string; builder_run?: string; builder_attempt?: string }> {
   for (let page = 1; ; page++) {
@@ -175,9 +207,9 @@ export function verifyWindowsPayload(root: string, request: LinuxReleaseRequest,
   const build = JSON.parse(readFileSync(join(directory, "build.json"), "utf8"));
   const manifest = JSON.parse(readFileSync(join(directory, "server-manifest.json"), "utf8"));
   if (build.source !== request.sha || build.version !== request.version || build.architecture !== arch
-    || build.target !== WINDOWS_TARGETS[arch] || build.bunVersion !== "1.4.2" || build.signed !== false
+    || build.target !== WINDOWS_TARGETS[arch] || build.bunVersion !== "1.4.4" || build.signed !== false
     || build.serverSmokePassed !== (arch === "x64") || manifest.platform !== "win32" || manifest.arch !== arch
-    || manifest.bunVersion !== "1.4.2" || !/^[a-f0-9]{64}$/.test(manifest.sha256) || build.serverSha256 !== manifest.sha256) {
+    || manifest.bunVersion !== "1.4.4" || !/^[a-f0-9]{64}$/.test(manifest.sha256) || build.serverSha256 !== manifest.sha256) {
     throw new Error("Windows server provenance mismatch");
   }
   const server = join(directory, `lumiverse-server-win32-${arch}.exe`);
@@ -301,6 +333,13 @@ async function main() {
     const builders = await resolvePrivateBuilds(new BridgeAPI(process.env.LINUX_RELEASE_BRIDGE_TOKEN!, BUILDER_REPOSITORY), request);
     if (builders.ready !== "true") { console.log("Private builds have not finished; release remains a draft."); return; }
     await publishDesktopRelease(new ReleaseAPI(SOURCE_REPOSITORY, process.env.GITHUB_TOKEN!), request);
+    // Cleanup is retryable and must never turn a published update into failure.
+    try {
+      const removed = await cleanupPublishedBuildArtifacts(
+        new BridgeAPI(process.env.LINUX_RELEASE_BRIDGE_TOKEN!, BUILDER_REPOSITORY),
+        new ReleaseAPI(SOURCE_REPOSITORY, process.env.GITHUB_TOKEN!), request);
+      console.log(`Removed ${removed.count} published-build handoffs (${(removed.bytes / 1024 ** 3).toFixed(2)} GiB).`);
+    } catch (error) { console.warn(`Could not clean published-build artifacts: ${error instanceof Error ? error.message : String(error)}`); }
   } else if (mode === "notify") {
     const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, "utf8"));
     const run = event.workflow_run as Run;

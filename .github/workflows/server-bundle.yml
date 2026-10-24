@@ -57,7 +57,7 @@ jobs:
           ref: ${{ inputs.source }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - name: Choose hosted platforms for the release channel
         id: platforms
         run: bun scripts/private-linux-release.ts matrix
@@ -94,7 +94,7 @@ jobs:
           ref: ${{ inputs.source }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - name: Dispatch without occupying a hosted runner during compilation
         env:
           PRIVATE_BUILDER: linux
@@ -111,7 +111,7 @@ jobs:
           ref: ${{ inputs.source }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - name: Dispatch without waiting for Windows compilation
         env:
           PRIVATE_BUILDER: windows
@@ -135,7 +135,7 @@ jobs:
           ref: ${{ inputs.source }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -153,7 +153,7 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
       - name: Test launcher, release policy, and desktop lifecycle
-        run: bun test tests/server-bundle.test.ts tests/lancedb-macos-native.test.ts tests/bun-runtime-version-policy.test.ts scripts/desktop-release.test.ts desktop/src-tauri/permissions.test.ts desktop/tests/desktop-updates.test.ts desktop/tests/instance-connection.test.ts desktop/tests/custom-url-ui.test.ts desktop/tests/local-server.test.ts desktop/tests/runner-client.test.ts scripts/desktop-session-restoration.test.ts scripts/tauri-finalized.test.ts scripts/appimage-packaging.test.ts scripts/appimage-runtime-manifest.test.ts desktop/tests/linux-desktop.test.ts src/spindle/runtime-transport.test.ts src/db/execution-transport.test.ts
+        run: bun test tests/server-bundle.test.ts tests/lancedb-macos-native.test.ts tests/bun-runtime-version-policy.test.ts scripts/desktop-toolchain.test.ts scripts/private-linux-release.test.ts scripts/desktop-release.test.ts desktop/src-tauri/permissions.test.ts desktop/tests/desktop-updates.test.ts desktop/tests/instance-connection.test.ts desktop/tests/custom-url-ui.test.ts desktop/tests/local-server.test.ts desktop/tests/runner-client.test.ts scripts/desktop-session-restoration.test.ts scripts/tauri-finalized.test.ts scripts/appimage-packaging.test.ts scripts/appimage-runtime-manifest.test.ts desktop/tests/linux-desktop.test.ts src/spindle/runtime-transport.test.ts src/db/execution-transport.test.ts
       - name: Test production browser cookie transport
         run: bun --no-env-file test src/auth/request-cookies.integration.test.ts
         env:
