@@ -36,25 +36,25 @@
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new Error('Export request timed out.'));
-      }, 120000);
+      }, action === 'url' ? 1800000 : action === 'begin' ? 360000 : 120000);
       pending.set(id, { resolve, reject, timer });
       try { bridge.postMessage(JSON.stringify({ id, action, payload })); }
       catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
     });
   }
-  async function saveBlob(url, filename) {
+  async function saveBlob(url, filename, sourceBlob) {
     let transfer;
     let stage = 'read the generated export';
     try {
       // Capture the Blob synchronously before callers revoke its URL. URLs not
       // created in this frame (including data:) retain the existing fallback.
-      let blob = blobs.get(url);
+      let blob = sourceBlob || blobs.get(url);
       if (!blob) {
         const response = await fetch(url);
         if (!response.ok) throw new Error('Could not read the export.');
         blob = await response.blob();
       }
-      stage = 'create the file in Downloads/Lumiverse';
+      stage = 'create the export file';
       transfer = await request('begin', { filename, mimeType: blob.type, size: blob.size });
       stage = 'write the export';
       for (let offset = 0; offset < blob.size; offset += 49152) {
@@ -79,21 +79,35 @@
       const message = `Could not ${stage}. ${error?.message || ''}`.trim();
       console.error('[Lumiverse export]', message);
       await request('abort', { transfer, message }).catch(() => {});
+      throw new Error(message);
     }
   }
+  async function saveUrl(url, filename) {
+    const target = new URL(url, location.href);
+    if (!/^https?:$/.test(target.protocol) || target.origin !== location.origin) throw new Error('Download must be from the selected server.');
+    try { await request('url', { url: target.href, filename }); }
+    catch (error) {
+      await request('abort', { message: error.message }).catch(() => {});
+      throw error;
+    }
+  }
+  // New frontends can await publication of the native file. The click hooks
+  // below keep older remote frontends and extension downloads working.
+  window.lumiverseNativeDownloads = Object.freeze({
+    saveBlob: (blob, filename) => saveBlob(null, filename, blob),
+    saveUrl,
+  });
   function download(anchor) {
     if (!anchor.hasAttribute('download')) return false;
     const url = anchor.href;
     if (url.startsWith('blob:') || url.startsWith('data:')) {
-      void saveBlob(url, anchor.download);
+      void saveBlob(url, anchor.download).catch(() => {});
       return true;
     }
     // Other websites keep their normal navigation policy and gain no bridge access.
     if (new URL(url, location.href).origin !== location.origin) return false;
     if (!/^https?:/i.test(url)) return false;
-    void request('url', { url, filename: anchor.download }).catch(error => {
-      void request('abort', { message: error.message }).catch(() => {});
-    });
+    void saveUrl(url, anchor.download).catch(() => {});
     return true;
   }
   document.addEventListener('click', event => {

@@ -1,5 +1,5 @@
 import { get, post, put, del, upload, uploadRaw, uploadWithProgress, getBlob, BASE_URL, type RequestOptions } from './client'
-import { triggerBlobDownload } from '@/lib/downloads'
+import { triggerBlobDownload, triggerUrlDownload } from '@/lib/downloads'
 import { uuidv4 } from '@/lib/uuid'
 import { completeDeletion } from '@/lib/deletion-completion'
 import type { DeletionOperation } from '@/lib/deletion-events'
@@ -260,7 +260,7 @@ export const charactersApi = {
     const blob = await getBlob(`/characters/${id}/export`, { format })
     const ext = format === 'charx' ? 'charx' : format
     const safeName = (characterName || 'character').replace(/[^a-zA-Z0-9_\-. ]/g, '_')
-    triggerBlobDownload(blob, `${safeName}.${ext}`)
+    await triggerBlobDownload(blob, `${safeName}.${ext}`)
   },
 
   /**
@@ -271,13 +271,7 @@ export const charactersApi = {
   downloadCharxExport(id: string, exportId: string, characterName?: string) {
     const safeName = (characterName || 'character').replace(/[^a-zA-Z0-9_\-. ]/g, '_')
     const params = new URLSearchParams({ format: 'charx', export_id: exportId })
-    const anchor = document.createElement('a')
-    anchor.href = `${BASE_URL}/characters/${encodeURIComponent(id)}/export?${params.toString()}`
-    anchor.download = `${safeName}.charx`
-    anchor.style.display = 'none'
-    document.body.appendChild(anchor)
-    anchor.click()
-    document.body.removeChild(anchor)
+    return triggerUrlDownload(`${BASE_URL}/characters/${encodeURIComponent(id)}/export?${params.toString()}`, `${safeName}.charx`)
   },
 
   getResolvedFields(id: string, chatId?: string) {

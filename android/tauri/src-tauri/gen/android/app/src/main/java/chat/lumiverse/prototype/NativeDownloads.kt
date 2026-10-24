@@ -1,8 +1,8 @@
 package chat.lumiverse.prototype
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ContentUris
-import android.content.ContentValues
 import android.net.Uri
 import android.os.Environment
 import android.os.Handler
@@ -14,6 +14,7 @@ import android.webkit.CookieManager
 import android.webkit.URLUtil
 import android.webkit.WebView
 import android.widget.Toast
+import android.widget.TextView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import okhttp3.OkHttpClient
@@ -27,6 +28,8 @@ import java.util.concurrent.TimeUnit
 /** Owns exports in shared Downloads; no filesystem permission or file:// access. */
 class NativeDownloads(private val activity: Activity, private val view: WebView) {
     private val resolver = activity.contentResolver
+    private val storage = NativeExportStorage(activity)
+    private var failureDialog: AlertDialog? = null
     private val worker = Executors.newSingleThreadExecutor()
     private val network = Executors.newFixedThreadPool(2)
     private val handler = Handler(Looper.getMainLooper())
@@ -37,12 +40,13 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
     @Volatile private var generation = 0
     @Volatile private var destroyed = false
     private val folder = "${Environment.DIRECTORY_DOWNLOADS}/Lumiverse/"
-    private data class Transfer(val uri: Uri, val output: OutputStream, val size: Long,
+    private data class Transfer(val uri: Uri, val output: OutputStream, val size: Long, val mediaStore: Boolean, val location: String,
         var written: Long = 0, var touched: Long = System.nanoTime())
 
     init {
         // Recover files left pending by a process exit. Completed files are untouched.
         worker.execute {
+            storage.recoverPending()
             runCatching {
                 resolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Downloads._ID),
                     "${MediaStore.MediaColumns.OWNER_PACKAGE_NAME}=? AND ${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.IS_PENDING}=1",
@@ -96,10 +100,11 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
                     }
                 }
                 if (request.optString("action") == "url") {
-                    val target = payload.getString("url")
-                    require(NativeNotifications.origin(target) == origin) { "Download must be from the selected server." }
-                    startUrl(target, payload.optString("filename"), view.settings.userAgentString, origin)
-                    reply(true)
+                    try {
+                        val target = payload.getString("url")
+                        require(NativeNotifications.origin(target) == origin) { "Download must be from the selected server." }
+                        startUrl(target, payload.optString("filename"), view.settings.userAgentString, origin) { error -> reply(error == null, error) }
+                    } catch (error: Exception) { reply(null, error.message ?: "Could not download the export.") }
                 } else worker.execute {
                     if (destroyed || epoch != generation) return@execute
                     try { reply(handle(request.getString("action"), payload)) }
@@ -114,27 +119,16 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
     }
 
     private fun create(filename: String, mimeType: String, size: Long): Transfer {
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, safeFilename(filename))
-            put(MediaStore.MediaColumns.MIME_TYPE, mimeType.substringBefore(';').takeIf { it.contains('/') } ?: "application/octet-stream")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, folder)
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
-        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("Could not create export.")
-        try {
-            val output = resolver.openOutputStream(uri, "w") ?: error("Could not open export.")
-            return Transfer(uri, output, size)
-        } catch (error: Exception) { resolver.delete(uri, null, null); throw error }
+        val target = storage.create(safeFilename(filename), mimeType.substringBefore(';').takeIf { it.contains('/') } ?: "application/octet-stream")
+        return Transfer(target.uri, target.output, size, target.mediaStore, target.location)
     }
 
     private fun publish(item: Transfer) {
         item.output.close()
         require(item.size < 0 || item.written == item.size) { "The export was incomplete." }
-        check(resolver.update(item.uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) == 1) { "Could not finish export." }
-        val name = resolver.query(item.uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use {
-            if (it.moveToFirst()) it.getString(0) else "export"
-        } ?: "export"
-        show("Export saved\nDownloads/Lumiverse/$name")
+        storage.publish(item.uri, item.mediaStore)
+        val name = storage.displayName(item.uri, "export")
+        show("Export saved\n${item.location}/$name")
     }
 
     private fun discard(id: String) {
@@ -142,7 +136,7 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
     }
     private fun remove(item: Transfer) {
         runCatching { item.output.close() }
-        runCatching { resolver.delete(item.uri, null, null) }
+        storage.remove(item.uri, item.mediaStore)
     }
     private fun handle(action: String, payload: JSONObject): Any {
         when (action) {
@@ -152,7 +146,7 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
                 require(size >= 0) { "Invalid export size." }
                 val id = UUID.randomUUID().toString()
                 transfers[id] = create(payload.optString("filename"), payload.optString("mimeType"), size)
-                show("Saving export to Downloads/Lumiverse…")
+                show("Saving export…")
                 return id
             }
             "chunk" -> {
@@ -181,10 +175,10 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
         return true
     }
 
-    private fun startUrl(url: String, filename: String, userAgent: String, origin: String) {
+    private fun startUrl(url: String, filename: String, userAgent: String, origin: String, completion: ((String?) -> Unit)? = null) {
         val epoch = generation
         val cookies = CookieManager.getInstance().getCookie(url)
-        show("Saving export to Downloads/Lumiverse…")
+        show("Saving export…")
         network.execute {
             var item: Transfer? = null
             var stage = "download the export"
@@ -222,6 +216,7 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
                             stage = "finish saving the export"
                             publish(output)
                             item = null
+                            completion?.invoke(null)
                             return@execute
                         }
                     }
@@ -229,14 +224,26 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
             } catch (error: Exception) {
                 item?.let { remove(it) }
                 Log.w("LumiverseDownloads", "Could not $stage (${error.javaClass.simpleName})")
-                if (!destroyed) showFailure("Could not $stage. ${error.message.orEmpty()}")
+                val message = "Could not $stage. ${error.message.orEmpty()}"
+                if (completion != null) completion(message)
+                else if (!destroyed) showFailure(message)
             }
         }
     }
 
     private fun showFailure(reason: String) {
-        val message = reason.filter { !it.isISOControl() }.trim().take(240)
-        show("Export failed. $message")
+        // Android limits text Toasts to two lines. Keep the actual provider
+        // error readable and selectable instead of truncating it after "open".
+        val message = reason.filter { !it.isISOControl() || it == '\n' }.trim().take(2000)
+        activity.runOnUiThread {
+            if (destroyed || activity.isFinishing) return@runOnUiThread
+            failureDialog?.dismiss()
+            failureDialog = AlertDialog.Builder(activity).setTitle("Export failed").setMessage(message)
+                .setPositiveButton("OK", null).create().also { dialog ->
+                    dialog.setOnShowListener { dialog.findViewById<TextView>(android.R.id.message)?.setTextIsSelectable(true) }
+                    dialog.show()
+                }
+        }
     }
 
     private fun show(message: String) { activity.runOnUiThread {
@@ -244,6 +251,8 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
     } }
     fun destroy() {
         destroyed = true
+        storage.destroy()
+        failureDialog?.dismiss(); failureDialog = null
         generation += 1
         handler.removeCallbacksAndMessages(null)
         client.dispatcher.cancelAll()

@@ -275,7 +275,7 @@ export default function MessageAudioPlayer({
     try {
       const response = await fetch(src, { credentials: 'include' })
       if (!response.ok) throw new Error(`Audio download failed: ${response.status}`)
-      triggerBlobDownload(await response.blob(), title || 'audio')
+      await triggerBlobDownload(await response.blob(), title || 'audio')
     } catch {
       toast.error('Could not download saved audio')
     } finally {

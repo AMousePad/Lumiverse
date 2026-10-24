@@ -5,10 +5,10 @@ const script = await Bun.file(new URL('../android/tauri/src-tauri/src/downloads.
 const windows: JSDOM[] = []
 afterEach(() => { for (const dom of windows.splice(0)) dom.window.close() })
 
-function fixture(failChunk = false, legacyBlob = false) {
+function fixture(failChunk = false, legacyBlob = false, autoReply = true) {
   const dom = new JSDOM('<!doctype html>', { url: 'https://lumiverse.example/', runScripts: 'outside-only' })
   windows.push(dom)
-  const messages: { action: string; payload: any }[] = []
+  const messages: { id: string; action: string; payload: any }[] = []
   const chunks: Uint8Array[] = []
   let complete!: () => void
   const done = new Promise<void>(resolve => { complete = resolve })
@@ -18,6 +18,7 @@ function fixture(failChunk = false, legacyBlob = false) {
       const request = JSON.parse(raw)
       messages.push(request)
       if (request.action === 'chunk') chunks.push(Buffer.from(request.payload.data, 'base64'))
+      if (!autoReply) return
       queueMicrotask(() => {
         bridge.onmessage?.({ data: JSON.stringify({ id: request.id, result: request.action === 'begin' ? 'transfer-1' : true, error: failChunk && request.action === 'chunk' ? 'Storage full' : null }) })
         if (['finish', 'abort', 'url'].includes(request.action)) complete()
@@ -37,7 +38,7 @@ function fixture(failChunk = false, legacyBlob = false) {
     anchor.click()
     anchor.remove()
   }
-  return { dom, click, messages, chunks, done }
+  return { dom, click, messages, chunks, done, reply: (index: number, result: unknown, error: string | null = null) => bridge.onmessage?.({ data: JSON.stringify({ id: messages[index]!.id, result, error }) }) }
 }
 
 test('blob exports survive immediate URL revocation, with exact binary chunks and acknowledgements', async () => {
@@ -138,4 +139,44 @@ test('ordinary links and iframe pages do not install download behavior', () => {
   const original = child.HTMLAnchorElement.prototype.click
   child.eval(script)
   expect(child.HTMLAnchorElement.prototype.click).toBe(original)
+})
+
+test('awaited native Blob saves complete only after native publication acknowledges finish', async () => {
+  const page = fixture(false, false, false)
+  let complete = false
+  const saved = (page.dom.window as any).lumiverseNativeDownloads.saveBlob(new Blob(['PNG bytes']), 'card.png').then(() => { complete = true })
+  expect(page.messages.map(message => message.action)).toEqual(['begin'])
+  expect(complete).toBe(false)
+  page.reply(0, 'transfer-1')
+  await Bun.sleep(0)
+  expect(page.messages.at(-1)!.action).toBe('chunk')
+  page.reply(1, true)
+  await Bun.sleep(0)
+  expect(page.messages.at(-1)!.action).toBe('finish')
+  expect(complete).toBe(false)
+  page.reply(2, true)
+  await saved
+  expect(complete).toBe(true)
+})
+
+test('awaited native saves reject a destination-open failure instead of reporting success', async () => {
+  const page = fixture(false, false, false)
+  const saved = (page.dom.window as any).lumiverseNativeDownloads.saveBlob(new Blob(['PNG bytes']), 'card.png').catch((error: Error) => error)
+  page.reply(0, null, 'open failed: EACCES (Permission denied)')
+  await Bun.sleep(0)
+  expect(page.messages.map(message => message.action)).toEqual(['begin', 'abort'])
+  page.reply(1, true)
+  expect((await saved).message).toContain('Permission denied')
+})
+
+test('awaited CHARX URLs remain pending until native download completion', async () => {
+  const page = fixture(false, false, false)
+  let complete = false
+  const saved = (page.dom.window as any).lumiverseNativeDownloads.saveUrl('/card.charx', 'card.charx').then(() => { complete = true })
+  await Bun.sleep(0)
+  expect(complete).toBe(false)
+  expect(page.messages.map(message => message.action)).toEqual(['url'])
+  page.reply(0, true)
+  await saved
+  expect(complete).toBe(true)
 })

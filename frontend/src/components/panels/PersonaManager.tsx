@@ -287,7 +287,7 @@ export default function PersonaManager() {
         exported_at: new Date().toISOString(),
         personas: selected,
       }
-      triggerBlobDownload(
+      await triggerBlobDownload(
         new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
         `lumiverse-personas-${new Date().toISOString().slice(0, 10)}.json`,
       )
