@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { Hono } from 'hono';
-import { websocket } from 'hono/bun';
+import { websocket } from './transport';
 import { closeDatabase, getDb, initDatabase } from '../db/connection';
 import { runMigrations } from '../db/migrate';
 import { sendToFrontendSession } from '../spindle/frontend-session';

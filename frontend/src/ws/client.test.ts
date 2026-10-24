@@ -154,6 +154,37 @@ describe('WebSocketClient push presence', () => {
       expect(seen).toEqual([{ payload, metadata }]);
     } finally { client.disconnect(); }
   });
+
+  test.each([1006, 1013])('reconnects after a slow-consumer close (%s) and restores the focused stream before recovery handlers', (code) => {
+    jest.useFakeTimers()
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    try {
+      client.setFocusedChat('streaming-chat')
+      client.connect()
+      const slowSocket = MockWebSocket.instances.at(-1)!
+      slowSocket.open()
+      slowSocket.readyState = MockWebSocket.CLOSED
+      ;(slowSocket as any).onclose({ code, reason: 'backpressure' })
+      expect(client.connected).toBe(false)
+
+      jest.advanceTimersByTime(4_000)
+      const recovered = MockWebSocket.instances.at(-1)!
+      expect(recovered).not.toBe(slowSocket)
+      recovered.open()
+      recovered.sent = []
+      let focusAtRecovery: unknown
+      client.on('CONNECTED', () => {
+        focusAtRecovery = recovered.sent.map(frame => JSON.parse(frame)).find(frame => frame.type === 'stream_focus')
+      })
+      recovered.receive({ event: 'CONNECTED', payload: { role: 'user' } })
+      expect(client.connected).toBe(true)
+      expect(focusAtRecovery).toEqual({ type: 'stream_focus', chatId: 'streaming-chat' })
+    } finally {
+      client.disconnect()
+      jest.useRealTimers()
+    }
+  })
+
   test('reports current presence and stream focus after opening and after authentication', () => {
     const client = new WebSocketClient('ws://localhost:3000/api/ws')
     try {

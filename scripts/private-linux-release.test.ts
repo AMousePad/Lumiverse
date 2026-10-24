@@ -4,8 +4,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { zipSync, strToU8 } from "fflate";
-import { sourceFingerprint as controllerFingerprint } from "./desktop-release";
-import { BridgeAPI, BUILDER_REPOSITORY, SOURCE_REPOSITORY, LINUX_TARGETS, WINDOWS_TARGETS, NoReleaseRequestError, builderRunName, hostedReleasePlatforms, readRequest, requestedBuilders, resolveBuilderRun, resolvePrivateBuilds, validateParent, validateRequest, verifyPayload, verifySource, verifyWindowsPayload, verifyWindowsQualification, type LinuxReleaseRequest } from "./private-linux-release";
+import { ReleaseAPI, sourceFingerprint as controllerFingerprint } from "./desktop-release";
+import { BridgeAPI, BUILDER_REPOSITORY, SOURCE_REPOSITORY, LINUX_TARGETS, WINDOWS_TARGETS, NoReleaseRequestError, builderRunName, cleanupPublishedBuildArtifacts, hostedReleasePlatforms, readRequest, requestedBuilders, resolveBuilderRun, resolvePrivateBuilds, validateParent, validateRequest, verifyPayload, verifySource, verifyWindowsPayload, verifyWindowsQualification, type LinuxReleaseRequest } from "./private-linux-release";
 
 const request: LinuxReleaseRequest = { format: 1, repository: SOURCE_REPOSITORY, channel: "nightly", run: "1234", attempt: "2",
   version: "0.3.2-nightly.20261016.1234", tag: "desktop-v0.3.2-nightly.20261016.1234",
@@ -14,6 +14,55 @@ const run = { id: 1234, run_attempt: 2, event: "workflow_dispatch", path: ".gith
   status: "in_progress", conclusion: null, display_title: "Nightly", repository: { full_name: SOURCE_REPOSITORY }, head_repository: { full_name: SOURCE_REPOSITORY } };
 const temporary: string[] = [];
 afterEach(() => { for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true }); });
+
+test("concurrent artifact cleanup tolerates already deleted handoffs but reports permission failures", async () => {
+  let status = 404;
+  const transport = (async (_input: RequestInfo | URL) => new Response(null, { status })) as typeof fetch;
+  const api = new BridgeAPI("test", BUILDER_REPOSITORY, transport);
+  await expect(api.deleteArtifact(42)).resolves.toBeUndefined();
+  status = 403;
+  await expect(api.deleteArtifact(42)).rejects.toThrow("403");
+  await expect(api.deleteArtifact(-1)).rejects.toThrow("Invalid artifact identity");
+});
+
+test("published release cleanup removes only the exact handoff names from successful private runs", async () => {
+  const desktopRequest: LinuxReleaseRequest = { ...request, format: 2, builders: ["linux", "windows"] };
+  const deleted: string[] = [];
+  const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "DELETE") { deleted.push(url.split("/").at(-1)!); return new Response(null, { status: 204 }); }
+    if (url.includes("/releases/tags/")) return Response.json({ draft: false, body: `<!-- lumiverse-bundled:${request.sha}:${request.fingerprint} -->` });
+    const builder = url.includes("linux-release.yml") ? "linux" : "windows";
+    if (url.includes("/workflows/")) return Response.json({ workflow_runs: [{
+      id: builder === "linux" ? 98 : 99, run_attempt: 1, event: "workflow_dispatch", display_title: builderRunName(request, builder),
+      status: "completed", conclusion: "success", head_branch: "main", path: `.github/workflows/${builder}-release.yml`,
+      repository: { full_name: BUILDER_REPOSITORY }, head_repository: { full_name: BUILDER_REPOSITORY },
+    }] });
+    if (url.includes("/runs/98/artifacts")) return Response.json({ artifacts: [
+      { id: 1, name: "linux-release-1234-2", size_in_bytes: 10 }, { id: 4, name: "linux-release-1234-1", size_in_bytes: 10 },
+      { id: 5, name: "unrelated", size_in_bytes: 10 },
+    ] });
+    if (url.includes("/runs/99/artifacts")) return Response.json({ artifacts: [
+      { id: 2, name: "windows-release-1234-2", size_in_bytes: 20 }, { id: 3, name: "windows-qualification-1234-2", size_in_bytes: 1 },
+    ] });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  expect(await cleanupPublishedBuildArtifacts(new BridgeAPI("test", BUILDER_REPOSITORY, transport), new ReleaseAPI(SOURCE_REPOSITORY, "test", transport), desktopRequest))
+    .toEqual({ count: 3, bytes: 31 });
+  expect(deleted).toEqual(["1", "2", "3"]);
+});
+
+test.each([
+  { draft: true, body: `<!-- lumiverse-bundled:${request.sha}:${request.fingerprint} -->` },
+  { draft: false, body: "another source" },
+])("cleanup preserves retry artifacts until the matching signed release is published ($draft)", async (release) => {
+  const transport = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "DELETE") throw new Error("Must not delete");
+    return Response.json(release);
+  }) as typeof fetch;
+  await expect(cleanupPublishedBuildArtifacts(new BridgeAPI("test", BUILDER_REPOSITORY, transport), new ReleaseAPI(SOURCE_REPOSITORY, "test", transport), request))
+    .rejects.toThrow("until the matching signed release");
+});
 
 test("Windows releases use the private VM in both channels; stable Linux stays hosted", () => {
   expect(hostedReleasePlatforms("nightly").map(p => p.platform)).toEqual(["darwin-aarch64", "darwin-x86_64"]);
@@ -144,9 +193,9 @@ function windowsPayload(arch: "x64" | "arm64" = "arm64", releaseRequest = deskto
   writeFileSync(installer, "finalized installer"); writeFileSync(join(directory, `lumiverse-server-win32-${arch}.exe`), server);
   writeFileSync(join(directory, "SHA256SUMS"), `${installerSha256}  Lumiverse-setup.exe\n`);
   writeFileSync(join(directory, "release.json"), JSON.stringify({ ...releaseRequest, arch, target: WINDOWS_TARGETS[arch], builderRun: identity.run, builderAttempt: identity.attempt }));
-  writeFileSync(join(directory, "server-manifest.json"), JSON.stringify({ platform: "win32", arch, bunVersion: "1.4.2", sha256: serverSha256 }));
+  writeFileSync(join(directory, "server-manifest.json"), JSON.stringify({ platform: "win32", arch, bunVersion: "1.4.4", sha256: serverSha256 }));
   writeFileSync(join(directory, "build.json"), JSON.stringify({ source: releaseRequest.sha, version: releaseRequest.version, architecture: arch,
-    target: WINDOWS_TARGETS[arch], bunVersion: "1.4.2", signed: false, serverSmokePassed: arch === "x64", sha256: installerSha256, serverSha256 }));
+    target: WINDOWS_TARGETS[arch], bunVersion: "1.4.4", signed: false, serverSmokePassed: arch === "x64", sha256: installerSha256, serverSha256 }));
   return { root, directory, installer, serverSha256, installerSha256 };
 }
 test("Windows signing accepts only the requested source, architecture, build attempt and exact installer bytes", () => {
