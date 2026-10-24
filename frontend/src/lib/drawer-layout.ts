@@ -1,6 +1,7 @@
 import type { DrawerCustomIconData, DrawerLayoutItem } from '@/types/store'
 import { sanitizeDrawerCustomIconData } from '@/lib/drawer-custom-icon'
 import { councilViewForTab } from '@/lib/council-navigation'
+import { uuidv4 } from '@/lib/uuid'
 export const DEFAULT_EXTENSION_DIVIDER_ID = 'extensions'
 export const DRAWER_LAYOUT_ROOT_END_ID = 'drawer-layout:root-end'
 
@@ -372,8 +373,5 @@ export function updateDrawerLayoutFolderView(
 }
 
 export function createDrawerLayoutContainerId(prefix: 'folder' | 'divider'): string {
-  const random = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-  return `${prefix}-${random}`
+  return `${prefix}-${uuidv4()}`
 }
