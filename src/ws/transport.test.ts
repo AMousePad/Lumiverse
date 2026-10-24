@@ -65,7 +65,7 @@ test("real receive pauses drain in order while a separate heartbeat stays respon
   const origin = `ws://127.0.0.1:${server.port}/ws`;
   const main = client(origin + "?id=main"), heartbeat = client(origin + "?id=heartbeat");
   try {
-    await until(() => raw.size === 2);
+    await until(() => raw.size === 2 && main.ws.readyState === WebSocket.OPEN && heartbeat.ws.readyState === WebSocket.OPEN);
     main.ws.send(JSON.stringify({ type: "bulk", id: 1 }));
     await until(() => started);
     main.ws.send(JSON.stringify({ type: "bulk", id: 2 }));
@@ -116,7 +116,7 @@ test("native stream pub/sub evicts a slow subscriber without losing fast-client 
     emitted++;
   }
   try {
-    await until(() => raw.size === 4);
+    await until(() => raw.size === 4 && [fast, slow, otherChat, otherUser].every(({ ws }) => ws.readyState === WebSocket.OPEN));
     (slow.ws as WebSocket & { pause(): boolean }).pause();
     while (emitted < 1024 && !closed.has("slow")) {
       emitSegment();
