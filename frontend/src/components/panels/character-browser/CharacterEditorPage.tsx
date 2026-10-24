@@ -68,6 +68,7 @@ import { useLongPress } from '@/hooks/useLongPress'
 import type { Character, CharacterGalleryItem, WorldBook } from '@/types/api'
 import type { WallpaperRef } from '@/types/store'
 import { toast } from '@/lib/toast'
+import { hasNativeDownloadCompletion } from '@/lib/downloads'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { galleryImageMarkdown } from '@/lib/galleryImageReference'
 import { getTauriMobilePlatform } from '@/lib/desktopWebView'
@@ -1810,6 +1811,7 @@ export default function CharacterEditorPage() {
     characterId: string
     characterName: string
     toastId: string
+    awaitsNativeSave: boolean
   } | null>(null)
 
   useEffect(() => {
@@ -1831,6 +1833,7 @@ export default function CharacterEditorPage() {
         return
       }
       if (payload.phase === 'complete') {
+        if (active.awaitsNativeSave) return
         toast.dismiss(active.toastId)
         activeCharxExportRef.current = null
         setExporting(false)
@@ -1864,10 +1867,18 @@ export default function CharacterEditorPage() {
         characterId: editingCharacterId,
         characterName: character.name,
         toastId,
+        awaitsNativeSave: hasNativeDownloadCompletion(),
       }
       try {
-        charactersApi.downloadCharxExport(editingCharacterId, exportId, character.name)
+        await charactersApi.downloadCharxExport(editingCharacterId, exportId, character.name)
+        if (activeCharxExportRef.current?.exportId === exportId && activeCharxExportRef.current.awaitsNativeSave) {
+          activeCharxExportRef.current = null
+          setExporting(false)
+          toast.dismiss(toastId)
+          toast.success(t('characterEditor.exportSuccess', { name: character.name, format: 'CHARX' }))
+        }
       } catch (err) {
+        if (activeCharxExportRef.current?.exportId !== exportId) return
         activeCharxExportRef.current = null
         setExporting(false)
         toast.dismiss(toastId)

@@ -9,7 +9,16 @@ if (!serial?.startsWith('emulator-')) throw new Error('Select a test emulator wi
 const adb = join(process.env.ANDROID_HOME || join(process.env.HOME!, 'Library/Android/sdk'), 'platform-tools/adb')
 const app = 'chat.lumiverse.prototype'
 const prefix = `lumiverse-export-smoke-${Date.now()}`
+const storageRecovery = process.argv.includes('--storage-recovery')
+const recoveryFolder = `Lumiverse-Test-${Date.now()}`
+const exportDirectory = storageRecovery ? `/sdcard/Download/${recoveryFolder}` : '/sdcard/Download/Lumiverse'
+const blockedDirectoryBackup = `/sdcard/Download/${prefix}-backup`
+const preferencesPath = 'shared_prefs/lumiverse-exports.xml'
+const preferencesBackup = `files/${prefix}-preferences.xml`
+let backedUpPreferences = false
+let blockedDirectory = false
 const bytes = Uint8Array.from({ length: 180000 }, (_, index) => index % 256)
+const lorebook = JSON.stringify({ name: 'Lorebook 世界', entries: Array.from({ length: 2000 }, (_, id) => ({ id, content: '🌌 lore '.repeat(100) })) }, null, 2)
 const fixture = await build({
   absWorkingDir: join(import.meta.dir, '..'), entryPoints: ['frontend/tests/ui-scale.fixture.tsx'],
   outfile: 'fixture.js', bundle: true, write: false, format: 'iife', jsx: 'automatic',
@@ -36,7 +45,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: request => {
     return new Response(bytes, { headers: { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${prefix}-attachment.charx"` } })
   }
   return new Response(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Android export smoke</title><link rel="stylesheet" href="/fixture.css"></head><body><div id="root"></div><script src="/fixture.js"></script></body></html>`,
-    { headers: { 'Content-Type': 'text/html', 'Set-Cookie': 'export-smoke=1; Path=/; SameSite=Lax', 'Cache-Control': 'no-store' } })
+    { headers: { 'Content-Type': 'text/html', 'Set-Cookie': 'export-smoke=1; Path=/; SameSite=Lax', 'Cache-Control': 'no-store', 'Content-Security-Policy': 'connect-src data:' } })
 } })
 const serverPort = server.port
 const foreignPort = foreign.port
@@ -90,14 +99,68 @@ async function chooser() {
   }
   throw new Error('Native Change server control did not open')
 }
-const files = async () => (await command('shell', 'ls', '/sdcard/Download/Lumiverse')).split('\n').filter(name => name.startsWith(prefix))
+const files = async () => (await command('shell', 'ls', exportDirectory)).split('\n').filter(name => name.startsWith(prefix))
 async function expectFile(name: string, expected = bytes) {
-  await waitFor(async () => (await files()).includes(name), `saved ${name}`)
-  const path = `/sdcard/Download/Lumiverse/${name}`
+  const path = `${exportDirectory}/${name}`
+  // SAF files become visible as soon as they are created. Wait for every byte
+  // before reading; file existence alone can observe an in-progress transfer.
+  await waitFor(async () => (await files()).includes(name) && Number(await command('exec-out', 'stat', '-c', '%s', path)) === expected.length, `saved ${name}`)
   const child = Bun.spawn([adb, '-s', serial, 'exec-out', 'cat', path], { stdout: 'pipe', stderr: 'pipe' })
   const result = new Uint8Array(await new Response(child.stdout).arrayBuffer())
   assert.equal(await child.exited, 0)
-  assert.deepEqual(result, expected, `Saved bytes for ${name}`)
+  assert.equal(Buffer.compare(Buffer.from(result), Buffer.from(expected)), 0, `Saved bytes for ${name} (${result.length}/${expected.length})`)
+}
+async function tapNative(label: string, attribute = 'text') {
+  let bounds: RegExpMatchArray | null = null
+  await waitFor(async () => {
+    await command('shell', 'uiautomator', 'dump', '/sdcard/lumiverse-export-controls.xml')
+    const xml = await command('shell', 'cat', '/sdcard/lumiverse-export-controls.xml')
+    bounds = xml.match(new RegExp(`${attribute}="${label}"[^>]*bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"`, 'i'))
+    return !!bounds
+  }, `native control ${label}`)
+  await command('shell', 'input', 'tap', String((+bounds![1]! + +bounds![3]!) / 2), String((+bounds![2]! + +bounds![4]!) / 2))
+}
+
+async function grantExportDirectory() {
+  await tapNative('Choose folder')
+  await waitFor(async () => {
+    await command('shell', 'uiautomator', 'dump', '/sdcard/lumiverse-export-controls.xml')
+    return (await command('shell', 'cat', '/sdcard/lumiverse-export-controls.xml')).includes('com.google.android.documentsui')
+  }, 'system folder picker')
+  let picker = await command('shell', 'cat', '/sdcard/lumiverse-export-controls.xml')
+  // Some DocumentsUI versions reject an initial Downloads URI and begin at
+  // internal storage. Enter its Download directory before creating the child.
+  if (!picker.includes('text="Download" resource-id="com.google.android.documentsui:id/breadcrumb_text"')) {
+    await tapNative('Download(?:s)?')
+    await command('shell', 'uiautomator', 'dump', '/sdcard/lumiverse-export-controls.xml')
+    picker = await command('shell', 'cat', '/sdcard/lumiverse-export-controls.xml')
+  }
+  if (picker.includes('content-desc="New folder"')) await tapNative('New folder', 'content-desc')
+  else {
+    await tapNative('More options', 'content-desc')
+    await tapNative('New folder')
+  }
+  let initialName = ''
+  await waitFor(async () => {
+    await command('shell', 'uiautomator', 'dump', '/sdcard/lumiverse-export-controls.xml')
+    const xml = await command('shell', 'cat', '/sdcard/lumiverse-export-controls.xml')
+    const field = xml.match(/<node\b[^>]*class="android.widget.EditText"[^>]*>/)?.[0]
+    initialName = field?.match(/text="([^"]*)"/)?.[1] || ''
+    return !!field
+  }, 'new export folder name field')
+  if (initialName.length) {
+    await command('shell', 'input', 'keyevent', '123')
+    await command('shell', 'input', 'keyevent', ...Array.from({ length: initialName.length }, () => '67'))
+  }
+  await command('shell', 'input', 'text', recoveryFolder)
+  await tapNative('OK')
+  await waitFor(async () => {
+    await command('shell', 'uiautomator', 'dump', '/sdcard/lumiverse-export-controls.xml')
+    const xml = await command('shell', 'cat', '/sdcard/lumiverse-export-controls.xml')
+    return /text="USE THIS FOLDER"[^>]*enabled="true"/.test(xml)
+  }, 'created export directory is selectable')
+  await tapNative('Use this folder')
+  await tapNative('Allow')
 }
 async function clickBlob(name: string, attached: boolean, mime = 'image/png') {
   await evaluate(`(() => {
@@ -112,6 +175,16 @@ try {
   await command('reverse', `tcp:${server.port}`, `tcp:${server.port}`)
   await command('reverse', `tcp:${foreign.port}`, `tcp:${foreign.port}`)
   await command('shell', 'am', 'force-stop', app)
+  if (storageRecovery) {
+    try {
+      await command('shell', 'run-as', app, 'cp', preferencesPath, preferencesBackup)
+      backedUpPreferences = true
+    } catch { /* The first run has no export preferences yet. */ }
+    await command('shell', 'run-as', app, 'rm', '-f', preferencesPath)
+    await command('shell', 'mv', '/sdcard/Download/Lumiverse', blockedDirectoryBackup)
+    blockedDirectory = true
+    await command('shell', 'touch', '/sdcard/Download/Lumiverse')
+  }
   await command('shell', 'am', 'start', '-n', `${app}/.MainActivity`)
   await waitFor(() => evaluate('document.readyState === "complete"'), 'app launch')
   console.log('APK launched; opening the connection chooser')
@@ -121,6 +194,17 @@ try {
   await waitFor(() => evaluate("document.title === 'Android export smoke' && !!window.uiScaleFixture && !!window.lumiverseDownloads"), 'hosted export fixture')
   console.log('Hosted fixture and native export bridge ready')
   await evaluate(`(() => { window.exportReplies=[]; const original=lumiverseDownloads.onmessage; lumiverseDownloads.onmessage=e=>{window.exportReplies.push(JSON.parse(e.data)); if(original)original(e)}; return true })()`)
+
+  // Match WorldBookPanel: a detached anchor and a URL revoked immediately after
+  // click(). The policy deliberately disallows fetching blob URLs.
+  assert.equal(await evaluate(`(async()=>{const url=URL.createObjectURL(new Blob(['test']));try{await fetch(url);return false}catch{return true}finally{URL.revokeObjectURL(url)}})()`), true, 'Fixture policy must block blob fetches')
+  await evaluate(`(() => {
+    const url=URL.createObjectURL(new Blob([${JSON.stringify(lorebook)}],{type:'application/json'}));
+    const a=document.createElement('a'); a.href=url; a.download='${prefix}-lorebook-blob.json'; a.click(); URL.revokeObjectURL(url); return true;
+  })()`)
+  if (storageRecovery) await grantExportDirectory()
+  await expectFile(`${prefix}-lorebook-blob.json`, new TextEncoder().encode(lorebook))
+  console.log('Multi-megabyte Unicode lorebook JSON, detached anchor, immediate revocation, restrictive CSP: passed')
 
   await clickBlob(`${prefix}-card.png`, true)
   await expectFile(`${prefix}-card.png`)
@@ -160,6 +244,15 @@ try {
   assert.ok(!(await files()).some(name => name.includes('-frame')), 'Subframes must not create exports')
   console.log('Incomplete export cleanup, HTTP failure, redirect and iframe isolation: passed')
 
+  if (storageRecovery) {
+    await command('shell', 'am', 'force-stop', app)
+    await command('shell', 'am', 'start', '-n', `${app}/.MainActivity`)
+    await waitFor(() => evaluate("document.title === 'Android export smoke' && !!window.uiScaleFixture && !!window.lumiverseDownloads"), 'persisted folder after restart')
+    await clickBlob(`${prefix}-after-restart.png`, false)
+    await expectFile(`${prefix}-after-restart.png`)
+    console.log('Denied automatic destination recovered through a persisted system directory grant; JSON, PNG, CHARX and app restart: passed')
+  }
+
   const scales = [0.5, 0.8, 1, 1.25, 1.5]
   const geometry = []
   for (const scale of scales) {
@@ -176,11 +269,17 @@ try {
     await evaluate('window.uiScaleFixture.setCompact(false); true')
     geometry.push({ scale, ...result })
   }
-  await Bun.write(join(import.meta.dir, '../dist/android/smoke-test-exports.json'), JSON.stringify({ testedAt: new Date().toISOString(), serial, files: await files(), authenticatedDownloads: authenticated, scales: geometry, passed: true }, null, 2) + '\n')
+  await Bun.write(join(import.meta.dir, `../dist/android/${storageRecovery ? 'smoke-test-export-storage' : 'smoke-test-exports'}.json`), JSON.stringify({ testedAt: new Date().toISOString(), serial, storageRecovery, destination: exportDirectory, files: await files(), authenticatedDownloads: authenticated, scales: geometry, passed: true }, null, 2) + '\n')
   console.log('Native WebView contained modal sizing at 50%, 80%, 100%, 125%, 150%: passed')
 } catch (error) {
   console.log('Native replies:', await evaluate('window.exportReplies').catch(() => null))
   console.log('Export directory:', await files().catch(() => []))
+  await command('shell', 'uiautomator', 'dump', '/sdcard/lumiverse-export-controls.xml').catch(() => {})
+  const xml = await command('shell', 'cat', '/sdcard/lumiverse-export-controls.xml').catch(() => '')
+  console.log('Native UI at failure:', [...xml.matchAll(/<node\b[^>]*>/g)].map(match => ({
+    text: match[0].match(/text="([^"]*)"/)?.[1],
+    description: match[0].match(/content-desc="([^"]*)"/)?.[1],
+  })).filter(node => node.text || node.description))
   throw error
 } finally {
   try {
@@ -190,6 +289,14 @@ try {
       else if (saved.mode === 'local') await evaluate("document.getElementById('local').click(); true")
     }
   } catch { /* Preserve failure evidence if the app stopped. */ }
+  if (blockedDirectory) {
+    await command('shell', 'am', 'force-stop', app)
+    if (backedUpPreferences) await command('shell', 'run-as', app, 'cp', preferencesBackup, preferencesPath)
+    else await command('shell', 'run-as', app, 'rm', '-f', preferencesPath)
+    await command('shell', 'run-as', app, 'rm', '-f', preferencesBackup)
+    await command('shell', 'rm', '/sdcard/Download/Lumiverse')
+    await command('shell', 'mv', blockedDirectoryBackup, '/sdcard/Download/Lumiverse')
+  }
   server.stop(true); foreign.stop(true)
   await command('reverse', '--remove', `tcp:${serverPort}`).catch(() => {})
   await command('reverse', '--remove', `tcp:${foreignPort}`).catch(() => {})
