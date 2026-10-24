@@ -182,6 +182,10 @@ if (env.stMigrate) {
 const { seedTokenizersAsync } = await import("./services/tokenizer-seed");
 await seedTokenizersAsync();
 
+// Importing auth waits for plugin initialization, including the desktop OAuth
+// resource overwrite. Finish that write before any background writer starts.
+await import("./auth");
+
 // Finish bootstrap writes before enabling background indexing/maintenance.
 // Keep the main connection's lock budget for synchronous auth/legacy writes;
 // only the supervised subprocess uses short waits with asynchronous retries.

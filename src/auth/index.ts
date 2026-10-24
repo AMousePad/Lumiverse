@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 import { createOAuthAccountIssuer } from "better-auth/db";
 import { username, admin, bearer, genericOAuth, jwt } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
-import { getDb } from "../db/connection";
+import { getDatabasePath, getDb } from "../db/connection";
 import { env } from "../env";
 import { provisionUserDirectories } from "./provision";
 import { seedDefaultPreset } from "./default-preset";
@@ -220,5 +220,22 @@ export const auth = betterAuth({
     },
   },
 });
+
+// betterAuth() starts initialization eagerly but returns before its plugins
+// finish. Make module loading a readiness barrier so startup observes failures
+// and completes the OAuth resource seed before enabling background DB writes.
+try {
+  await auth.$context;
+} catch (error) {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && code.startsWith("SQLITE_BUSY")) {
+    throw new Error(
+      `[Auth] Authentication initialization could not acquire the SQLite write lock for ${getDatabasePath()}. `
+      + "Close other Lumiverse instances or database tools using this data directory, then restart.",
+      { cause: error },
+    );
+  }
+  throw error;
+}
 
 export type Auth = typeof auth;

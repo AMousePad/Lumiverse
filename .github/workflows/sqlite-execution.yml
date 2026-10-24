@@ -3,6 +3,7 @@ name: SQLite execution regression tests
 on:
   pull_request:
     paths:
+      - 'src/auth/**'
       - 'src/db/**'
       - 'src/utils/bun-cmd.ts'
       - 'src/utils/subprocess-messages.ts'
@@ -36,6 +37,7 @@ jobs:
       - name: Test contention, responsiveness, interruption, and cleanup
         run: >-
           bun test --isolate
+          src/auth/startup.test.ts
           src/db/connection.test.ts
           src/db/execution.test.ts
           src/db/execution-transport.test.ts
