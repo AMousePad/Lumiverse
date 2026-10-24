@@ -44,6 +44,7 @@ import useIsMobile from '@/hooks/useIsMobile'
 import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
 import type { LoomPreset, PromptVariableValues } from '@/lib/loom/types'
 import AuthorsNotePanel from './AuthorsNotePanel'
+import ReasoningBlock from './ReasoningBlock'
 import { PromptVariablesModal } from '@/components/shared/PromptVariablesModal'
 import ProviderIcon from '@/components/shared/ProviderIcon'
 import { databankApi } from '@/api/databank'
@@ -446,6 +447,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const setImpersonateDraftContent = useStore((s) => s.setImpersonateDraftContent)
   const streamingContent = useStore((s) => s.streamingContent)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
+  const streamingReasoning = useStore((s) => s.streamingReasoning)
+  const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
+  const streamingReasoningStartedAt = useStore((s) => s.streamingReasoningStartedAt)
   const localGenerationInChat = isStreaming && activeChatId === chatId
   const isGeneratingInChat = !!liveChatGenerationId || localGenerationInChat
   const generationIdForChat = liveChatGenerationId || (localGenerationInChat ? activeGenerationId : null)
@@ -4398,6 +4402,15 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         style={{ display: 'none' }}
         onChange={(e) => handleAttachFiles(e.target.files)}
       />
+
+      {isGeneratingInChat && streamingGenerationType === 'impersonate_draft' && streamingReasoning && (
+        <ReasoningBlock
+          reasoning={streamingReasoning}
+          reasoningDuration={streamingReasoningDuration ?? undefined}
+          reasoningStartedAt={streamingReasoningStartedAt}
+          isStreaming
+        />
+      )}
 
       {showSTTIndicator ? (
         <button
