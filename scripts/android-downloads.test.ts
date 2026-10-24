@@ -5,7 +5,7 @@ const script = await Bun.file(new URL('../android/tauri/src-tauri/src/downloads.
 const windows: JSDOM[] = []
 afterEach(() => { for (const dom of windows.splice(0)) dom.window.close() })
 
-function fixture(failChunk = false) {
+function fixture(failChunk = false, legacyBlob = false) {
   const dom = new JSDOM('<!doctype html>', { url: 'https://lumiverse.example/', runScripts: 'outside-only' })
   windows.push(dom)
   const messages: { action: string; payload: any }[] = []
@@ -24,7 +24,11 @@ function fixture(failChunk = false) {
       })
     },
   }
-  Object.assign(dom.window, { lumiverseDownloads: bridge, fetch })
+  Object.assign(dom.window, { lumiverseDownloads: bridge, fetch, Blob: legacyBlob ? dom.window.Blob : Blob })
+  Object.assign(dom.window.URL, {
+    createObjectURL: (blob: Blob) => legacyBlob ? 'blob:https://lumiverse.example/legacy' : URL.createObjectURL(blob),
+    revokeObjectURL: (url: string) => { if (!legacyBlob) URL.revokeObjectURL(url) },
+  })
   dom.window.eval(script)
   function click(url: string, attached: boolean, filename = 'example.json') {
     const anchor = dom.window.document.createElement('a')
@@ -59,6 +63,48 @@ test('a native write failure aborts the pending export and stops sending chunks'
   await page.done
   expect(page.messages.map(message => message.action)).toEqual(['begin', 'chunk', 'abort'])
   expect(page.messages.at(-1)!.payload.transfer).toBe('transfer-1')
+  expect(page.messages.at(-1)!.payload.message).toContain('write the export')
+  expect(page.messages.at(-1)!.payload.message).toContain('Storage full')
+})
+
+test('page-generated lorebook JSON needs no blob fetch and survives immediate URL revocation', async () => {
+  for (const attached of [true, false]) {
+    const page = fixture()
+    const fetchBlob = () => { throw new Error('Blocked by connect-src') }
+    page.dom.window.fetch = fetchBlob as any
+    const contents = JSON.stringify({ name: 'Lorebook 世界', entries: Array.from({ length: 2000 }, (_, id) => ({ id, content: '🌌 lore '.repeat(100) })) }, null, 2)
+    const blob = new Blob([contents], { type: 'application/json' })
+    const url = page.dom.window.URL.createObjectURL(blob)
+    page.click(url, attached, 'lorebook.json')
+    page.dom.window.URL.revokeObjectURL(url)
+    await page.done
+    expect(page.messages.at(-1)!.action).toBe('finish')
+    expect(page.messages[0]!.payload.size).toBe(new TextEncoder().encode(contents).byteLength)
+    expect(Buffer.concat(page.chunks)).toEqual(Buffer.from(contents))
+  }
+})
+
+test('read failures identify the failed stage instead of suggesting a storage problem', async () => {
+  const page = fixture()
+  page.dom.window.fetch = (async () => { throw new Error('Blocked by connect-src') }) as any
+  page.click('blob:https://lumiverse.example/not-created-here', false)
+  await page.done
+  expect(page.messages.map(message => message.action)).toEqual(['abort'])
+  expect(page.messages[0]!.payload.message).toContain('read the generated export')
+})
+
+test('older WebViews can read export chunks with FileReader instead of Blob.arrayBuffer', async () => {
+  const page = fixture(false, true)
+  Object.defineProperty(page.dom.window.Blob.prototype, 'arrayBuffer', { configurable: true, value: undefined })
+  const content = 'Lorebook 🌌 世界\n'.repeat(10000)
+  const blob = new page.dom.window.Blob([content], { type: 'application/json' })
+  expect(typeof blob.arrayBuffer).toBe('undefined')
+  const url = page.dom.window.URL.createObjectURL(blob)
+  page.click(url, false, 'lorebook.json')
+  page.dom.window.URL.revokeObjectURL(url)
+  await page.done
+  expect(page.messages.at(-1)!.action).toBe('finish')
+  expect(Buffer.concat(page.chunks)).toEqual(Buffer.from(content))
 })
 
 test('prepared URL exports use the native streaming path without fetching a blob', async () => {

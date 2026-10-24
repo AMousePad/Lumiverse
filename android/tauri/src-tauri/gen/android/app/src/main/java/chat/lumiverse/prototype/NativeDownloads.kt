@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Base64
+import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.URLUtil
 import android.webkit.WebView
@@ -103,6 +104,7 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
                     if (destroyed || epoch != generation) return@execute
                     try { reply(handle(request.getString("action"), payload)) }
                     catch (error: Exception) {
+                        Log.w("LumiverseDownloads", "Export ${request.optString("action")} failed (${error.javaClass.simpleName})")
                         payload.optString("transfer").takeIf { it.isNotBlank() }?.let { discard(it) }
                         reply(null, error.message ?: "Could not save export.")
                     }
@@ -172,7 +174,7 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
             }
             "abort" -> {
                 discard(payload.optString("transfer"))
-                show("Export failed. Check your connection and available storage, then try again.")
+                showFailure(payload.optString("message").ifBlank { "The export was interrupted. Please try again." })
             }
             else -> error("Unknown export action.")
         }
@@ -185,6 +187,7 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
         show("Saving export to Downloads/Lumiverse…")
         network.execute {
             var item: Transfer? = null
+            var stage = "download the export"
             try {
                 var target = url
                 for (redirect in 0..5) {
@@ -201,8 +204,10 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
                             check(response.isSuccessful) { "Download failed (${response.code})." }
                             val body = response.body ?: error("The download was empty.")
                             val name = filename.ifBlank { URLUtil.guessFileName(target, response.header("Content-Disposition"), body.contentType()?.toString()) }
+                            stage = "create the file in Downloads/Lumiverse"
                             val output = create(name, body.contentType()?.toString() ?: "application/octet-stream", body.contentLength())
                             item = output
+                            stage = "write the export"
                             body.byteStream().use { input ->
                                 val buffer = ByteArray(65536)
                                 while (true) {
@@ -214,17 +219,24 @@ class NativeDownloads(private val activity: Activity, private val view: WebView)
                                 }
                             }
                             check(!destroyed && epoch == generation) { "Connection changed." }
+                            stage = "finish saving the export"
                             publish(output)
                             item = null
                             return@execute
                         }
                     }
                 }
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 item?.let { remove(it) }
-                if (!destroyed) show("Export failed. Check your connection and available storage, then try again.")
+                Log.w("LumiverseDownloads", "Could not $stage (${error.javaClass.simpleName})")
+                if (!destroyed) showFailure("Could not $stage. ${error.message.orEmpty()}")
             }
         }
+    }
+
+    private fun showFailure(reason: String) {
+        val message = reason.filter { !it.isISOControl() }.trim().take(240)
+        show("Export failed. $message")
     }
 
     private fun show(message: String) { activity.runOnUiThread {

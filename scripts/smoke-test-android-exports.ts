@@ -10,6 +10,7 @@ const adb = join(process.env.ANDROID_HOME || join(process.env.HOME!, 'Library/An
 const app = 'chat.lumiverse.prototype'
 const prefix = `lumiverse-export-smoke-${Date.now()}`
 const bytes = Uint8Array.from({ length: 180000 }, (_, index) => index % 256)
+const lorebook = JSON.stringify({ name: 'Lorebook 世界', entries: Array.from({ length: 2000 }, (_, id) => ({ id, content: '🌌 lore '.repeat(100) })) }, null, 2)
 const fixture = await build({
   absWorkingDir: join(import.meta.dir, '..'), entryPoints: ['frontend/tests/ui-scale.fixture.tsx'],
   outfile: 'fixture.js', bundle: true, write: false, format: 'iife', jsx: 'automatic',
@@ -36,7 +37,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: request => {
     return new Response(bytes, { headers: { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${prefix}-attachment.charx"` } })
   }
   return new Response(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Android export smoke</title><link rel="stylesheet" href="/fixture.css"></head><body><div id="root"></div><script src="/fixture.js"></script></body></html>`,
-    { headers: { 'Content-Type': 'text/html', 'Set-Cookie': 'export-smoke=1; Path=/; SameSite=Lax', 'Cache-Control': 'no-store' } })
+    { headers: { 'Content-Type': 'text/html', 'Set-Cookie': 'export-smoke=1; Path=/; SameSite=Lax', 'Cache-Control': 'no-store', 'Content-Security-Policy': 'connect-src data:' } })
 } })
 const serverPort = server.port
 const foreignPort = foreign.port
@@ -121,6 +122,16 @@ try {
   await waitFor(() => evaluate("document.title === 'Android export smoke' && !!window.uiScaleFixture && !!window.lumiverseDownloads"), 'hosted export fixture')
   console.log('Hosted fixture and native export bridge ready')
   await evaluate(`(() => { window.exportReplies=[]; const original=lumiverseDownloads.onmessage; lumiverseDownloads.onmessage=e=>{window.exportReplies.push(JSON.parse(e.data)); if(original)original(e)}; return true })()`)
+
+  // Match WorldBookPanel: a detached anchor and a URL revoked immediately after
+  // click(). The policy deliberately disallows fetching blob URLs.
+  assert.equal(await evaluate(`(async()=>{const url=URL.createObjectURL(new Blob(['test']));try{await fetch(url);return false}catch{return true}finally{URL.revokeObjectURL(url)}})()`), true, 'Fixture policy must block blob fetches')
+  await evaluate(`(() => {
+    const url=URL.createObjectURL(new Blob([${JSON.stringify(lorebook)}],{type:'application/json'}));
+    const a=document.createElement('a'); a.href=url; a.download='${prefix}-lorebook-blob.json'; a.click(); URL.revokeObjectURL(url); return true;
+  })()`)
+  await expectFile(`${prefix}-lorebook-blob.json`, new TextEncoder().encode(lorebook))
+  console.log('Multi-megabyte Unicode lorebook JSON, detached anchor, immediate revocation, restrictive CSP: passed')
 
   await clickBlob(`${prefix}-card.png`, true)
   await expectFile(`${prefix}-card.png`)
