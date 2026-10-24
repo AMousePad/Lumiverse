@@ -86,6 +86,42 @@ describe("database migrations", () => {
     }
   });
 
+  test("fresh bootstrap records the widget migration once and preserves account-scoped registrations", async () => {
+    const db = new Database(":memory:");
+    try {
+      db.run("PRAGMA foreign_keys = ON");
+      await runMigrations(db);
+
+      db.run(`INSERT INTO "user" (id, name, email) VALUES
+        ('owner', 'Owner', 'owner@example.test'),
+        ('tenant', 'Tenant', 'tenant@example.test')`);
+      const insert = db.query(`INSERT INTO ios_widget_registrations
+        (id, user_id, device_id, credential_hash, expires_at) VALUES (?, ?, ?, ?, ?)`);
+      insert.run("owner-widget", "owner", "shared-device", "owner-hash", 100);
+      insert.run("tenant-widget", "tenant", "shared-device", "tenant-hash", 200);
+      expect(() => insert.run("duplicate", "owner", "shared-device", "duplicate-hash", 300))
+        .toThrow("UNIQUE constraint failed");
+      expect(() => insert.run("orphan", "missing", "other-device", "orphan-hash", 300))
+        .toThrow("FOREIGN KEY constraint failed");
+
+      await runMigrations(db);
+      expect(db.query("SELECT COUNT(*) AS count FROM _migrations WHERE name = ?")
+        .get("132_ios_widgets.sql")).toEqual({ count: 1 });
+      expect(db.query("PRAGMA index_info('idx_ios_widget_registrations_expiry')").all())
+        .toMatchObject([{ name: "expires_at" }]);
+      expect(db.query("SELECT * FROM ios_widget_registrations ORDER BY id").all()).toEqual([
+        { id: "owner-widget", user_id: "owner", device_id: "shared-device", credential_hash: "owner-hash", expires_at: 100 },
+        { id: "tenant-widget", user_id: "tenant", device_id: "shared-device", credential_hash: "tenant-hash", expires_at: 200 },
+      ]);
+
+      db.run(`DELETE FROM "user" WHERE id = 'owner'`);
+      expect(db.query("SELECT id FROM ios_widget_registrations").all())
+        .toEqual([{ id: "tenant-widget" }]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("assigns the legacy instance link to the historical owner", async () => {
     const db = new Database(":memory:");
     try {
