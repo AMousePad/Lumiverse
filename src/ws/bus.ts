@@ -1,4 +1,5 @@
 import type { ServerWebSocket } from "bun";
+import { WEBSOCKET_BACKPRESSURE_LIMIT } from "./transport";
 import { advanceRuntimeStateRevision, runtimeMutationId } from '../spindle/runtime-state-revision';
 import {
   EventType,
@@ -43,6 +44,7 @@ function getRoomFeedTopic(roomId: string): string {
 
 class EventBus {
   private server: import("bun").Server<unknown> | null = null;
+  private backpressureLimit = WEBSOCKET_BACKPRESSURE_LIMIT;
   private clientToUser = new Map<ServerWebSocket<unknown>, string>();
   private sessionToClient = new Map<string, ServerWebSocket<unknown>>();
   private clientToSession = new Map<ServerWebSocket<unknown>, string>();
@@ -72,8 +74,27 @@ class EventBus {
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Store the Bun server reference so we can use native publish(). */
-  setServer(server: import("bun").Server<unknown>): void {
+  setServer(server: import("bun").Server<unknown>, backpressureLimit = WEBSOCKET_BACKPRESSURE_LIMIT): void {
     this.server = server;
+    this.backpressureLimit = backpressureLimit;
+  }
+
+  private publish(topic: string, message: string): void {
+    if (!this.server) return;
+    const status = this.server.publish(topic, message);
+    if (status !== -1 && status !== 0) return;
+
+    // Windows native pub/sub can drop messages at the limit without honoring
+    // closeOnBackpressureLimit. Disconnect the affected subscriber so it
+    // recovers its stream instead of remaining connected with missing deltas.
+    // The normal publishing path stays a single native call.
+    for (const ws of this.clientLastActivity.keys()) {
+      try {
+        if (ws.readyState === 1 && ws.isSubscribed(topic) && ws.getBufferedAmount() >= this.backpressureLimit) {
+          ws.close(1013, "WebSocket subscriber too slow");
+        }
+      } catch { /* Socket closed during delivery. */ }
+    }
   }
 
   withBufferedEvents<T>(callback: () => T): BufferedEventRun<T> {
@@ -380,7 +401,7 @@ class EventBus {
   publishToRoom(roomId: string, event: EventType, payload: any = {}): void {
     if (this.server) {
       const message: EventMessage = { event, payload, timestamp: Date.now() };
-      this.server.publish(getRoomTopic(roomId), JSON.stringify(message));
+      this.publish(getRoomTopic(roomId), JSON.stringify(message));
     }
     this.fireRoomBroadcast(roomId, event, payload);
   }
@@ -392,7 +413,7 @@ class EventBus {
   publishToRoomFeed(roomId: string, event: EventType, payload: any = {}): void {
     if (this.server) {
       const message: EventMessage = { event, payload, timestamp: Date.now() };
-      this.server.publish(getRoomFeedTopic(roomId), JSON.stringify(message));
+      this.publish(getRoomFeedTopic(roomId), JSON.stringify(message));
     }
     this.fireRoomBroadcast(roomId, event, payload);
   }
@@ -503,7 +524,7 @@ class EventBus {
     // instead of iterating over JS Maps and calling ws.send() per-socket.
     if (this.server) {
       const topic = options?.topic || (userId ? getUserTopic(userId) : "system");
-      this.server.publish(topic, json);
+      this.publish(topic, json);
     }
 
     // Fire in-process listeners asynchronously so extension worker IPC
