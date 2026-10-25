@@ -11,6 +11,7 @@ import { KEYBOARD_VIEWPORT_EVENT } from './lib/keyboardViewport'
 import { installIOSTouchScrollGuard, preventPageTouchZoom } from './lib/iosTouchScroll'
 import { installKeyboardFocusReveal } from './lib/keyboardFocusReveal'
 import { installIOSKeyboardScrollGuard } from './lib/iosKeyboardScroll'
+import { subscribeIOSNativeViewport } from './lib/iosNativeViewport'
 import { installIOSEditableFocusScrollPrevention } from './lib/iosEditableFocus'
 import { rememberRegistration } from './lib/swUpdater'
 import { claimServiceWorkerReload } from './lib/swUpdatePolicy'
@@ -118,6 +119,7 @@ const initialFullHeight = window.visualViewport
 const startedPortrait = window.matchMedia('(orientation: portrait)').matches
 let basePortrait = startedPortrait ? initialFullHeight : 0
 let baseLandscape = startedPortrait ? 0 : initialFullHeight
+let nativeIOSHeight: number | undefined
 
 function syncViewportVars() {
   const root = document.documentElement
@@ -143,12 +145,16 @@ function syncViewportVars() {
   if (!keyboardActive && height > base) base = height
   if (isPortrait) basePortrait = base
   else baseLandscape = base
+  // Native bounds include safe areas and can shrink on an iPad window resize.
+  // Do not let an older WebKit's shortened visual viewport become the full
+  // height, or retain the previous window's maximum after resizing.
+  const fullHeight = nativeIOSHeight ?? base
 
   // Standalone iOS composers prevent native focus scrolling, and the guard
   // below recovers real document scrolling. WebKit can still report transient
   // or stale offsetTop values; do not subtract those from keyboard clearance.
   const keyboardInsetBottom = computeViewportKeyboardInset({
-    fullHeight: base,
+    fullHeight,
     viewportHeight: height,
     offsetTop,
     keyboardActive,
@@ -157,7 +163,7 @@ function syncViewportVars() {
     accessoryMinInset: isIOSStandaloneClient ? IOS_PWA_ACCESSORY_MIN_INSET : KEYBOARD_MIN_INSET,
   })
   const visibleViewport = computeVisibleViewport({
-    fullHeight: base,
+    fullHeight,
     viewportHeight: viewport?.height ?? window.innerHeight,
     offsetTop: viewport?.offsetTop ?? 0,
     scale,
@@ -197,6 +203,11 @@ function scheduleViewportSync() {
     syncViewportVars()
   })
 }
+
+subscribeIOSNativeViewport(height => {
+  nativeIOSHeight = height
+  scheduleViewportSync()
+})
 
 scheduleViewportSync()
 window.addEventListener('resize', scheduleViewportSync, { passive: true })

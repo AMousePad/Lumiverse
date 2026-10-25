@@ -71,6 +71,13 @@
   padding-right: calc(var(--spindle-dock-right, 0px) + env(safe-area-inset-right, 0px) / var(--lumiverse-ui-scale, 1));
 }
 
+/* Match the body to measured WKWebView bounds rather than iOS viewport units.
+   The full shell stays stable while InputArea owns keyboard clearance. */
+:global(html[data-tauri-mobile='ios']) .app {
+  height: calc(var(--app-shell-height) / var(--lumiverse-ui-scale, 1));
+  max-height: calc(var(--app-shell-height) / var(--lumiverse-ui-scale, 1));
+}
+
 /* Same treatment for Chromium/Android PWAs. Since Chrome 135 the Android
    viewport goes edge-to-edge by default, so env(safe-area-inset-bottom) is
    the gesture-navigation-bar height (large on foldables like the Galaxy

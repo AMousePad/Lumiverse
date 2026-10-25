@@ -65,21 +65,38 @@ async function modules() {
 }
 
 function nativeHost(platform: string) {
+  if (platform.endsWith('-init')) {
+    Object.assign(window, { __LUMIVERSE_MOBILE__: true, __LUMIVERSE_PLATFORM__: platform.replace('-init', '') })
+    return
+  }
   if (platform === 'android' || platform === 'ios') document.documentElement.dataset.tauriMobile = platform
   else document.documentElement.dataset.tauriDesktop = ''
   document.documentElement.dataset.platform = platform
 }
 
-const platforms = ['android', 'ios', 'macos', 'windows', 'linux']
+// At document start the wrappers expose window flags before DOMContentLoaded
+// installs the HTML attributes. Audio must skip priming in both phases.
+const platforms = ['android', 'ios', 'android-init', 'ios-init', 'macos', 'windows', 'linux']
 
 test.each(platforms)('%s never plays silent unlock audio on startup, touch, or Send', async platform => {
   nativeHost(platform)
   const { notification, tts } = await modules()
   disposers.push(notification.installNotificationAudioPrimer(), tts.installTTSAudioPrimer())
   document.dispatchEvent(new dom.window.Event('pointerdown'))
+  document.dispatchEvent(new dom.window.Event('touchstart'))
   document.dispatchEvent(new dom.window.Event('keydown'))
   expect(await notification.unlockNotificationAudio()).toBe(true)
   tts.unlockTTSAudio()
+  expect(audioElements).toHaveLength(0)
+  expect(contexts).toHaveLength(0)
+})
+
+test('primers installed before mobile identification do not play silence once the wrapper is identified', async () => {
+  const { notification, tts } = await modules()
+  disposers.push(notification.installNotificationAudioPrimer(), tts.installTTSAudioPrimer())
+  nativeHost('ios-init')
+  document.dispatchEvent(new dom.window.Event('touchstart'))
+  await Bun.sleep(0)
   expect(audioElements).toHaveLength(0)
   expect(contexts).toHaveLength(0)
 })
