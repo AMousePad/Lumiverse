@@ -6,6 +6,7 @@ import type { Message } from '@/types/api'
 import { createChatSlice } from '@/store/slices/chat'
 import { executeSwipe } from '@/hooks/useSwipeAction'
 import SwipeControls from '@/components/chat/SwipeControls'
+import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 
 const store = createStore<ChatSlice>()(createChatSlice)
 export const useFixtureStore = Object.assign((selector: (state: ChatSlice) => unknown) => useStore(store, selector), {
@@ -40,13 +41,14 @@ function reset() {
   store.getState().setActiveChat('chat')
   store.getState().setMessages([original])
   store.setState({ activeProfileId: 'mock', activePersonaId: null, getActivePresetForGeneration: () => null,
-    regenFeedback: { enabled: false }, openModal: () => undefined } as never)
+    regenFeedback: { enabled: false }, openModal: () => undefined, swipeGesturesEnabled: true } as never)
   selections = []
 }
 reset()
 store.subscribe(state => { selections.push(state.messages[0]?.swipe_id ?? -1) })
 
 function App() {
+  useSwipeKeyboard()
   const message = useStore(store, state => state.messages[0])
   const streaming = useStore(store, state => state.isStreaming)
   const index = useStore(store, state => state.streamingSwipeId)
@@ -55,8 +57,9 @@ function App() {
   const visible = streaming && (index == null || index === message.swipe_id) ? content || message.content : message.content
   return <main>
     <h1>Background swipe diagnostics</h1>
-    <article aria-label="Selected reply">{visible}</article>
+    <article aria-label="Selected reply" tabIndex={0}>{visible}</article>
     <SwipeControls message={message} chatId="chat" />
+    <textarea aria-label="Draft message" />
     <button disabled={streaming} onClick={() => void executeSwipe(message, 'chat', 'right', { background: true })}>Generate swipe in background</button>
     <p role="status">{streaming ? 'Generating another swipe' : 'Ready'}</p>
   </main>
