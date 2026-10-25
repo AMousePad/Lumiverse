@@ -1283,7 +1283,7 @@ export interface SelectedZipExtractionOptions {
   archivePath: string;
   destinationDir: string;
   /** Return a relative output path for entries to extract, or null to skip. */
-  selectEntry(name: string): string | null;
+  selectEntry(name: string, uncompressedSize: number): string | null;
   /** Validate state accumulated by selectEntry before extraction starts. */
   validateSelection?(): void;
   /** Legacy CL bundles can repeat a shared gallery path. Every copy must be byte-identical. */
@@ -1349,7 +1349,7 @@ export async function extractSelectedZipEntries(
   let declaredBytes = 0;
 
   for await (const entry of scanCentralDirectory(archive, cdOffset, cdSize, totalEntries)) {
-    const relativePath = options.selectEntry(entry.name);
+    const relativePath = options.selectEntry(entry.name, entry.uncompressedSize);
     if (relativePath === null) continue;
     const previous = selectedByName.get(entry.name);
     if (previous && !options.allowIdenticalDuplicate?.(entry.name)) {
@@ -1426,6 +1426,12 @@ export async function extractSelectedZipEntries(
             throw new ArchiveValidationError(
               "size",
               `selected ZIP data exceeds decompressed size cap (${maxDecompressedBytes} bytes)`,
+            );
+          }
+          if (chunk.byteLength > centralEntry.uncompressedSize - entryBytes) {
+            throw new ArchiveValidationError(
+              "not_zip",
+              `entry size disagrees with central directory (${centralEntry.name})`,
             );
           }
           if (outputFd !== null) writeAllSync(outputFd, chunk);
