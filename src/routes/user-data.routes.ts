@@ -24,7 +24,6 @@ import {
   submitTicket,
   skipTicket,
   ArchiveValidationError,
-  MAX_COMPRESSED_BYTES,
 } from "../services/user-data/import.service";
 import { TicketError } from "../services/user-data/secret-ticket.service";
 import { unlinkSync } from "fs";
@@ -239,13 +238,6 @@ app.post("/import", async (c) => {
 
   try {
     const declared = Number(c.req.header("content-length") || "0");
-    if (declared > MAX_COMPRESSED_BYTES) {
-      return c.json(
-        { error: "archive exceeds compressed size cap", maxBytes: MAX_COMPRESSED_BYTES },
-        413,
-      );
-    }
-
     try {
       const ct = c.req.header("content-type") || "";
       if (ct.startsWith("multipart/form-data")) {

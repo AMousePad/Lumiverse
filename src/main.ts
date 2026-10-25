@@ -1,6 +1,7 @@
 import { unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { env } from "./env";
+import { MAX_ACCOUNT_ARCHIVE_BYTES } from "./services/user-data/archive-limits";
 import { getDatabasePath, initDatabase } from "./db/connection";
 import { runMigrations } from "./db/migrate";
 import { runStartupDatabaseMaintenance } from "./db/maintenance";
@@ -310,7 +311,7 @@ const server = Bun.serve({
   // MAX_CHARX_SIZE ≈ 1000 MB, image/avatar uploads at a few MB, etc.), so
   // raising the global ceiling here only widens the door for routes we
   // explicitly opt-in for via the bodyLimit exclusion list above.
-  maxRequestBodySize: 5 * 1024 * 1024 * 1024, // 5 GB — matches MAX_COMPRESSED_BYTES in user-data import.
+  maxRequestBodySize: MAX_ACCOUNT_ARCHIVE_BYTES,
   idleTimeout: 255,
 });
 

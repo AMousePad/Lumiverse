@@ -737,7 +737,7 @@
     "linking": "Linking...",
     "waitingBrowser": "Waiting for authorization in your browser...",
     "browserCodeTitle": "Browser verification code",
-    "browserCodeNote": "Enter this code on the Illarin page before approving. Decline any request you didn't start.",
+    "browserCodeNote": "Copy this code, then open the Illarin page and enter it before approving. Decline any request you didn't start.",
     "openAuthorization": "Open Illarin approval page",
     "waitingDevice": "Waiting for the code to be entered on Illarin...",
     "deviceFallback": "Use a device code instead",

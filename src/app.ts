@@ -116,11 +116,11 @@ app.use("*", compress());
 // Body size limit — 10 MB default for API routes.
 // Import routes (migrate/*, characters/import, characters/import-bulk) are excluded
 // here to support charx uploads up to 100 MB; the Bun server-level maxRequestBodySize
-// (512 MB in index.ts) covers them.
+// in main.ts permits streaming account archives without a fixed size quota.
 // Public/unauthenticated POST surfaces (auth, OAuth callbacks, etc.) never
 // need a multi-megabyte body. Apply a tight 1 MB cap before the broader 10 MB
-// rule below so a client without credentials cannot drive the server-level
-// 1 GB limit by hitting an unauthenticated endpoint with a giant payload.
+// rule below so unauthenticated endpoints cannot consume the archive upload
+// allowance with giant payloads.
 const PUBLIC_POST_PREFIXES = [
   "/api/auth/",
   "/api/spindle-oauth/",
