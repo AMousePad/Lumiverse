@@ -824,7 +824,7 @@ verify_backend_dependencies() {
   local dir="$1"
   # glibc-runner/grun currently word-splits argv containing spaces on Termux.
   # Keep eval probes whitespace-free so fallback runtimes receive one intact -e arg.
-  (cd "$dir" && _bun -e "await(import('better-auth'));await(import('@better-auth/oauth-provider'))")
+  (cd "$dir" && _bun -e "await(import('./src/sharp-preflight.ts')).then(m=>m.configureSharpNativeOverride());await(import('sharp')).then(m=>m.default({create:{width:1,height:1,channels:4,background:'#000000'}}).png().toBuffer());await(import('better-auth'));await(import('@better-auth/oauth-provider'))")
 }
 
 verify_frontend_dependencies() {
