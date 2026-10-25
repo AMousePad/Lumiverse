@@ -61,7 +61,8 @@ Think of swipes as a deck of cards — each one is a different take on the same 
 
 On the final assistant reply, **Ctrl+click** the right swipe arrow (Windows/Linux)
 or **Cmd+click** it (Mac) to generate another swipe while keeping the current
-response selected. With the arrow focused, **Ctrl/Cmd+Enter** does the same.
+response selected. On mobile, **hold the right swipe arrow** for the same action;
+its context menu is suppressed. With the arrow focused, **Ctrl/Cmd+Enter** does the same.
 A pulsing dot points toward the generating swipe; it becomes steady when ready.
 Click that arrow normally when you want to read the new response. This action
 is unavailable while a generation is already running.
