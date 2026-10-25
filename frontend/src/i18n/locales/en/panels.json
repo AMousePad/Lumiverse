@@ -835,6 +835,10 @@
   },
   "regexPanel": {
     "title": "Regex Scripts",
+    "searchFolder": "Search scripts in this folder…",
+    "searchFolderAria": "Search scripts in {{folder}}",
+    "folderPagesAria": "Script pages in {{folder}}",
+    "noSearchResults": "No scripts match your search.",
     "bulkSelect": "Bulk select",
     "exitBulkSelect": "Exit bulk selection",
     "selectedCount": "{{selected}} of {{total}} selected",

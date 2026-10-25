@@ -16,6 +16,7 @@ import { EventType } from './events'
 import { useStore } from '@/store'
 import type { DecisionConnectionProfile } from '@/types/api'
 import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
+import { createRegexRefreshScheduler } from './regex-refresh'
 import {
   createProviderRegistryProjection,
   FRONTEND_PROVIDER_SCOPE,
@@ -620,6 +621,8 @@ export function useWebSocket() {
     // WS auth uses cookies — no token needed in the URL.
     // Connect only once; the singleton client handles reconnects internally.
     wsClient.connect()
+
+    const regexRefresh = createRegexRefreshScheduler((shouldApply) => store.getState().loadRegexScripts(shouldApply))
 
     const unsubs = [
       wsClient.on(EventType.DECISION_CONNECTION_CHANGED, (payload: { id: string; deleted?: boolean; profile?: DecisionConnectionProfile }) => {
@@ -1901,13 +1904,9 @@ export function useWebSocket() {
         }
       }),
 
-      // Regex script events — reload for multi-tab sync
-      wsClient.on(EventType.REGEX_SCRIPT_CHANGED, () => {
-        store.getState().loadRegexScripts()
-      }),
-      wsClient.on(EventType.REGEX_SCRIPT_DELETED, () => {
-        store.getState().loadRegexScripts()
-      }),
+      // Preset activation/import can emit hundreds of these in one burst.
+      wsClient.on(EventType.REGEX_SCRIPT_CHANGED, regexRefresh.request),
+      wsClient.on(EventType.REGEX_SCRIPT_DELETED, regexRefresh.request),
 
       // Expression change events
       wsClient.on(EventType.EXPRESSION_CHANGED, (payload: { chatId: string; characterId: string; label: string; imageId: string }) => {
@@ -2354,6 +2353,7 @@ export function useWebSocket() {
       clearInterval(chatHeadReconcile)
       unsubDrawerTabs()
       unsubPersonaRelay()
+      regexRefresh.dispose()
       store.getState().setWsResumeRecovering(false)
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
