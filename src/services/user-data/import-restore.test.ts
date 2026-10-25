@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { zipSync } from "fflate";
+import { unzipSync, zipSync } from "fflate";
+import sharp from "sharp";
 import { closeDatabase, getDb, initDatabase } from "../../db/connection";
 import { stopDatabaseExecution } from "../../db/execution";
 import { initIdentity } from "../../crypto/init";
@@ -14,6 +15,8 @@ import { getSecret } from "../secrets.service";
 import { startImport, submitTicket, type ImportJob } from "./import.service";
 import { createManifest } from "./manifest";
 import { createTicket, encryptSecret } from "./secret-ticket.service";
+import { buildExportStream } from "./export.service";
+import { getImageFilePath } from "../images.service";
 
 const USER = "restore-owner";
 const IMAGE = "53b85311-27f6-4b99-9053-10f99879c058";
@@ -124,6 +127,44 @@ test("restores original and cropped avatars, legacy avatar files, and wallpapers
   expect(getDb().query("SELECT value FROM settings WHERE key = 'activePersonaId' AND user_id = ?").get(USER)).toEqual({ value: JSON.stringify("restored-persona") });
   for (const id of [IMAGE, CROP, BACKGROUND]) expect([...readFileSync(join(directory, "images", `${id}.webp`))]).toEqual([4, 5, 6]);
   expect([...readFileSync(join(directory, "avatars", "legacy-avatar.png"))]).toEqual([1, 2, 3]);
+});
+
+test("round-trips referenced image backup filenames without renaming or dropping their data", async () => {
+  const imageId = "ed383b1a-55d7-4959-a9b3-5ed69d5d16d4";
+  const filename = `${imageId}.bak_20260808_pre_calligraphy`;
+  const originalFilename = `${imageId}.webp`;
+  const png = await sharp({ create: { width: 2, height: 2, channels: 4, background: "#8866cc" } }).png().toBuffer();
+  const original = await sharp({ create: { width: 3, height: 3, channels: 4, background: "#443388" } }).webp().toBuffer();
+  const imagesDir = join(directory, "images");
+  mkdirSync(imagesDir);
+  writeFileSync(join(imagesDir, filename), png);
+  writeFileSync(join(imagesDir, originalFilename), original);
+  getDb().query("INSERT INTO images (id, filename, mime_type, user_id) VALUES (?, ?, 'image/png', ?)")
+    .run(imageId, filename, USER);
+  getDb().query("INSERT INTO characters (id, name, image_id, user_id) VALUES ('backup-image-character', 'Backup image', ?, ?)")
+    .run(imageId, USER);
+
+  const exported = new Uint8Array(await new Response(buildExportStream({ userId: USER, includeVectors: false })).arrayBuffer());
+  expect(unzipSync(exported)[`files/images/${filename}`]).toEqual(new Uint8Array(png));
+  const archiveDir = join(directory, "upload");
+  mkdirSync(archiveDir);
+  const archivePath = join(archiveDir, "archive.lvbak");
+  writeFileSync(archivePath, exported);
+  getDb().run("DELETE FROM characters WHERE id = 'backup-image-character'");
+  getDb().run("DELETE FROM images WHERE id = ?", [imageId]);
+  rmSync(join(imagesDir, filename));
+
+  const job = startImport({ userId: USER, archivePath, jobId: crypto.randomUUID() });
+  await waitFor(job, "complete");
+  expect(job.fileSummary.images).toBe(1);
+  expect(getDb().query("SELECT filename FROM images WHERE id = ?").get(imageId)).toEqual({ filename });
+  expect(getDb().query("SELECT image_id FROM characters WHERE id = 'backup-image-character'").get())
+    .toEqual({ image_id: imageId });
+  const restoredPath = await getImageFilePath(USER, imageId);
+  expect(restoredPath).toBe(join(imagesDir, filename));
+  expect(new Uint8Array(readFileSync(restoredPath!))).toEqual(new Uint8Array(png));
+  expect(await sharp(restoredPath!).metadata()).toMatchObject({ format: "png", width: 2, height: 2 });
+  expect(new Uint8Array(readFileSync(join(imagesDir, originalFilename)))).toEqual(new Uint8Array(original));
 });
 
 test("waits for a competing writer instead of abandoning table restoration", async () => {

@@ -5,7 +5,11 @@
 const PREFIX_RE =
   /^(?:database\/|files\/(?:images|thumbnails|avatars|databank|theme-assets|notification-sounds)\/|lancedb\/|secrets\/(?:encrypted\.ndjson|index\.json)$|manifest\.json$|manifest-stats\.json$)/;
 
-const IMAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[a-zA-Z0-9]{1,8})?$/;
+// Some existing image rows reference a saved original such as
+// UUID.bak_20260808_pre_calligraphy (optionally after the original extension).
+// Exports preserve that filename, so imports must preserve it as well. Keep
+// the UUID stem and a bounded, single-component backup label.
+const IMAGE_FILENAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[a-zA-Z0-9]{1,8})?(?:\.bak(?:_[A-Za-z0-9_-]{1,128})?)?$/;
 
 const THUMB_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_thumb_(?:sm|lg)_v2\.(?:webp|avif)$/;
 
@@ -124,7 +128,7 @@ export function sanitizeEntry(rawPath: string): SanitizedEntry {
 
   switch (bucket) {
     case "images":
-      if (!IMAGE_ID_RE.test(inner)) {
+      if (!IMAGE_FILENAME_RE.test(inner)) {
         throw new SanitizeError("files/images entry must be UUID-shaped", rawPath);
       }
       break;
