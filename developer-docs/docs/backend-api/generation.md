@@ -695,6 +695,8 @@ observer.generationId  // active generation ID, or null if idle
 | `chatId` | `string` | Chat this generation belongs to |
 | `model` | `string` | Model being used |
 | `targetMessageId` | `string` | Optional. ID of the message being generated/regenerated |
+| `targetSwipeId` | `number` | Optional. Swipe slot receiving tokens; may differ from the selected swipe. |
+| `backgroundSwipe` | `boolean` | Optional. True when the new swipe was staged without selecting it. |
 | `characterId` | `string` | Optional. Target character ID |
 | `characterName` | `string` | Optional. Target character name |
 

@@ -232,6 +232,8 @@ interface GenerateInput {
   messages?: LlmMessage[];
   parameters?: GenerationParameters;
   generation_type?: GenerationType;
+  /** Append a swipe without selecting it. Only valid for swipe/regenerate. */
+  background_swipe?: boolean;
   impersonate_mode?: ImpersonateMode;
   /** For impersonate: free-form text from the user's input box, appended to the impersonation prompt. */
   impersonate_input?: string;
@@ -285,6 +287,7 @@ interface GenerationLifecycle {
   targetMessageId?: string;
   /** For regenerate: index of the blank swipe to fill with generated content */
   targetSwipeIdx?: number;
+  backgroundSwipe?: boolean;
   /** Index of the swipe being streamed into, surfaced to clients (GENERATION_STARTED /
    *  IN_PROGRESS / status) so they can gate the streaming buffer to that swipe and
    *  let the user navigate other swipes mid-generation. Set for all generation types
@@ -1548,6 +1551,18 @@ export async function startGeneration(
     }
   }
 
+  if (input.background_swipe !== undefined && typeof input.background_swipe !== "boolean") {
+    throw new Error("background_swipe must be a boolean");
+  }
+  const backgroundSwipe = input.background_swipe === true;
+  if (backgroundSwipe && genType !== "swipe" && genType !== "regenerate") {
+    throw new Error("background_swipe requires an assistant swipe target");
+  }
+  if (backgroundSwipe) {
+    const target = input.message_id ? chatsSvc.getMessage(input.userId, input.message_id) : chatsSvc.getLastAssistantMessage(input.userId, input.chat_id);
+    if (!target || target.is_user || target.chat_id !== input.chat_id) throw new Error("Invalid background swipe target");
+  }
+
   // --- Per-chat generation lock ---
   // Stop any existing generation for this chat (including in-flight council tools)
   // before proceeding. This prevents council re-firing and generation interruption.
@@ -1555,6 +1570,7 @@ export async function startGeneration(
     input.userId,
     input.chat_id,
   );
+  if (backgroundSwipe && existingGenId) throw new Error("A generation is already running for this chat");
   if (existingGenId) {
     const existing = getActiveGeneration(existingGenId);
     if (existing) {
@@ -1650,7 +1666,7 @@ export async function startGeneration(
         ? chatsSvc.getMessage(input.userId, input.message_id)
         : chatsSvc.getLastAssistantMessage(input.userId, input.chat_id);
       if (target && !target.is_user) {
-        const reuseIdx = requestedGenerationId ? reusableStagedSwipeIndex(target) : undefined;
+        const reuseIdx = requestedGenerationId && !backgroundSwipe ? reusableStagedSwipeIndex(target) : undefined;
         if (reuseIdx != null) {
           const priorIdx = reuseIdx > 0 ? reuseIdx - 1 : reuseIdx;
           stagedSwipeOriginal = {
@@ -1662,8 +1678,8 @@ export async function startGeneration(
           stagedSwipeId = reuseIdx;
         } else {
           stagedSwipeOriginal = target;
-          stagedSwipe = chatsSvc.addSwipe(input.userId, target.id, "");
-          stagedSwipeId = stagedSwipe?.swipe_id;
+          stagedSwipe = chatsSvc.addSwipe(input.userId, target.id, "", { select: !backgroundSwipe });
+          stagedSwipeId = stagedSwipe ? stagedSwipe.swipes.length - 1 : undefined;
         }
       }
     }
@@ -1880,17 +1896,17 @@ export async function startGeneration(
         lifecycle.targetMessageId = targetMsg.id;
         excludeMessageId = targetMsg.id;
         rejectedSwipe = targetMsg.content;
-        // Add a blank swipe immediately so the frontend shows cleared content
-        // before council/assembly begins (MESSAGE_SWIPED event fires now).
-        const withBlank = stagedSwipe ?? chatsSvc.addSwipe(input.userId, targetMsg.id, "");
-        lifecycle.targetSwipeIdx = withBlank ? withBlank.swipe_id : 0;
+        // Stage a distinct output slot before council/assembly. Background
+        // requests leave the reader's selected swipe and metrics intact.
+        const withBlank = stagedSwipe ?? chatsSvc.addSwipe(input.userId, targetMsg.id, "", { select: !backgroundSwipe });
+        lifecycle.targetSwipeIdx = stagedSwipeId ?? (withBlank ? withBlank.swipes.length - 1 : 0);
         targetSwipeId = lifecycle.targetSwipeIdx;
         // Clear stale generation metrics from the previous swipe so the pill
         // doesn't display outdated values while the new generation runs.
         // Uses patchMessageExtra to avoid triggering chunk rebuilds / WS events.
         const prevExtra = withBlank?.extra ?? targetMsg.extra;
         if (
-          prevExtra &&
+          !backgroundSwipe && prevExtra &&
           (prevExtra.tokenCount != null ||
             prevExtra.generationMetrics ||
             prevExtra.usage ||
@@ -1957,6 +1973,7 @@ export async function startGeneration(
     // Carry the streaming swipe index into runGeneration so the GENERATION_IN_PROGRESS
     // emit (different scope) can surface it too.
     lifecycle.streamingSwipeId = targetSwipeId;
+    lifecycle.backgroundSwipe = backgroundSwipe;
 
     // Register pool entry for recovery — at this point we have all the metadata
     pool.createPoolEntry({
@@ -1971,6 +1988,7 @@ export async function startGeneration(
       connectionName: connection.name,
       targetMessageId: lifecycle.targetMessageId,
       targetSwipeId,
+      backgroundSwipe,
     });
 
     // Emit GENERATION_STARTED immediately so the frontend can show a chat head
@@ -1985,6 +2003,7 @@ export async function startGeneration(
         model: connection.model,
         targetMessageId: lifecycle.targetMessageId,
         targetSwipeId,
+        backgroundSwipe,
         characterId: targetCharId,
         characterName,
         generationType: lifecycle.generationType,
@@ -3286,6 +3305,7 @@ async function runGeneration(
       model,
       targetMessageId: lifecycle.targetMessageId,
       targetSwipeId: lifecycle.streamingSwipeId,
+      backgroundSwipe: lifecycle.backgroundSwipe,
       characterId: lifecycle.targetCharacterId,
       characterName: lifecycle.characterName,
       contextClipStats: lifecycle.contextClipStats,

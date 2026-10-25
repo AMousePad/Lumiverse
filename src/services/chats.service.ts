@@ -3069,7 +3069,7 @@ function userContentRevisionSql(message: Message, content: string): string {
     : "";
 }
 
-export function addSwipe(userId: string, messageId: string, content: string): Message | null {
+export function addSwipe(userId: string, messageId: string, content: string, options?: { select?: boolean }): Message | null {
   const msg = getMessage(userId, messageId);
   if (!msg) return null;
 
@@ -3077,6 +3077,8 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
   const swipes = [...msg.swipes, content];
   const swipeDates = [...msg.swipe_dates, now];
   const newSwipeId = swipes.length - 1;
+  const selectedSwipeId = options?.select === false ? msg.swipe_id : newSwipeId;
+  const selectedContent = options?.select === false ? msg.content : content;
   const normalizedExtra = normalizeStoredMessageExtra(
     msg.extra,
     swipes.length,
@@ -3084,12 +3086,12 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
   );
 
   getDb()
-    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ?${userContentRevisionSql(msg, content)} WHERE id = ? AND chat_id = ?`)
+    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ?${userContentRevisionSql(msg, selectedContent)} WHERE id = ? AND chat_id = ?`)
     .run(
       JSON.stringify(swipes),
       JSON.stringify(swipeDates),
-      newSwipeId,
-      content,
+      selectedSwipeId,
+      selectedContent,
       JSON.stringify(normalizedExtra),
       messageId,
       msg.chat_id,
@@ -3106,7 +3108,7 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
     },
     userId,
   );
-  if (content !== msg.content) {
+  if (selectedContent !== msg.content) {
     scheduleMemoryRebuildForActiveMessageChange(userId, updated.chat_id, messageId, "swipe add");
   }
   return updated;

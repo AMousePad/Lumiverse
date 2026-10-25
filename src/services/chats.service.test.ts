@@ -9,6 +9,7 @@ import { EventType, type EventMessage } from "../ws/events";
 import {
   addGroupMember,
   addSwipe,
+  updateSwipe,
   deleteSwipe,
   setSwipeScopedExtra,
   applyChatAppearance,
@@ -641,6 +642,27 @@ describe("recent chats", () => {
     const messages = getMessages("u1", branch.id);
     expect(messages).toHaveLength(1);
     expect(messages[0].extra.promptActivation).toBeUndefined();
+  });
+
+  test("background swipe staging and completion preserve the selected content and metadata", () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "still reading", { reasoning: "original reasoning", tokenCount: 12 });
+    const staged = addSwipe("u1", "msg-1", "", { select: false })!;
+    expect(staged).toMatchObject({ swipe_id: 0, content: "still reading", swipes: ["still reading", ""], extra: { reasoning: "original reasoning", tokenCount: 12 } });
+    const completed = updateSwipe("u1", "msg-1", 1, "new response")!;
+    expect(completed).toMatchObject({ swipe_id: 0, content: "still reading", swipes: ["still reading", "new response"] });
+    setSwipeScopedExtra("u1", "msg-1", 1, { reasoning: "new reasoning", tokenCount: 24 });
+    expect(getMessage("u1", "msg-1")!.extra.reasoning).toBe("original reasoning");
+    expect(cycleSwipe("u1", "msg-1", "right")).toMatchObject({ swipe_id: 1, content: "new response", extra: { reasoning: "new reasoning", tokenCount: 24 } });
+  });
+
+  test("cancelling an unselected blank swipe keeps the reader's selection", () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "original", {});
+    addSwipe("u1", "msg-1", "second", { select: false });
+    addSwipe("u1", "msg-1", "", { select: false });
+    cycleSwipe("u1", "msg-1", "right");
+    expect(deleteSwipe("u1", "msg-1", 2, { restoreSwipeId: 0 })).toMatchObject({ swipe_id: 1, content: "second" });
   });
 
   test("keeps reasoning scoped to the swipe it belongs to", () => {

@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import useSwipeAction from '@/hooks/useSwipeAction'
+import useSwipeAction, { executeSwipe } from '@/hooks/useSwipeAction'
 import { useStore } from '@/store'
 import type { Message } from '@/types/api'
 import styles from './SwipeControls.module.css'
@@ -67,7 +67,19 @@ export default function SwipeControls({ message, chatId, variant = 'default' }: 
       <button
         type="button"
         className={clsx(styles.btn, rightDot && styles.btnAccent)}
-        onClick={() => handleSwipe('right')}
+        onClick={(event) => {
+          if (event.ctrlKey || event.metaKey) void executeSwipe(message, chatId, 'right', { background: true })
+          else void handleSwipe('right')
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault()
+            event.stopPropagation()
+            void executeSwipe(message, chatId, 'right', { background: true })
+          }
+        }}
+        title={t('swipe.backgroundHint', { defaultValue: 'Ctrl/Cmd-click or Ctrl/Cmd-Enter: generate a swipe in the background' })}
+        aria-keyshortcuts="Control+Enter Meta+Enter"
         disabled={disableRight}
         aria-label={dotLabel(rightDot, t('swipe.next'))}
       >
