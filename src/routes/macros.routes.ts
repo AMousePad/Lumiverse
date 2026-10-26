@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { applyMessagePresetContext, getMessagePresetContext } from "../services/message-preset-context.service";
 import { evaluate, buildEnv, resolveGroupCharacterNames, registry, initMacros, withPromptBlockContext } from "../macros";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import { isTemporaryChatMetadata } from "../types/chat";
@@ -78,6 +79,9 @@ app.post("/resolve-batch", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json<{
     templates: Record<string, string>;
+    message_id?: string;
+    swipe_index?: number;
+    use_message_preset?: boolean;
     chat_id?: string;
     character_id?: string;
     persona_id?: string;
@@ -107,6 +111,13 @@ app.post("/resolve-batch", async (c) => {
   // Build environment once and reuse for all templates
   const env = await buildEnvFromIds(userId, body);
   seedPromptVariablesForPreview(env, body);
+  if (body.use_message_preset === true) {
+    if (typeof body.chat_id !== "string" || typeof body.message_id !== "string") {
+      return c.json({ error: "chat_id and message_id are required for a message preset" }, 400);
+    }
+    const context = getMessagePresetContext(userId, body.chat_id, body.message_id, body.swipe_index);
+    if (!context || !applyMessagePresetContext(env, userId, context)) return c.json({ error: "Message preset context is no longer available" }, 404);
+  }
   const resolved: Record<string, string> = {};
   const touchedVars: Record<string, string[]> = {};
   const cacheable: Record<string, boolean> = {};

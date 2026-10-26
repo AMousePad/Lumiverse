@@ -10,6 +10,8 @@ import { resolveMacrosBatch } from '@/api/macros'
 import { isDisplayChatOwned, getDisplayResolverForChat } from '@/lib/spindle/display-resolver-registry'
 import type { DisplayMacroContext } from '@/lib/resolveDisplayMacros'
 import type { Message } from '@/types/api'
+import type { MessagePresetContext, RegexScript } from '@/types/regex'
+import { resetMessagePresetScriptsForTests, useMessagePresetScripts } from './useMessagePresetScripts'
 import { canOptimisticallyAppendStreamingText } from '@/lib/display-streaming'
 
 interface ResolvedDisplayRegexTemplates {
@@ -32,6 +34,8 @@ interface DisplayRegexContentCacheEntry {
 }
 
 export interface DisplayPreprocessOpts {
+  swipeIndex?: number
+  presetContext?: MessagePresetContext
   messageId: string
   role: 'user' | 'assistant' | 'system'
   chatId?: string
@@ -53,6 +57,7 @@ interface ResolvedContentState {
 }
 
 interface DisplayPreprocessBody {
+  swipeIndex?: number
   messageId: string
   role: string
   rawContent: string
@@ -85,6 +90,14 @@ interface DisplayPreprocessCacheEntry {
 }
 
 const displayRegexResolutionCache = new Map<string, DisplayRegexCacheEntry>()
+const DISPLAY_REGEX_TEMPLATE_CACHE_MAX = 300
+
+function cacheResolvedTemplates(key: string, entry: DisplayRegexCacheEntry): void {
+  displayRegexResolutionCache.set(key, entry)
+  if (displayRegexResolutionCache.size > DISPLAY_REGEX_TEMPLATE_CACHE_MAX) {
+    displayRegexResolutionCache.delete(displayRegexResolutionCache.keys().next().value!)
+  }
+}
 const displayRegexContentCache = new Map<string, DisplayRegexContentCacheEntry>()
 const displayPreprocessCache = new Map<string, DisplayPreprocessCacheEntry>()
 function getDisplayContentCacheEntry(key: string, processingState: string | undefined) {
@@ -173,7 +186,7 @@ function fnv1a(s: string): string {
 
 async function resolveTemplatesWithResolver(
   templates: Record<string, string>,
-  ctx: { chatId?: string; characterId?: string; personaId?: string },
+  ctx: { chatId?: string; characterId?: string; personaId?: string; messageId?: string; swipeIndex?: number; presetContext?: MessagePresetContext; presetRegexIds?: string[] },
 ): Promise<{ resolved: Record<string, string>; touched_vars?: Record<string, string[]>; cacheable?: Record<string, boolean> }> {
   if (ctx.chatId && isDisplayChatOwned(ctx.chatId)) {
     const resolver = getDisplayResolverForChat(ctx.chatId)
@@ -187,6 +200,7 @@ async function resolveTemplatesWithResolver(
             personaId: ctx.personaId,
             isUser: false,
             depth: 0,
+            ...(ctx.presetContext ? { messageId: ctx.messageId, presetContext: ctx.presetContext, presetRegexIds: ctx.presetRegexIds } : {}),
           },
         })
         if (local) {
@@ -208,6 +222,7 @@ async function resolveTemplatesWithResolver(
     chat_id: ctx.chatId,
     character_id: ctx.characterId,
     persona_id: ctx.personaId,
+    ...(ctx.presetContext ? { message_id: ctx.messageId, swipe_index: ctx.swipeIndex, use_message_preset: true } : {}),
   })
 }
 
@@ -271,7 +286,7 @@ function enqueueDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): 
   })
 }
 
-export function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Promise<DisplayPreprocessOutcome> {
+export function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody, presetContext?: MessagePresetContext): Promise<DisplayPreprocessOutcome> {
   if (isDisplayChatOwned(chatId)) {
     const resolver = getDisplayResolverForChat(chatId)
     if (resolver) {
@@ -284,6 +299,7 @@ export function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBo
             depth: body.depth ?? 0,
             messageId: body.messageId,
             role: body.role,
+            ...(presetContext ? { presetContext } : {}),
             ...(typeof body.messageIndex === 'number' ? { messageIndex: body.messageIndex } : {}),
             ...(body.dynamicMacros ? { dynamicMacros: body.dynamicMacros } : {}),
           },
@@ -335,8 +351,8 @@ function useDisplayPreprocessedState(
   const getSnapshot = useCallback(() => getDisplayRegexCacheSnapshot(messageId), [messageId])
   const cvSnapshot = useSyncExternalStore(subscribeDisplayRegexCache, getSnapshot, getSnapshot)
   const contextKey = useMemo(() => JSON.stringify([
-    chatId, messageId, opts?.role, opts?.depth, opts?.messageIndex, opts?.dynamicMacros,
-  ]), [chatId, messageId, opts?.role, opts?.depth, opts?.messageIndex, opts?.dynamicMacros])
+    chatId, messageId, opts?.swipeIndex, opts?.presetContext, opts?.role, opts?.depth, opts?.messageIndex, opts?.dynamicMacros,
+  ]), [chatId, messageId, opts?.swipeIndex, opts?.presetContext, opts?.role, opts?.depth, opts?.messageIndex, opts?.dynamicMacros])
   const key = chatId && messageId ? `${contextKey}|${content.length}|${fnv1a(content)}` : null
   const version = `${contextKey}|${cvSnapshot}`
   const schedule = useDisplayTask(version, content, isStreaming)
@@ -344,9 +360,9 @@ function useDisplayPreprocessedState(
   const [state, setState] = useState<Snapshot | null>(null)
   const seenState = useRef(state)
   const carry = useRef<Snapshot | null>(null)
-  const lifecycle = useRef({ chatId, messageId, isStreaming, finishing: false })
+  const lifecycle = useRef({ chatId, messageId, isStreaming, finishing: false, presetContext: opts?.presetContext })
   if (
-    lifecycle.current.chatId !== chatId || lifecycle.current.messageId !== messageId
+    lifecycle.current.chatId !== chatId || lifecycle.current.messageId !== messageId || lifecycle.current.presetContext !== opts?.presetContext
     || (!lifecycle.current.isStreaming && isStreaming)
   ) {
     carry.current = null
@@ -354,7 +370,7 @@ function useDisplayPreprocessedState(
   } else if (lifecycle.current.isStreaming && !isStreaming) {
     lifecycle.current.finishing = true
   }
-  Object.assign(lifecycle.current, { chatId, messageId, isStreaming })
+  Object.assign(lifecycle.current, { chatId, messageId, isStreaming, presetContext: opts?.presetContext })
 
   // Only adopt a completion once; an older completed prefix must never rewind
   // a longer suffix already proven to pass through preprocessing unchanged.
@@ -394,10 +410,11 @@ function useDisplayPreprocessedState(
         messageId,
         role: opts.role,
         rawContent: content,
+        ...(typeof opts.swipeIndex === 'number' ? { swipeIndex: opts.swipeIndex } : {}),
         ...(typeof opts.depth === 'number' ? { depth: opts.depth } : {}),
         ...(typeof opts.messageIndex === 'number' ? { messageIndex: opts.messageIndex } : {}),
         ...(opts.dynamicMacros ? { dynamicMacros: opts.dynamicMacros } : {}),
-      }).then((next) => {
+      }, opts.presetContext).then((next) => {
         if (displayPreprocessCache.get(key)?.promise === assigned) {
           if (next.ok && next.cacheable !== false) {
             displayPreprocessCache.set(key, {
@@ -421,7 +438,7 @@ function useDisplayPreprocessedState(
       }
       return assigned
     }, (outcome) => setState({ key, version, raw: content, outcome }))
-  }, [key, version, chatId, messageId, content, opts?.role, opts?.depth, opts?.messageIndex,
+  }, [key, version, chatId, messageId, content, opts?.swipeIndex, opts?.presetContext, opts?.role, opts?.depth, opts?.messageIndex,
     opts?.dynamicMacros, appendSafe, schedule, trackForDisplaySettle])
 
   if (!key) return { value: content, ready: true, settled: true }
@@ -605,13 +622,14 @@ export function seedDisplayContentEntryForTests(entry: {
   evictDisplayRegexContentCacheOverflow()
 }
 
-export function getDisplayContentCacheStatsForTests(): { size: number; keyCharacters: number; hasKey(key: string): boolean } {
+export function getDisplayContentCacheStatsForTests(): { size: number; templateSize: number; keyCharacters: number; hasKey(key: string): boolean } {
   let keyCharacters = 0
   for (const key of displayRegexContentCache.keys()) keyCharacters += key.length
-  return { size: displayRegexContentCache.size, keyCharacters, hasKey: (k) => displayRegexContentCache.has(k) }
+  return { size: displayRegexContentCache.size, templateSize: displayRegexResolutionCache.size, keyCharacters, hasKey: (k) => displayRegexContentCache.has(k) }
 }
 
 export function resetDisplayRegexCachesForTests(): void {
+  resetMessagePresetScriptsForTests()
   displayPreprocessCache.clear()
   displayRegexContentCache.clear()
   displayRegexResolutionCache.clear()
@@ -632,8 +650,8 @@ export function useDisplayRegexState(
   macroCtx?: DisplayMacroContext,
   preprocessOpts?: DisplayPreprocessOpts,
   isStreaming = false,
-): { content: string; pending: boolean } {
-  const regexScripts = useStore((s) => s.regexScripts)
+): { content: string; pending: boolean; scripts: RegexScript[] } {
+  const configuredRegexScripts = useStore((s) => s.regexScripts)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const activeChatId = useStore((s) => s.activeChatId)
@@ -664,17 +682,35 @@ export function useDisplayRegexState(
     return { chat_index: String(messageIndex) }
   }, [messageIndex])
   const macroCharacterId = activeGroupCharacterId ?? activeCharacterId
+  const storedPresetContext = useStore((s) => {
+    const message = preprocessOpts?.messageId ? s.messages[getMessageIndex(s.messages, preprocessOpts.messageId)] : undefined
+    return message?.extra?.spindle_metadata?.preset_contexts?.[preprocessOpts?.swipeIndex ?? message?.swipe_id ?? 0] as MessagePresetContext | undefined
+  })
+  const storedSwipeIndex = useStore((s) => preprocessOpts?.messageId
+    ? s.messages[getMessageIndex(s.messages, preprocessOpts.messageId)]?.swipe_id : undefined)
+  const presetSwipeIndex = preprocessOpts?.swipeIndex ?? storedSwipeIndex
+  const presetContextKey = JSON.stringify(preprocessOpts?.presetContext ?? storedPresetContext ?? null)
+  const presetContext = useMemo<MessagePresetContext | undefined>(() => {
+    const value = JSON.parse(presetContextKey)
+    return typeof value?.preset_id === 'string' && value.preset_id ? value : undefined
+  }, [presetContextKey])
+  const presetScripts = useMessagePresetScripts(presetContext?.preset_id, scopedChatId, macroCharacterId, configuredRegexScripts)
+  const regexScripts = presetScripts.scripts ?? configuredRegexScripts
+  const presetRegexIds = useMemo(() => presetContext
+    ? regexScripts.filter(s => s.preset_id === presetContext.preset_id && !s.owner_extension_identifier).map(s => s.id) : undefined,
+  [presetContext, regexScripts])
 
   const displayPreprocessOpts = useMemo(
     () => preprocessOpts
       ? {
           ...preprocessOpts,
+          ...(presetContext ? { presetContext, swipeIndex: presetSwipeIndex } : {}),
           depth,
           ...(messageIndex >= 0 ? { messageIndex } : {}),
           ...(dynamicMacros ? { dynamicMacros } : {}),
         }
       : undefined,
-    [preprocessOpts, depth, messageIndex, dynamicMacros],
+    [preprocessOpts, presetContext, presetSwipeIndex, depth, messageIndex, dynamicMacros],
   )
   const displayOwned = !!scopedChatId && isDisplayChatOwned(scopedChatId)
   const displayScripts = useMemo(
@@ -702,10 +738,10 @@ export function useDisplayRegexState(
     scopedChatId,
     displayPreprocessOpts,
     isStreaming,
-    isStreaming && !displayOwned,
+    (isStreaming || !!presetContext) && !displayOwned,
   )
   // When an extension owns display, regex runs on preprocessed content only.
-  const regexGated = displayOwned && !preprocessReady
+  const regexGated = (displayOwned || !!presetContext) && !preprocessReady || !presetScripts.ready
   const needsPreviousContent = useMemo(
     () => displayScripts.some(
       (script) =>
@@ -762,9 +798,10 @@ export function useDisplayRegexState(
       scopedChatId,
       macroCharacterId,
       activePersonaId,
+      ...(presetContext ? { presetContextKey, presetSwipeIndex, messageId: preprocessOpts?.messageId } : {}),
       scripts: getRegexScriptCacheKey(scriptsNeedingResolution),
     })
-  }, [scriptsNeedingResolution, scopedChatId, macroCharacterId, activePersonaId])
+  }, [scriptsNeedingResolution, scopedChatId, macroCharacterId, activePersonaId, presetContext, presetContextKey, presetSwipeIndex, preprocessOpts?.messageId])
 
   const cachedTemplates = templateCacheKey ? displayRegexResolutionCache.get(templateCacheKey)?.value : undefined
   const [resolvedTemplatesState, setResolvedTemplatesState] = useState<ResolvedTemplatesState | null>(() => (
@@ -823,6 +860,7 @@ export function useDisplayRegexState(
         chatId: scopedChatId ?? undefined,
         characterId: macroCharacterId ?? undefined,
         personaId: activePersonaId ?? undefined,
+        ...(presetContext ? { messageId: preprocessOpts?.messageId, swipeIndex: presetSwipeIndex, presetContext, presetRegexIds } : {}),
       })
         .then((res) => {
           const next = createEmptyResolvedTemplates()
@@ -839,7 +877,7 @@ export function useDisplayRegexState(
           }
           if (res.cacheable && Object.values(res.cacheable).some((c) => c === false)) agg = null
           if (displayRegexResolutionCache.get(templateCacheKey)?.promise === assignedPromise) {
-            displayRegexResolutionCache.set(templateCacheKey, agg ? { value: next, touchedVars: agg } : { value: next })
+            cacheResolvedTemplates(templateCacheKey, agg ? { value: next, touchedVars: agg } : { value: next })
           }
           return next
         })
@@ -850,13 +888,14 @@ export function useDisplayRegexState(
           return createEmptyResolvedTemplates()
         })
       assignedPromise = trackInitialDisplayResolve(promise, scopedChatId)
-      displayRegexResolutionCache.set(templateCacheKey, { promise: assignedPromise })
+      cacheResolvedTemplates(templateCacheKey, { promise: assignedPromise })
     }
 
     displayRegexResolutionCache.get(templateCacheKey)?.promise?.then(applyResolvedTemplates)
 
     return () => { cancelled = true }
-  }, [scriptsNeedingResolution, templateCacheKey, scopedChatId, macroCharacterId, activePersonaId, cvSnapshot])
+  }, [scriptsNeedingResolution, templateCacheKey, scopedChatId, macroCharacterId, activePersonaId, cvSnapshot,
+    preprocessOpts?.messageId, presetContext, presetRegexIds, presetSwipeIndex])
 
   const skipEmptyFinalization = displayScripts.length === 0
     && getDisplayResolverForChat(scopedChatId ?? '')?.finalizeWithoutScripts !== true
@@ -880,10 +919,11 @@ export function useDisplayRegexState(
     scopedChatId, messageId: preprocessOpts?.messageId, role: preprocessOpts?.role,
     macroCharacterId, activePersonaId, isUser, depth, macroCtx, messageIndex,
     resolvedTemplateKey, dynamicMacros, previousContent, displayOwned,
+    ...(presetContext ? { presetContextKey, presetSwipeIndex } : {}),
     scripts: getRegexScriptCacheKey(displayScripts),
   }), [scopedChatId, preprocessOpts?.messageId, preprocessOpts?.role, macroCharacterId,
     activePersonaId, isUser, depth, macroCtx, messageIndex, resolvedTemplateKey,
-    dynamicMacros, previousContent, displayOwned, displayScripts])
+    dynamicMacros, previousContent, displayOwned, displayScripts, presetContext, presetContextKey, presetSwipeIndex])
   const version = useMemo(() => ({ contextKey, cvSnapshot, processingState }), [contextKey, cvSnapshot, processingState])
   const contentCacheKey = skipEmptyFinalization || passthrough || regexGated || normalizedContent !== undefined
     ? null : JSON.stringify([contextKey, content])
@@ -905,6 +945,7 @@ export function useDisplayRegexState(
         resolvedFindPatterns: resolvedTemplates.resolvedFindPatterns,
         resolvedReplacements: resolvedTemplates.resolvedReplacements,
         dynamicMacros,
+        ...(presetContext ? { presetContext, presetRegexIds, swipeIndex: presetSwipeIndex } : {}),
         ...(preprocessOpts?.messageId ? { messageId: preprocessOpts.messageId } : {}),
         ...(messageIndex >= 0 ? { messageIndex } : {}),
         ...(previousContent !== undefined ? { previousContent } : {}),
@@ -934,11 +975,16 @@ export function useDisplayRegexState(
   }, [contentCacheKey, version, content, processingState, displayScripts, isUser, depth, macroCtx,
     scopedChatId, macroCharacterId, activePersonaId, resolvedTemplates, dynamicMacros,
     preprocessOpts?.messageId, preprocessOpts?.role, messageIndex, previousContent,
-    schedule, trackContentForDisplaySettle])
+    schedule, trackContentForDisplaySettle, presetContext, presetRegexIds, presetSwipeIndex])
 
   const messageId = preprocessOpts?.messageId ?? null
   const carry = useRef<ResolvedContentState | null>(null)
   const settledDisplay = useRef<{ rawContent: string; value: string } | null>(null)
+  const presetIdentity = presetContext ? `${presetContextKey}|${presetSwipeIndex ?? ''}` : ''
+  const previousPresetIdentity = useRef(presetIdentity)
+  if (previousPresetIdentity.current !== presetIdentity) {
+    previousPresetIdentity.current = presetIdentity; carry.current = null; settledDisplay.current = null
+  }
   const seenState = useRef(resolvedContentState)
   const lifecycle = useRef({ chatId: scopedChatId, messageId, isStreaming, finishing: false })
   if (
@@ -962,7 +1008,7 @@ export function useDisplayRegexState(
   const live = normalizedContent ?? (passthrough || (skipEmptyFinalization && preprocessSettled) ? content : cachedResolvedContent)
     ?? (resolvedContentState?.key === contentCacheKey && resolvedContentState.version === version
       ? resolvedContentState.value : undefined)
-  const pending = !preprocessSettled || (
+  const pending = !presetScripts.ready || !preprocessSettled || (
     templateCacheKey !== null && !cachedTemplates && resolvedTemplatesState?.key !== templateCacheKey
   )
   const resolutionPending = pending || (contentCacheKey !== null && live === undefined)
@@ -971,20 +1017,21 @@ export function useDisplayRegexState(
   // preprocessed text and the final HTML, so the streaming carry cannot cover
   // this gap. Retain a completed display of the same source through ALL stages
   // of the refresh; cold mounts still reserve their height and stay hidden.
-  if (!isStreaming && resolutionPending && settledDisplay.current?.rawContent === rawContent) {
-    return { content: settledDisplay.current.value, pending: false }
+  if (!isStreaming && resolutionPending && settledDisplay.current && (settledDisplay.current.rawContent === rawContent
+    || (!!presetContext && rawContent.startsWith(settledDisplay.current.rawContent)))) {
+    return { content: settledDisplay.current.value, pending: false, scripts: regexScripts }
   }
   if (live !== undefined) {
-    carry.current = { key: contentCacheKey ?? '', version, content, value: live }
+    if (!presetContext || !resolutionPending) carry.current = { key: contentCacheKey ?? '', version, content, value: live }
     if (!resolutionPending) settledDisplay.current = { rawContent, value: live }
     // Finalization may still need a second pass after preprocessing settles.
     if (!isStreaming && preprocessSettled) lifecycle.current.finishing = false
-    return { content: live, pending }
+    return { content: live, pending, scripts: regexScripts }
   }
   if (carry.current && (
     isStreaming || lifecycle.current.finishing
     || carry.current.content === content || RAW_MACRO_RE.test(content)
-  )) return { content: carry.current.value, pending: false }
+  )) return { content: carry.current.value, pending: false, scripts: regexScripts }
   if (!resolutionPending) settledDisplay.current = { rawContent, value: content }
-  return { content, pending: pending || contentCacheKey !== null }
+  return { content, pending: pending || contentCacheKey !== null, scripts: regexScripts }
 }

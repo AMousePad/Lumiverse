@@ -44,6 +44,8 @@ export function MessagePreview({ chatId, messageId, swipeIndex, start = 0, end }
       content={source.slice(start, end)}
       chatId={chatId}
       messageId={messageId}
+      swipeIndex={selectedSwipe}
+      presetContext={message.extra?.spindle_metadata?.preset_contexts?.[selectedSwipe]}
       isUser={message.is_user}
       userName={(message.is_user ? message.name : messages.slice(0, index).reverse().find((candidate) => candidate.is_user)?.name) || personaName}
       depth={messages.length - index - 1}

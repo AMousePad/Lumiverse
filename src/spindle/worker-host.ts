@@ -1321,6 +1321,7 @@ export class WorkerHost {
         lumiverseVersion: await getBackendVersion(),
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
+          "message-preset-context-v1": 1,
           "frontend-runtime-capabilities-v1": 1,
           "frontend-session-origin-v1": 1,
           "frontend-session-routing-v1": 1,
@@ -4738,6 +4739,7 @@ export class WorkerHost {
         connection_id: input.connectionId,
         persona_id: input.personaId,
         preset_id: input.presetId,
+        ...(input.forcePresetId === true ? { force_preset_id: true } : {}),
         generation_type: input.generationType,
         parameters: input.parameters,
       });
@@ -4748,7 +4750,7 @@ export class WorkerHost {
         name: m.name,
       }));
 
-      const result: DryRunResultDTO = {
+      const result: DryRunResultDTO & { variable_state?: import("../types/preset-context").MacroVariableSnapshot } = {
         messages: messagesDTO,
         breakdown: (dryRunResult.breakdown || []).map((b) => ({
           type: b.type,
@@ -4765,6 +4767,7 @@ export class WorkerHost {
           extensionName: b.extensionName,
         })),
         parameters: dryRunResult.parameters,
+        ...(dryRunResult.variable_state ? { variable_state: dryRunResult.variable_state } : {}),
         model: dryRunResult.model,
         provider: dryRunResult.provider,
         tokenCount: dryRunResult.tokenCount,

@@ -446,6 +446,7 @@ const result = await spindle.generate.dryRun({
 | `connectionId` | `string` | Optional. Use a specific connection profile. |
 | `personaId` | `string` | Optional. Use a specific persona. |
 | `presetId` | `string` | Optional. Use a specific preset. |
+| `forcePresetId` | `boolean` | Optional, default false. Use `presetId` instead of chat bindings and return `variable_state`. Requires host capability `message-preset-context-v1: 1`. |
 | `generationType` | `string` | Optional. One of `"normal"`, `"continue"`, `"regenerate"`, `"swipe"`, `"impersonate"`. |
 | `parameters` | `Record<string, unknown>` | Optional. Override sampler parameters. |
 
@@ -462,6 +463,7 @@ const result = await spindle.generate.dryRun({
 | `messages` | `LlmMessageDTO[]` | The fully assembled message array that would be sent to the LLM. |
 | `breakdown` | `AssemblyBreakdownEntryDTO[]` | Ordered list of prompt blocks showing how the prompt was built. |
 | `parameters` | `Record<string, unknown>` | Final merged sampler parameters. |
+| `variable_state` | `MacroVariableSnapshotDTO` | Optional. Captured local, global, chat, and prompt-variable values when `forcePresetId: true` is used. Omitted for ordinary dry runs. Can be saved in a swipe's `preset_contexts` entry for subsequent rendering. |
 | `model` | `string` | The model that would be used. |
 | `provider` | `string` | The provider that would be used. |
 | `tokenCount` | `DryRunTokenCountDTO` | Optional. Per-block token counts (if a tokenizer is available). |

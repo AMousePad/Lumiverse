@@ -1438,6 +1438,7 @@ async function doLoadFrontendExtension(
       descriptorVersion: 1 as const,
       lumiverseVersion: LUMIVERSE_VERSION,
       capabilities: Object.freeze({ ...SPINDLE_HOST_CAPABILITIES, ...THEME_AUTHORING_HOST_CAPABILITIES, ...SPINDLE_STT_HOST_CAPABILITIES, ...SPINDLE_SYSTEM_AUDIO_HOST_CAPABILITIES,
+        "message-preset-context-v1": 1,
         ...SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES,
         ...CLIENT_HOST_CAPABILITIES,
         ...SPINDLE_TTS_HOST_CAPABILITIES,

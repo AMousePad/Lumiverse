@@ -406,6 +406,7 @@ export interface SummarizeGenerateInput {
 }
 
 export interface DryRunResult {
+  variable_state?: import("../types/preset-context").MacroVariableSnapshot;
   messages: DryRunDisplayMessage[];
   breakdown: AssemblyBreakdownEntry[];
   parameters: Record<string, any>;
@@ -3173,6 +3174,13 @@ export async function dryRunGeneration(
     breakdown: omitChatHistoryBreakdownEntries(pipeline.breakdown || []),
     parameters: outboundParams,
     assistantPrefill: pipeline.assistantPrefill,
+    ...(input.force_preset_id ? { variable_state: {
+      local: Object.fromEntries(pipeline.macroEnv?.variables.local ?? []),
+      global: Object.fromEntries(pipeline.macroEnv?.variables.global ?? []),
+      chat: Object.fromEntries(pipeline.macroEnv?.variables.chat ?? []),
+      prompt_selections: pipeline.macroEnv?.extra.promptVariableSelections as Record<string, string[]> | undefined,
+      prompt_defaults: Object.fromEntries(Object.entries(pipeline.macroEnv?.extra.promptVariableDefaults ?? {}).map(([key, value]) => [key, String(value)])),
+    } } : {}),
     model: connection.model,
     provider: provider.name,
     tokenCount: omitChatHistoryTokenBreakdown(tokenCount),

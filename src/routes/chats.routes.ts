@@ -20,13 +20,15 @@ import {
   getActivatedWorldInfoEntriesForChat,
   resolveWorldInfoOutlets,
 } from "../services/prompt-assembly.service";
-import { resolveRegexActionEffects } from "../services/associative-regex-effects.service";
+import { resolveRegexActionEffects, getMessageDisplayScripts } from "../services/associative-regex-effects.service";
 import {
   personaHasAddon,
   withChatPersonaAddonState,
 } from "../services/persona-addon-states";
 import type { RegexActionEffect } from "../types/regex-script";
 import { dispatchEditAndSendRequest } from "../services/edit-and-send-dispatcher.service";
+import { readMessagePresetContext } from "../types/preset-context";
+import { applyMessagePresetContext, getMessagePresetContext } from "../services/message-preset-context.service";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -99,6 +101,7 @@ interface DisplayPreprocessItem {
   messageIndex?: number;
   role?: string;
   rawContent: string;
+  swipeIndex?: number;
 }
 
 function parseDisplayPreprocessItem(input: unknown): DisplayPreprocessItem | null {
@@ -108,11 +111,13 @@ function parseDisplayPreprocessItem(input: unknown): DisplayPreprocessItem | nul
     messageIndex?: unknown;
     role?: unknown;
     rawContent?: unknown;
+    swipeIndex?: unknown;
   };
   if (typeof body.rawContent !== "string") return null;
 
   return {
     rawContent: body.rawContent,
+    ...(Number.isInteger(body.swipeIndex) ? { swipeIndex: body.swipeIndex as number } : {}),
     ...(typeof body.messageId === "string" ? { messageId: body.messageId } : {}),
     ...(typeof body.messageIndex === "number" ? { messageIndex: body.messageIndex } : {}),
     ...(typeof body.role === "string" ? { role: body.role } : {}),
@@ -143,10 +148,12 @@ async function runDisplayPreprocessItem(
 
   let content = processed.content ?? item.rawContent;
   const savedMessage = item.messageId ? svc.getMessage(userId, item.messageId) : null;
+  const presetContext = savedMessage?.chat_id === chatId
+    ? readMessagePresetContext(savedMessage.extra, item.swipeIndex ?? savedMessage.swipe_id) : null;
   if (savedMessage?.chat_id === chatId) content = shieldMessageLiterals(content, savedMessage);
   if (contentHasMacroHints(content)) {
     const env = svc.buildMacroEnvForChat(userId, chatId);
-    if (env) {
+    if (env && (!presetContext || applyMessagePresetContext(env, userId, presetContext))) {
       // {{outlet::name}} is only populated during prompt assembly; mirror it
       // here so displayed messages match what the model actually receives.
       if (OUTLET_MACRO_RE.test(content)) {
@@ -919,7 +926,10 @@ app.post("/:chatId/messages/regex-actions/claim", async (c) => {
     }
     const script = await regexScriptsSvc.getRegexScriptAsync(userId, scriptId);
     const action = script?.actions.find((candidate) => candidate.id === actionId);
-    if (!script || script.disabled || !script.target.includes("display") || !action) {
+    const presetContext = getMessagePresetContext(userId, chatId, messageId);
+    if (!script || !action || (presetContext
+      ? !getMessageDisplayScripts(userId, chatId, messageId).some(s => s.id === scriptId)
+      : script.disabled || !script.target.includes("display"))) {
       return c.json({ error: "regex action is no longer available" }, 404);
     }
     if (!action.multi_select && action.type !== "send") {
@@ -974,7 +984,10 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
 
   const script = await regexScriptsSvc.getRegexScriptAsync(userId, scriptId);
   const action = script?.actions.find((candidate) => candidate.id === actionId);
-  if (!script || script.disabled || !script.target.includes("display") || !action) {
+  const presetContext = getMessagePresetContext(userId, chatId, messageId);
+  if (!script || !action || (presetContext
+    ? !getMessageDisplayScripts(userId, chatId, messageId).some(s => s.id === scriptId)
+    : script.disabled || !script.target.includes("display"))) {
     return c.json({ error: "regex action is no longer available" }, 404);
   }
   if (action.multi_select) {

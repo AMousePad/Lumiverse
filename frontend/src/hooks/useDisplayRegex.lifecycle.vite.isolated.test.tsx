@@ -3,6 +3,8 @@
 import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import type { Root } from 'react-dom/client'
+import type { Message } from '@/types/api'
+import type { RegexScript } from '@/types/regex'
 
 interface PipelineOutcome {
   result: string
@@ -69,7 +71,7 @@ const storeState = {
   activeGroupCharacterId: null,
   activeChatId: 'resolver-lifecycle-default-chat',
   activePersonaId: null,
-  messages: [],
+  messages: [] as Message[],
 }
 
 mock.module('@/store', () => ({
@@ -94,6 +96,10 @@ const heldPreprocess = new Set<string>()
 const pendingPreprocess = new Map<string, (value: { content: string; cacheable: boolean; processingState?: string }) => void>()
 let finalizeWithoutScripts: boolean | undefined = true
 const isDisplayChatOwnedMock = mock(() => true)
+const ownedTemplateResolver = mock(async ({ templates, context }: { templates: Record<string, string>; context: { messageId?: string } }) => ({
+  resolved: Object.fromEntries(Object.entries(templates).map(([key, value]) => [key,
+    value === '{{getvar::template_marker}}' ? context.messageId ?? 'missing' : value])),
+}))
 const heldRemotePreprocess = new Set<string>()
 const pendingRemotePreprocess = new Map<string, (response: Response) => void>()
 const nativeFetch = globalThis.fetch
@@ -131,11 +137,12 @@ mock.module('@/lib/spindle/display-resolver-registry', () => ({
           })
         : Promise.resolve({ content, cacheable: true })
     ),
-    resolveTemplates: async ({ templates }: { templates: Record<string, string> }) => ({ resolved: templates }),
+    resolveTemplates: ownedTemplateResolver,
   }),
 }))
-mock.module('@/api/regex', () => ({ regexApi: { reportPerformance: async () => undefined } }))
-mock.module('@/lib/toast', () => ({ toast: { warning: () => undefined } }))
+const getPresetScripts = mock(async () => [{ ...storeState.regexScripts[0], id: 'source-only', preset_id: 'source-preset' }])
+mock.module('@/api/regex', () => ({ regexApi: { getActive: getPresetScripts, reportPerformance: async () => undefined } }))
+mock.module('@/lib/toast', () => ({ toast: { warning: () => undefined, error: () => undefined } }))
 mock.module('@/i18n', () => ({ default: { t: (key: string) => key } }))
 
 const {
@@ -234,6 +241,7 @@ async function destroyHarness(host: HTMLDivElement, root: Root): Promise<void> {
 }
 
 afterEach(() => {
+  storeState.messages = []
   pendingResults.clear()
   heldPreprocess.clear()
   pendingPreprocess.clear()
@@ -242,6 +250,7 @@ afterEach(() => {
   isDisplayChatOwnedMock.mockImplementation(() => true)
   fetchMock.mockClear()
   applyDisplayRegexTiered.mockClear()
+  getPresetScripts.mockClear()
   trackInitialDisplayResolve.mockClear()
   document.body.replaceChildren()
   resetDisplayRegexCachesForTests()
@@ -253,6 +262,54 @@ afterAll(() => {
 })
 
 describe('useDisplayRegex resolver lifecycle', () => {
+  test('source template caches keep identical preset variables separate across messages', async () => {
+    getPresetScripts.mockImplementationOnce(async () => [{ ...storeState.regexScripts[0], id: 'source-only', preset_id: 'source-preset',
+      replace_string: '{{getvar::template_marker}}', substitute_macros: 'escaped' }])
+    storeState.messages = ['first', 'second'].map(id => ({ id, chat_id: 'source-chat', index_in_chat: 0, is_user: false, name: 'Cat', content: `chunk ${id}`,
+      send_date: 0, swipe_id: 0, swipes: [`chunk ${id}`], swipe_dates: [0], parent_message_id: null, branch_id: null, created_at: 0,
+      extra: { spindle_metadata: { preset_contexts: [{ preset_id: 'source-preset', variables: { local: { same: 'value' } } }] } } }))
+    const { host, root } = await createHarness()
+    try {
+      for (const id of ['first', 'second']) {
+        await render(root, { content: `chunk ${id}`, identity: { chatId: 'source-chat', messageId: id }, isStreaming: false })
+        await waitForPending(`chunk ${id}`)
+        const context = applyDisplayRegexTiered.mock.calls.at(-1)?.[2] as { resolvedReplacements: Map<string, string> }
+        expect(context.resolvedReplacements.get('source-only')).toBe(id)
+        await settle(`chunk ${id}`, id)
+      }
+      expect(getPresetScripts).toHaveBeenCalledTimes(1)
+    } finally { await destroyHarness(host, root) }
+  })
+
+  test('a swipe reuses its preset definitions and runs the existing worker pipeline without the active preset', async () => {
+    isDisplayChatOwnedMock.mockImplementation(() => false)
+    const raw = 'chunk scoped source'
+    heldRemotePreprocess.add(raw)
+    storeState.messages = [{ id: 'source-message', chat_id: 'source-chat', index_in_chat: 0, is_user: false, name: 'Cat', content: raw,
+      send_date: 0, swipe_id: 0, swipes: [raw], swipe_dates: [0], parent_message_id: null, branch_id: null, created_at: 0,
+      extra: { spindle_metadata: { preset_contexts: [{ preset_id: 'source-preset' }] } } }]
+    const { host, root } = await createHarness()
+    try {
+      await act(async () => { root.render(createElement(Harness, { content: raw, identity: { chatId: 'source-chat', messageId: 'source-message' }, isStreaming: false })) })
+      for (let i = 0; i < 20 && !pendingRemotePreprocess.has(raw); i++) await flushReact()
+      await act(async () => {
+        pendingRemotePreprocess.get(raw)!(Response.json({ items: [{ content: raw, incrementalRawAppendSafe: true }] }))
+      })
+      await waitForPending(raw)
+      expect(applyDisplayRegexTiered.mock.calls).toHaveLength(1)
+      expect((applyDisplayRegexTiered.mock.calls[0][1] as Array<{ id: string }>).map(s => s.id)).toEqual(['source-only'])
+      await settle(raw, 'A:final')
+      expect(readRendered(host)).toBe('A:final')
+      expect(host.querySelector('output')?.getAttribute('data-pending')).toBe('false')
+      const next = `${raw} next`
+      await render(root, { content: next, identity: { chatId: 'source-chat', messageId: 'source-message' }, isStreaming: false })
+      expect(readRendered(host)).toBe('A:final')
+      await settle(next, 'A:next')
+      expect(readRendered(host)).toBe('A:next')
+      expect(getPresetScripts).toHaveBeenCalledTimes(1)
+    } finally { await destroyHarness(host, root) }
+  })
+
   test('large preset definitions are shared across cached answer frames', async () => {
     isDisplayChatOwnedMock.mockImplementation(() => false)
     const originalScripts = storeState.regexScripts
@@ -1083,4 +1140,107 @@ describe('useDisplayRegex resolver lifecycle', () => {
       }
     }
   })
+})
+test('cold preset definitions keep raw content provisional', async () => {
+  isDisplayChatOwnedMock.mockImplementation(() => false)
+  let releaseScripts!: (value: Awaited<ReturnType<typeof getPresetScripts>>) => void
+  getPresetScripts.mockImplementationOnce(() => new Promise(resolve => { releaseScripts = resolve }))
+  const raw = 'chunk source not yet loaded'
+  storeState.messages = [{ id: 'source-message', chat_id: 'source-chat', index_in_chat: 0, is_user: false, name: 'Assistant', content: raw,
+    send_date: 0, swipe_id: 0, swipes: [raw], swipe_dates: [0], parent_message_id: null, branch_id: null, created_at: 0,
+    extra: { spindle_metadata: { preset_contexts: [{ preset_id: 'source-preset' }] } } }]
+  const { host, root } = await createHarness()
+  try {
+    await act(async () => { root.render(createElement(Harness, { content: raw, identity: { chatId: 'source-chat', messageId: 'source-message' }, isStreaming: false })) })
+    for (let i = 0; i < 8; i++) await flushReact()
+    expect(applyDisplayRegexTiered).not.toHaveBeenCalled()
+    expect(host.querySelector('output')?.getAttribute('data-pending')).toBe('true')
+    await act(async () => { releaseScripts([{ ...storeState.regexScripts[0], id: 'source-only', preset_id: 'source-preset' }]) })
+    await waitForPending(raw)
+    expect(host.querySelector('output')?.getAttribute('data-pending')).toBe('true')
+    await settle(raw, 'Completed source rendering')
+    expect(readRendered(host)).toBe('Completed source rendering')
+    expect(host.querySelector('output')?.getAttribute('data-pending')).toBe('false')
+  } finally {
+    await act(async () => { releaseScripts([{ ...storeState.regexScripts[0], id: 'source-only', preset_id: 'source-preset' }]) })
+    await destroyHarness(host, root)
+  }
+})
+
+function sourceMessage(presetId = 'source-preset'): Message {
+  return { id: 'source-message', chat_id: 'source-chat', index_in_chat: 0, is_user: false, name: 'Assistant', content: 'chunk source',
+    send_date: 0, swipe_id: 0, swipes: ['chunk source'], swipe_dates: [0], parent_message_id: null, branch_id: null, created_at: 0,
+    extra: { spindle_metadata: { preset_contexts: [{ preset_id: presetId }] } } }
+}
+
+test('failed preset definition loads release the row and retry after remount', async () => {
+  isDisplayChatOwnedMock.mockImplementation(() => false)
+  getPresetScripts.mockImplementationOnce(async () => { throw new Error('Temporary outage') })
+  storeState.messages = [sourceMessage()]
+  let harness = await createHarness()
+  const props = { content: 'chunk source', identity: { chatId: 'source-chat', messageId: 'source-message' }, isStreaming: false }
+  try {
+    await act(async () => { harness.root.render(createElement(Harness, props)) })
+    for (let i = 0; i < 8; i++) await flushReact()
+    expect(harness.host.querySelector('output')?.getAttribute('data-pending')).toBe('false')
+    expect(readRendered(harness.host)).toBe('chunk source')
+    expect(getPresetScripts).toHaveBeenCalledTimes(1)
+    await act(async () => harness.root.unmount())
+    harness.host.remove()
+    harness = await createHarness()
+    await render(harness.root, props)
+    await settle(props.content, 'Recovered rendering')
+    expect(readRendered(harness.host)).toBe('Recovered rendering')
+    expect(getPresetScripts).toHaveBeenCalledTimes(2)
+  } finally { await destroyHarness(harness.host, harness.root) }
+})
+
+test('a late preset fetch cannot replace the newly selected source', async () => {
+  isDisplayChatOwnedMock.mockImplementation(() => false)
+  let releaseScripts!: (value: Awaited<ReturnType<typeof getPresetScripts>>) => void
+  getPresetScripts.mockImplementationOnce(() => new Promise(resolve => { releaseScripts = resolve }))
+  getPresetScripts.mockImplementationOnce(async () => [{ ...storeState.regexScripts[0], id: 'second-rule', preset_id: 'second' }])
+  storeState.messages = [sourceMessage('first')]
+  const { host, root } = await createHarness()
+  const props = { content: 'chunk source', identity: { chatId: 'source-chat', messageId: 'source-message' }, isStreaming: false }
+  try {
+    await act(async () => { root.render(createElement(Harness, props)) })
+    storeState.messages = [sourceMessage('second')]
+    await render(root, props)
+    expect((applyDisplayRegexTiered.mock.calls.at(-1)?.[1] as RegexScript[]).map(script => script.id)).toEqual(['second-rule'])
+    await settle(props.content, 'Second source')
+    await act(async () => { releaseScripts([{ ...storeState.regexScripts[0], id: 'first-rule', preset_id: 'first' }]) })
+    await flushReact()
+    expect(readRendered(host)).toBe('Second source')
+    expect(applyDisplayRegexTiered).toHaveBeenCalledTimes(1)
+  } finally { await destroyHarness(host, root) }
+})
+
+test('unmarked messages never request preset definitions', async () => {
+  const { host, root } = await createHarness()
+  try {
+    await render(root, { content: 'chunk vanilla', isStreaming: false })
+    await settle('chunk vanilla', 'Vanilla output')
+    expect(getPresetScripts).not.toHaveBeenCalled()
+    expect(readRendered(host)).toBe('Vanilla output')
+  } finally { await destroyHarness(host, root) }
+})
+
+test('long source histories bound template caches and resolve evicted messages again', async () => {
+  getPresetScripts.mockImplementationOnce(async () => [{ ...storeState.regexScripts[0], id: 'source-only', preset_id: 'source-preset',
+    replace_string: '{{getvar::template_marker}}', substitute_macros: 'escaped' }])
+  const { host, root } = await createHarness()
+  try {
+    for (const index of [...Array.from({ length: 320 }, (_, i) => i), 0]) {
+      const message = { ...sourceMessage(), id: `history-${index}` }
+      storeState.messages = [message]
+      await render(root, { content: message.content, identity: { chatId: 'source-chat', messageId: message.id }, isStreaming: false })
+      const context = applyDisplayRegexTiered.mock.calls.at(-1)?.[2] as { resolvedReplacements: Map<string, string> }
+      expect(context.resolvedReplacements.get('source-only')).toBe(message.id)
+      await settle(message.content, message.id)
+      expect(readRendered(host)).toBe(message.id)
+      expect(getDisplayContentCacheStatsForTests().templateSize).toBeLessThanOrEqual(300)
+    }
+    expect(getPresetScripts).toHaveBeenCalledTimes(1)
+  } finally { await destroyHarness(host, root) }
 })
