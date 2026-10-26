@@ -144,6 +144,7 @@ const BASELINE_MIGRATIONS: readonly string[] = [
   "130_android_push_destinations.sql",
   "131_ios_notification_delivery.sql",
   "132_ios_widgets.sql",
+  "133_android_notification_relay.sql",
 ];
 
 const BASELINE_SET = new Set(BASELINE_MIGRATIONS);
