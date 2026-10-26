@@ -54,6 +54,21 @@ describe.skipIf(!baseUrl)("Memory Cortex native Decision simulation", () => {
       expect(result.verdicts.every((v) => v.action === "defer")).toBe(true);
     }
   });
+  test("recovers the reported 16K questions overflow over native HTTP", async () => {
+    const result = await arbitrateCortexCandidates({ userId, config, input: input("SIMULATE_CONTEXT_LIMIT") });
+    expect(result.verdicts.map((verdict) => verdict.action)).toEqual(["keep", "reject"]);
+    expect(result.models).toEqual(["fixture-model"]);
+  });
+  test("reviews every candidate across batches on a 16K endpoint", async () => {
+    const candidates = Array.from({ length: 35 }, (_, i) => ({ id: `e${i}`, kind: "entity" as const,
+      name: `Character${i}`, evidence: [`Character${i} is explicitly named in the passage.`] }));
+    const result = await arbitrateCortexCandidates({ userId, config, input: {
+      passage: `SIMULATE_16K_REVIEW ${candidates.map((candidate) => candidate.name).join(" met ")}.`,
+      candidates, canonicals: [],
+    } });
+    expect(result.verdicts.map((verdict) => verdict.id)).toEqual(candidates.map((candidate) => candidate.id));
+    expect(result.verdicts.every((verdict) => verdict.action === "keep")).toBe(true);
+  });
   test("rejects partial answers, JSON/HTML errors, timeout and inaccessible profiles", async () => {
     for (const directive of ["SIMULATE_PARTIAL", "SIMULATE_JSON_ERROR", "SIMULATE_HTML_ERROR", "SIMULATE_TIMEOUT"]) {
       await expect(arbitrateCortexCandidates({ userId, config, input: input(directive) })).rejects.toThrow();
@@ -61,7 +76,11 @@ describe.skipIf(!baseUrl)("Memory Cortex native Decision simulation", () => {
     await expect(arbitrateCortexCandidates({ userId: "another-user", config, input: input() })).rejects.toThrow("not found");
   });
   test("caller cancellation aborts native evaluation", async () => {
-    await expect(arbitrateCortexCandidates({ userId, config, input: input("SIMULATE_TIMEOUT"), signal: AbortSignal.timeout(10) })).rejects.toThrow("cancelled");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("Simulation caller cancelled")), 10);
+    try {
+      await expect(arbitrateCortexCandidates({ userId, config, input: input("SIMULATE_TIMEOUT"), signal: controller.signal })).rejects.toThrow("cancelled");
+    } finally { clearTimeout(timer); }
   });
 
   async function ingest(passage: string, extraction?: SidecarExtractionResult) {

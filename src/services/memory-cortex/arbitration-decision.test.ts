@@ -126,6 +126,44 @@ test("valid Decision answers need only one provider request", async () => {
   expect(requests).toHaveLength(1);
 });
 
+test("a local server context rejection splits questions and their state without losing evidence", async () => {
+  const detailed: CortexArbitrationInput = { ...input, canonicals: [
+    { id: "c0", name: "Mara", aliases: ["Red"] }, { id: "c1", name: "Tovin", aliases: ["Blue"] },
+  ], candidates: [
+    { id: "e0", kind: "entity", name: "Red", canonicalIds: ["c0"], evidence: ["Red is Mara."] },
+    { id: "x3", kind: "existing", name: "Blue", canonicalIds: ["c1"], evidence: ["Blue is Tovin."] },
+  ] };
+  provider((body) => Object.keys(body.questions).length > 1
+    ? Response.json({ error: { message: "the questions take 16500 tokens, more than the 16384 this model reads", code: "BadRequestError" } }, { status: 400 })
+    : Response.json(response(body)));
+  const result = await arbitrateCortexCandidates({ userId, config, input: detailed });
+  expect(result.verdicts.map((verdict) => verdict.id)).toEqual(["e0", "x3"]);
+  expect(requests.map((request) => Object.keys(request.questions))).toEqual([["e0", "x3"], ["e0"], ["x3"]]);
+  expect(requests[1].state.candidates).toEqual([detailed.candidates[0]]);
+  expect(requests[2].state.candidates).toEqual([detailed.candidates[1]]);
+  expect(requests[1].state.canonicals.map((c: any) => c.id)).toEqual(["c0"]);
+  expect(requests[2].state.canonicals.map((c: any) => c.id)).toEqual(["c1"]);
+  expect(requests.every((request) => request.state.passage === detailed.passage)).toBe(true);
+});
+
+test("context splitting still retries invalid probabilities and preserves valid judgments", async () => {
+  provider((body) => Object.keys(body.questions).length > 1
+    ? Response.json({ error: "Context length exceeded" }, { status: 400 })
+    : Response.json(response(body, (id) => id === "x3")));
+  expect((await evaluate()).verdicts.map((verdict) => verdict.action)).toEqual(["keep", "defer"]);
+  expect(requests.map((request) => Object.keys(request.questions))).toEqual([["e0", "x3"], ["e0"], ["x3"], ["x3"]]);
+});
+
+test("one oversized candidate fails with actionable guidance and unrelated 400s are not retried", async () => {
+  provider(() => Response.json({ error: "the questions take 16500 tokens, more than the 16384 this model reads" }, { status: 400 }));
+  await expect(arbitrateCortexCandidates({ userId, config, input: { ...input, candidates: [input.candidates[0]!] } })).rejects.toThrow("Reduce the memory chunk size");
+  expect(requests).toHaveLength(1);
+  requests = [];
+  provider(() => Response.json({ error: "Invalid model configuration" }, { status: 400 }));
+  await expect(evaluate()).rejects.toThrow("Invalid model configuration");
+  expect(requests).toHaveLength(1);
+});
+
 test("retries only invalid questions and recovers their native verdicts", async () => {
   provider((body, attempt) => Response.json(response(body, (id) => attempt === 1 && id === "x3")));
   const result = await evaluate();

@@ -24,6 +24,35 @@ describe("Cortex arbitration contract", () => {
       expect(() => validateArbitrationVerdicts(verdicts, input.candidates)).toThrow();
     }
   });
+  test("Decision batches fit a 16K estimate while preserving every candidate and all evidence", () => {
+    const candidates = Array.from({ length: 35 }, (_, i) => ({ id: `e${i}`, kind: "entity" as const,
+      name: `Name${i}`, canonicalIds: ["c0"], evidence: [`Full evidence for candidate ${i}.`] }));
+    const batches = buildArbitrationBatches({ ...input, candidates }, 16384);
+    expect(batches.length).toBeGreaterThan(1);
+    expect(batches.flatMap((batch) => (batch.state as any).candidates)).toEqual(candidates);
+    for (const batch of batches) {
+      expect(256 + Math.ceil(Buffer.byteLength(JSON.stringify(batch)) / 3)).toBeLessThanOrEqual(Math.floor(16384 * 0.8));
+      expect((batch.state as any).passage).toBe(input.passage);
+      expect((batch.state as any).canonicals).toEqual(input.canonicals);
+      expect(Object.keys(batch.questions)).toEqual((batch.state as any).candidates.map((c: any) => c.id));
+      expect(Object.values(batch.questions)[0]!.instructions).not.toContain("For color candidates");
+    }
+    expect(() => buildArbitrationBatches({ ...input, passage: "Full passage. ".repeat(10000) }, 16384)).toThrow("no evidence was truncated");
+  });
+  test("each question retains its relevant rules without unrelated review instructions", () => {
+    const [batch] = buildArbitrationBatches({ ...input, candidates: [
+      ...input.candidates, { id: "r0", kind: "relationship", source: "Mara", target: "Tovin", type: "lover" },
+      { id: "f0", kind: "color", name: "Mara", type: "thought", hexColor: "#abcdef" },
+      { id: "x0", kind: "existing", name: "Mara" },
+    ] });
+    expect(batch!.questions.r0!.instructions).toContain("A supported love interest is sufficient");
+    expect(batch!.questions.r0!.instructions).toContain("A student is not a child relationship");
+    expect(batch!.questions.r0!.instructions).not.toContain("For color candidates");
+    expect(batch!.questions.f0!.instructions).toContain("Thought/italic wrappers");
+    expect(batch!.questions.f0!.instructions).toContain("My/my/MY");
+    expect(batch!.questions.f0!.instructions).not.toContain("For lover");
+    expect(batch!.questions.x0!.instructions).toContain("Absence from this passage or low importance is never grounds for rejection");
+  });
   test("an incomplete legacy reviewer fails over without accepting omitted candidates", async () => {
     const config = normalizeCortexConfig({ ...DEFAULT_CORTEX_CONFIG, queryGeneration: {
       primary: { connectionProfileId: "bad", model: "bad" }, secondary: { connectionProfileId: "good", model: "good" },

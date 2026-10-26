@@ -44,3 +44,9 @@ test("chat Cortex opt-out inherits global config unless explicitly disabled", ()
   expect(isCortexEnabledForChat({ enabled: true }, { temporary: true })).toBe(false);
   expect(isCortexEnabledForChat({ enabled: true }, { temporary: true, cortex_settings: { enabled: true } })).toBe(false);
 });
+
+test("Decision review defaults to a 16K input window and bounds local-server overrides", () => {
+  expect(normalizeCortexConfig({}).arbitration.maxInputTokens).toBe(16384);
+  expect(normalizeCortexConfig({ arbitration: { ...DEFAULT_CORTEX_CONFIG.arbitration, maxInputTokens: 4096 } }).arbitration.maxInputTokens).toBe(4096);
+  expect(normalizeCortexConfig({ arbitration: { ...DEFAULT_CORTEX_CONFIG.arbitration, maxInputTokens: -1 } }).arbitration.maxInputTokens).toBe(1024);
+});

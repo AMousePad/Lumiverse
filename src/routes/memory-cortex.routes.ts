@@ -1363,6 +1363,7 @@ app.get("/health", async (c) => {
       connectionProfileId: config.arbitration.backend === "decision" ? config.arbitration.connectionProfileId : sidecarConnectionId,
       model: config.arbitration.backend === "decision" ? config.arbitration.model || decisionProfile?.model || null : config.sidecar.model,
       minConfidence: config.arbitration.minConfidence, timeoutMs: config.arbitration.timeoutMs,
+      maxInputTokens: config.arbitration.maxInputTokens,
     },
     chat: chatReport,
     checks,

@@ -100,6 +100,8 @@ export interface CortexArbitrationConfig {
   connectionProfileId: string | null;
   model: string | null;
   timeoutMs: number;
+  /** Deployed Decision server's input window; batching reserves tokenizer headroom. */
+  maxInputTokens: number;
   requestsPerMinute: number;
   minConfidence: number;
 }
@@ -310,6 +312,7 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
     connectionProfileId: null,
     model: null,
     timeoutMs: 30000,
+    maxInputTokens: 16384,
     requestsPerMinute: 0,
     minConfidence: 0.8,
   },
@@ -719,6 +722,7 @@ export function normalizeCortexConfig(
       backend: input.arbitration?.backend === "decision" ? "decision" : "sidecar",
       ...normalizeCortexModelEndpoint(input.arbitration),
       timeoutMs: boundedNumber(input.arbitration?.timeoutMs, 100, 30000, defaults.arbitration.timeoutMs),
+      maxInputTokens: boundedNumber(input.arbitration?.maxInputTokens, 1024, 262144, defaults.arbitration.maxInputTokens),
       requestsPerMinute: normalizeRequestsPerMinute(input.arbitration?.requestsPerMinute, 0),
       minConfidence: boundedNumber(input.arbitration?.minConfidence, 0, 1, defaults.arbitration.minConfidence),
     },

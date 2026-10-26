@@ -855,7 +855,7 @@ export default function MemoryCortexSettings() {
                 label={t("memoryCortex.arbitratesHeuristics")} hint={t("memoryCortex.arbitratesHeuristicsHint")} />
             </div>
             {config.sidecarReliability?.arbitratesHeuristics && (() => {
-              const arbitration = config.arbitration ?? { backend: "sidecar" as const, connectionProfileId: null, model: null, timeoutMs: 30000, requestsPerMinute: 0, minConfidence: 0.8 };
+              const arbitration = config.arbitration ?? { backend: "sidecar" as const, connectionProfileId: null, model: null, timeoutMs: 30000, maxInputTokens: 16384, requestsPerMinute: 0, minConfidence: 0.8 };
               const update = (patch: Partial<typeof arbitration>) => updateConfig({ arbitration: { ...arbitration, ...patch } });
               return <>
                 <div className={styles.infoRow}>
@@ -871,6 +871,12 @@ export default function MemoryCortexSettings() {
                     withModel seedDefaultModel={false} modelValue={arbitration.model ?? ""}
                     onModelChange={(model) => update({ model: model || null })} clearable portal
                     ariaLabel={t("memoryCortex.decisionConnection")} modelPlaceholder={t("memoryCortex.useConnectionDefault")} />
+                  <div className={styles.infoRow}>
+                    <span className={styles.infoLabel}>{t("memoryCortex.arbitrationInputLimit")}</span>
+                    <NumericInput className={styles.numberInput} value={arbitration.maxInputTokens ?? 16384} min={1024} max={262144} step={1024} integer
+                      onChange={(v) => update({ maxInputTokens: v ?? 16384 })} />
+                  </div>
+                  <div className={styles.hintText}>{t("memoryCortex.arbitrationInputLimitHint")}</div>
                   <div className={styles.infoRow}>
                     <span className={styles.infoLabel}>{t("memoryCortex.arbitrationConfidence")}</span>
                     <NumericInput className={styles.numberInput} value={arbitration.minConfidence} min={0} max={1} step={0.05}

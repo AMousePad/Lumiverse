@@ -364,6 +364,7 @@ export function getCortexRuntimeSignature(config: MemoryCortexConfig): string {
     memorySummarization: config.memorySummarization,
     sidecarTimeoutMs: config.sidecarTimeoutMs,
     arbitrationTimeoutMs: config.arbitration.timeoutMs,
+    arbitrationMaxInputTokens: config.arbitration.maxInputTokens,
     arbitrationRequestsPerMinute: config.arbitration.requestsPerMinute,
     consolidation: config.consolidation,
     entityPruning: config.entityPruning,

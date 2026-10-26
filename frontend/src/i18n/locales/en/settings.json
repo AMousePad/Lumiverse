@@ -1320,6 +1320,8 @@
     "decisionConnection": "Decision connection",
     "useConnectionDefault": "Use connection default",
     "arbitrationConfidence": "Minimum confidence",
+    "arbitrationInputLimit": "Reviewer input limit (tokens)",
+    "arbitrationInputLimitHint": "Match the input window configured on your Decision server. Defaults to 16,384 tokens. Requests reserve headroom and split candidates into smaller batches without shortening the passage or evidence. A single candidate that cannot fit leaves the chunk pending.",
     "arbitrationTimeout": "Review timeout (seconds)",
     "arbitrationHint": "Decision review uses a separate Decision connection and can also review heuristic extraction. Low confidence defers a candidate; failed or incomplete reviews leave the chunk pending for retry. AI extraction and summaries continue to use the sidecar."
   },

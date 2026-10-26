@@ -58,6 +58,7 @@ export interface CortexConfig {
     connectionProfileId: string | null;
     model: string | null;
     timeoutMs: number;
+    maxInputTokens?: number;
     requestsPerMinute: number;
     minConfidence: number;
   };

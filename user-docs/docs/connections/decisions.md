@@ -22,6 +22,14 @@ Saved model IDs remain available even when the provider's model picker no longer
 
 **Run sample decision (uses provider credits)** sends a small evaluation to the saved model. This checks that the selected model accepts the Decision protocol. Models that require another protocol, including Together's Tev1, are excluded from the picker.
 
+## Memory Cortex candidate review
+
+Candidate review is optional and off by default. Enable **Memory Cortex → Candidate review → Review memory candidates**, choose **Decision model**, and select your Decision connection to use it.
+
+Set **Reviewer input limit (tokens)** to the effective limit of your deployed server, including any separate question-token limit. It defaults to 16,384. Cortex reserves headroom for tokenizer differences and splits candidates into smaller batches; if the server still reports a context overflow, Cortex retries smaller groups. Each group retains the complete passage and its candidates' evidence and canonical targets. If one candidate cannot fit, the chunk remains pending with guidance to reduce the memory chunk size or increase the server's context window and reviewer input limit.
+
+Jev-compatible endpoints can enforce different context limits from the hosted model or the model catalog. Check the actual endpoint rather than assuming that quantization, a model name, or an advertised context window determines every request limit.
+
 ## Use from extensions
 
 Grant an extension its **Decisions** permission in the Extensions panel when you want it to inspect or use these connections. Extensions receive the results without receiving your API key. This release supports text and JSON input. Each extension determines how probabilities and confidence affect its behavior.
