@@ -36,6 +36,8 @@ import { refineHeuristicDetections } from "./detection-refiner";
 import { filterEntitiesByExtractionFilters } from "./entity-extraction-filters";
 import { isPlausibleAlias, sanitizeAlias } from "./alias-validation";
 import { runHeuristicAnalysisInWorker } from "./heuristic-worker-host";
+import { extractParticipantRelationships } from "./relationship-extractor";
+import { resolveConversationParticipants, type CortexParticipant } from "./conversation-context";
 import { resolveCounter } from "../tokenizer.service";
 import * as entityGraph from "./entity-graph";
 import * as entityContext from "./entity-context";
@@ -1517,6 +1519,7 @@ export async function processChunk(
       extraScaffoldTags: config.nonProseScaffoldTags,
     });
     const thoughtDelimiters = config.thoughtMarkers;
+    const participants = getStoredConversationParticipants(data.chatId);
 
     const knownEntities = entityGraph.getActiveEntities(data.chatId);
     const entityIdByName = new Map<string, string>();
@@ -1633,6 +1636,7 @@ export async function processChunk(
           target.connectionProfileId,
           {
             characterNames,
+            participants,
             knownEntities: entityContext,
             thoughtDelimiters,
             descriptionAliases: buildSidecarAliasList(descriptionAliases, knownEntities),
@@ -1792,10 +1796,17 @@ export async function processChunk(
         const targets = aliasTargets.get(name.toLowerCase());
         return targets?.size === 1 ? [...targets][0]! : name;
       };
-      const relationships = mergeRelationships(heuristicResult?.relationships ?? [], sidecarRelationships)
+      const participantRelationships = extractParticipantRelationships(proseContent, characterNames,
+        [...(descriptionAliases ?? [])].map(([alias, canonicalName]) => ({ alias, canonicalName })),
+        [...knownEntities.filter((entity) => entity.entityType === "character").flatMap((entity) => [entity.name, ...entity.aliases]),
+          ...sidecarEntities.filter((entity) => entity.type === "character").map((entity) => entity.name)], participants);
+      const relationships = mergeRelationships([...(heuristicResult?.relationships ?? []), ...participantRelationships], sidecarRelationships)
         .map((r) => ({ ...r, source: canonicalize(r.source), target: canonicalize(r.target) }));
       const knownReferences = new Map([
         ...characterNames.map((name) => [name.toLowerCase(), { name, type: "character" }] as const),
+        ...resolveConversationParticipants(proseContent, characterNames,
+          [...(descriptionAliases ?? [])].map(([alias, canonicalName]) => ({ alias, canonicalName })), participants)
+          .map(({ name }) => [name.toLowerCase(), { name, type: "character" }] as const),
         ...knownEntities.map((entity) => [entity.name.toLowerCase(), { name: entity.name, type: entity.entityType }] as const),
       ]);
       const referencedEntities = relationships.flatMap((r) => [r.source, r.target])
@@ -1827,7 +1838,7 @@ export async function processChunk(
           for (const entity of reviewEntities) evidence.set(entity.id, (excerpts.all(entity.id) as Array<{ excerpt: string }>).map((row) => row.excerpt));
         }
         const plan = buildCortexArbitrationPlan({ passage: proseContent, graph: graphPlan,
-          knownEntities: reviewEntities, characterNames, canonicalAliases: descriptionAliases, existingEvidence: evidence,
+          knownEntities: reviewEntities, characterNames, participants, canonicalAliases: descriptionAliases, existingEvidence: evidence,
           gradeExisting: config.sidecarReliability.gradesExistingRecords });
         const result = await arbitrateCortexCandidates({ userId: data.userId, config, input: plan.input,
           generate: generateRawFn, sidecarConnectionId, signal });
@@ -1835,7 +1846,13 @@ export async function processChunk(
         graphPlan = applied.graph;
         cleanupActions = applied.cleanup;
         timings.sidecarMs += result.durationMs;
-        console.info(`[memory-cortex] arbitration backend=${config.arbitration.backend} candidates=${result.verdicts.length} models=${result.models.join(",")} ms=${Math.round(result.durationMs)}`);
+        const relationshipIds = new Set(plan.input.candidates.filter((candidate) => candidate.kind === "relationship").map((candidate) => candidate.id));
+        const relationshipVerdicts = result.verdicts.filter((verdict) => relationshipIds.has(verdict.id));
+        console.info(`[memory-cortex] arbitration backend=${config.arbitration.backend} candidates=${result.verdicts.length} models=${result.models.join(",")} ms=${Math.round(result.durationMs)}`
+          + ` relationships_sidecar=${sidecarRelationships.length} relationships_participant=${participantRelationships.length}`
+          + ` relationships_proposed=${relationshipIds.size} relationships_kept=${relationshipVerdicts.filter((verdict) => verdict.action === "keep").length}`
+          + ` relationships_rejected=${relationshipVerdicts.filter((verdict) => verdict.action === "reject").length}`
+          + ` relationships_deferred=${relationshipVerdicts.filter((verdict) => verdict.action === "defer").length} relationships_applied=${graphPlan.relationships.length}`);
       }
     }
     signal?.throwIfAborted();
@@ -2348,6 +2365,7 @@ export async function rebuildCortex(
         rebuildTokenCounter = undefined;
       }
       let batchCounter = 0;
+      const participants = getStoredConversationParticipants(chatId);
 
       const tickProgress = () => {
         completed++;
@@ -2398,6 +2416,7 @@ export async function rebuildCortex(
               activeSidecarConnectionId,
               {
                 characterNames,
+                participants,
                 thoughtDelimiters: config.thoughtMarkers,
                 knownEntities: entityGraph.getActiveEntities(chatId).map((e) => ({ name: e.name, type: e.entityType, aliases: e.aliases })),
                 descriptionAliases: buildSidecarAliasList(
@@ -2884,6 +2903,12 @@ function safeJsonArray(raw: string | null | undefined): string[] {
   try { return JSON.parse(raw); } catch { return []; }
 }
 
+function getStoredConversationParticipants(chatId: string): CortexParticipant[] {
+  const rows = getDb().query("SELECT DISTINCT name, is_user FROM messages WHERE chat_id = ? AND trim(name) != ''")
+    .all(chatId) as Array<{ name: string; is_user: number }>;
+  return rows.map((row) => ({ name: normalizeCharacterName(row.name), role: row.is_user ? "user" : "character", aliases: [row.name] }));
+}
+
 function hydrateChunkContentFromMessages(messageIds: string[], fallbackContent: string): string {
   if (messageIds.length === 0) return fallbackContent;
 
@@ -3267,9 +3292,9 @@ function getInflectionalVariants(word: string): string[] {
  * Merge heuristic and sidecar relationships, preferring sidecar for duplicate pair+type combos.
  */
 function mergeRelationships(
-  heuristic: Array<{ source: string; target: string; type: string; label: string; sentiment: number; confidence?: number }>,
-  sidecar: Array<{ source: string; target: string; type: string; label: string; sentiment: number }>,
-): Array<{ source: string; target: string; type: string; label: string; sentiment: number }> {
+  heuristic: Array<{ source: string; target: string; type: string; label: string; sentiment: number; confidence?: number; evidence?: string[] }>,
+  sidecar: Array<{ source: string; target: string; type: string; label: string; sentiment: number; evidence?: string[] }>,
+): Array<{ source: string; target: string; type: string; label: string; sentiment: number; evidence?: string[] }> {
   const merged = new Map<string, any>();
 
   // Heuristic first (lower priority)
@@ -3281,7 +3306,8 @@ function mergeRelationships(
   // Sidecar overwrites (higher priority)
   for (const rel of sidecar) {
     const key = `${rel.source.toLowerCase()}→${rel.target.toLowerCase()}:${rel.type}`;
-    merged.set(key, rel);
+    const evidence = [...new Set([...(merged.get(key)?.evidence ?? []), ...(rel.evidence ?? [])])];
+    merged.set(key, { ...rel, ...(evidence.length ? { evidence } : {}) });
   }
 
   return [...merged.values()];

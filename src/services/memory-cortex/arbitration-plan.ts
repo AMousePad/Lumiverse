@@ -3,6 +3,7 @@ import { validateArbitrationVerdicts } from "./arbitration";
 import type { ArbitrationCanonical, ArbitrationCandidate, ArbitrationVerdict, CortexArbitrationInput } from "./arbitration";
 import type { DiscoveredAlias, ExtractedEntity, ExtractedRelationship, MemoryEntity } from "./types";
 import type { ColorAttribution } from "./font-attribution";
+import { resolveConversationParticipants, type CortexParticipant } from "./conversation-context";
 
 export interface CortexGraphPlan {
   entities: ExtractedEntity[];
@@ -24,6 +25,7 @@ export function buildCortexArbitrationPlan(options: {
   knownEntities: MemoryEntity[];
   characterNames: string[];
   canonicalAliases?: Map<string, string>;
+  participants?: CortexParticipant[];
   existingEvidence?: Map<string, string[]>;
   gradeExisting: boolean;
 }): { input: CortexArbitrationInput; apply: (verdicts: ArbitrationVerdict[]) => { graph: CortexGraphPlan; cleanup: CortexCleanupAction[] } } {
@@ -56,7 +58,7 @@ export function buildCortexArbitrationPlan(options: {
   const candidates: ArbitrationCandidate[] = [
     ...graph.entities.map((e, i): ArbitrationCandidate => ({ id: `e${i}`, kind: "entity", name: e.name, type: e.type,
       origin: e.provisional ? "noun_phrase" : "extraction", canonicalIds: shortlist(e.name) })),
-    ...graph.relationships.map((r, i): ArbitrationCandidate => ({ id: `r${i}`, kind: "relationship", source: r.source, target: r.target, type: r.type, evidence: [r.label] })),
+    ...graph.relationships.map((r, i): ArbitrationCandidate => ({ id: `r${i}`, kind: "relationship", source: r.source, target: r.target, type: r.type, evidence: [r.label, ...(r.evidence ?? [])] })),
     ...graph.aliases.map((a, i): ArbitrationCandidate => ({ id: `a${i}`, kind: "alias", source: a.alias, target: a.canonicalName, evidence: a.evidence ? [a.evidence] : [] })),
     ...(graph.colors ?? []).map((color, i): ArbitrationCandidate => ({ id: `f${i}`, kind: "color", name: color.entityName!,
       type: color.usageType, hexColor: color.hexColor, evidence: color.evidence ?? [] })),
@@ -64,7 +66,8 @@ export function buildCortexArbitrationPlan(options: {
       evidence: options.existingEvidence?.get(e.id) ?? [], canonicalIds: shortlist(e.name).filter((id) => canonicalEntityIds.has(id)) })),
   ];
   return {
-    input: { passage, candidates, canonicals },
+    input: { passage, candidates, canonicals, participants: resolveConversationParticipants(passage, options.characterNames,
+      [...(options.canonicalAliases ?? [])].map(([alias, canonicalName]) => ({ alias, canonicalName })), options.participants) },
     apply(verdicts) {
       const byId = new Map(validateArbitrationVerdicts(verdicts, candidates).map((v) => [v.id, v]));
       const renames = new Map<string, string>();

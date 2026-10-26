@@ -12,6 +12,7 @@ import {
   userDataApi,
   type DecryptionTicket,
   type ImportJobStatus,
+  type ImportJobProgress,
   type TicketSubmissionResponse,
 } from '@/api/user-data'
 import styles from './DataPortability.module.css'
@@ -23,12 +24,8 @@ interface ExportProgress {
   total?: number
 }
 
-interface ImportProgress {
+interface ImportProgress extends ImportJobProgress {
   jobId: string
-  phase: string
-  table?: string
-  processed?: number
-  total?: number
 }
 
 type ImportSummary = ImportJobStatus['summary']
@@ -144,6 +141,7 @@ export default function DataPortability() {
       try {
         const status = await userDataApi.getImportStatus(importJobId)
         if (cancelled) return
+        if (status.progress) setImportProgress({ ...status.progress, jobId: status.jobId })
         if (status.status === 'complete') {
           setImportSummary(status.summary)
           setImportFileSummary(status.fileSummary)
@@ -250,6 +248,11 @@ export default function DataPortability() {
         }
       })
       setImportJobId(jobId)
+      // The start event can arrive before the upload response or be missed
+      // during a WebSocket reconnect. Leave the upload label immediately.
+      setImportProgress((previous) => previous?.phase === 'verifying' || !previous
+        ? { jobId, phase: 'start' }
+        : previous)
       if (userId) trackImportJob(userId, jobId)
       setImportUploadPct(null)
     } catch (err: any) {
@@ -340,6 +343,12 @@ export default function DataPortability() {
     const phase = importProgress.phase
     if (phase === 'verifying') return t('dataPortability.verifying')
     if (phase === 'start') return t('dataPortability.importQueued')
+    if (phase === 'extracting') {
+      return t('dataPortability.extracting', {
+        done: ((importProgress.bytesProcessed ?? 0) / (1024 ** 3)).toFixed(2),
+        total: ((importProgress.bytesTotal ?? 0) / (1024 ** 3)).toFixed(2),
+      })
+    }
     if (phase === 'awaiting_ticket') return t('dataPortability.awaitingTicket')
     if (phase === 'ticket_accepted') return t('dataPortability.ticketAccepted')
     if (phase === 'ticket_skipped') return t('dataPortability.ticketSkipped')
@@ -522,7 +531,9 @@ export default function DataPortability() {
               ) : null}
             </div>
             <div className={styles.progressBar}>
-              {importUploadPct !== null ? (
+              {importProgress?.phase === 'extracting' && (importProgress.bytesTotal ?? 0) > 0 ? (
+                <div className={styles.progressFill} style={{ width: `${Math.min(100, 100 * (importProgress.bytesProcessed ?? 0) / importProgress.bytesTotal!)}%` }} />
+              ) : importUploadPct !== null ? (
                 <div className={styles.progressFill} style={{ width: `${importUploadPct}%` }} />
               ) : (
                 <div className={styles.progressFillIndeterminate} />

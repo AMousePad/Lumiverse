@@ -132,6 +132,29 @@ test("live and batch extraction receive the same thought-channel rules and confi
   }
 });
 
+test("live and batch extraction retain configured participants alongside known entities", async () => {
+  const prompts: Array<{ system: string; user: string }> = [];
+  const generate: Parameters<typeof extractWithSidecar>[1] = async (request) => {
+    prompts.push({ system: request.messages[0]!.content, user: request.messages[1]!.content });
+    const entry = { importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [],
+      relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] };
+    return { content: JSON.stringify(request.requestPurpose === "batch extraction" ? { results: [{ ...entry, index: 0 }, { ...entry, index: 1 }] } : entry) };
+  };
+  const options = { characterNames: ["Mara", "Prolix"],
+    participants: [{ name: "Mara", role: "character" as const }, { name: "Prolix", role: "user" as const }],
+    knownEntities: [{ name: "Inn", type: "location", aliases: [] }],
+  };
+  const content = '[CHARACTER | Mara]: "I have a crush on you."';
+  await extractWithSidecar(content, generate, "fixture", options);
+  await extractBatchWithSidecar([{ index: 0, content }, { index: 1, content }], generate, "fixture", options);
+  for (const prompt of prompts) {
+    expect(prompt.user).toContain("<known_entities>");
+    expect(prompt.user).toContain("<known_characters>\nMara, Prolix");
+    expect(prompt.user).toContain('"name":"Prolix","role":"user"');
+    expect(prompt.system).toContain("A love interest is a relationship even before a formal partnership");
+  }
+});
+
 describe("extractBatchWithSidecar", () => {
   test("a failed batch does not fan out into more provider requests", async () => {
     let calls = 0;

@@ -319,6 +319,7 @@ app.get("/import/:jobId/status", (c) => {
     manifest: job.manifest,
     summary: job.summary,
     fileSummary: job.fileSummary,
+    progress: job.progress,
     error: job.error,
   });
 });

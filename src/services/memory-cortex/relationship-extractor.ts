@@ -15,6 +15,7 @@
  */
 
 import type { RelationType, EmotionalTag } from "./types";
+import { getConversationMessages, resolveConversationParticipants, type CortexParticipant } from "./conversation-context";
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -25,6 +26,61 @@ export interface HeuristicRelationship {
   label: string;
   sentiment: number;
   confidence: number;
+  evidence?: string[];
+}
+
+/** Strong first-person signals supply reviewable candidates even if generative
+ * extraction omits the relationship. Never seed a pair from co-presence alone. */
+export function extractParticipantRelationships(
+  content: string,
+  characterNames: string[],
+  aliases: Array<{ alias: string; canonicalName: string }> = [],
+  otherCharacterNames: string[] = [],
+  storedParticipants?: CortexParticipant[],
+): HeuristicRelationship[] {
+  const participants = resolveConversationParticipants(content, characterNames, aliases, storedParticipants);
+  const results = new Map<string, HeuristicRelationship>();
+  const escape = (name: string) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const signals = [
+    /\bI\s+(?:love|adore|cherish)\s+you\b/i,
+    /\bI(?:['’]m|\s+am)\s+(?:in\s+love\s+with|falling\s+for|attracted\s+to)\s+you\b/i,
+    /\bI\s+(?:have\s+(?:a\s+)?crush\s+on|want\s+to\s+date|want\s+to\s+be\s+with)\s+you\b/i,
+    /\bI\s+(?:kiss|kissed|caress|caressed|cuddle|cuddled|nuzzle|nuzzled)\s+you\b/i,
+    /\byou(?:['’]re|\s+are)\s+my\s+(?:girlfriend|boyfriend|wife|husband|lover|fianc[ée]+|romantic\s+partner)\b/i,
+    /["“][^"”\n]*\bmy\s+(?:love|beloved|sweetheart|darling)\s*[,!.?”"]/i,
+  ];
+  for (const message of getConversationMessages(content)) {
+    const owner = participants.find((participant) => participant.role === message.role
+      && (participant.name.toLowerCase() === message.name.toLowerCase()
+        || aliases.some((alias) => alias.alias.toLowerCase() === message.name.toLowerCase() && alias.canonicalName.toLowerCase() === participant.name.toLowerCase())
+        || storedParticipants?.some((stored) => stored.role === message.role && stored.name.toLowerCase() === participant.name.toLowerCase()
+          && stored.aliases?.some((alias) => alias.toLowerCase() === message.name.toLowerCase()))));
+    const counterparts = participants.filter((participant) => participant.role !== message.role);
+    if (!owner || counterparts.length !== 1) continue;
+    const target = counterparts[0]!;
+    const pairNames = new Set([owner.name, target.name].map((name) => name.toLowerCase()));
+    if (pairNames.size !== 2) continue;
+    const thirdParties = [...characterNames, ...otherCharacterNames, ...participants.map((participant) => participant.name), ...aliases.filter((alias) => !pairNames.has(alias.canonicalName.toLowerCase())).map((alias) => alias.alias)]
+      .filter((name) => !pairNames.has(name.toLowerCase()));
+    for (const paragraph of message.content.split(/\n\s*\n/)) {
+      const signal = signals.map((pattern) => pattern.exec(paragraph)).find(Boolean);
+      if (!signal) continue;
+      // These patterns deliberately decline indirect/negated speech and local
+      // third-party scenes. The generative extractor can resolve richer prose.
+      if (/\b(?:not|never|don['’]t|didn['’]t|can['’]t|wouldn['’]t|couldn['’]t|if|pretend\w*|rehears\w*|quot(?:e|ed|ing)|jok\w*|sarcas\w*|mock\w*)\b/i.test(paragraph)) continue;
+      if (/\b(?:he|she|they)\s+(?:said|asked|whispered|replied|murmured|thought)\b/i.test(paragraph)) continue;
+      const attributedNames = [...paragraph.matchAll(/\b([\p{Lu}][\p{L}’'-]*(?:\s+[\p{Lu}][\p{L}’'-]*){0,2})\s+(?:said|asked|whispered|replied|murmured|thought)\b/gu)]
+        .map((match) => match[1]!);
+      attributedNames.push(...[...paragraph.matchAll(/\b(?:said|asked|whispered|replied|murmured|thought)\s+([\p{Lu}][\p{L}’'-]*(?:\s+[\p{Lu}][\p{L}’'-]*){0,2})/gu)].map((match) => match[1]!));
+      if (attributedNames.some((name) => name !== "I" && name.toLowerCase() !== owner.name.toLowerCase())) continue;
+      if (thirdParties.some((name) => new RegExp(`(?<![\\p{L}\\p{N}_])${escape(name)}(?![\\p{L}\\p{N}_])`, "iu").test(paragraph))) continue;
+      const key = `${owner.name.toLowerCase()}→${target.name.toLowerCase()}:lover`;
+      const prior = results.get(key);
+      results.set(key, { source: owner.name, target: target.name, type: "lover", label: "romantic interest",
+        sentiment: 0.7, confidence: 0.75, evidence: [...(prior?.evidence ?? []), paragraph.slice(Math.max(0, signal.index - 250), signal.index + signal[0].length + 500).trim()].slice(0, 3) });
+    }
+  }
+  return [...results.values()];
 }
 
 // ─── Verb Dictionaries ─────────────────────────────────────────

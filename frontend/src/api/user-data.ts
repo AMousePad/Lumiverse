@@ -30,6 +30,15 @@ export interface TicketSubmissionResponse {
   uses: number
 }
 
+export interface ImportJobProgress {
+  phase: string
+  table?: string
+  processed?: number
+  total?: number
+  bytesProcessed?: number
+  bytesTotal?: number
+}
+
 export interface ImportJobStatus {
   jobId: string
   status: 'queued' | 'awaiting_ticket' | 'running' | 'complete' | 'failed' | 'cancelled'
@@ -50,6 +59,7 @@ export interface ImportJobStatus {
   summary: Record<string, { imported: number; skipped: number }>
   fileSummary: Record<string, number>
   error: string | null
+  progress?: ImportJobProgress | null
 }
 
 export const userDataApi = {

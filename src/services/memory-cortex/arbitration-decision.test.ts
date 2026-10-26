@@ -5,7 +5,7 @@ import * as secrets from "../secrets.service";
 import { ProviderRequestError } from "../../utils/provider-errors";
 import { arbitrateCortexCandidates, type CortexArbitrationInput } from "./arbitration";
 import { DEFAULT_CORTEX_CONFIG, normalizeCortexConfig, putCortexConfig } from "./config";
-import { processChunk } from "./index";
+import { processChunk, rebuildCortex } from "./index";
 import { runHeuristicAnalysis } from "./heuristic-analysis";
 import * as graph from "./entity-graph";
 
@@ -56,6 +56,69 @@ function response(body: any, invalid: (id: string, candidate: any) => boolean = 
   })) };
 }
 const evaluate = (signal?: AbortSignal) => arbitrateCortexCandidates({ userId, config, input, signal });
+
+for (const verdict of ["keep", "reject", "defer", "low-confidence"] as const) {
+  test(`sidecar rebuild proposes omitted first-person romance to native Decision review: ${verdict}`, async () => {
+    const chatId = "romance-rebuild-chat";
+    const db = getDb();
+    putCortexConfig(userId, { ...config, entityExtractionMode: "sidecar", salienceScoringMode: "sidecar",
+      sidecar: { ...config.sidecar, connectionProfileId: "sidecar", model: "fixture-sidecar", chunkBatchSize: 2, rebuildConcurrency: 1 },
+      queryGeneration: { primary: { connectionProfileId: "sidecar", model: "fixture-sidecar" }, secondary: null },
+      sidecarReliability: { ...config.sidecarReliability, gradesExistingRecords: false },
+    });
+    db.query("INSERT INTO chats (id, user_id) VALUES (?, ?)").run(chatId, userId);
+    db.query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES ('romance-user', ?, 0, 1, 'Prolix', 'Shall we walk?')").run(chatId);
+    const texts = ['"I have a crush on you. I want to date you," I said.', '"I will stay in your room tonight."'];
+    for (let index = 0; index < texts.length; index++) {
+      const id = `romance-${index}`;
+      db.query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, ?, 0, 'Mara', ?)")
+        .run(id, chatId, index + 1, texts[index]!);
+      db.query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, message_range_start, message_range_end, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 20, 1, ?, ?, 1, 1)")
+        .run(id, chatId, id, id, JSON.stringify([id]), texts[index]!, index + 1, index + 1);
+    }
+    let extractionCalls = 0;
+    provider((body) => {
+      expect(body.state.participants).toContainEqual({ name: "Mara", role: "character" });
+      expect(body.state.participants).toContainEqual({ name: "Prolix", role: "user" });
+      const value = response(body);
+      for (const [id, answer] of Object.entries(value.answers)) {
+        const candidate = body.state.candidates.find((entry: any) => entry.id === id);
+        const relationship = candidate.kind === "relationship";
+        if (relationship) {
+          expect(candidate).toMatchObject({ source: "Mara", target: "Prolix", type: "lover" });
+          expect(candidate.evidence.join(" ")).toContain("I have a crush on you");
+          expect(body.questions[id].instructions).toContain("A supported love interest is sufficient");
+        }
+        answer.choice = relationship && verdict !== "low-confidence" ? verdict
+          : candidate.kind === "entity" && !["Mara", "Prolix"].includes(candidate.name) ? "reject" : "keep";
+        if (relationship && verdict === "low-confidence") answer.confidence = 0.7;
+        const keys = Object.keys(answer.probabilities);
+        answer.probabilities = Object.fromEntries(keys.map((key) => [key, key === answer.choice ? 0.98 : 0.02 / (keys.length - 1)]));
+      }
+      return Response.json(value);
+    });
+    const result = await rebuildCortex(userId, chatId, ["Mara", "Prolix"], async (request) => {
+      extractionCalls++;
+      expect(request.requestPurpose).toBe("batch extraction");
+      expect(request.messages[0]!.content).toContain("A love interest is a relationship even before a formal partnership");
+      expect(request.messages[1]!.content).toContain('"name":"Prolix","role":"user"');
+      // Reproduce the reported omission instead of supplying a relationship
+      // fixture. The real ingestion path must discover and review the proposal.
+      return { content: JSON.stringify({ results: texts.map((_, index) => ({ index, importance: 3,
+        emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [], relationships_shown: [],
+        status_changes: [], color_attributions: [], discovered_aliases: [],
+      })) }) };
+    }, "sidecar");
+    expect(extractionCalls).toBe(1);
+    expect(requests.flatMap((request) => request.state.candidates).filter((candidate: any) => candidate.kind === "relationship")).toHaveLength(1);
+    const relations = graph.getRelationsIncludingInactive(chatId);
+    expect(result.relationsFound).toBe(verdict === "keep" ? 1 : 0);
+    expect(relations).toHaveLength(verdict === "keep" ? 1 : 0);
+    if (verdict === "keep") expect(relations[0]).toMatchObject({ relationType: "lover",
+      sourceEntityId: graph.findEntityByName(chatId, "Mara")!.id, targetEntityId: graph.findEntityByName(chatId, "Prolix")!.id });
+    expect(result.chunksProcessed).toBe(2);
+  });
+}
 
 test("valid Decision answers need only one provider request", async () => {
   provider((body) => Response.json(response(body)));

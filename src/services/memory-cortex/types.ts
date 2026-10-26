@@ -335,6 +335,7 @@ export interface ExtractedRelationship {
   type: RelationType;
   label: string;
   sentiment: number;
+  evidence?: string[];
 }
 
 export interface SidecarFontColor {

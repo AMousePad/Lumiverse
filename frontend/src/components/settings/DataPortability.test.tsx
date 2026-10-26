@@ -7,7 +7,7 @@ const startImport = mock(async () => ({ jobId: 'restore-job' }))
 const getImportStatus = mock()
 const skipTicket = mock(async () => ({}))
 const refresh = mock(async () => {})
-const t = (key: string) => key
+const t = (key: string, args?: Record<string, unknown>) => args ? `${key} ${JSON.stringify(args)}` : key
 mock.module('@/store', () => ({ useStore: { getState: () => ({ user: { id: 'owner' } }) } }))
 mock.module('@/lib/import-recovery', () => ({ pendingImportJob: () => null, trackImportJob() {} }))
 mock.module('react-i18next', () => ({ useTranslation: () => ({ t }) }))
@@ -83,4 +83,19 @@ test('recovers the ticket prompt and completion through polling alone', async ()
   await tick()
   expect(refresh).toHaveBeenCalledWith('restore-job')
   expect(host.textContent).not.toContain('dataPortability.ticketPrompt')
+})
+
+
+test('recovers extraction progress and its byte-based bar without WebSocket events', async () => {
+  getImportStatus.mockResolvedValue({
+    ...status('running'),
+    progress: { phase: 'extracting', processed: 10, total: 100, bytesProcessed: 2 * 1024 ** 3, bytesTotal: 8 * 1024 ** 3 },
+  })
+  await start()
+  expect(host.textContent).not.toContain('dataPortability.verifying')
+  await tick()
+  expect(getImportStatus).toHaveBeenCalledWith('restore-job')
+  expect(host.textContent).toContain('dataPortability.extracting {"done":"2.00","total":"8.00"}')
+  expect(host.textContent).toContain('10/100')
+  expect(host.querySelector('[style*="width: 25%"]')).not.toBeNull()
 })

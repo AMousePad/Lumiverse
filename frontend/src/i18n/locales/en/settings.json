@@ -790,6 +790,7 @@
     "ticketLastUsed": " (last used {{date}})",
     "uploading": "Uploading… {{pct}}%",
     "verifying": "Verifying archive…",
+    "extracting": "Extracting archive… {{done}} / {{total}} GiB",
     "importQueued": "Queued — starting import…",
     "awaitingTicket": "Waiting for decryption ticket…",
     "ticketAccepted": "Ticket accepted — applying secrets…",

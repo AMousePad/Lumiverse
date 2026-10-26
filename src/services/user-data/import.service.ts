@@ -9,7 +9,7 @@
 // progress flows over the WebSocket EventBus.
 
 import { createHash } from "node:crypto";
-import { createInflateRaw, inflateRawSync } from "node:zlib";
+import { createInflateRaw, crc32, inflateRawSync } from "node:zlib";
 import {
   decryptSecret,
   lookupConsumedTicket,
@@ -91,6 +91,9 @@ const MAX_ENTRIES = 500_000;
 /** Apply DB rows in batches of this size, one transaction per batch. */
 const ROW_BATCH = 200;
 
+/** Bound retained serialized row data as well as row count. Larger rows run alone. */
+const ROW_BATCH_BYTES = 8 * 1024 * 1024;
+
 /** Yield to the event loop between batches. */
 const YIELD_INTERVAL_MS = 0;
 
@@ -127,6 +130,15 @@ export type ImportJobStatus =
   | "failed"
   | "cancelled";
 
+export interface ImportProgress {
+  phase: string;
+  table?: string;
+  processed?: number;
+  total?: number;
+  bytesProcessed?: number;
+  bytesTotal?: number;
+}
+
 export interface ImportJob {
   jobId: string;
   userId: string;
@@ -141,6 +153,8 @@ export interface ImportJob {
   fileSummary: Record<string, number>;
   /** Most recent error message if status === 'failed'. */
   error: string | null;
+  /** Latest progress snapshot, also available when WebSocket delivery is interrupted. */
+  progress: ImportProgress | null;
   /** Abort controller — exposed for cancel endpoint. */
   abort: AbortController;
   /**
@@ -857,6 +871,7 @@ export function startImport(opts: {
     summary: {},
     fileSummary: {},
     error: null,
+    progress: null,
     abort: new AbortController(),
     ticketGate,
     ticketResolver,
@@ -878,6 +893,9 @@ export function startImport(opts: {
 // ---------------------------------------------------------------------------
 
 function emit(job: ImportJob, type: EventType, payload: Record<string, any>): void {
+  if (type === EventType.USER_IMPORT_PROGRESS && typeof payload.phase === "string") {
+    job.progress = { ...payload, phase: payload.phase };
+  }
   try {
     eventBus.emit(type, { jobId: job.jobId, ...payload }, job.userId);
   } catch {
@@ -967,26 +985,10 @@ function writeAllSync(fd: number, chunk: Uint8Array): void {
   }
 }
 
-// ZIP uses the IEEE CRC-32 polynomial. Keep the running state inverted so
-// chunks can be fed to it without allocating one concatenated entry buffer.
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < table.length; n++) {
-    let value = n;
-    for (let bit = 0; bit < 8; bit++) {
-      value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-    }
-    table[n] = value >>> 0;
-  }
-  return table;
-})();
-
+// Keep the historical inverted running state, but checksum each fixed-size
+// chunk natively. A JavaScript byte loop is costly for multi-GB phone restores.
 function updateCrc32(state: number, bytes: Uint8Array): number {
-  let next = state;
-  for (const byte of bytes) {
-    next = (CRC32_TABLE[(next ^ byte) & 0xff] ^ (next >>> 8)) >>> 0;
-  }
-  return next;
+  return (crc32(bytes, (state ^ 0xffffffff) >>> 0) ^ 0xffffffff) >>> 0;
 }
 
 function finishCrc32(state: number): number {
@@ -1251,6 +1253,7 @@ async function inflateEntry(
   onChunk: (chunk: Uint8Array) => void,
   signal: AbortSignal,
 ): Promise<void> {
+  signal.throwIfAborted();
   if (compressedSize === 0) {
     // Empty entries are valid when their central-directory output size is
     // also zero; the caller validates that exact size after this returns.
@@ -1262,13 +1265,22 @@ async function inflateEntry(
     highWaterMark: ARCHIVE_READ_BYTES,
   });
   const inflater = createInflateRaw({ chunkSize: INFLATE_OUTPUT_BYTES });
-  source.pipe(inflater);
+  // pipe() does not forward source errors. Without this, a read failure can
+  // leave the iterator waiting forever. Cancellation must also wake a read.
+  source.on("error", (error) => inflater.destroy(error));
+  const abort = () => {
+    source.destroy();
+    inflater.destroy(signal.reason instanceof Error ? signal.reason : new Error("import cancelled"));
+  };
+  signal.addEventListener("abort", abort, { once: true });
   try {
+    source.pipe(inflater);
     for await (const chunk of inflater) {
       if (signal.aborted) throw signal.reason ?? new Error("import cancelled");
       onChunk(chunk as Uint8Array);
     }
   } finally {
+    signal.removeEventListener("abort", abort);
     source.destroy();
     inflater.destroy();
   }
@@ -1523,6 +1535,7 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
   let declaredDecompressedBytes = 0;
   let declaredBinaryBytes = 0;
   for await (const entry of scanCentralDirectory(archive, cdOffset, cdSize, totalEntries)) {
+    job.abort.signal.throwIfAborted();
     // Validate every name before allocating any staging files, and reject
     // unsafe aggregate sizes before decompression begins. Account archives
     // use available disk space rather than a fixed total-byte quota.
@@ -1534,6 +1547,22 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
     if (descriptor.kind === "files") declaredBinaryBytes += entry.uncompressedSize;
   }
   assertExtractionDiskCapacity(stagingDir, declaredDecompressedBytes, declaredBinaryBytes);
+
+  let entriesExtracted = 0;
+  let lastProgressAt = 0;
+  const reportExtraction = (force = false) => {
+    const now = Date.now();
+    if (!force && now - lastProgressAt < 250) return;
+    lastProgressAt = now;
+    emit(job, EventType.USER_IMPORT_PROGRESS, {
+      phase: "extracting",
+      processed: entriesExtracted,
+      total: totalEntries,
+      bytesProcessed: buf.totalDecompressed,
+      bytesTotal: declaredDecompressedBytes,
+    });
+  };
+  reportExtraction(true);
 
   const archiveFd = openSync(job.archivePath, "r");
   const journalFd = openSync(binaryJournalPath, "w");
@@ -1612,6 +1641,7 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
           crcState = updateCrc32(crcState, chunk);
           entry.byteSize += chunk.byteLength;
           buf.totalDecompressed += chunk.byteLength;
+          reportExtraction();
         };
         if (centralEntry.compression === 0) {
           await copyStoredEntry(
@@ -1679,6 +1709,8 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
       } else {
         buf.entries.push(entry);
       }
+      entriesExtracted++;
+      reportExtraction();
 
       if ((buf.entryCount & 15) === 0) await yieldAndCheck(job.abort.signal);
     }
@@ -1686,6 +1718,7 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
     closeSync(journalFd);
     closeSync(archiveFd);
   }
+  reportExtraction(true);
 
   // Find and parse the manifest. If absent the archive is invalid.
   const manifestEntry = buf.entries.find((e) => e.table === "__manifest__");
@@ -1754,13 +1787,13 @@ function ndjsonLineLimitForManifest(manifest: ArchiveManifest | null): number {
 }
 
 /**
- * Read an NDJSON file line-by-line, yielding parsed objects. Enforces the
- * per-line size cap.
+ * Read an NDJSON file line-by-line, yielding parsed objects with their source
+ * byte counts so consumers can bound batches without serializing them again.
  */
 async function* readNdjson(
   path: string,
   maxLineBytes: number = NDJSON_MAX_RECORD_BYTES,
-): AsyncGenerator<Record<string, any>> {
+): AsyncGenerator<{ value: Record<string, any>; byteLength: number }> {
   const decoder = new TextDecoder();
   const buffer = new Uint8Array(ARCHIVE_READ_BYTES);
   const fragments: Uint8Array[] = [];
@@ -1777,7 +1810,7 @@ async function* readNdjson(
     fragments.push(chunk.slice());
     lineBytes += chunk.byteLength;
   };
-  const consumeLine = (): Record<string, any> | null => {
+  const consumeLine = (): { value: Record<string, any>; byteLength: number } | null => {
     if (lineBytes === 0) return null;
     const bytes = new Uint8Array(lineBytes);
     let offset = 0;
@@ -1788,7 +1821,7 @@ async function* readNdjson(
     fragments.length = 0;
     lineBytes = 0;
     const line = decoder.decode(bytes);
-    return line.trim().length > 0 ? JSON.parse(line) : null;
+    return line.trim().length > 0 ? { value: JSON.parse(line), byteLength: bytes.byteLength } : null;
   };
 
   try {
@@ -1920,7 +1953,7 @@ async function applySettingsTable(
   let skipped = 0;
   let lineCount = 0;
 
-  for await (const raw of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
+  for await (const { value: raw } of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
     if (ctx.signal.aborted) throw ctx.signal.reason ?? new Error("import cancelled");
     const key = typeof raw.key === "string" ? raw.key : null;
     if (!key) continue;
@@ -2027,6 +2060,7 @@ async function applyTable(
 
   const db = getDb();
   let batch: Record<string, any>[] = [];
+  let batchBytes = 0;
   const inserts = new Map<string, { columns: string[]; statement: ReturnType<typeof db.prepare> }>();
 
   const getInsert = (row: Record<string, any>) => {
@@ -2077,11 +2111,18 @@ async function applyTable(
     imported += committed.imported;
     skipped += committed.skipped;
     batch = [];
+    batchBytes = 0;
   };
 
   let lineCount = 0;
-  for await (const raw of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
+  const flushBatch = async () => {
+    await commitBatch();
+    emit(ctx.job, EventType.USER_IMPORT_PROGRESS, { phase: "table", table, processed: lineCount });
+    await yieldAndCheck(ctx.signal);
+  };
+  for await (const { value: raw, byteLength } of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
     if (ctx.signal.aborted) throw ctx.signal.reason ?? new Error("import cancelled");
+    if (batch.length > 0 && batchBytes + byteLength > ROW_BATCH_BYTES) await flushBatch();
 
     // Defensive filter for the settings table.
     if (table === "settings" && typeof raw.key === "string" && isSecretSettingKey(raw.key)) {
@@ -2102,17 +2143,10 @@ async function applyTable(
     if (columnSet.has("has_api_key")) filtered.has_api_key = 0;
 
     batch.push(filtered);
+    batchBytes += byteLength;
     lineCount++;
 
-    if (batch.length >= ROW_BATCH) {
-      await commitBatch();
-      emit(ctx.job, EventType.USER_IMPORT_PROGRESS, {
-        phase: "table",
-        table,
-        processed: lineCount,
-      });
-      await yieldAndCheck(ctx.signal);
-    }
+    if (batch.length >= ROW_BATCH || batchBytes >= ROW_BATCH_BYTES) await flushBatch();
   }
   await commitBatch();
 
@@ -2309,8 +2343,26 @@ async function applyLancedbVectors(
     }
 
     const batch: any[] = [];
+    let batchBytes = 0;
     let restored = 0;
-    for await (const row of readNdjson(entry.stagingPath, ctx.ndjsonLineBytes)) {
+    const commitBatch = async () => {
+      await table.add(batch);
+      restored += batch.length;
+      batch.length = 0;
+      batchBytes = 0;
+      await yieldAndCheck(ctx.signal);
+    };
+    for await (const { value: row, byteLength } of readNdjson(entry.stagingPath, ctx.ndjsonLineBytes)) {
+      ctx.signal.throwIfAborted();
+      if (batch.length > 0 && batchBytes + byteLength > ROW_BATCH_BYTES) {
+        try {
+          await commitBatch();
+        } catch (err) {
+          if (ctx.signal.aborted) throw err;
+          console.warn(`[user-data import] LanceDB add failed for ${tableName}:`, err);
+          break;
+        }
+      }
       let vector: Float32Array | null = null;
       if (typeof row.vector_b64 === "string" && row.vector_b64.length > 0) {
         const bytes = Buffer.from(row.vector_b64, "base64");
@@ -2324,16 +2376,15 @@ async function applyLancedbVectors(
       }
       const { vector_b64: _drop, ...rest } = row;
       batch.push({ ...rest, user_id: ctx.userId, vector });
-      if (batch.length >= 256) {
+      batchBytes += byteLength;
+      if (batch.length >= 256 || batchBytes >= ROW_BATCH_BYTES) {
         try {
-          await table.add(batch);
+          await commitBatch();
         } catch (err) {
+          if (ctx.signal.aborted) throw err;
           console.warn(`[user-data import] LanceDB add failed for ${tableName}:`, err);
           break;
         }
-        restored += batch.length;
-        batch.length = 0;
-        await yieldAndCheck(ctx.signal);
       }
     }
     if (batch.length > 0) {
@@ -2457,7 +2508,7 @@ async function applySecrets(
 ): Promise<{ restored: number; skipped: number }> {
   let restored = 0;
   let skipped = 0;
-  for await (const raw of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
+  for await (const { value: raw } of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
     if (ctx.signal.aborted) throw ctx.signal.reason ?? new Error("import cancelled");
     const entry = raw as Partial<EncryptedSecretEntry>;
     if (
@@ -2633,7 +2684,7 @@ async function runImportJob(job: ImportJob): Promise<void> {
     // library/avatar requests must never see a restored row with a missing file.
     emit(job, EventType.USER_IMPORT_PROGRESS, { phase: "files", total: buf.binaryEntryCount });
     let filesDone = 0;
-    for await (const raw of readNdjson(buf.binaryJournalPath)) {
+    for await (const { value: raw } of readNdjson(buf.binaryJournalPath)) {
       if (job.abort.signal.aborted) throw job.abort.signal.reason ?? new Error("cancelled");
       const entry = raw as Partial<BufferedBinaryEntry>;
       if (
