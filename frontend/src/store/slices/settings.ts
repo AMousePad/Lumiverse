@@ -716,7 +716,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   bubbleUseFullAvatar: false,
   bubbleOpacity: 1,
   inputBarEnterToSend: { ...DEFAULT_ENTER_TO_SEND_SETTINGS },
-  saveDraftInput: false,
+  saveDraftInput: true,
   composerActionBar: null,
   defaultImpersonationMode: DEFAULT_IMPERSONATION_MODE,
   chatWidthMode: 'full',
