@@ -375,11 +375,12 @@
     "headerValue": "Value",
     "addHeader": "+ Add header",
     "command": "Command",
-    "commandHint": "The executable to run (e.g. node, python3, npx)",
-    "commandPlaceholder": "npx",
+    "commandHint": "Executable on the backend host. Allowed by default: node, bun, deno, python, python3.",
+    "stdioPolicyHint": "Other executables require MCP_STDIO_ALLOWED_COMMANDS. Package runners such as npx and uvx also require approved packages in MCP_STDIO_ALLOWED_PACKAGES. Set these in the backend environment and restart Lumiverse.",
+    "commandPlaceholder": "node",
     "args": "Arguments",
     "argsHint": "Comma-separated command arguments",
-    "argsPlaceholder": "-y, @modelcontextprotocol/server-filesystem, /path",
+    "argsPlaceholder": "./server.js",
     "env": "Environment Variables",
     "envHint": "Env vars passed to the subprocess. Values are stored encrypted.",
     "varName": "Variable name",
@@ -401,7 +402,8 @@
     "discoveredTools": "Discovered tools",
     "toolCount": "{{count}} tool",
     "toolCount_plural": "{{count}} tools",
-    "testRequestFailed": "Test request failed"
+    "testRequestFailed": "Test request failed",
+    "saveFailed": "Failed to save MCP server configuration"
   },
   "tokenizers": {
     "loading": "Loading tokenizers...",

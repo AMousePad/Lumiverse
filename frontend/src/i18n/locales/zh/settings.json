@@ -257,11 +257,12 @@
     "headerValue": "值",
     "addHeader": "+ 添加请求头",
     "command": "命令",
-    "commandHint": "要运行的可执行文件（如 node、python3、npx）",
-    "commandPlaceholder": "npx",
+    "commandHint": "在后端主机上运行的程序。默认允许：node、bun、deno、python、python3。",
+    "stdioPolicyHint": "其他可执行程序需要配置 MCP_STDIO_ALLOWED_COMMANDS。npx、uvx 等包运行器还需要在 MCP_STDIO_ALLOWED_PACKAGES 中明确允许相应的软件包。请在后端环境中设置这些变量，然后重启 Lumiverse。",
+    "commandPlaceholder": "node",
     "args": "参数",
     "argsHint": "逗号分隔的命令参数",
-    "argsPlaceholder": "-y, @modelcontextprotocol/server-filesystem, /path",
+    "argsPlaceholder": "./server.js",
     "env": "环境变量",
     "envHint": "传给子进程的环境变量，值会加密存储。",
     "varName": "变量名",
@@ -283,7 +284,8 @@
     "discoveredTools": "已发现的工具",
     "testPass": "通过",
     "testFail": "失败",
-    "testRequestFailed": "测试请求失败"
+    "testRequestFailed": "测试请求失败",
+    "saveFailed": "无法保存 MCP 服务器配置"
   },
   "tokenizers": {
     "loading": "正在加载分词器…",

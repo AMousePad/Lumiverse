@@ -341,11 +341,12 @@
     "headerValue": "価値",
     "addHeader": "+ ヘッダーを追加",
     "command": "指示",
-    "commandHint": "実行する実行可能ファイル (node、python3、npx など)",
-    "commandPlaceholder": "npx",
+    "commandHint": "バックエンドホストで実行するプログラム。既定で許可されるもの: node、bun、deno、python、python3。",
+    "stdioPolicyHint": "その他の実行ファイルには MCP_STDIO_ALLOWED_COMMANDS の設定が必要です。npx や uvx などのパッケージランナーには、MCP_STDIO_ALLOWED_PACKAGES でのパッケージの許可も必要です。バックエンドの環境変数を設定し、Lumiverse を再起動してください。",
+    "commandPlaceholder": "node",
     "args": "引数",
     "argsHint": "カンマ区切りのコマンド引数",
-    "argsPlaceholder": "-y、@modelcontextprotocol/server-filesystem、/path",
+    "argsPlaceholder": "./server.js",
     "env": "環境変数",
     "envHint": "Env vars を追加してサブプロセスに渡します。値は暗号化されて保存されます。",
     "varName": "変数名",
@@ -367,7 +368,8 @@
     "discoveredTools": "発見されたツール",
     "toolCount": "{{count}} ツール",
     "toolCount_plural": "{{count}} ツール",
-    "testRequestFailed": "テストリクエストが失敗しました"
+    "testRequestFailed": "テストリクエストが失敗しました",
+    "saveFailed": "MCP サーバー設定を保存できませんでした"
   },
   "tokenizers": {
     "loading": "トークナイザーを読み込み中...",
