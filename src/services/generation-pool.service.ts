@@ -30,6 +30,7 @@ export interface PooledTokensEntry {
   /** Index of the swipe being streamed into, so recovering clients can gate the
    *  streaming buffer to the right swipe even after navigating away. */
   targetSwipeId?: number;
+  backgroundSwipe?: boolean;
   characterName: string;
   characterId?: string;
   model: string;
@@ -118,6 +119,7 @@ export function createPoolEntry(opts: {
   connectionName?: string;
   targetMessageId?: string;
   targetSwipeId?: number;
+  backgroundSwipe?: boolean;
 }): void {
   const entry: PooledTokensEntry = {
     frontendSessionId: opts.frontendSessionId,
@@ -130,6 +132,7 @@ export function createPoolEntry(opts: {
     generationType: opts.generationType,
     targetMessageId: opts.targetMessageId,
     targetSwipeId: opts.targetSwipeId,
+    backgroundSwipe: opts.backgroundSwipe,
     characterName: opts.characterName,
     characterId: opts.characterId,
     model: opts.model,

@@ -57,6 +57,18 @@ Think of swipes as a deck of cards — each one is a different take on the same 
 - **Edit** any individual swipe
 - The currently displayed swipe is what the AI sees as "the message" in subsequent turns
 
+### Generate while reading
+
+On the final assistant reply, **Ctrl+click** the right swipe arrow (Windows/Linux)
+or **Cmd+click** it (Mac) to generate another swipe while keeping the current
+response selected. On mobile, **hold the right swipe arrow** for the same action;
+its context menu is suppressed. **Ctrl/Cmd+Right Arrow** also starts a background
+swipe when swipe navigation is enabled and you are not editing text. With the
+arrow focused, **Ctrl/Cmd+Enter** does the same.
+A pulsing dot points toward the generating swipe; it becomes steady when ready.
+Click that arrow normally when you want to read the new response. This action
+is unavailable while a generation is already running.
+
 ### Why Swipes Matter
 
 Swipes are one of the most powerful features in AI chat. Instead of accepting the first response, you can:

@@ -74,7 +74,7 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
     // startStreaming rejects already-ended generations. Do not attach their
     // swipe anchors or replay their buffers after that rejection.
     if (useStore.getState().activeGenerationId !== genStatus.generationId) return
-    latest.setStreamingSwipeId(genStatus.targetSwipeId ?? null)
+    latest.setStreamingSwipeId(genStatus.targetSwipeId ?? null, genStatus.backgroundSwipe === true)
   }
 
   if (

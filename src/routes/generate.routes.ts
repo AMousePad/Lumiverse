@@ -138,6 +138,7 @@ app.get("/status/:chatId", (c) => {
     generationType: entry.generationType,
     targetMessageId: entry.targetMessageId,
     targetSwipeId: entry.targetSwipeId,
+    backgroundSwipe: entry.backgroundSwipe,
     characterName: entry.characterName,
     characterId: entry.characterId,
     model: entry.model,

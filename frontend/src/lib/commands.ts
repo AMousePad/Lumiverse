@@ -36,14 +36,24 @@ export const GROUP_ORDER: CommandGroup[] = ['actions', 'panels', 'settings', 'ex
 const tc = (key: string, options?: Record<string, unknown>) => i18n.t(key, { ns: 'commands', ...options })
 
 /** Swipe the last assistant message, like the ArrowLeft/ArrowRight shortcut. */
-async function swipeLastAssistant(direction: 'left' | 'right') {
+async function swipeLastAssistant(direction: 'left' | 'right', background = false) {
   const { activeChatId, messages } = useStore.getState()
   const target = messages.findLast((message) => !message.is_user)
   if (!activeChatId || !target) return
-  await executeSwipe(target, activeChatId, direction)
+  await executeSwipe(target, activeChatId, direction, background ? { background: true } : undefined)
 }
 
 export const COMMANDS: Command[] = [
+  {
+    id: 'action-background-swipe',
+    label: 'Generate Swipe in Background',
+    description: 'Generate another swipe without leaving the reply you are reading',
+    icon: RotateCw,
+    keywords: ['swipe', 'background', 'generate', 'alternate'],
+    group: 'actions',
+    scope: 'chat-idle',
+    run: () => swipeLastAssistant('right', true),
+  },
 
 
   {

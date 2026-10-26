@@ -21,8 +21,8 @@ mock.module('@/api/generate', () => ({
   generateApi: { stop: async (...args: unknown[]) => { calls.push(['stop', ...args]); await stopCompletion } },
 }))
 mock.module('@/hooks/useSwipeAction', () => ({
-  executeSwipe: async (message: { id: string }, chatId: string, direction: string) => {
-    calls.push(['swipe', message.id, chatId, direction])
+  executeSwipe: async (message: { id: string }, chatId: string, direction: string, options?: { background: boolean }) => {
+    calls.push(options ? ['swipe', message.id, chatId, direction, options] : ['swipe', message.id, chatId, direction])
   },
 }))
 
@@ -104,6 +104,12 @@ describe('generation-control commands', () => {
     await run('action-swipe-left')
     await run('action-swipe-right')
     expect(calls).toEqual([['swipe', 'a-2', 'chat-1', 'left'], ['swipe', 'a-2', 'chat-1', 'right']])
+  })
+
+  test('background command requests a non-selecting native swipe', async () => {
+    store.messages = [{ id: 'a-1', is_user: false }]
+    await run('action-background-swipe')
+    expect(calls).toEqual([['swipe', 'a-1', 'chat-1', 'right', { background: true }]])
   })
 
   test('swipes do nothing without an assistant message', async () => {
