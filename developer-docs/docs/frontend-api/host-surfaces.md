@@ -38,6 +38,7 @@ Ids in params must match `^[A-Za-z0-9_-]{1,64}$`. Unknown params throw `HOST_ACT
 | Command | Permission | Behavior |
 | --- | --- | --- |
 | `action-regenerate` | `generation` | Generates a new swipe for the last AI reply. |
+| `action-background-swipe` | `generation` | Generates a new swipe of the final assistant reply while keeping its current swipe selected. Does nothing while generation runs or the chat ends with a user message. |
 | `action-continue` | `generation` | Continues the last reply. |
 | `action-stop-generation` | `generation` | Stops every generation of the active chat. Does nothing for a multiplayer room guest. |
 | `action-swipe-left` | `chats` | Shows the previous swipe of the last AI reply. |
