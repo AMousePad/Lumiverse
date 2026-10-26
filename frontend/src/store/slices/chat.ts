@@ -367,7 +367,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
 
       const current = get()
 
-      const resolvedGenerationType = generationType ?? current.streamingGenerationType
+      // The server reports impersonate drafts as plain 'impersonate'; keep the local draft type.
+      const resolvedGenerationType = (generationType === 'impersonate' ? 'impersonate_draft' : generationType) ?? current.streamingGenerationType
       const resolvedRegeneratingMessageId = regeneratingMessageId ?? current.regeneratingMessageId
 
       // If we're already in an optimistic streaming state (beginStreaming was

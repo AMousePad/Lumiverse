@@ -153,7 +153,7 @@ export function useMessageCard(message: Message, chatId: string) {
   const onStreamingSwipe = streamingSwipeId == null || message.swipe_id === streamingSwipeId
   const isRegenerating = isStreaming && regeneratingMessageId === message.id && onStreamingSwipe
   const isContinuing = isStreaming && streamingGenerationType === 'continue' && isLastMessage && !isUser && onStreamingSwipe
-  const isActivelyStreaming = isRegenerating || isContinuing || (isStreaming && isLastMessage && !isUser && !regeneratingMessageId && onStreamingSwipe)
+  const isActivelyStreaming = isRegenerating || isContinuing || (isStreaming && isLastMessage && !isUser && !regeneratingMessageId && onStreamingSwipe && streamingGenerationType !== 'impersonate_draft')
   // When this message is being regenerated, show streaming content in-place
   // instead of the saved (blank) swipe content.
   // When continuing, append streaming content to the existing message content.
