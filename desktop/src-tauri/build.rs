@@ -68,11 +68,13 @@ fn main() {
     stamp_build_revision();
     println!("cargo:rerun-if-changed=src/capture/macos.m");
     println!("cargo:rerun-if-changed=src/system_audio/coreaudio.m");
+    println!("cargo:rerun-if-changed=src/popup_close.m");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         let mut capture = cc::Build::new();
         capture
             .file("src/capture/macos.m")
             .file("src/system_audio/coreaudio.m")
+            .file("src/popup_close.m")
             .flag("-fobjc-arc")
             .flag("-fblocks")
             .compile("lumiverse_capture");
@@ -103,6 +105,7 @@ fn main() {
         println!("cargo:rustc-link-lib=static=clang_rt.osx");
         for framework in [
             "Cocoa",
+            "WebKit",
             "CoreGraphics",
             "AVFoundation",
             "CoreAudio",

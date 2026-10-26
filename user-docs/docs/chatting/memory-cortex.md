@@ -68,7 +68,19 @@ After the chain fails:
 
 **Sidecar Timeout** bounds each call. AI Only with an unavailable sidecar can leave analysis incomplete instead of filling the graph with heuristics.
 
-**Arbitrates Heuristics** lets successful sidecar analysis reject or rename heuristic candidates. **Grades Existing Records** can remove invalid existing entities; user-edited entities are protected from that grading. Inspect the records rather than assuming every fact is correct.
+### Optional Candidate Review
+
+In **Advanced → Candidate review**, enable **Review memory candidates** and choose **Generative sidecar** or **Decision model**. Review is off by default. It covers heuristic, AI and provisional entity proposals, relationships and proposed aliases before they enter the graph. Review adds model requests, including during rebuilds.
+
+For **Decision model**, first create a Decision connection in Connections, then select that connection here. The model override is optional; leaving it empty uses the connection's saved default. Decision review also works with heuristic extraction and importance scoring. AI extraction, fact curation and summaries still use the generative sidecar.
+
+**Minimum confidence** defaults to 0.8. Both the chosen answer's probability and its confidence must meet the threshold; otherwise that candidate is deferred. This is a retention threshold, not a measured guarantee of accuracy. **Review timeout** is capped at 30 seconds per request; **Requests per minute** limits Decision request starts (0 disables throttling).
+
+A failed or incomplete review saves no new graph or salience results for that chunk and leaves it pending for a later warmup or rebuild. A complete review can defer individual candidates; those candidates are omitted while the chunk completes. Review failures do not fall back to unreviewed persistence. Failed or uncertain review of a dormant relationship leaves it dormant with pending evidence.
+
+**Prune Graph** also reviews existing records against historical excerpts. Manually edited entities and their manually edited relationships are preserved. Inspect the results; model review can still make mistakes. Reviewer configuration changes invalidate prior chunk coverage so the next warmup can rebuild it; changing a connection's default model alone requires a manual rebuild.
+
+Passage-wide facts now attach only to approved entities explicitly named in each fact, including accepted aliases. Facts with an ambiguous subject are omitted. Stored fact metadata retains source chunk IDs and short evidence excerpts. When Fact Auto-Pilot is enabled, it selects from the full set of source facts before retention trims overflow, preserving their text, importance and branch tags.
 
 ## Memory Panel
 

@@ -118,7 +118,7 @@ describe("Cortex thinking responses", () => {
   }
 
   test("a twelve-passage batch uses the configured budget and preserves tool results", async () => {
-    const results = Array.from({ length: 12 }, (_, index) => ({ index, importance: 5, key_facts: [`Mara found map ${index}`], entities_present: [] }));
+    const results = Array.from({ length: 12 }, (_, index) => ({ index, importance: 5, key_facts: [`Mara found map ${index}`], entities_present: [], emotional_tones: [], narrative_flags: [], relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] }));
     const sent = mockProvider((body) => body.max_tokens < 8192
       ? truncatedResponse(body)
       : new Response(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "Analyzed the passages." } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "batch-call", type: "function", function: { name: "analyze_passage_batch", arguments: JSON.stringify({ results }) } }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`));

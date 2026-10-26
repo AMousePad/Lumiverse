@@ -231,7 +231,7 @@ const TOOL_ENTITIES: ToolDefinition = {
             entity: { type: "string", description: "Proper name of the entity whose status changed." },
             change: {
               type: "string",
-              enum: ["injured", "healed", "died", "transformed", "betrayed", "allied", "departed", "arrived"],
+              enum: ["injured", "healed", "died", "destroyed", "transformed", "betrayed", "allied", "departed", "arrived"],
               description: "What explicitly happened to this entity in the passage.",
             },
             detail: { type: "string", description: "Brief factual description of the change, not interpretation." },
@@ -671,6 +671,38 @@ function buildEntityHint(options?: {
   return "";
 }
 
+/** An empty extraction is valid; a missing tool or missing field is not. */
+function validateExtractionObject(json: any): void {
+  if (!json || typeof json.importance !== "number" || !Number.isFinite(json.importance)
+    || json.importance < 0 || json.importance > 10) throw new Error("Invalid or missing importance");
+  for (const field of ["emotional_tones", "narrative_flags", "key_facts", "entities_present", "relationships_shown", "status_changes", "color_attributions", "discovered_aliases"]) {
+    if (!Array.isArray(json[field])) throw new Error(`Incomplete extraction: ${field}`);
+  }
+}
+
+function validateExtractionTools(calls: Array<{ name: string; args: Record<string, unknown> }>, graded: boolean): void {
+  const required = ["score_salience", "extract_entities", "extract_relationships", "extract_font_colors", ...(graded ? ["grade_heuristic_candidates"] : [])];
+  for (const name of required) {
+    if (calls.filter((call) => call?.name === name && call.args && typeof call.args === "object").length !== 1) throw new Error(`Incomplete extraction tool: ${name}`);
+  }
+  const args = (name: string): any => calls.find((call) => call?.name === name)!.args;
+  validateExtractionObject({ ...args("score_salience"), ...args("extract_entities"),
+    entities_present: args("extract_entities").entities,
+    relationships_shown: args("extract_relationships").relationships,
+    color_attributions: args("extract_font_colors").color_attributions });
+}
+
+function validateLegacyGrading(value: any, arbiter: NonNullable<Parameters<typeof extractWithSidecar>[3]>["arbiter"], canonicals: string[]): void {
+  if (!arbiter) return;
+  for (const key of ["rejected_heuristic_entities", "transformed_heuristic_entities", "rejected_heuristic_relationships", "rejected_existing_entities"]) {
+    if (!Array.isArray(value?.[key])) throw new Error(`Incomplete legacy grading: ${key}`);
+  }
+  if (value.rejected_heuristic_entities.some((name: string) => !arbiter.heuristicEntities.some((e) => e.name === name))
+    || value.rejected_existing_entities.some((name: string) => !arbiter.existingGraphEntities.includes(name))
+    || value.transformed_heuristic_entities.some((entry: any) => !arbiter.heuristicEntities.some((e) => e.name === entry?.from) || !canonicals.includes(entry?.to))
+    || value.rejected_heuristic_relationships.some((r: any) => !arbiter.heuristicRelationships.some((c) => c.source === r?.source && c.target === r?.target && c.type === r?.type))) throw new Error("Legacy grading targeted an unsupplied candidate or canonical");
+}
+
 // Validate a parsed JSON extraction object into a SidecarExtractionResult.
 function buildResultFromJsonObject(
   json: any,
@@ -679,6 +711,7 @@ function buildResultFromJsonObject(
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
   },
 ): SidecarExtractionResult {
+  validateExtractionObject(json);
   const entities = validateEntities(json.entities_present).filter(
     (e) => !ENTITY_BLOCKLIST.has(e.name.toLowerCase().trim()),
   );
@@ -798,6 +831,8 @@ export async function extractWithSidecar(
 
     // Tool calls: parse structured results from tool_calls
     if (response.tool_calls && response.tool_calls.length > 0) {
+      validateExtractionTools(response.tool_calls, arbiterActive);
+      if (arbiterActive) validateLegacyGrading(response.tool_calls.find((call) => call?.name === "grade_heuristic_candidates")?.args, arbiter, [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
       let result = parseToolCallResults(response.tool_calls);
       // Resolve any remaining aliases to canonical names (safety net if LLM used alias)
       if (options?.knownEntities?.length) {
@@ -815,6 +850,7 @@ export async function extractWithSidecar(
       return null;
     }
 
+    if (arbiterActive) validateLegacyGrading(json.grading, arbiter, [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
     return buildResultFromJsonObject(json, options);
   } catch (err) {
     if (options?.throwOnFailure) throw err;
@@ -854,15 +890,15 @@ function buildArbiterBlock(arbiter: NonNullable<Parameters<typeof extractWithSid
   if (!arbiter) return "";
   const sections: string[] = [];
   if (arbiter.heuristicEntities.length > 0) {
-    const lines = arbiter.heuristicEntities.slice(0, 60).map((e) => `- ${e.name} [${e.type}]`).join("\n");
+    const lines = arbiter.heuristicEntities.map((e) => `- ${e.name} [${e.type}]`).join("\n");
     sections.push(`<heuristic_entities>\n${lines}\n</heuristic_entities>`);
   }
   if (arbiter.heuristicRelationships.length > 0) {
-    const lines = arbiter.heuristicRelationships.slice(0, 60).map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
+    const lines = arbiter.heuristicRelationships.map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
     sections.push(`<heuristic_relationships>\n${lines}\n</heuristic_relationships>`);
   }
   if (arbiter.existingGraphEntities.length > 0) {
-    const lines = arbiter.existingGraphEntities.slice(0, 100).map((n) => `- ${n}`).join("\n");
+    const lines = arbiter.existingGraphEntities.map((n) => `- ${n}`).join("\n");
     sections.push(`<existing_graph_entities>\n${lines}\n</existing_graph_entities>`);
   }
   if (sections.length === 0) return "";
@@ -907,7 +943,7 @@ Analyze EACH passage independently and convert it into structured data.
 
 OUTPUT FORMAT
 Call analyze_passage_batch exactly once with arguments matching this shape:
-{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}]}]}
+{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|destroyed|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}]}]}
 - Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
 - Use empty arrays for any field with nothing to report.
 
@@ -927,7 +963,7 @@ block is present, grade those candidates.
 
 OUTPUT FORMAT
 Call analyze_passage_batch exactly once with arguments matching this shape:
-{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}],"grading":{"rejected_heuristic_entities":[],"transformed_heuristic_entities":[{"from":"","to":""}],"rejected_heuristic_relationships":[{"source":"","target":"","type":""}],"rejected_existing_entities":[]}}]}
+{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|destroyed|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}],"grading":{"rejected_heuristic_entities":[],"transformed_heuristic_entities":[{"from":"","to":""}],"rejected_heuristic_relationships":[{"source":"","target":"","type":""}],"rejected_existing_entities":[]}}]}
 - Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
 - Use empty arrays for any field with nothing to report.
 - Include "grading" ONLY for passages that had an <arbiter> block. For other passages, omit the grading field entirely.
@@ -1020,11 +1056,11 @@ export async function extractBatchWithSidecar(
         const arbiter = options!.perChunkArbiter![i]!;
         const sections: string[] = [];
         if (arbiter.heuristicEntities.length > 0) {
-          const lines = arbiter.heuristicEntities.slice(0, 40).map((e) => `- ${e.name} [${e.type}]`).join("\n");
+          const lines = arbiter.heuristicEntities.map((e) => `- ${e.name} [${e.type}]`).join("\n");
           sections.push(`<heuristic_entities>\n${lines}\n</heuristic_entities>`);
         }
         if (arbiter.heuristicRelationships.length > 0) {
-          const lines = arbiter.heuristicRelationships.slice(0, 40).map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
+          const lines = arbiter.heuristicRelationships.map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
           sections.push(`<heuristic_relationships>\n${lines}\n</heuristic_relationships>`);
         }
         const arbiterBlock = `<arbiter index="${i}">\n${sections.join("\n")}\n</arbiter>`;
@@ -1036,7 +1072,7 @@ export async function extractBatchWithSidecar(
     // passage, so we render it once instead of duplicating it per chunk.
     const batchExisting = options?.batchExistingEntities ?? [];
     const batchExistingBlock = batchExisting.length > 0
-      ? `\n\n<batch_existing_entities>\n${batchExisting.slice(0, 60).map((n) => `- ${n}`).join("\n")}\n</batch_existing_entities>`
+      ? `\n\n<batch_existing_entities>\n${batchExisting.map((n) => `- ${n}`).join("\n")}\n</batch_existing_entities>`
       : "";
 
     const systemPrompt = anyArbiterActive ? BATCH_ARBITER_SYSTEM_PROMPT : BATCH_EXTRACTION_SYSTEM_PROMPT;
@@ -1079,18 +1115,25 @@ export async function extractBatchWithSidecar(
     const toolResults = batchToolCall?.args?.results;
     const parsed = Array.isArray(toolResults) ? toolResults : extractJsonArray(response.content);
     const byIndex = new Map<number, any>();
+    const duplicates = new Set<number>();
     if (parsed) {
       for (const item of parsed) {
-        if (item && typeof item.index === "number") byIndex.set(item.index, item);
+        if (item && Number.isInteger(item.index)) {
+          if (byIndex.has(item.index)) duplicates.add(item.index);
+          byIndex.set(item.index, item);
+        }
       }
     }
 
     const results: Array<SidecarExtractionResult | null> = new Array(chunks.length).fill(null);
     const missing: number[] = [];
     for (let i = 0; i < chunks.length; i++) {
-      const obj = byIndex.get(i);
+      const obj = duplicates.has(i) ? null : byIndex.get(i);
       if (obj) {
-        results[i] = buildResultFromJsonObject(obj, options);
+        try {
+          if (arbiterActiveByIndex[i] || batchExistingActive) validateLegacyGrading(obj.grading, singleChunkArbiterFor(i), [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
+          results[i] = buildResultFromJsonObject(obj, options);
+        } catch { missing.push(i); }
       } else {
         missing.push(i);
       }

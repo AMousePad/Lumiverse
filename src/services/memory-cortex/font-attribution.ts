@@ -763,6 +763,7 @@ export function processChunkFontColors(
   knownEntityNames: string[],
   entityIdByName: Map<string, string>,
   thoughtDelimiters?: ThoughtDelimiters,
+  persist = true,
 ): { strippedContent: string; attributions: ColorAttribution[] } {
   const blocks = extractColorBlocks(content, thoughtDelimiters);
   if (blocks.length === 0) {
@@ -801,7 +802,7 @@ export function processChunkFontColors(
     // Check existing high-confidence mapping first
     const existing = lookupColor(chatId, block.hexColor);
     if (existing && existing.entityId) {
-      recordColorAttribution(chatId, block.hexColor, existing.entityId, block.usageType, block.content.slice(0, 80));
+      if (persist) recordColorAttribution(chatId, block.hexColor, existing.entityId, block.usageType, block.content.slice(0, 80));
       const entityName = knownEntityNames.find((n) => entityIdByName.get(n.toLowerCase()) === existing.entityId);
       blockResults.push({
         block,
@@ -916,7 +917,7 @@ export function processChunkFontColors(
       continue;
     }
 
-    if (result.attribution.entityName) {
+    if (persist && result.attribution.entityName) {
       const entityId = entityIdByName.get(result.attribution.entityName.toLowerCase()) || null;
       recordColorAttribution(chatId, result.block.hexColor, entityId, result.block.usageType, result.block.content.slice(0, 80));
     }

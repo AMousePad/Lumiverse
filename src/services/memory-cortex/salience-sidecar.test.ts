@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   extractBatchWithSidecar,
+  extractWithSidecar,
   getToolChoiceParams,
   parseToolCallResults,
 } from "./salience-sidecar";
@@ -116,14 +117,14 @@ describe("extractBatchWithSidecar", () => {
       { index: 1, content: "Tovin crossed the river." },
     ], async () => {
       calls++;
-      return { content: JSON.stringify([{ index: 0, importance: 5, entities_present: [], key_facts: [] }]) };
+      return { content: JSON.stringify([{ index: 0, importance: 5, entities_present: [], key_facts: [], emotional_tones: [], narrative_flags: [], relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] }]) };
     }, "sidecar-test");
     expect(calls).toBe(1);
     expect(result[0]?.score).toBe(0.5);
     expect(result[1]).toBeNull();
   });
 
-  test("ignores sparse tool-call entries from a provider", async () => {
+  test("rejects an unexpected tool for a single passage", async () => {
     const result = await extractBatchWithSidecar([
       { index: 0, content: "Mara found the missing map." },
     ], async () => ({
@@ -150,7 +151,7 @@ describe("extractBatchWithSidecar", () => {
       ],
     }), "sidecar-test");
 
-    expect(result[0]?.score).toBe(0.5);
+    expect(result[0]).toBeNull();
   });
 
   test("uses one structured batch tool call and maps results by passage index", async () => {
@@ -200,5 +201,17 @@ describe("extractBatchWithSidecar", () => {
     expect(result.map((entry) => entry?.score)).toEqual([0.5, 0.7]);
     expect(result[0]?.entitiesPresent[0]?.name).toBe("Mara");
     expect(result[1]?.entitiesPresent[0]?.name).toBe("Tovin");
+  });
+});
+
+describe("extraction completeness", () => {
+  test("a salience-only response cannot warm a chunk", async () => {
+    await expect(extractWithSidecar("Mara found the map.", async () => ({ content: "", tool_calls: [
+      { name: "score_salience", args: { importance: 7, emotional_tones: [], narrative_flags: [], key_facts: [] } },
+    ] }), "test", { throwOnFailure: true })).rejects.toThrow("Incomplete extraction tool");
+  });
+  test("a complete empty JSON extraction succeeds", async () => {
+    const result = await extractWithSidecar("Quiet weather.", async () => ({ content: JSON.stringify({ importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [], relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] }) }), "test", { throwOnFailure: true });
+    expect(result?.score).toBe(0.2);
   });
 });

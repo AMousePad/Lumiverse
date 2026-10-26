@@ -173,19 +173,22 @@ mock.module("@/components/panels/connection-manager/ModelCombobox", () => ({
     createElement("input", { defaultValue: value, placeholder }),
 }));
 mock.module("@/components/shared/ConnectionSelect", () => ({
-  default: ({ value, ariaLabel, onChange }: {
+  default: ({ value, ariaLabel, onChange, kind }: {
     value: string;
+    kind?: string;
     ariaLabel?: string;
     onChange: (id: string) => void;
   }) =>
     createElement("select", {
       "aria-label": ariaLabel,
+      "data-kind": kind,
       value,
       onChange: (event: { target: { value: string } }) => onChange(event.target.value),
     },
       createElement("option", { value: "" }, "none"),
       createElement("option", { value: "primary-conn" }, "primary"),
       createElement("option", { value: "secondary-conn" }, "secondary"),
+      createElement("option", { value: "decision-conn" }, "decision"),
     ),
 }));
 mock.module("@/components/shared/NumericInput", () => ({
@@ -257,7 +260,7 @@ describe("MemoryCortexSettings secondary fallback", () => {
       root!.render(createElement(MemoryCortexSettings));
       await Promise.resolve();
     });
-    await waitFor(() => el.querySelector('[data-testid="cortex-query-add-fallback"]') !== null);
+    await waitFor(() => el.querySelector('[data-testid="cortex-query-add-fallback"]') !== null || el.querySelector('[aria-label="memoryCortex.decisionConnection"]') !== null);
     return el;
   };
 
@@ -296,6 +299,18 @@ describe("MemoryCortexSettings secondary fallback", () => {
 
   const selectIn = (h: HTMLDivElement, testId: string) =>
     h.querySelector<HTMLSelectElement>(`[data-testid="${testId}"] select`);
+
+  test("Decision review is configurable without a generative sidecar", async () => {
+    persistedConfig = { ...structuredClone(config), sidecar: { ...config.sidecar, connectionProfileId: null },
+      sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: true },
+      arbitration: { backend: "decision", connectionProfileId: null, model: null, timeoutMs: 30000, requestsPerMinute: 0, minConfidence: 0.8 },
+    } as typeof config;
+    const h = await mount();
+    const select = h.querySelector<HTMLSelectElement>('[aria-label="memoryCortex.decisionConnection"]');
+    expect(select?.getAttribute("data-kind")).toBe("decision");
+    await changeSelect(select!, "decision-conn");
+    expect(patches.at(-1)).toMatchObject({ arbitration: { backend: "decision", connectionProfileId: "decision-conn", minConfidence: 0.8 } });
+  });
 
   test("renders secondary profile controls and unavailable state", async () => {
     const h = await mount();

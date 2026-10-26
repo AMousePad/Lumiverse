@@ -81,7 +81,7 @@ fn macos_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tau
     let hide_frontend = MenuItem::with_id(
         app,
         "frontend.hide",
-        "Hide Frontend",
+        "Close Window",
         true,
         Some("CmdOrCtrl+W"),
     )?;
@@ -158,7 +158,9 @@ fn handle_macos_menu_event<R: tauri::Runtime>(
             }
         }
         "frontend.hide" => {
-            frontend::hide_frontend_window(app);
+            if !frontend::close_focused_popup(app) {
+                frontend::hide_frontend_window(app);
+            }
         }
         #[cfg(debug_assertions)]
         "frontend.devtools" => {

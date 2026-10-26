@@ -80,6 +80,7 @@ export default function DecisionConnectionItem({
           profile={profile}
           onSave={handleSaveEdit}
           onCancel={() => setEditing(false)}
+          onOAuthComplete={(updated) => onUpdate(updated)}
         />
       ) : (
         <>

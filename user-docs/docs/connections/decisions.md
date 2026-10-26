@@ -6,9 +6,11 @@ Decision models answer structured questions about text or JSON: choose an option
 
 1. Open **Connections → Decision Models**.
 2. Select **New Connection** and give it a name.
-3. Choose **OpenRouter**, **NanoGPT**, or **TypeSafe** and enter that provider's API key.
+3. Choose **OpenRouter**, **NanoGPT**, or **TypeSafe**. You can enter that provider's API key or use **Sign in with OpenRouter** / **Sign in with NanoGPT** with the provider's default API URL.
 4. Select a model from the model picker or enter its exact ID. OpenRouter suggests `~typesafe/jev-latest`; NanoGPT suggests `typesafe/jev-latest`; TypeSafe suggests `jev-latest`.
-5. Enable **Set as default** if extensions should use this connection when they do not select one explicitly, then save.
+5. Enable **Set as default** if extensions should use this connection when they do not select one explicitly, then save or sign in. Sign-in creates the connection after you authorize it and stores the key securely. Cancelling before authorization creates no connection.
+
+To replace a key on an existing OpenRouter or NanoGPT connection, edit it and use **Sign in**. Save any provider or API URL changes first. After signing in, save any other edits you made to the connection.
 
 The API URL can remain blank for the provider's default. A custom URL should be a versioned base URL, such as `https://proxy.example/v1`. Changing the provider or endpoint clears the previous credential unless you enter a replacement key. **Remove saved API key** clears a stored key explicitly.
 

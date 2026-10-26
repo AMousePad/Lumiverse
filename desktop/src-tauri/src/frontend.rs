@@ -141,6 +141,80 @@ fn configure_webview_runtime<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
     crate::profile::configure_webview(builder)
 }
 
+fn create_frontend_popup(
+    app: &AppHandle,
+    url: tauri::Url,
+    features: tauri::webview::NewWindowFeatures,
+) -> tauri::webview::NewWindowResponse<tauri::Wry> {
+    // Only an empty placeholder or a web page may become a native popup.
+    if !matches!(url.scheme(), "http" | "https") && url.as_str() != "about:blank" {
+        return tauri::webview::NewWindowResponse::Deny;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let Some(main_thread) = objc2::MainThreadMarker::new() else {
+            return tauri::webview::NewWindowResponse::Deny;
+        };
+        // WebKit's child configuration shares the opener's content controller.
+        // Reusing it inherits the opener's non-configurable Tauri metadata and
+        // IPC handler: callbacks then identify as `frontend`, and destroying a
+        // child can remove its opener's IPC handler. Keep WebKit's process pool
+        // and cookie store, but let Tauri install fresh scripts/IPC for this view.
+        unsafe {
+            let configuration = &features.opener().target_configuration;
+            configuration.setUserContentController(&objc2_web_kit::WKUserContentController::new(
+                main_thread,
+            ));
+        }
+    }
+
+    let popup_id = NEXT_FRONTEND_POPUP_ID.fetch_add(1, Ordering::Relaxed);
+    let label = format!("frontend-popup-{popup_id}");
+    let child_app = app.clone();
+    let popup = configure_webview_runtime(WebviewWindowBuilder::new(
+        app,
+        &label,
+        // The browser attaches this view to the opener and loads the original
+        // request after Create returns. Loading the target here as well races
+        // that handoff and can repeat one-use OAuth redirects.
+        WebviewUrl::External("about:blank".parse().unwrap()),
+    ))
+    .title("Lumiverse Authorization")
+    .window_features(features)
+    .initialization_script(include_str!("frontend-popup.js"))
+    .on_new_window(move |url, features| create_frontend_popup(&child_app, url, features))
+    .on_document_title_changed(|window, title| {
+        let _ = window.set_title(&title);
+    })
+    .build();
+
+    match popup {
+        Ok(window) => {
+            #[cfg(target_os = "macos")]
+            {
+                // An about:blank reservation may never execute initialization
+                // scripts. Handle its browser close through WKUIDelegate too.
+                if let Err(error) = window.with_webview(|webview| unsafe {
+                    extern "C" {
+                        fn lumiverse_install_popup_close_handler(webview: *mut std::ffi::c_void);
+                    }
+                    lumiverse_install_popup_close_handler(webview.inner());
+                }) {
+                    eprintln!("[desktop-window] could not install popup close handler: {error}");
+                    let _ = window.destroy();
+                    return tauri::webview::NewWindowResponse::Deny;
+                }
+            }
+            tauri::webview::NewWindowResponse::Create { window }
+        }
+        Err(error) => {
+            eprintln!("[desktop-window] could not create frontend popup: {error}");
+            tauri::webview::NewWindowResponse::Deny
+        }
+    }
+}
+
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopDownloadEvent {
@@ -188,15 +262,41 @@ fn is_frontend_popup_label(label: &str) -> bool {
     })
 }
 
-/// Destroy the invoking SSO popup without granting remote content generic
+fn close_popup_window<R: tauri::Runtime>(window: &WebviewWindow<R>) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        // Let WebKit close the browsing context before WKUIDelegate closes the
+        // native container, so the opener also observes WindowProxy.closed.
+        window.eval("window.close()").or_else(|_| window.destroy())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.destroy()
+    }
+}
+
+/// Close the invoking authorization popup without granting remote content generic
 /// access to other native windows. Browser `window.close()` is not a reliable
 /// lifecycle signal for Rust-created WebviewWindows on every platform.
 #[tauri::command]
 pub fn close_current_sso_popup(window: WebviewWindow) -> Result<(), String> {
     if !is_frontend_popup_label(window.label()) {
-        return Err("Only a Lumiverse sign-in popup may invoke this command".into());
+        return Err("Only a Lumiverse authorization popup may invoke this command".into());
     }
-    window.destroy().map_err(|error| error.to_string())
+    close_popup_window(&window).map_err(|error| error.to_string())
+}
+
+/// Cmd+W belongs to the focused authorization window while one is active.
+/// Hiding the main frontend instead leaves the popup stranded on macOS.
+pub fn close_focused_popup<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    let popup = app.webview_windows().into_values().find(|window| {
+        is_frontend_popup_label(window.label()) && window.is_focused().unwrap_or(false)
+    });
+    if let Some(window) = popup {
+        let _ = close_popup_window(&window);
+        return true;
+    }
+    false
 }
 
 #[derive(Default)]
@@ -744,33 +844,7 @@ pub fn show_frontend(
         // main frontend. Reuse the opener's WebView configuration/environment;
         // that keeps cookies and window.opener available for the completion
         // page's authenticated handoff on macOS, Windows, and Linux.
-        .on_new_window(move |popup_url, features| {
-            if !matches!(popup_url.scheme(), "about" | "http" | "https") {
-                return tauri::webview::NewWindowResponse::Deny;
-            }
-
-            let popup_id = NEXT_FRONTEND_POPUP_ID.fetch_add(1, Ordering::Relaxed);
-            let label = format!("frontend-popup-{popup_id}");
-            let popup = configure_webview_runtime(WebviewWindowBuilder::new(
-                &popup_app,
-                &label,
-                WebviewUrl::External(popup_url),
-            ))
-            .title("Lumiverse Sign-In")
-            .window_features(features)
-            .on_document_title_changed(|window, title| {
-                let _ = window.set_title(&title);
-            })
-            .build();
-
-            match popup {
-                Ok(window) => tauri::webview::NewWindowResponse::Create { window },
-                Err(error) => {
-                    eprintln!("[desktop-window] could not create frontend popup: {error}");
-                    tauri::webview::NewWindowResponse::Deny
-                }
-            }
-        })
+        .on_new_window(move |url, features| create_frontend_popup(&popup_app, url, features))
         .visible(false);
     if let Some([red, green, blue, alpha]) = webview_background {
         builder = builder.background_color(tauri::webview::Color(red, green, blue, alpha));

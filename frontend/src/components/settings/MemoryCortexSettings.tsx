@@ -32,6 +32,7 @@ import {
   type CortexModelFallbackPair,
   type CortexUsageStats,
 } from "@/api/memory-cortex";
+import ConnectionSelect from "@/components/shared/ConnectionSelect";
 import SidecarConnectionPicker from "@/components/shared/SidecarConnectionPicker";
 import { getReasoningBindingSummary } from "@/lib/reasoning-binding";
 import { readProductivityFeature } from "@/lib/spindle/productivity-feature-toggles";
@@ -839,31 +840,61 @@ export default function MemoryCortexSettings() {
                     <option value="skip">{t("memoryCortex.fallbackSkip")}</option>
                   </select>
                 </div>
-                <div className={styles.toggleRow}>
-                  <Toggle.Checkbox
-                    checked={config.sidecarReliability?.arbitratesHeuristics ?? false}
-                    onChange={(v) => updateConfig({
-                      sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: v },
-                    })}
-                    label={t("memoryCortex.arbitratesHeuristics")}
-                    hint={t("memoryCortex.arbitratesHeuristicsHint")}
-                  />
-                </div>
-                <div className={styles.toggleRow}>
-                  <Toggle.Checkbox
-                    checked={config.sidecarReliability?.gradesExistingRecords ?? false}
-                    onChange={(v) => updateConfig({
-                      sidecarReliability: { ...config.sidecarReliability, gradesExistingRecords: v },
-                    })}
-                    label={t("memoryCortex.pruneGraph")}
-                    hint={t("memoryCortex.pruneGraphHint")}
-                  />
-                </div>
                 <div className={styles.hintText}>
                   {t("memoryCortex.sidecarLongHint")}
                 </div>
               </>
             )}
+          </div>
+
+          <div className={styles.section}>
+            <div className={styles.sectionHeader}><Shield size={14} /><span>{t("memoryCortex.arbitrationTitle")}</span></div>
+            <div className={styles.toggleRow}>
+              <Toggle.Checkbox checked={config.sidecarReliability?.arbitratesHeuristics ?? false}
+                onChange={(v) => updateConfig({ sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: v } })}
+                label={t("memoryCortex.arbitratesHeuristics")} hint={t("memoryCortex.arbitratesHeuristicsHint")} />
+            </div>
+            {config.sidecarReliability?.arbitratesHeuristics && (() => {
+              const arbitration = config.arbitration ?? { backend: "sidecar" as const, connectionProfileId: null, model: null, timeoutMs: 30000, requestsPerMinute: 0, minConfidence: 0.8 };
+              const update = (patch: Partial<typeof arbitration>) => updateConfig({ arbitration: { ...arbitration, ...patch } });
+              return <>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>{t("memoryCortex.arbitrationBackend")}</span>
+                  <select aria-label={t("memoryCortex.arbitrationBackend")} className={styles.selectInput} value={arbitration.backend} onChange={(e) => update({ backend: e.target.value as "sidecar" | "decision" })}>
+                    <option value="sidecar">{t("memoryCortex.arbitrationSidecar")}</option>
+                    <option value="decision">{t("memoryCortex.arbitrationDecision")}</option>
+                  </select>
+                </div>
+                {arbitration.backend === "decision" && <>
+                  <ConnectionSelect kind="decision" value={arbitration.connectionProfileId ?? ""}
+                    onChange={(id) => update({ connectionProfileId: id || null, model: null })}
+                    withModel seedDefaultModel={false} modelValue={arbitration.model ?? ""}
+                    onModelChange={(model) => update({ model: model || null })} clearable portal
+                    ariaLabel={t("memoryCortex.decisionConnection")} modelPlaceholder={t("memoryCortex.useConnectionDefault")} />
+                  <div className={styles.infoRow}>
+                    <span className={styles.infoLabel}>{t("memoryCortex.arbitrationConfidence")}</span>
+                    <NumericInput className={styles.numberInput} value={arbitration.minConfidence} min={0} max={1} step={0.05}
+                      onChange={(v) => update({ minConfidence: v ?? 0.8 })} />
+                  </div>
+                  <div className={styles.infoRow}>
+                    <span className={styles.infoLabel}>{t("memoryCortex.rpmLimit")}</span>
+                    <NumericInput className={styles.numberInput} value={arbitration.requestsPerMinute} min={0} max={600} integer
+                      onChange={(v) => update({ requestsPerMinute: v ?? 0 })} />
+                  </div>
+                </>}
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>{t("memoryCortex.arbitrationTimeout")}</span>
+                  <NumericInput className={styles.numberInput} value={arbitration.timeoutMs / 1000} min={0.1} max={30} step={1}
+                    onChange={(v) => update({ timeoutMs: (v ?? 30) * 1000 })} />
+                </div>
+                <div className={styles.toggleRow}>
+                  <Toggle.Checkbox checked={config.sidecarReliability.gradesExistingRecords}
+                    onChange={(v) => updateConfig({ sidecarReliability: { ...config.sidecarReliability, gradesExistingRecords: v } })}
+                    label={t("memoryCortex.pruneGraph")} hint={t("memoryCortex.pruneGraphHint")} />
+                </div>
+                <div className={styles.hintText}>{t("memoryCortex.arbitrationHint")}</div>
+              </>;
+            })()}
           </div>
 
           {/* ── Entity Whitelist ── */}
