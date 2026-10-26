@@ -3,6 +3,9 @@
 import { describe, expect, mock, test } from 'bun:test'
 import { isOpaqueThemeColor, toOpaqueRgb, withPreservedAlpha } from '../theme/themeColor'
 import type { CharacterThemeOverlay, ThemeConfig } from '../types/theme'
+import { DEFAULT_THEME } from '../theme/presets'
+import { generateThemeVariables } from '../theme/engine'
+import { themeControls } from '../lib/deviceThemeControls'
 
 mock.module('@/store', () => ({
   useStore: Object.assign(() => undefined, { getState: () => ({}) }),
@@ -126,5 +129,69 @@ describe('native desktop surface policy', () => {
     expect(surface.surfaceMode).toBe('translucent')
     expect(surface.blur).toBeTrue()
     expect(surface.nativeColor).toEqual([14, 11, 17])
+  })
+})
+
+
+describe('device theme controls', () => {
+  test.each([false, true])('uses local glass opacity throughout a Spindle palette (glass: %s)', (enableGlass) => {
+    const theme = { ...DEFAULT_THEME, enableGlass: !enableGlass }
+    const accent = { h: 120, s: 50, l: 60 }
+    // applyPalette generates these maps on the server using the synced theme.
+    const overrides = { fixture: {
+      extensionId: 'fixture', extensionName: 'Fixture', variables: {}, paletteAccent: accent,
+      variablesByMode: { dark: generateThemeVariables({ ...theme, accent }, 'dark') },
+    } }
+    const controls = themeControls({ enableGlass })
+    const resolved = buildResolvedThemeVars(theme, null, overrides, {}, 'dark', controls)
+    const expected = generateThemeVariables({ ...theme, ...controls, accent }, 'dark')
+    for (const key of ['--lumiverse-bg', '--lumiverse-bg-elevated', '--lumiverse-bg-hover',
+      '--lumiverse-surface', '--lumiverse-surface-raised', '--lumiverse-surface-hover',
+      '--lcs-glass-bg', '--lcs-glass-bg-hover', '--lcs-glass-border', '--lcs-glass-border-hover']) {
+      // Compare alpha independently of the extension's chosen surface color.
+      expect(withPreservedAlpha('#ffffff', resolved.vars[key])).toBe(withPreservedAlpha('#ffffff', expected[key]))
+    }
+  })
+
+  test.each([false, true])('preserves extension glass surface colors when enabling local scale controls (full theme: %s)', (full) => {
+    const variables = full
+      ? generateThemeVariables({ ...DEFAULT_THEME, accent: { h: 120, s: 50, l: 60 } }, 'dark')
+      : { '--lcs-glass-bg': 'rgba(12, 30, 18, 0.55)', '--lcs-glass-bg-hover': 'rgba(18, 40, 24, 0.65)' }
+    const overrides = { fixture: { extensionId: 'fixture', extensionName: 'Fixture', variables } }
+    const before = buildResolvedThemeVars(DEFAULT_THEME, null, overrides, {}, 'dark')
+    const after = buildResolvedThemeVars(DEFAULT_THEME, null, overrides, {}, 'dark', themeControls({ uiScale: 0.75 }))
+    for (const key of ['--lcs-glass-bg', '--lcs-glass-bg-hover']) {
+      expect(toOpaqueRgb(after.vars[key])).toBe(toOpaqueRgb(before.vars[key]))
+    }
+  })
+
+  test.each(['dark', 'light'] as const)('resolves device controls without changing authored values in %s mode', (mode) => {
+    const theme = { ...DEFAULT_THEME, fontScale: 1.2, uiScale: 1.1 }
+    const controls = themeControls({ radiusScale: 1.5, fontScale: 0.9, uiScale: 0.75, enableGlass: false })
+    const resolved = buildResolvedThemeVars(theme, null, {}, {}, mode, controls)
+    expect(resolved.config).toMatchObject(controls)
+    expect(resolved.vars).toMatchObject({
+      '--lumiverse-font-scale': '0.9', '--lumiverse-ui-scale': '0.75',
+      '--lumiverse-radius': '12px', '--lcs-radius': '21px', '--lcs-glass-blur': '0px',
+    })
+    expect(theme).toMatchObject({ fontScale: 1.2, uiScale: 1.1 })
+    expect(buildResolvedThemeVars(theme, null, {}, {}, mode).vars['--lumiverse-ui-scale']).toBe('1.1')
+  })
+
+  test.each([false, true])('keeps local preference tokens above extension overrides (full theme: %s)', (full) => {
+    const variables: Record<string, string> = {
+      '--lumiverse-ui-scale': '1.5', '--lumiverse-font-scale': '2',
+      '--lcs-glass-blur': '20px', '--lumiverse-radius': '40px', '--lumiverse-primary': '#ff0000',
+    }
+    if (full) for (let i = 0; i < 40; i++) variables[`--fixture-${i}`] = '1'
+    const overrides = { fixture: { extensionId: 'fixture', extensionName: 'Fixture', variables, paletteAccent: { h: 120, s: 50, l: 60 } } }
+    if (full) delete overrides.fixture.paletteAccent
+    const controls = themeControls({ uiScale: 0.75, fontScale: 0.9, enableGlass: false, radiusScale: 1 })
+    const resolved = buildResolvedThemeVars(DEFAULT_THEME, null, overrides, {}, 'dark', controls)
+    expect(resolved.vars).toMatchObject({
+      '--lumiverse-ui-scale': '0.75', '--lumiverse-font-scale': '0.9',
+      '--lcs-glass-blur': '0px', '--lumiverse-radius': '8px', '--lumiverse-primary': '#ff0000',
+    })
+    expect(buildResolvedThemeVars(DEFAULT_THEME, null, overrides, {}, 'dark').vars['--lumiverse-ui-scale']).toBe('1.5')
   })
 })

@@ -2,6 +2,7 @@ import { hasTauriDesktopBridge } from '@/lib/desktopWebView'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useStore } from '@/store'
+import { activeDeviceThemeControls, resolveDeviceTheme, useDeviceThemeControls, type ThemeControls } from '@/lib/deviceThemeControls'
 import { generateThemeVariables } from '@/theme/engine'
 import { DEFAULT_THEME, PRESETS } from '@/theme/presets'
 import { isOpaqueThemeColor, toOpaqueRgb, toOpaqueRgbChannels, withPreservedAlpha } from '@/theme/themeColor'
@@ -421,14 +422,21 @@ function buildColorInterpolator(from: string, to: string): ((t: number) => strin
 /** Threshold: if an extension override provides this many variables, it IS the theme. */
 const FULL_THEME_MIN_KEYS = 40
 
+const GLASS_COLOR_KEYS = new Set([
+  '--lumiverse-bg', '--lumiverse-bg-elevated', '--lumiverse-bg-hover',
+  '--lumiverse-surface', '--lumiverse-surface-raised', '--lumiverse-surface-hover',
+  '--lcs-glass-bg', '--lcs-glass-bg-hover', '--lcs-glass-border', '--lcs-glass-border-hover',
+])
+
 export function buildResolvedThemeVars(
   theme: ThemeConfig | null,
   characterThemeOverlay: CharacterThemeOverlay | null,
   extensionThemeOverrides: ReturnType<typeof useStore.getState>['extensionThemeOverrides'],
   mutedExtensionThemes: ReturnType<typeof useStore.getState>['mutedExtensionThemes'],
   modeOverride?: ResolvedMode,
+  deviceControls: ThemeControls | null = null,
 ): { config: ThemeConfig; mode: ResolvedMode; vars: Record<string, string>; hasOverrides: boolean; hasPaletteOverride: boolean } {
-  const config = theme ?? DEFAULT_THEME
+  const config = resolveDeviceTheme(theme, deviceControls)
   const mode = modeOverride ?? resolveMode(config)
 
   // Filter out overrides whose extension has been muted by the user in the
@@ -475,15 +483,30 @@ export function buildResolvedThemeVars(
     : config
 
   const baseVars = generateThemeVariables(effectiveConfig, mode)
+  let controlVars = baseVars
+  // Device preferences own geometry and glass opacity; extensions still own palette colors.
+  const preserveDeviceControls = (vars: Record<string, string>) => {
+    if (deviceControls) {
+      for (const key of Object.keys(controlVars)) {
+        if (GLASS_COLOR_KEYS.has(key)) {
+          vars[key] = withPreservedAlpha(vars[key], controlVars[key]) ?? vars[key]
+        } else if (key.startsWith('--lumiverse-radius') || key.startsWith('--lcs-radius')
+          || key.startsWith('--lcs-glass-') || key === '--lumiverse-font-scale' || key === '--lumiverse-ui-scale') {
+          vars[key] = controlVars[key]
+        }
+      }
+    }
+    return vars
+  }
 
   if (fullThemeVars) {
     return {
       config,
       mode,
-      vars: {
+      vars: preserveDeviceControls({
         ...baseVars,
         ...fullThemeVars,
-      },
+      }),
       hasOverrides: true,
       hasPaletteOverride,
     }
@@ -491,10 +514,11 @@ export function buildResolvedThemeVars(
 
   // Partial overrides: generate the user's base theme, then layer on the
   // extension's handful of tweaks.
-  const vars = baseVars
+  const vars = { ...baseVars }
   for (const override of activeOverrides) {
     if (override.paletteAccent) {
-      Object.assign(vars, generateThemeVariables({ ...effectiveConfig, accent: override.paletteAccent }, mode))
+      controlVars = generateThemeVariables({ ...effectiveConfig, accent: override.paletteAccent }, mode)
+      Object.assign(vars, controlVars)
     }
 
     for (const [key, value] of Object.entries(override.variables)) {
@@ -508,11 +532,12 @@ export function buildResolvedThemeVars(
     }
   }
 
-  return { config: effectiveConfig, mode, vars, hasOverrides, hasPaletteOverride }
+  return { config: effectiveConfig, mode, vars: preserveDeviceControls(vars), hasOverrides, hasPaletteOverride }
 }
 
 export function useThemeApplicator() {
   const theme = useStore((s) => s.theme) as ThemeConfig | null
+  const deviceControls = useDeviceThemeControls(activeDeviceThemeControls)
   const characterThemeOverlay = useStore((s) => s.characterThemeOverlay)
   const extensionThemeOverrides = useStore((s) => s.extensionThemeOverrides)
   const mutedExtensionThemes = useStore((s) => s.mutedExtensionThemes)
@@ -536,7 +561,7 @@ export function useThemeApplicator() {
     const motionMq = window.matchMedia('(prefers-reduced-motion: reduce)')
 
     const applyResolvedTheme = (modeOverride?: ResolvedMode) => {
-      const { config, mode, vars, hasOverrides, hasPaletteOverride } = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, modeOverride)
+      const { config, mode, vars, hasOverrides, hasPaletteOverride } = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, modeOverride, deviceControls)
       const nextKeys = Object.keys(vars)
 
       for (const key of prevKeysRef.current) {
@@ -628,7 +653,7 @@ export function useThemeApplicator() {
     const config = initial?.config ?? (theme ?? DEFAULT_THEME)
 
     const updateGlass = () => {
-      const latest = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes)
+      const latest = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, undefined, deviceControls)
       if (latest.config.enableGlass && latest.config.renderingMode !== 'efficiency' && !motionMq.matches) {
         root.setAttribute('data-glass', '')
       } else {
@@ -654,5 +679,5 @@ export function useThemeApplicator() {
     return () => {
       motionMq.removeEventListener('change', updateGlass)
     }
-  }, [theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes])
+  }, [theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, deviceControls])
 }

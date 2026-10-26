@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, jest, mock, test } from 'bun:test'
+import { useDeviceThemeControls, themeControls } from '@/lib/deviceThemeControls'
 import { JSDOM } from 'jsdom'
 import { act, forwardRef, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import type { ReactVirtualizerOptions, Virtualizer } from '@tanstack/react-virtual'
@@ -281,6 +282,7 @@ mock.module('@/lib/imageDecodeCache', () => ({
   prefetchImages: prefetchLandingImages,
 }))
 mock.module('@/lib/uiScale', () => ({
+  normalizeUiScale: (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(1.5, Math.max(0.5, value)) : 1,
   measureLayoutHeight: () => 0,
   renderedPxToLayoutPx: (value: number) => value,
   getUiScale: () => 1,
@@ -596,6 +598,7 @@ afterEach(async () => {
   await act(async () => {
     for (const { root } of roots) root.unmount()
   })
+  useDeviceThemeControls.setState({ userId: null, enabled: false, controls: null })
   document.body.replaceChildren()
   document.documentElement.removeAttribute('data-tauri-desktop')
   document.documentElement.removeAttribute('data-platform')
@@ -1162,6 +1165,22 @@ describe('LandingPage character library', () => {
     expect(options.measureElement!(document.createElement('div'), undefined, {
       indexFromElement: () => 0, options,
     } as unknown as Virtualizer<HTMLDivElement, Element>)).toBe(98)
+    await settleDeferred(refresh, page(saved.items))
+  })
+
+  test('invalidates compact row measurements for device font changes while preserving the authored theme', async () => {
+    storeState = { ...createStoreState(false), landingPageLayoutMode: 'compact', theme: { fontScale: 1 } }
+    const saved = measuredLandingSnapshot('compact')
+    writeLandingPageSnapshot(saved)
+    const refresh = createDeferred<SummaryPage>()
+    listRecentGrouped.mockReturnValue(refresh.promise)
+    await mountLanding()
+    expect(measureChatRows).not.toHaveBeenCalled()
+    await act(async () => {
+      useDeviceThemeControls.setState({ userId: 'fixture', enabled: true, controls: themeControls({ fontScale: 1.3 }) })
+    })
+    expect(measureChatRows).toHaveBeenCalledTimes(1)
+    expect(storeState.theme?.fontScale).toBe(1)
     await settleDeferred(refresh, page(saved.items))
   })
 

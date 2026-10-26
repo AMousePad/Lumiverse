@@ -86,7 +86,9 @@ await spindle.theme.applyPalette(null, userId)
 
 ### Available CSS Variables
 
-Lumiverse generates 100+ CSS custom properties from the active theme. All are overridable:
+Lumiverse generates 100+ CSS custom properties from the active theme:
+
+When a user enables **Device-specific controls**, their local radius, font scale, UI scale, and glass preferences take precedence over extension overrides, including `applyPalette()`. Palette colors are retained while glass opacity follows the device preference. `getCurrent()` continues to return the account's authored base theme; device preferences are stored locally and are not included in that snapshot.
 
 | Group | Variables |
 |---|---|

@@ -44,7 +44,17 @@ Adjusts the global text size. Useful for accessibility or personal preference.
 
 ### UI Scale
 
-Scales every UI element — panels, controls, chrome — proportionally between 0.8× and 1.5×. Where **Font Scale** only resizes text, **UI Scale** zooms the entire interface, which is handy on very high-density displays or for people who like a more compact (or more spacious) layout overall.
+Scales every UI element — panels, controls, chrome — proportionally between 0.5× and 1.5×. Where **Font Scale** only resizes text, **UI Scale** zooms the entire interface, which is handy on very high-density displays or for people who like a more compact (or more spacious) layout overall.
+
+### Device-specific controls
+
+Expand **Device-specific controls** in the Controls section and enable **Use device-specific controls** to keep Corner Radius, Font Scale, UI Scale, and Glass effects local to your current browser or app and signed-in account. The existing sliders and checkbox then edit your device values. These values survive reloads and theme changes without changing the theme on your other devices.
+
+- **Copy device controls into theme** copies all four values into the theme. Use this before saving, updating, or exporting a theme if you want those values baked into it.
+- **Reset device controls from theme** replaces your local values with the current theme's values.
+- Disable **Use device-specific controls** to follow the theme again. Your previous local values are remembered for next time.
+
+Different browsers, browser profiles, and site addresses have separate local storage. Clearing that storage removes the device preferences. Desktop-only background and rendering settings continue to belong to the theme.
 
 ### Glass Effect
 
