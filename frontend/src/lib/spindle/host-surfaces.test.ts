@@ -5,6 +5,7 @@ const COMMANDS = [
   ['action-new-chat', 'global'],
   ['action-delete-last-message', 'chat'],
   ['action-regenerate', 'chat-idle'],
+  ['action-background-swipe', 'chat-idle'],
   ['action-stop-generation', 'chat'],
   ['action-swipe-left', 'chat'],
   ['action-swipe-right', 'chat'],
@@ -136,6 +137,7 @@ describe('H4 host surface catalog and invocation', () => {
 
   test.each([
     ['action-stop-generation', 'generation'],
+    ['action-background-swipe', 'generation'],
     ['action-swipe-left', 'chats'],
     ['action-swipe-right', 'generation'],
   ])('%s checks its permission on every invocation', (id, permission) => {

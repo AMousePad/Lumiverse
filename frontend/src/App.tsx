@@ -58,12 +58,14 @@ import { createDesktopDownloadFeedback, type DesktopDownloadEvent } from '@/lib/
 import { toast } from '@/lib/toast'
 import { useIOSDuoLayout } from '@/hooks/useIOSDuoLayout'
 import { duoChatStyle } from '@/lib/ios-duo-layout'
+import { useIOSShortcuts } from '@/hooks/useIOSShortcuts'
 
 const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
 
 export { acknowledgePendingConnectionsDeepLink }
 
 export default function App() {
+  useIOSShortcuts()
   return (
     <AuthGuard>
       {isDesktopFloatingWidgetWindow()

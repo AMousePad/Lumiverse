@@ -133,7 +133,10 @@
     "saving": "Saving..."
   },
   "display": {
-    "zoom": { "title": "Zoom", "desktopPinchZoom": "Pinch to zoom on desktop" },
+    "zoom": {
+      "title": "Zoom",
+      "desktopPinchZoom": "Pinch to zoom on desktop"
+    },
     "longMessages": {
       "title": "Long Messages",
       "helper": "Limit long messages to a comfortable height until you expand them.",
@@ -375,11 +378,12 @@
     "headerValue": "Value",
     "addHeader": "+ Add header",
     "command": "Command",
-    "commandHint": "The executable to run (e.g. node, python3, npx)",
-    "commandPlaceholder": "npx",
+    "commandHint": "Executable on the backend host. Allowed by default: node, bun, deno, python, python3.",
+    "stdioPolicyHint": "Other executables require MCP_STDIO_ALLOWED_COMMANDS. Package runners such as npx and uvx also require approved packages in MCP_STDIO_ALLOWED_PACKAGES. Set these in the backend environment and restart Lumiverse.",
+    "commandPlaceholder": "node",
     "args": "Arguments",
     "argsHint": "Comma-separated command arguments",
-    "argsPlaceholder": "-y, @modelcontextprotocol/server-filesystem, /path",
+    "argsPlaceholder": "./server.js",
     "env": "Environment Variables",
     "envHint": "Env vars passed to the subprocess. Values are stored encrypted.",
     "varName": "Variable name",
@@ -401,7 +405,8 @@
     "discoveredTools": "Discovered tools",
     "toolCount": "{{count}} tool",
     "toolCount_plural": "{{count}} tools",
-    "testRequestFailed": "Test request failed"
+    "testRequestFailed": "Test request failed",
+    "saveFailed": "Failed to save MCP server configuration"
   },
   "tokenizers": {
     "loading": "Loading tokenizers...",
@@ -737,7 +742,7 @@
     "linking": "Linking...",
     "waitingBrowser": "Waiting for authorization in your browser...",
     "browserCodeTitle": "Browser verification code",
-    "browserCodeNote": "Enter this code on the Illarin page before approving. Decline any request you didn't start.",
+    "browserCodeNote": "Copy this code, then open the Illarin page and enter it before approving. Decline any request you didn't start.",
     "openAuthorization": "Open Illarin approval page",
     "waitingDevice": "Waiting for the code to be entered on Illarin...",
     "deviceFallback": "Use a device code instead",
@@ -1228,10 +1233,10 @@
     "onSidecarFailure": "On sidecar failure",
     "fallbackHeuristic": "Fall back to heuristic",
     "fallbackSkip": "AI Only — skip chunk, retry on warmup",
-    "arbitratesHeuristics": "Sidecar arbitrates heuristics",
-    "arbitratesHeuristicsHint": "When the sidecar succeeds, it sees the heuristic candidates for this chunk and can drop bad ones or rename them to a canonical form before merging.",
-    "pruneGraph": "Sidecar can prune existing graph entities",
-    "pruneGraphHint": "The sidecar may flag entities already in the graph as invalid (e.g. a verb captured by an earlier heuristic pass). Flagged entities are deleted; user-edited entities are always preserved.",
+    "arbitratesHeuristics": "Review memory candidates",
+    "arbitratesHeuristicsHint": "Review extracted entities, relationships, aliases and character color attributions before saving. Includes heuristic, AI and provisional candidates.",
+    "pruneGraph": "Prune Graph",
+    "pruneGraphHint": "Also review existing records using historical excerpts. Preserve manually edited entities and relationships. This adds review requests.",
     "sidecarLongHint": "Max output tokens: ceiling on what the sidecar can emit per call. Each chunk's result JSON is ~400-600 tokens with arbiter on, so a chunks-per-request value of N needs roughly N × 600 tokens of headroom. If responses get truncated mid-JSON the whole batch falls back to per-chunk extraction — much slower. Raise this if you increase chunks per request. Chunks per request: how many memory chunks to analyze in a single LLM call. Higher = fewer API calls but larger prompts. Parallel requests: how many LLM calls to run simultaneously during rebuild. RPM limit: cap Cortex sidecar requests per minute for this provider. 0 disables throttling. Sidecar timeout: max wait per sidecar call. Increase for thinking/reasoning models that need more processing time. 0 = no limit. Retrieval timeout: max wait for cortex retrieval during generation. If exceeded, falls back to plain vector search. 0 = no limit. On sidecar failure: \"AI Only\" mode skips writing anything for this chunk (heuristic noise stays out of the graph) — the next cortex warmup will retry it. Retry attempts/delay: extra sidecar tries with exponential backoff before falling back. 0 = no retry (legacy behavior).",
     "whitelist": "Whitelist",
     "whitelistHint": "Words the entity extractor should never filter out. Use this for fantasy proper nouns that look like common words (e.g., \"The Pale\", \"Binding\", \"Ash\").",
@@ -1303,7 +1308,16 @@
     "rebuildBatchesInFlight": "{{count}} batch in flight",
     "rebuildBatchesInFlight_other": "{{count}} batches in flight",
     "rebuildLastRequest": "last request {{seconds}}s ago",
-    "rebuildLastResponse": "last response {{seconds}}s"
+    "rebuildLastResponse": "last response {{seconds}}s",
+    "arbitrationTitle": "Candidate review",
+    "arbitrationBackend": "Reviewer",
+    "arbitrationSidecar": "Generative sidecar",
+    "arbitrationDecision": "Decision model",
+    "decisionConnection": "Decision connection",
+    "useConnectionDefault": "Use connection default",
+    "arbitrationConfidence": "Minimum confidence",
+    "arbitrationTimeout": "Review timeout (seconds)",
+    "arbitrationHint": "Decision review uses a separate Decision connection and can also review heuristic extraction. Low confidence defers a candidate; failed or incomplete reviews leave the chunk pending for retry. AI extraction and summaries continue to use the sidecar."
   },
   "operator": {
     "serverControls": "Server Controls",
@@ -1595,7 +1609,6 @@
     "sharpQueueRecoverFailed": "Failed to recover leftover thumbnail jobs.",
     "sharpQueueDiscarded": "Leftover thumbnail jobs discarded.",
     "sharpQueueDiscardFailed": "Failed to discard leftover thumbnail jobs.",
-
     "sharpCacheMemory": "Cache memory (MiB)",
     "sharpCacheFiles": "Cache files",
     "sharpCacheItems": "Cache items",

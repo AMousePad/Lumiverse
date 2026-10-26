@@ -1,5 +1,5 @@
 -- Lumiverse Database Baseline Schema
--- Generated from migrations 001 through 112.
+-- Includes schema changes through migration 133.
 -- Fresh databases bootstrap from this file instead of replaying the full
 -- migration stack. All squashed migration names are recorded in _migrations
 -- so the runner treats them as already applied.
@@ -1983,10 +1983,18 @@ CREATE TABLE IF NOT EXISTS android_push_destinations (
   user_agent TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  registered_at INTEGER NOT NULL
+  registered_at INTEGER NOT NULL,
+  delivery_mode TEXT NOT NULL DEFAULT 'direct' CHECK(delivery_mode IN ('direct','relay')),
+  package_name TEXT NOT NULL DEFAULT 'chat.lumiverse.prototype',
+  enrollment_id TEXT,
+  relay_url TEXT,
+  relay_credential TEXT,
+  encryption_key TEXT,
+  encryption_key_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_android_push_user ON android_push_destinations(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_android_push_token ON android_push_destinations(device_token) WHERE device_token IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_android_push_enrollment ON android_push_destinations(enrollment_id) WHERE enrollment_id IS NOT NULL;
 
 -- iOS APNs destinations
 CREATE TABLE IF NOT EXISTS ios_push_destinations (

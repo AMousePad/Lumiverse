@@ -37,6 +37,8 @@ export interface AndroidPushDestinationRecord {
   device_id: string;
   transport: "local" | "fcm";
   project_id: string | null;
+  delivery_mode: "direct" | "relay";
+  package_name: string;
   label: string;
   user_agent: string;
   created_at: number;
@@ -50,6 +52,11 @@ export interface CreateAndroidPushDestinationInput {
   serverOrigin: string;
   deviceToken?: string;
   projectId?: string;
+  packageName?: string;
+  delivery?: "direct" | "relay";
+  enrollmentId?: string;
+  relayCredential?: string;
+  encryption?: { key: string; keyId: string };
   label?: string;
   userAgent?: string;
 }

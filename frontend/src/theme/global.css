@@ -172,7 +172,7 @@ select:focus-visible,
    viewport-fit=cover). iOS PWAs rely on the base styles in reset.css
    (height:100%, overflow:hidden) instead. */
 @media (display-mode: standalone), (display-mode: window-controls-overlay) {
-  html:not([data-ios-pwa]) {
+  html:not([data-ios-pwa]):not([data-tauri-mobile='ios']) {
     position: fixed;
     inset: 0;
     overflow: hidden;
@@ -195,6 +195,15 @@ select:focus-visible,
 
 }
 
+/* Native Android resizes the WebView for the IME. Lock its document to those
+   bounds just as the standalone PWA does, so focus cannot pan the shell. */
+html[data-tauri-mobile='android'] {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* ── iOS PWA viewport compensation ──
    With viewport-fit=cover + black-translucent status bar, content renders
    behind the status bar (starts at y=0), but height:100% on <html> still
@@ -210,4 +219,12 @@ html[data-ios-pwa] {
   height: var(--ios-screen-height, 100%);
   --ios-viewport-offset: env(safe-area-inset-top, 0px);
   --app-shell-height: var(--ios-screen-height, 100dvh);
+}
+
+/* Native iOS owns the full scene geometry. Older WebKit viewport units can
+   exclude safe areas or shrink under CSS zoom, leaving a composer gap.
+   Keep safe-area padding inside the individual controls, not the shell. */
+html[data-tauri-mobile='ios'] {
+  --app-shell-height: var(--ios-native-viewport-height, 100dvh);
+  height: var(--app-shell-height);
 }

@@ -34,6 +34,7 @@ interface VerbSignal {
   type: RelationType;
   sentiment: number;
   label: string;
+  reverse?: boolean;
 }
 
 const DIRECTED_VERB_PATTERNS: Array<{ pattern: RegExp; signal: VerbSignal }> = [
@@ -73,7 +74,7 @@ const DIRECTED_VERB_PATTERNS: Array<{ pattern: RegExp; signal: VerbSignal }> = [
   { pattern: /\b(glared\s+at|snarled\s+at|snapped\s+at|shouted\s+at|yelled\s+at)\b/i, signal: { type: "rival", sentiment: -0.5, label: "hostility" } },
 
   // Hierarchical
-  { pattern: /\b(commanded|ordered|instructed|directed|assigned|dispatched)\b/i, signal: { type: "serves", sentiment: 0.1, label: "commands" } },
+  { pattern: /\b(commanded|ordered|instructed|directed|assigned|dispatched)\b/i, signal: { type: "serves", sentiment: 0.1, label: "serves", reverse: true } },
   { pattern: /\b(obeyed|served|reported\s+to|answered\s+to|bowed\s+(?:to|before))\b/i, signal: { type: "serves", sentiment: 0.1, label: "serves" } },
 
   // Teaching/mentoring
@@ -86,7 +87,7 @@ const DIRECTED_VERB_PATTERNS: Array<{ pattern: RegExp; signal: VerbSignal }> = [
 // ─── Relational Noun Patterns ──────────────────────────────────
 // "Melina's brother", "her mentor", "his rival"
 
-const RELATIONAL_NOUNS: Array<{ pattern: RegExp; type: RelationType; sentiment: number }> = [
+const RELATIONAL_NOUNS: Array<{ pattern: RegExp; type: RelationType; sentiment: number; reverse?: boolean; label?: string }> = [
   // Family
   { pattern: /\b(father|mother|parent|dad|mom|papa|mama)\b/i, type: "parent", sentiment: 0.3 },
   { pattern: /\b(son|daughter|child|kid|offspring)\b/i, type: "child", sentiment: 0.3 },
@@ -97,8 +98,8 @@ const RELATIONAL_NOUNS: Array<{ pattern: RegExp; type: RelationType; sentiment: 
 
   // Professional/hierarchical
   { pattern: /\b(mentor|teacher|master|instructor|sensei|coach)\b/i, type: "mentor", sentiment: 0.3 },
-  { pattern: /\b(student|apprentice|protégée?|pupil|trainee)\b/i, type: "child", sentiment: 0.2 },
-  { pattern: /\b(boss|commander|captain|superior|leader|chief)\b/i, type: "serves", sentiment: 0.1 },
+  { pattern: /\b(student|apprentice|protégée?|pupil|trainee)\b/i, type: "mentor", sentiment: 0.2, reverse: true, label: "mentors" },
+  { pattern: /\b(boss|commander|captain|superior|leader|chief)\b/i, type: "serves", sentiment: 0.1, reverse: true, label: "serves" },
 
   // Social
   { pattern: /\b(friend|companion|comrade|buddy|pal|confidant|ally|partner-in-crime)\b/i, type: "ally", sentiment: 0.5 },
@@ -286,7 +287,7 @@ export function extractRelationshipsHeuristic(
   for (const pair of candidateDirectedPairs) {
     const verbRels = detectVerbMediated(pair.source, pair.target, pair.content);
     for (const rel of verbRels) {
-      const key = `${pair.source}→${pair.target}:${rel.type}`;
+      const key = `${rel.source}→${rel.target}:${rel.type}`;
       if (!seen.has(key)) {
         seen.add(key);
         relationships.push(rel);
@@ -381,8 +382,8 @@ function detectVerbMediated(
     );
     if (directPattern.test(content)) {
       results.push({
-        source,
-        target,
+        source: signal.reverse ? target : source,
+        target: signal.reverse ? source : target,
         type: signal.type,
         label: signal.label,
         sentiment: signal.sentiment,
@@ -398,8 +399,8 @@ function detectVerbMediated(
     );
     if (prepPattern.test(content)) {
       results.push({
-        source,
-        target,
+        source: signal.reverse ? target : source,
+        target: signal.reverse ? source : target,
         type: signal.type,
         label: signal.label,
         sentiment: signal.sentiment,
@@ -425,7 +426,7 @@ function detectRelationalNouns(
   for (const [possessor, other] of pairs) {
     const escPoss = possessor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-    for (const { pattern, type, sentiment } of RELATIONAL_NOUNS) {
+    for (const { pattern, type, sentiment, reverse, label } of RELATIONAL_NOUNS) {
       // "Possessor's [relation]" near Other
       const possPattern = new RegExp(
         `${escPoss}[''\u2019]s\\s+${pattern.source}`,
@@ -439,10 +440,10 @@ function detectRelationalNouns(
             const nounMatch = content.match(possPattern);
             const relNoun = nounMatch ? nounMatch[0].split(/[''\u2019]s\s+/)[1] : type;
             results.push({
-              source: other,   // Other IS Possessor's [relation]
-              target: possessor,
+              source: reverse ? possessor : other,
+              target: reverse ? other : possessor,
               type,
-              label: relNoun?.toLowerCase() || type,
+              label: label ?? relNoun?.toLowerCase() ?? type,
               sentiment,
               confidence: 0.7,
             });
@@ -461,10 +462,10 @@ function detectRelationalNouns(
           const searchWindow = content.slice(Math.max(0, matchIdx - 40), matchIdx + 80);
           if (searchWindow.toLowerCase().includes(other.toLowerCase())) {
             results.push({
-              source: other,
-              target: possessor,
+              source: reverse ? possessor : other,
+              target: reverse ? other : possessor,
               type,
-              label: type,
+              label: label ?? type,
               sentiment,
               confidence: 0.65,
             });

@@ -122,6 +122,26 @@ describe("database migrations", () => {
     }
   });
 
+  test("fresh bootstrap records the Android relay migration once without replaying its columns", async () => {
+    const db = new Database(":memory:");
+    try {
+      db.run("PRAGMA foreign_keys = ON");
+      await runMigrations(db);
+      db.run(`INSERT INTO "user" (id, name, email) VALUES ('owner', 'Owner', 'owner@example.test')`);
+      db.run(`INSERT INTO android_push_destinations
+        (id, user_id, device_id, transport, server_origin, token_hash, registered_at, delivery_mode, enrollment_id)
+        VALUES ('relay', 'owner', 'device', 'fcm', 'https://example.test', 'hash', 1, 'relay', 'enrollment')`);
+
+      await runMigrations(db);
+      expect(db.query("SELECT COUNT(*) AS count FROM _migrations WHERE name = ?")
+        .get("133_android_notification_relay.sql")).toEqual({ count: 1 });
+      expect(db.query("SELECT delivery_mode, enrollment_id FROM android_push_destinations WHERE id = 'relay'")
+        .get()).toEqual({ delivery_mode: "relay", enrollment_id: "enrollment" });
+    } finally {
+      db.close();
+    }
+  });
+
   test("assigns the legacy instance link to the historical owner", async () => {
     const db = new Database(":memory:");
     try {

@@ -68,7 +68,21 @@ After the chain fails:
 
 **Sidecar Timeout** bounds each call. AI Only with an unavailable sidecar can leave analysis incomplete instead of filling the graph with heuristics.
 
-**Arbitrates Heuristics** lets successful sidecar analysis reject or rename heuristic candidates. **Grades Existing Records** can remove invalid existing entities; user-edited entities are protected from that grading. Inspect the records rather than assuming every fact is correct.
+### Optional Candidate Review
+
+In **Advanced → Candidate review**, enable **Review memory candidates** and choose **Generative sidecar** or **Decision model**. Review is off by default. It covers heuristic, AI and provisional entity proposals, relationships, proposed aliases and character color attributions before saving. Review adds model requests, including during rebuilds.
+
+For **Decision model**, first create a Decision connection in Connections, then select that connection here. The model override is optional; leaving it empty uses the connection's saved default. Decision review also works with heuristic extraction and importance scoring. AI extraction, fact curation and summaries still use the generative sidecar.
+
+**Minimum confidence** defaults to 0.8. Both the chosen answer's probability and its confidence must meet the threshold; otherwise that candidate is deferred. This is a retention threshold, not a measured guarantee of accuracy. **Review timeout** is capped at 30 seconds per request; **Requests per minute** limits Decision request starts (0 disables throttling).
+
+A failed or incomplete review saves no new graph or salience results for that chunk and leaves it pending for a later warmup or rebuild. A complete review can defer individual candidates; those candidates are omitted while the chunk completes. Review failures do not fall back to unreviewed persistence. Failed or uncertain review of a dormant relationship leaves it dormant with pending evidence.
+
+If a Decision response contains an individually invalid answer, Cortex keeps the valid answers and retries only the invalid questions once, using the same connection and confidence threshold. Answers that remain invalid are explicitly deferred: new candidates are omitted, and existing records are preserved while the chunk completes. Logs include the affected candidate ID and, for invalid probability totals, the sum and option count. Missing/foreign answer IDs, invalid response metadata, authentication failures and caller cancellation still stop ingestion. Probabilities are never automatically normalized.
+
+**Prune Graph** also reviews existing records against historical excerpts. Manually edited entities and their manually edited relationships are preserved. Inspect the results; model review can still make mistakes. Reviewer configuration changes invalidate prior chunk coverage so the next warmup can rebuild it; changing a connection's default model alone requires a manual rebuild.
+
+Passage-wide facts now attach only to approved entities explicitly named in each fact, including accepted aliases. Facts with an ambiguous subject are omitted. Stored fact metadata retains source chunk IDs and short evidence excerpts. When Fact Auto-Pilot is enabled, it selects from the full set of source facts before retention trims overflow, preserving their text, importance and branch tags.
 
 ## Memory Panel
 
@@ -80,6 +94,24 @@ After the chain fails:
 | **Links** | Attach vaults/interlinks and manage the Vault Library |
 
 Stored records are not this generation's retrieved context. Seeing entities here does not mean every entity will appear in `{{entities}}`.
+
+### Character Colors
+
+Cortex reads colors from `<font color="...">` and `<span style="color: ...">` markup. Following the roleplay formatting convention, `*...*`, `_..._`, `<i>`, `<em>` and configured thought delimiters identify the **thought/italic channel**, including when they wrap the color tag. Quotes inside that channel remain thoughts. Other quoted text is speech, and plain descriptive text is narration. Italics indicate formatting; they do not prove a character's mental state.
+
+For example, both `<font color="#abc">*"I should leave."*</font>` and `*<font color="#abc">"I should leave."</font>*` produce thought color `#aabbcc`. A character can use the same color for both speech and thoughts; Cortex keeps those usages separately. `{{characterColors}}` supplies speech and thought guidance. Narration remains visible in the Colors tab.
+
+Ownership uses local attribution and message context. A name addressed inside dialogue is not automatically the speaker, and a shared color does not uniquely identify a character. With candidate review enabled, the reviewer must approve each color, usage and owner claim independently. Unsupported colors and usage types are discarded, and heuristic plus sidecar detections count as one observation per color/owner/usage in a chunk.
+
+A standalone first-person thought continues its message's established first-person viewpoint, including sentences beginning with “My.” Other characters mentioned elsewhere in the message do not remove that evidence. Explicit attribution to another thinker takes precedence. Colors for newly extracted characters are eligible after their identity and color claim pass review.
+
+After updating from older color detection behavior, rebuild Cortex for an existing chat to replace its old color attributions. Warmup also detects the changed rules when enabled.
+
+### Relationship References
+
+AI extraction resolves relationship endpoints from names, message prefixes, aliases and unambiguous pronouns. It requires evidence for the connection; sharing a scene or a room alone does not establish a partnership. Known endpoints omitted from the entity extraction list can still be proposed for review. Rejected or deferred endpoints cannot acquire new relationships, and new aliases redirect endpoints only after approval when review is enabled.
+
+Directed types describe the source's role relative to the target: a parent points to their child, a mentor to their student, and a subordinate to the superior they serve. Heuristic extraction remains limited to supported text patterns; Decision review judges supplied candidates and does not generate missing relationships.
 
 ## Vaults & Interlinks
 

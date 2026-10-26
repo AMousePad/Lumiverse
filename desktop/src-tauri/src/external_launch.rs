@@ -375,7 +375,10 @@ mod linux {
                     let running = running.clone();
                     std::thread::spawn(move || {
                         while running.load(Ordering::Relaxed) {
-                            assert!(std::process::Command::new("/bin/true")
+                            // /bin/true is absent on macOS; use the same
+                            // portable shell required by the launcher fixture.
+                            assert!(std::process::Command::new("/bin/sh")
+                                .args(["-c", "exit 0"])
                                 .status()
                                 .unwrap()
                                 .success());

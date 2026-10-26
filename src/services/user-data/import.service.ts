@@ -57,19 +57,17 @@ import {
 } from "./table-registry";
 import { sanitizeEntry, safeJoin, SanitizeError, type SanitizedEntry } from "./sanitize";
 import { markConnectionSecretRestored } from "./connection-secret-restore";
+import { MAX_ACCOUNT_ARCHIVE_BYTES } from "./archive-limits";
 
 // ---------------------------------------------------------------------------
 // Tunables / safety caps
 // ---------------------------------------------------------------------------
 
-/** Reject archives whose total decompressed size exceeds this cap. */
+/** Default expansion cap for extension/selected ZIP extraction, not account restores. */
 export const MAX_DECOMPRESSED_BYTES = 20 * 1024 * 1024 * 1024; // 20 GB
 
 /** Keep a small reserve for SQLite journals and normal server operation. */
 const IMPORT_DISK_HEADROOM_BYTES = 64 * 1024 * 1024;
-
-/** Reject archives over this compressed size at upload time. */
-export const MAX_COMPRESSED_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
 
 /**
  * ZIP32 archives and format-1 ZIP64 archives predate a trustworthy record
@@ -269,10 +267,10 @@ export async function persistUploadedArchive(
   declaredSize: number | null,
   jobId: string = crypto.randomUUID(),
 ): Promise<{ path: string; jobId: string }> {
-  if (declaredSize !== null && declaredSize > MAX_COMPRESSED_BYTES) {
+  if (declaredSize !== null && (!Number.isSafeInteger(declaredSize) || declaredSize < 0)) {
     throw new ArchiveValidationError(
       "size",
-      `archive exceeds ${MAX_COMPRESSED_BYTES / (1024 * 1024 * 1024)} GB cap`,
+      "archive size exceeds the supported integer range",
     );
   }
   const dir = join(env.dataDir, "imports", userId, jobId);
@@ -313,10 +311,10 @@ export async function persistUploadedArchive(
 
   const writeChunk = (chunk: Uint8Array) => {
     if (chunk.byteLength === 0) return;
-    if (total + chunk.byteLength > MAX_COMPRESSED_BYTES) {
+    if (chunk.byteLength > MAX_ACCOUNT_ARCHIVE_BYTES - total) {
       throw new ArchiveValidationError(
         "size",
-        `archive exceeds compressed size cap (${total + chunk.byteLength} bytes)`,
+        "archive size exceeds the supported integer range",
       );
     }
     writeAllSync(fd, chunk);
@@ -379,18 +377,6 @@ export async function persistUploadedArchive(
     }
   }
 
-  const stat = statSync(path);
-  if (stat.size > MAX_COMPRESSED_BYTES) {
-    try {
-      unlinkSync(path);
-    } catch {
-      /* ignore */
-    }
-    throw new ArchiveValidationError(
-      "size",
-      `archive exceeds compressed size cap (${stat.size} bytes)`,
-    );
-  }
   return { path, jobId };
 }
 
@@ -1297,7 +1283,7 @@ export interface SelectedZipExtractionOptions {
   archivePath: string;
   destinationDir: string;
   /** Return a relative output path for entries to extract, or null to skip. */
-  selectEntry(name: string): string | null;
+  selectEntry(name: string, uncompressedSize: number): string | null;
   /** Validate state accumulated by selectEntry before extraction starts. */
   validateSelection?(): void;
   /** Legacy CL bundles can repeat a shared gallery path. Every copy must be byte-identical. */
@@ -1363,7 +1349,7 @@ export async function extractSelectedZipEntries(
   let declaredBytes = 0;
 
   for await (const entry of scanCentralDirectory(archive, cdOffset, cdSize, totalEntries)) {
-    const relativePath = options.selectEntry(entry.name);
+    const relativePath = options.selectEntry(entry.name, entry.uncompressedSize);
     if (relativePath === null) continue;
     const previous = selectedByName.get(entry.name);
     if (previous && !options.allowIdenticalDuplicate?.(entry.name)) {
@@ -1440,6 +1426,12 @@ export async function extractSelectedZipEntries(
             throw new ArchiveValidationError(
               "size",
               `selected ZIP data exceeds decompressed size cap (${maxDecompressedBytes} bytes)`,
+            );
+          }
+          if (chunk.byteLength > centralEntry.uncompressedSize - entryBytes) {
+            throw new ArchiveValidationError(
+              "not_zip",
+              `entry size disagrees with central directory (${centralEntry.name})`,
             );
           }
           if (outputFd !== null) writeAllSync(outputFd, chunk);
@@ -1531,11 +1523,12 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
   let declaredDecompressedBytes = 0;
   let declaredBinaryBytes = 0;
   for await (const entry of scanCentralDirectory(archive, cdOffset, cdSize, totalEntries)) {
-    // Validate every name before allocating any staging files, and reject a
-    // declared expansion beyond the global cap before decompression begins.
+    // Validate every name before allocating any staging files, and reject
+    // unsafe aggregate sizes before decompression begins. Account archives
+    // use available disk space rather than a fixed total-byte quota.
     const descriptor = sanitizeEntry(entry.name);
-    if (entry.uncompressedSize > MAX_DECOMPRESSED_BYTES - declaredDecompressedBytes) {
-      throw new Error(`archive exceeds decompressed size cap (${MAX_DECOMPRESSED_BYTES} bytes)`);
+    if (entry.uncompressedSize > MAX_ACCOUNT_ARCHIVE_BYTES - declaredDecompressedBytes) {
+      throw new Error("archive expansion exceeds the supported integer range");
     }
     declaredDecompressedBytes += entry.uncompressedSize;
     if (descriptor.kind === "files") declaredBinaryBytes += entry.uncompressedSize;
@@ -1609,8 +1602,8 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
       let crcState = 0xffffffff;
       try {
         const onChunk = (chunk: Uint8Array) => {
-          if (buf.totalDecompressed + chunk.byteLength > MAX_DECOMPRESSED_BYTES) {
-            throw new Error(`archive exceeds decompressed size cap (${MAX_DECOMPRESSED_BYTES} bytes)`);
+          if (chunk.byteLength > MAX_ACCOUNT_ARCHIVE_BYTES - buf.totalDecompressed) {
+            throw new Error("archive expansion exceeds the supported integer range");
           }
           if (textLimit !== null && entry.byteSize + chunk.byteLength > textLimit) {
             throw new Error(`${centralEntry.name} exceeds ${textLimit} bytes`);

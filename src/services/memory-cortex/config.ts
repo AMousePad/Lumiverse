@@ -71,15 +71,12 @@ export interface SidecarReliabilityConfig {
    *    warmup signature. The next cortex warmup re-processes it. Equivalent to
    *    the "AI Only" mode users have asked for. */
   fallback: "heuristic" | "skip";
-  /** When true and the sidecar succeeded, the sidecar judges heuristic entities
-   *  and relationships extracted for this chunk: rejected heuristics are
-   *  dropped, transformed ones are renamed to the sidecar's canonical form
-   *  before merging. */
+  /** Review every entity, relationship, alias and font-color proposal before persistence.
+   *  The arbitration backend can be the generative sidecar or a native Decision
+   *  connection. Failed/incomplete reviews leave the chunk pending. */
   arbitratesHeuristics: boolean;
-  /** When true and the sidecar marks an *existing* graph entity as invalid for
-   *  this chunk's context, that entity is removed from the graph (mentions and
-   *  relations included). User-edited entities are preserved regardless of
-   *  sidecar grading. */
+  /** Also review existing records against historical excerpts. Cleanup never
+   *  removes manually edited entities or incident manually edited relations. */
   gradesExistingRecords: boolean;
 }
 
@@ -91,9 +88,19 @@ export interface FactManagementConfig {
    *  are trimmed first. Default: 30. */
   maxFactsPerEntity: number;
   /** When true and the sidecar is active, exceeding maxFactsPerEntity triggers
-   *  an LLM call to curate which facts to keep/merge/discard instead of
+   *  an LLM call to select which source facts to keep/discard instead of
    *  purely score-based trimming. ("Fact Auto-Pilot") Default: false. */
   autopilot: boolean;
+}
+
+/** Arbitration is independent of generative extraction and summarization. */
+export interface CortexArbitrationConfig {
+  backend: "sidecar" | "decision";
+  connectionProfileId: string | null;
+  model: string | null;
+  timeoutMs: number;
+  requestsPerMinute: number;
+  minConfidence: number;
 }
 
 export interface ThoughtMarkerConfig {
@@ -184,6 +191,7 @@ export interface MemoryCortexConfig {
    *  See SidecarReliabilityConfig for field-level docs.
    */
   sidecarReliability: SidecarReliabilityConfig;
+  arbitration: CortexArbitrationConfig;
 
   /** Retrieval pipeline tuning */
   retrieval: {
@@ -295,6 +303,14 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
     fallback: "heuristic",
     arbitratesHeuristics: false,
     gradesExistingRecords: false,
+  },
+  arbitration: {
+    backend: "sidecar",
+    connectionProfileId: null,
+    model: null,
+    timeoutMs: 30000,
+    requestsPerMinute: 0,
+    minConfidence: 0.8,
   },
   consolidation: { ...DEFAULT_CONSOLIDATION_CONFIG },
   retrieval: {
@@ -442,7 +458,9 @@ export function putCortexConfig(
   update: Partial<MemoryCortexConfig>,
 ): MemoryCortexConfig {
   const current = getCortexConfig(userId);
-  const next: Partial<MemoryCortexConfig> = { ...current, ...update };
+  const next: Partial<MemoryCortexConfig> = { ...current, ...update,
+    arbitration: { ...current.arbitration, ...update.arbitration },
+  };
   // Legacy sidecar-only writes: rematerialize both primaries from sidecar
   // and keep any already-configured secondaries.
   if (update.sidecar && !update.queryGeneration && !update.memorySummarization) {
@@ -624,7 +642,8 @@ export function shouldUseCortexSidecar(config: MemoryCortexConfig): boolean {
   return !!getCortexSidecarConnectionId(config) && (
     config.entityExtractionMode === "sidecar" ||
     config.salienceScoringMode === "sidecar" ||
-    (config.consolidation.enabled && config.consolidation.useSidecar)
+    (config.consolidation.enabled && config.consolidation.useSidecar) ||
+    (config.sidecarReliability.arbitratesHeuristics && config.arbitration.backend === "sidecar")
   );
 }
 
@@ -697,6 +716,13 @@ export function normalizeCortexConfig(
       gradesExistingRecords: input.sidecarReliability?.gradesExistingRecords
         ?? defaults.sidecarReliability.gradesExistingRecords,
     },
+    arbitration: {
+      backend: input.arbitration?.backend === "decision" ? "decision" : "sidecar",
+      ...normalizeCortexModelEndpoint(input.arbitration),
+      timeoutMs: boundedNumber(input.arbitration?.timeoutMs, 100, 30000, defaults.arbitration.timeoutMs),
+      requestsPerMinute: normalizeRequestsPerMinute(input.arbitration?.requestsPerMinute, 0),
+      minConfidence: boundedNumber(input.arbitration?.minConfidence, 0, 1, defaults.arbitration.minConfidence),
+    },
     consolidation: {
       enabled: input.consolidation?.enabled ?? defaults.consolidation.enabled,
       chunkThreshold: input.consolidation?.chunkThreshold ?? defaults.consolidation.chunkThreshold,
@@ -747,6 +773,10 @@ export function normalizeCortexConfig(
       : defaults.nonProseScaffoldTags,
     entityExtractionFilters: normalizeEntityExtractionFilters(input.entityExtractionFilters),
   };
+}
+
+function boundedNumber(value: unknown, min: number, max: number, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
 }
 
 function normalizeRequestsPerMinute(value: number | null | undefined, fallback: number): number {

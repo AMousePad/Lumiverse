@@ -16,6 +16,8 @@ import { getProvider } from "../llm/registry";
 import * as chatsSvc from "../services/chats.service";
 import { enqueueChatPipelineTask, getChatPipelineStatus } from "../services/chat-pipeline-coordinator.service";
 import * as connectionsSvc from "../services/connections.service";
+import * as decisionConnectionsSvc from "../services/decision-connections.service";
+import { withReadableApiKeyStatus } from "../services/connection-secret-status";
 import * as embeddingsSvc from "../services/embeddings.service";
 import * as memoryCortex from "../services/memory-cortex";
 import { parsePagination } from "../services/pagination";
@@ -1023,7 +1025,8 @@ app.get("/health", async (c) => {
   const sidecarRequired =
     config.entityExtractionMode === "sidecar" ||
     config.salienceScoringMode === "sidecar" ||
-    config.consolidation.useSidecar;
+    config.consolidation.useSidecar
+    || (config.sidecarReliability.arbitratesHeuristics && config.arbitration.backend === "sidecar");
 
   const sidecarProfile = sidecarConnectionId
     ? connectionsSvc.resolveConnection(userId, sidecarConnectionId)
@@ -1085,6 +1088,17 @@ app.get("/health", async (c) => {
       "No sidecar connection is configured. Heuristic cortex mode can still run without it.",
     );
   }
+
+  const arbitrationEnabled = config.sidecarReliability.arbitratesHeuristics;
+  const decisionProfile = config.arbitration.backend === "decision" && config.arbitration.connectionProfileId
+    ? decisionConnectionsSvc.getConnection(userId, config.arbitration.connectionProfileId) : null;
+  const readableDecisionProfile = decisionProfile
+    ? await withReadableApiKeyStatus(userId, decisionProfile, decisionConnectionsSvc.decisionConnectionSecretKey) : null;
+  const arbitrationReady = !arbitrationEnabled || (config.arbitration.backend === "decision"
+    ? !!readableDecisionProfile?.has_api_key : sidecarReady);
+  if (arbitrationEnabled) pushCheck("arbitration_ready", "Candidate review", arbitrationReady ? "pass" : "fail",
+    arbitrationReady ? "The selected reviewer is configured. Live Decision inference is checked during ingestion."
+      : "Candidate review is enabled but its connection or readable credential is missing. Chunks remain pending until review succeeds.");
 
   let sidecarConnectivity: {
     attempted: boolean;
@@ -1343,6 +1357,12 @@ app.get("/health", async (c) => {
       queryGeneration: sidecarEndpoints.queryGeneration,
       memorySummarization: sidecarEndpoints.memorySummarization,
       connectivity: sidecarConnectivity,
+    },
+    arbitration: {
+      enabled: arbitrationEnabled, backend: config.arbitration.backend, ready: arbitrationReady,
+      connectionProfileId: config.arbitration.backend === "decision" ? config.arbitration.connectionProfileId : sidecarConnectionId,
+      model: config.arbitration.backend === "decision" ? config.arbitration.model || decisionProfile?.model || null : config.sidecar.model,
+      minConfidence: config.arbitration.minConfidence, timeoutMs: config.arbitration.timeoutMs,
     },
     chat: chatReport,
     checks,

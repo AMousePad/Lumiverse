@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { validateDecisionInput, validateDecisionResult, usesDecisionImages } from "./validation";
+import { inspectDecisionAnswers, validateDecisionInput, validateDecisionResult, usesDecisionImages } from "./validation";
 import type { DecisionEvaluationInput } from "./contract";
 
 const input: DecisionEvaluationInput = {
@@ -10,11 +10,53 @@ const input: DecisionEvaluationInput = {
   },
 };
 const result = () => ({ model: "model-resolved", answers: {
-  handling: { type: "choice", choice: "transition", confidence: 0.62, probabilities: { continue: 0.2, transition: 0.8 } },
-  intensity: { type: "score", score: 0.731, confidence: 0.45, probabilities: { "0": 0.269, "1": 0.731 }, legend: { "0": "Low", "1": "High" } },
-  change: { type: "noul", noul: 0.915 },
+  handling: { type: "choice" as const, choice: "transition", confidence: 0.62, probabilities: { continue: 0.2, transition: 0.8 } },
+  intensity: { type: "score" as const, score: 0.731, confidence: 0.45, probabilities: { "0": 0.269, "1": 0.731 }, legend: { "0": "Low", "1": "High" } },
+  change: { type: "noul" as const, noul: 0.915 },
 } });
 describe("Decision contracts", () => {
+  test("accepts decimal totals at the existing tolerance boundary without changing probabilities", () => {
+    for (const other of [0.19, 0.21]) {
+      const value = result();
+      value.answers.handling.probabilities.continue = other;
+      expect(() => validateDecisionResult(value, input.questions)).not.toThrow();
+      expect(value.answers.handling.probabilities.continue).toBe(other);
+    }
+    const value = result();
+    value.answers.handling.probabilities.continue = 0.189;
+    expect(() => validateDecisionResult(value, input.questions)).toThrow("sum=0.989");
+  });
+  test("the internal report isolates invalid answers while preserving exact native values", () => {
+    const value = result();
+    value.answers.handling.probabilities.continue = 0.5;
+    const report = inspectDecisionAnswers(value, input.questions);
+    expect(report.issues).toEqual([{ questionId: "handling", message: "Provider probabilities do not sum to 1 for handling (sum=1.3, options=2)" }]);
+    expect(report.result.answers).not.toHaveProperty("handling");
+    expect(report.result.answers.intensity).toEqual(value.answers.intensity);
+    expect(report.result.answers.change).toEqual(value.answers.change);
+    expect(value.answers.handling.probabilities.continue).toBe(0.5);
+    expect(() => validateDecisionResult(value, input.questions)).toThrow();
+  });
+  test("the internal report rejects missing/foreign answers and invalid envelope metadata", () => {
+    for (const failure of ["missing", "extra", "usage", "model"]) {
+      const value: any = result();
+      if (failure === "missing") delete value.answers.change;
+      if (failure === "extra") value.answers.foreign = { type: "noul", noul: 1 };
+      if (failure === "usage") value.usage = { input_tokens: -1 };
+      if (failure === "model") value.model = "";
+      expect(() => inspectDecisionAnswers(value, input.questions)).toThrow();
+    }
+  });
+  test.each(["option", "type", "range", "missing probability"])("the internal report never admits malformed answers: %s", (failure) => {
+    const value: any = result();
+    if (failure === "option") value.answers.handling.choice = "invented";
+    if (failure === "type") value.answers.handling.type = "score";
+    if (failure === "range") value.answers.handling.probabilities.continue = -0.1;
+    if (failure === "missing probability") delete value.answers.handling.probabilities.continue;
+    const report = inspectDecisionAnswers(value, input.questions);
+    expect(report.result.answers).not.toHaveProperty("handling");
+    expect(report.issues.map((issue) => issue.questionId)).toEqual(["handling"]);
+  });
   test("accepts mixed questions with structured descriptions and null Choice criteria", () => {
     expect(() => validateDecisionInput(input)).not.toThrow();
     const value = result();

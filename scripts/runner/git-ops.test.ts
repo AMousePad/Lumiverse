@@ -183,6 +183,9 @@ test("validates backend and frontend dependencies with the same Termux runtime w
   expect(probe.slice(0, 2)).toEqual(["grun", env.LUMIVERSE_BUN_PATH]);
   expect(probe.at(-1)).toContain("import('better-auth')");
   expect(probe.at(-1)).toContain("import('@better-auth/oauth-provider')");
+  expect(probe.at(-1)).toContain("configureSharpNativeOverride()");
+  expect(probe.at(-1)).toContain("import('sharp')");
+  expect(probe.at(-1)).toContain(".png().toBuffer()");
   expect(probe.at(-1)).not.toMatch(/\s/);
 
   const frontendProbe = frontendDependencyProbeCmd(env);
@@ -205,6 +208,9 @@ test("Better Auth validation detects a missing exported core subpath", () => {
   writeFileSync(contextPath, "export const context = {};\n");
   installEsmPackage(dir, "better-auth", "import '@better-auth/core/context';\n");
   installEsmPackage(dir, "@better-auth/oauth-provider", "import '@better-auth/core/context';\n");
+  mkdirSync(join(dir, "src"), { recursive: true });
+  writeFileSync(join(dir, "src/sharp-preflight.ts"), "export async function configureSharpNativeOverride() {}\n");
+  installEsmPackage(dir, "sharp", "export default () => ({ png: () => ({ toBuffer: async () => Buffer.from('png') }) });\n");
 
   const runProbe = () => Bun.spawnSync({
     cmd: backendDependencyProbeCmd({}),
@@ -216,6 +222,16 @@ test("Better Auth validation detects a missing exported core subpath", () => {
   expect(runProbe().exitCode).toBe(0);
   rmSync(contextPath);
   expect(runProbe().exitCode).not.toBe(0);
+});
+
+test("backend validation rejects an installed Sharp package whose native engine cannot load", () => {
+  const dir = makeTempDir();
+  mkdirSync(join(dir, "src"), { recursive: true });
+  writeFileSync(join(dir, "src/sharp-preflight.ts"), "export async function configureSharpNativeOverride() {}\n");
+  installEsmPackage(dir, "sharp", "throw new Error('Could not load sharp using the android-arm64 runtime');\n");
+  const probe = Bun.spawnSync({ cmd: backendDependencyProbeCmd({}), cwd: dir, stdout: "pipe", stderr: "pipe" });
+  expect(probe.exitCode).not.toBe(0);
+  expect(probe.stderr.toString()).toContain("Could not load sharp");
 });
 
 test("frontend dependency validation detects a missing transitive Better Auth module", () => {

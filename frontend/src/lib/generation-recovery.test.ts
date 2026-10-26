@@ -57,6 +57,14 @@ describe('generation recovery races', () => {
     expect(store.getState().messages).toEqual([original])
   })
 
+  test('background recovery stages a missing target without changing the selected reply', async () => {
+    getStatus = mock(async () => ({ ...active, backgroundSwipe: true }))
+    await recoverPooledGeneration('chat')
+    expect(store.getState().messages[0]).toMatchObject({ swipe_id: 0, content: 'original', swipes: ['original', ''] })
+    expect(store.getState().streamingSwipeId).toBe(1)
+    expect(store.getState().streamingContent).toBe('live')
+  })
+
   test('recovers a missed start while the new swipe is still assembling', async () => {
     getStatus = mock(async () => ({ ...active, status: 'assembling', content: '' }))
     await recoverPooledGeneration('chat')

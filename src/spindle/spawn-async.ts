@@ -28,7 +28,7 @@ export interface SpawnAsyncResult {
   /** True if the process was aborted due to timeoutMs. */
   timedOut: boolean;
   /** Present when the OS terminated the child with a signal. */
-  signalCode?: string;
+  signalCode?: string | number;
 }
 
 export interface SpawnAsyncOptions {

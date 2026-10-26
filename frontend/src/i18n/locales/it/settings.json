@@ -257,11 +257,12 @@
     "headerValue": "Valore",
     "addHeader": "+ Aggiungi intestazione",
     "command": "Comando",
-    "commandHint": "L'eseguibile da eseguire (es. node, python3, npx)",
-    "commandPlaceholder": "npx",
+    "commandHint": "Eseguibile sul computer del backend. Consentiti per impostazione predefinita: node, bun, deno, python, python3.",
+    "stdioPolicyHint": "Gli altri eseguibili richiedono MCP_STDIO_ALLOWED_COMMANDS. I runner di pacchetti come npx e uvx richiedono anche pacchetti approvati in MCP_STDIO_ALLOWED_PACKAGES. Imposta queste variabili nell’ambiente del backend e riavvia Lumiverse.",
+    "commandPlaceholder": "node",
     "args": "Argomenti",
     "argsHint": "Argomenti del comando separati da virgole",
-    "argsPlaceholder": "-y, @modelcontextprotocol/server-filesystem, /percorso",
+    "argsPlaceholder": "./server.js",
     "env": "Variabili ambiente",
     "envHint": "Variabili d'ambiente passate al sottoprocesso. I valori sono memorizzati crittografati.",
     "varName": "Nome variabile",
@@ -283,7 +284,8 @@
     "discoveredTools": "Strumenti scoperti",
     "toolCount": "{{count}} strumento",
     "toolCount_plural": "{{count}} strumenti",
-    "testRequestFailed": "Richiesta di test fallita"
+    "testRequestFailed": "Richiesta di test fallita",
+    "saveFailed": "Impossibile salvare la configurazione del server MCP"
   },
   "tokenizers": {
     "loading": "Caricamento tokenizzatori...",

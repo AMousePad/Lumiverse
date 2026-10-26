@@ -1,4 +1,4 @@
-import type { DecisionEvaluationInput, DecisionQuestion, DecisionResult } from "./contract";
+import type { DecisionAnswer, DecisionEvaluationInput, DecisionQuestion, DecisionResult } from "./contract";
 
 /**
  * Decoded image bytes per request. Fits 8 NovelAI 832x1216 PNGs (largest seen: 2.5 MiB) or 8 JPEGs at 1568 px;
@@ -113,7 +113,9 @@ export function validateDecisionResult(value: unknown, questions: Record<string,
     const keys = question.type === "choice" ? Object.keys(question.criteria) : question.criteria.map((_, i) => String(i));
     if (!probability(answer.confidence) || !sameKeys(answer.probabilities, keys) || !Object.values(answer.probabilities).every(probability)) fail(`Provider returned invalid probabilities for ${id}`);
     const sum = Object.values(answer.probabilities).reduce<number>((total, p) => total + (p as number), 0);
-    if (Math.abs(sum - 1) > 0.01) fail(`Provider probabilities do not sum to 1 for ${id}`);
+    // Decimal totals at the tolerance boundary (e.g. 0.99) must not fail
+    // because binary floating-point subtraction lands just above 0.01.
+    if (Math.abs(sum - 1) > 0.01 + keys.length * Number.EPSILON) fail(`Provider probabilities do not sum to 1 for ${id} (sum=${Number(sum.toPrecision(12))}, options=${keys.length})`);
     if (question.type === "choice") {
       if (typeof answer.choice !== "string" || !keys.includes(answer.choice)) fail(`Provider returned an unknown Choice option for ${id}`);
     } else {
@@ -127,4 +129,41 @@ export function validateDecisionResult(value: unknown, questions: Record<string,
     if (n !== undefined && n !== null && (typeof n !== "number" || !Number.isFinite(n) || n < 0)) fail("Provider returned invalid Decision usage");
   }
   for (const key of ["id", "provider"]) if (value[key] !== undefined && typeof value[key] !== "string") fail(`Provider returned an invalid ${key}`);
+}
+
+export interface DecisionAnswerIssue {
+  questionId: string;
+  message: string;
+}
+
+/** Internal partial report; never expose this as a complete DecisionResult. */
+export interface DecisionAnswerReport {
+  result: Omit<DecisionResult, "answers"> & { answers: Partial<Record<string, DecisionAnswer>> };
+  issues: DecisionAnswerIssue[];
+}
+
+/** Preserve valid answers for a caller that can retry/defer individual items.
+ * Missing/foreign IDs or malformed metadata still invalidate the whole response.
+ * Uses the same strict validator; no probabilities are repaired or normalized. */
+export function inspectDecisionAnswers(value: unknown, questions: Record<string, DecisionQuestion>): DecisionAnswerReport {
+  if (!isRecord(value) || !sameKeys(value.answers, Object.keys(questions))) fail("Provider returned invalid Decision answers");
+  const envelope = { ...value, answers: {} };
+  validateDecisionResult(envelope, {});
+  const answers: Partial<Record<string, DecisionAnswer>> = Object.create(null);
+  const issues: DecisionAnswerIssue[] = [];
+  for (const [id, question] of Object.entries(questions)) {
+    const single = { ...envelope, answers: { [id]: value.answers[id] } };
+    try {
+      validateDecisionResult(single, { [id]: question });
+      answers[id] = single.answers[id];
+    } catch (error) {
+      if (!(error instanceof DecisionValidationError)) throw error;
+      issues.push({ questionId: id, message: error.message });
+    }
+  }
+  return { result: { model: envelope.model, answers,
+    ...(envelope.usage !== undefined ? { usage: envelope.usage } : {}),
+    ...(envelope.id !== undefined ? { id: envelope.id } : {}),
+    ...(envelope.provider !== undefined ? { provider: envelope.provider } : {}),
+  }, issues };
 }

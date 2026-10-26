@@ -1,10 +1,11 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Hono } from "hono";
+import { createHash } from "node:crypto";
 
 const db = new Database(":memory:");
 db.exec("PRAGMA foreign_keys=ON; CREATE TABLE user(id TEXT PRIMARY KEY); INSERT INTO user VALUES ('owner'),('other');");
-for (const file of ["035_push_subscriptions", "117_desktop_notification_destinations", "127_ios_push_destinations", "128_ios_live_activities", "130_android_push_destinations", "131_ios_notification_delivery"])
+for (const file of ["035_push_subscriptions", "117_desktop_notification_destinations", "127_ios_push_destinations", "128_ios_live_activities", "130_android_push_destinations", "131_ios_notification_delivery", "133_android_notification_relay"])
   db.exec(await Bun.file(new URL(`../db/migrations/${file}.sql`, import.meta.url)).text());
 mock.module("../db/connection", () => ({ getDb: () => db }));
 mock.module("../crypto/init", () => ({ getEncryptionKeyBytes: () => new Uint8Array(32).fill(7) }));
@@ -68,8 +69,8 @@ test("account transfer revokes credentials, outstanding tickets, sockets and ava
   expect((await ticket(first.credential)).status).toBe(401);
   expect((await app.request(nativePath)).status).toBe(404);
   expect(service.listAndroidDestinations("owner")).toHaveLength(0);
-  expect(service.deleteAndroidDestination("owner", second.destination.id)).toBe(false);
-  expect(service.deleteAndroidDestination("other", second.destination.id)).toBe(true);
+  expect(await service.deleteAndroidDestination("owner", second.destination.id)).toBe(false);
+  expect(await service.deleteAndroidDestination("other", second.destination.id)).toBe(true);
   expect((await ticket(second.credential)).status).toBe(401);
 });
 
@@ -83,13 +84,13 @@ test("tickets are single-use and media capabilities cannot be tampered with or e
   expect(service.verifyAndroidAvatar(value.destination.id, "character", path.searchParams.get("expires")!, path.searchParams.get("signature")!, Number(path.searchParams.get("expires")))).toBe(false);
 });
 
-test("local enrollment cannot be used on remote servers, and remote enrollment reports missing configuration", async () => {
+test("local enrollment cannot be used on remote servers, and remote enrollment requires verified relay registration", async () => {
   expect(() => service.createAndroidDestination("owner", { ...input, accountId: "other" })).toThrow("account changed");
   expect(() => service.createAndroidDestination("owner", { ...input, serverOrigin: "https://chat.example" })).toThrow("embedded Android");
   delete process.env.LUMIVERSE_ANDROID_HOST;
   expect(() => enroll()).toThrow("embedded Android");
   const response = await app.request("/push/android", { method: "POST", body: JSON.stringify({ ...input, transport: "fcm" }) });
-  expect(response.status).toBe(503);
+  expect(response.status).toBe(400);
 });
 
 test("presence suppresses normal Android delivery and per-device tests bypass it", async () => {
@@ -103,4 +104,25 @@ test("presence suppresses normal Android delivery and per-device tests bypass it
     expect(await sendPushToUser("owner", { title: "Generation Failed", body: "Provider unavailable", tag: "generation-error-chat" }, { bypassPresence: true, destinationId: value.destination.id })).toBe(1);
     expect(JSON.parse(messages[0]!).payload.data.error).toBe(true);
   } finally { eventBus.removeClient(socket as never); eventBus.setUserVisibility("owner", "android-session", false) }
+});
+
+test("relay enrollment requires encryption, keeps secrets private, and is idempotent across concurrent enrollment completions", async () => {
+  const key = Buffer.alloc(32, 8), encryption = { key: key.toString("base64"), keyId: createHash("sha256").update(key).digest("hex").slice(0, 32) };
+  const registration = { ...input, transport: "fcm" as const, serverOrigin: "https://chat.example", projectId: "lumiverse-bc911",
+    delivery: "relay" as const, enrollmentId: "e".repeat(43), relayCredential: "lvf_" + "r".repeat(43), encryption };
+  const info = await (await app.request("/push/android/info")).json();
+  expect(info).toMatchObject({ configured: true, delivery: "relay", encryptionRequired: true, encryptionVersion: 1 });
+  expect(() => service.createAndroidDestination("owner", { ...registration, encryption: undefined })).toThrow("verification");
+  expect(() => service.createAndroidDestination("owner", { ...registration, projectId: "wrong-project" })).toThrow("projects do not match");
+  const first = service.createAndroidDestination("owner", registration);
+  const repeated = service.createAndroidDestination("owner", registration);
+  expect(repeated.destination.id).toBe(first.destination.id);
+  expect(service.listAndroidDestinations("owner")).toHaveLength(1);
+  const listed = JSON.stringify(service.listAndroidDestinations("owner"));
+  expect(listed).not.toContain(encryption.key); expect(listed).not.toContain(registration.relayCredential);
+  expect(listed).not.toContain("encryption_key"); expect(listed).not.toContain("device_token");
+  const row = db.query("SELECT * FROM android_push_destinations WHERE id=?").get(first.destination.id) as any;
+  expect(row.device_token).toBeNull(); expect(row.delivery_mode).toBe("relay");
+  expect(row.encryption_key).not.toContain(encryption.key); expect(row.relay_credential).not.toContain(registration.relayCredential);
+  expect(await service.sendAndroidNotifications("owner", { title: "Private", body: "Text" }, undefined, () => false)).toBe(0);
 });

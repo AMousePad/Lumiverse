@@ -72,7 +72,7 @@ The source commands below assume you have already cloned the repo and are workin
 
 The launcher will:
 1. Install Bun if not found
-2. Upgrade unsupported Bun versions to the latest stable release (minimum 1.4.2)
+2. Upgrade unsupported Bun versions to the latest stable release (minimum 1.4.4)
 3. Run the **first-time setup wizard** (admin account, port, extension storage, optional SMART disk monitoring)
 4. Install backend dependencies and serve the existing frontend build if one is available
 5. Start the backend with the runner and IPC bridge when launched interactively
@@ -130,7 +130,7 @@ In your Space's **Settings → Persistent storage**, attach a storage bucket and
 In the **Files** tab of your Space, create a file named `Dockerfile` with the following contents:
 
 ```dockerfile
-FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61
+FROM oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \

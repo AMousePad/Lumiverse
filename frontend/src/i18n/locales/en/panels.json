@@ -835,6 +835,10 @@
   },
   "regexPanel": {
     "title": "Regex Scripts",
+    "searchFolder": "Search scripts in this folder…",
+    "searchFolderAria": "Search scripts in {{folder}}",
+    "folderPagesAria": "Script pages in {{folder}}",
+    "noSearchResults": "No scripts match your search.",
     "bulkSelect": "Bulk select",
     "exitBulkSelect": "Exit bulk selection",
     "selectedCount": "{{selected}} of {{total}} selected",
@@ -3958,6 +3962,15 @@
     "deleteConfirm": "Delete"
   },
   "decisionConnectionForm": {
+    "providerSignIn": "Provider sign-in",
+    "signIn": "Sign in with {{provider}}",
+    "signingIn": "Signing in…",
+    "signInHintCreate": "Sign in to create this Decision connection and store its API key.",
+    "signInHintExisting": "Sign in to store a new API key for this Decision connection.",
+    "signInDefaultUrl": "Use the provider's default API URL to sign in. For a custom URL, enter an API key.",
+    "signInSaveFirst": "Save the provider and API URL changes before signing in.",
+    "signInSaved": "Signed in. API key saved.",
+    "signInFailed": "Could not sign in. Please try again.",
     "name": "Name",
     "connectionName": "My Decision connection",
     "provider": "Provider",

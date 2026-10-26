@@ -375,11 +375,12 @@
     "headerValue": "Wert",
     "addHeader": "+ Header hinzufügen",
     "command": "Befehl",
-    "commandHint": "Die auszuführende Programmdatei (z. B. node, python3, npx)",
-    "commandPlaceholder": "npx",
+    "commandHint": "Programm auf dem Backend-Host. Standardmäßig erlaubt: node, bun, deno, python, python3.",
+    "stdioPolicyHint": "Andere Programme erfordern MCP_STDIO_ALLOWED_COMMANDS. Paket-Runner wie npx und uvx benötigen außerdem genehmigte Pakete in MCP_STDIO_ALLOWED_PACKAGES. Setze diese Variablen in der Backend-Umgebung und starte Lumiverse neu.",
+    "commandPlaceholder": "node",
     "args": "Argumente",
     "argsHint": "Kommagetrennte Befehlsargumente",
-    "argsPlaceholder": "-y, @modelcontextprotocol/server-filesystem, /path",
+    "argsPlaceholder": "./server.js",
     "env": "Umgebungsvariablen",
     "envHint": "Umgebungsvariablen, die an den Subprozess übergeben werden. Werte werden verschlüsselt gespeichert.",
     "varName": "Variablenname",
@@ -401,7 +402,8 @@
     "discoveredTools": "Gefundene Tools",
     "toolCount": "{{count}} Tool",
     "toolCount_plural": "{{count}} Tools",
-    "testRequestFailed": "Testanfrage fehlgeschlagen"
+    "testRequestFailed": "Testanfrage fehlgeschlagen",
+    "saveFailed": "MCP-Serverkonfiguration konnte nicht gespeichert werden"
   },
   "tokenizers": {
     "loading": "Tokenizer werden geladen...",

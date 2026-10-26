@@ -86,7 +86,7 @@ export function isChatChunkVectorizationSubprocessStartupError(err: unknown): er
 
 function buildLaunchError(
   exitCode: number | null,
-  signalCode: number | null,
+  signalCode: number | NodeJS.Signals | null,
   error?: Error,
   startup = false,
 ): Error {
@@ -160,7 +160,7 @@ function failInflight(error: Error): void {
   item.reject(error);
 }
 
-function handleExit(exitCode: number | null, signalCode: number | null, error?: Error): void {
+function handleExit(exitCode: number | null, signalCode: number | NodeJS.Signals | null, error?: Error): void {
   const wasExpected = expectedExit;
   const wasShutdown = shutdownRequested;
   const wasReady = ready;

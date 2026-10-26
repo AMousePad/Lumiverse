@@ -35,6 +35,7 @@ export interface ChatSlice {
    *  streaming buffer to that swipe so the user can navigate to other swipes
    *  mid-generation. null when unknown (pre-GENERATION_STARTED) or idle. */
   streamingSwipeId: number | null
+  streamingPreserveSwipe: boolean
   streamingGenerationType: string | null
   /** The generation type of the last completed generation — survives endStreaming() */
   lastCompletedGenerationType: string | null
@@ -75,7 +76,7 @@ export interface ChatSlice {
   addMessage: (message: Message) => void
   updateMessage: (id: string, updates: Partial<Message>) => void
   removeMessage: (id: string) => void
-  beginStreaming: (regeneratingMessageId?: string, generationType?: string) => void
+  beginStreaming: (regeneratingMessageId?: string, generationType?: string, backgroundSwipeId?: number) => void
   startStreaming: (generationId: string, regeneratingMessageId?: string, generationType?: string) => void
   pauseStreamingForNavigation: () => void
   /** Append a live stream segment. When `offset` (char position of the segment
@@ -93,7 +94,7 @@ export interface ChatSlice {
   getStreamBuffers: () => { content: string; reasoning: string }
   setStreamingReasoningStartedAt: (ts: number | null) => void
   /** Set the confirmed streaming swipe index and recover its slot if a staging event was missed. */
-  setStreamingSwipeId: (swipeId: number | null) => void
+  setStreamingSwipeId: (swipeId: number | null, preserveSelection?: boolean) => void
   /** Flag a freshly-generated swipe as unseen (drives the "new swipe ready" badge). */
   setUnseenSwipe: (messageId: string, swipeId: number) => void
   /** Clear the unseen-swipe flag for a message (e.g. once the user views it). */
@@ -858,7 +859,8 @@ export interface SettingsSlice {
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
   setInputBarEnterToSend: (settings: EnterToSendSettings) => void
-  setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K], source?: SettingsWriteSource) => void
+  // Character filters also use coordinated persistence to survive startup hydration.
+  setSetting: <K extends keyof (SettingsSlice & Pick<CharactersSlice, 'filterTab'>)>(key: K, value: (SettingsSlice & Pick<CharactersSlice, 'filterTab'>)[K], source?: SettingsWriteSource) => void
   setTheme: (theme: ThemeConfig | null) => void
   setCharacterThemeOverlay: (overlay: CharacterThemeOverlay | null) => void
   setCustomCSS: (css: string) => void

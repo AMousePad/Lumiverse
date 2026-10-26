@@ -20,6 +20,7 @@ interface ConnectionLike {
 /** Store-slice selector per kind; exhaustive, so a new kind won't compile until added here. */
 const PROFILE_SELECTOR_MAP: Record<ConnectionKind, (s: AppStore) => ConnectionLike[]> = {
   llm: (s) => s.profiles,
+  decision: (s) => s.decisionProfiles,
   imageGen: (s) => s.imageGenProfiles,
   tts: (s) => s.ttsProfiles,
   stt: (s) => s.sttProfiles,

@@ -24,7 +24,9 @@ await bootstrapBunRuntime(_resolve(import.meta.dir, ".."));
 // Must run BEFORE any application code is imported so that environment variables
 // take precedence when NAPI-RS resolves bindings via `require()`.
 import { configureLanceDbNativeOverride } from "./lancedb-preflight";
+import { configureSharpNativeOverride } from "./sharp-preflight";
 await configureLanceDbNativeOverride();
+await configureSharpNativeOverride();
 
 // ── Application Boot ────────────────────────────────────────────────────────
 await import("./main");

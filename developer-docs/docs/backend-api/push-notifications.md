@@ -10,11 +10,13 @@ Notifications are automatically **suppressed** on the server when any of the use
 Registered destinations may be browser Web Push subscriptions, Lumiverse Desktop native destinations, native iOS APNs destinations, or native Android destinations. The desktop companion's Rust host maintains the notification-only socket and heartbeat independently of its WebViews, then presents the payload through the operating system; it never joins the user's general event channel. iOS receives alert notifications through APNs while backgrounded or closed. The official app uses the encrypted Lumiverse relay by default; self-built IPAs can use their owner's provider credentials. See [iOS notification delivery](../getting-started/ios-notification-relay.md).
 
 Native Android destinations (`android_native`) use a notification-only socket
-for the embedded backend and FCM for remote servers. They participate in the same
+for the embedded backend and FCM for remote servers. The official APK defaults to
+the encrypted Lumiverse FCM relay; operators can build an APK for their own
+Firebase project and configure direct delivery. They participate in the same
 preferences, presence suppression, destination removal and test flow. Completion
 alerts can show the character avatar; error alerts preserve their failure details.
 See [Android notification setup](../getting-started/android-notifications.md) for
-APK configuration, provider credentials and local backend lifetime limits.
+relay enrollment, APK configuration, provider credentials and local backend lifetime limits.
 Android currently renders title, body and owned character avatar thumbnails;
 `image` attachments are not rendered. Taps accept `/chat/{id}` and otherwise open
 the server's home page.

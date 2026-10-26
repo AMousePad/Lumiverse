@@ -1,4 +1,5 @@
 import { get, post, del, type RequestOptions } from './client'
+import type { AndroidNotificationInfo, AndroidPushRegistration } from '@/lib/android-native'
 
 export interface PushSubscriptionRecord {
   type: 'web_push' | 'tauri_desktop' | 'ios_apns' | 'android_native'
@@ -33,9 +34,9 @@ export interface PushTestResult {
 
 export const pushApi = {
   getAndroidInfo() {
-    return get<{ configured: boolean; projectId: string | null; serverInstanceId: string; reason: string | null }>('/push/android/info')
+    return get<AndroidNotificationInfo>('/push/android/info')
   },
-  subscribeAndroid(input: { deviceId: string; accountId?: string; transport: 'local' | 'fcm'; deviceToken?: string; projectId?: string }, options?: RequestOptions) {
+  subscribeAndroid(input: AndroidPushRegistration, options?: RequestOptions) {
     return post<{ destination: PushSubscriptionRecord; credential: string; serverInstanceId: string }>('/push/android', {
       ...input, serverOrigin: window.location.origin, label: 'Lumiverse Android', userAgent: navigator.userAgent,
     }, options)

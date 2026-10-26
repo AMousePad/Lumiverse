@@ -1,6 +1,6 @@
-import { CSS, type Transform } from '@dnd-kit/utilities'
-import { DndContext as BaseDndContext, getClientRect, type DndContextProps } from '@dnd-kit/core'
-import { createElement, useCallback, useEffect, useRef } from 'react'
+import type { Transform } from '@dnd-kit/utilities'
+import { DndContext as BaseDndContext, getClientRect, type DndContextProps, type Modifier } from '@dnd-kit/core'
+import { createContext, createElement, useCallback, useContext, useLayoutEffect, useReducer, useRef } from 'react'
 import { getUiScale } from './uiScale'
 
 const computedTransformIncludesZoom = new WeakMap<Document, boolean>()
@@ -56,80 +56,45 @@ const scaledMeasuring = {
   droppable: { measure: measureUiScaledRect },
 }
 
+interface DragGeometry {
+  transform: Transform
+  rect: { left: number; top: number } | null
+  overlay: boolean
+}
+
+const DragGeometryContext = createContext<{ current: DragGeometry | null } | null>(null)
+
 /** Use with useScaledSortableStyle so measurement and painting share units. */
-export function DndContext({ measuring, ...props }: DndContextProps) {
-  return createElement(BaseDndContext, {
+export function DndContext({ measuring, modifiers, ...props }: DndContextProps) {
+  const geometry = useRef<DragGeometry | null>(null)
+  // Modifiers receive viewport deltas before dnd-kit adds its layout-pixel
+  // scroll adjustment. Capture the result after caller-supplied constraints.
+  const captureGeometry = useCallback<Modifier>(({ transform, activeNodeRect, overlayNodeRect }) => {
+    geometry.current = { transform, rect: activeNodeRect, overlay: !!overlayNodeRect }
+    return transform
+  }, [])
+
+  return createElement(DragGeometryContext.Provider, { value: geometry }, createElement(BaseDndContext, {
     ...props,
+    modifiers: [...(modifiers ?? []), captureGeometry],
     measuring: measuring ? {
       ...measuring,
       draggable: { ...scaledMeasuring.draggable, ...measuring.draggable },
       droppable: { ...scaledMeasuring.droppable, ...measuring.droppable },
     } : scaledMeasuring,
-  })
+  }))
 }
 
 /**
- * Walk up from `node` to the nearest scrollable ancestor (the element that
- * auto-scrolls while a drag drags past the viewport edge). Returns null if the
- * node is not inside a scroll container.
+ * Preserve intrinsic dimensions throughout sorting and the drop animation.
+ * Target-size and derived FLIP scales can stretch variable-height rows,
+ * including siblings that are no longer marked as dragging. Retain fractional
+ * layout pixels rather than rounding them before the browser applies UI scale.
  */
-function getScrollableAncestor(node: Element | null): Element | null {
-  let el = node?.parentElement ?? null
-  while (el) {
-    const { overflowY, overflowX } = getComputedStyle(el)
-    const scrollableY = /(auto|scroll|overlay)/.test(overflowY) && el.scrollHeight > el.clientHeight
-    const scrollableX = /(auto|scroll|overlay)/.test(overflowX) && el.scrollWidth > el.clientWidth
-    if (scrollableY || scrollableX) return el
-    el = el.parentElement
-  }
-  return null
-}
-
-/**
- * Build a `translate3d` string from a `useSortable` transform, compensating for
- * the CSS `zoom: var(--lumiverse-ui-scale)` applied to body (see
- * theme/reset.css).
- *
- * dnd-kit's transform is the sum of two components measured in *different*
- * coordinate spaces under CSS `zoom`:
- *   - the pointer/rect delta, read from pointer events and getBoundingClientRect,
- *     which are viewport-relative and therefore in post-zoom (rendered) pixels;
- *   - the auto-scroll delta, read from `element.scrollTop`/`scrollLeft`, which is
- *     element-relative and therefore in pre-zoom (layout) pixels.
- *
- * A CSS transform on a zoomed element is itself applied in layout space (the
- * zoom multiplies it on paint), so only the pointer component must be divided by
- * the scale — the scroll component is already in layout pixels. Dividing the
- * whole sum (the previous behaviour) under-applied the scroll component by a
- * factor of the scale, so the card drifted further from the cursor the more the
- * list auto-scrolled. We subtract the scroll delta, scale the pointer remainder,
- * then add the scroll delta back untouched.
- */
-function scaledTransform(
-  transform: Transform | null,
-  scrollDx: number,
-  scrollDy: number,
-  isDragging: boolean,
-): string | undefined {
-  if (!transform) return CSS.Transform.toString(transform)
+function scaledTransform(transform: Transform | null): string | undefined {
+  if (!transform) return undefined
   const uiScale = getUiScale()
-  // During drag, the FLIP animation transform may include scaleX/scaleY
-  // from useDerivedTransform. These scale factors compound with the pointer
-  // delta and cause the card to visually stretch or squish. Strip them —
-  // only keep the translation.
-  if (isDragging) {
-    return CSS.Transform.toString({
-      x: uiScale !== 1 ? (transform.x - scrollDx) / uiScale + scrollDx : transform.x,
-      y: uiScale !== 1 ? (transform.y - scrollDy) / uiScale + scrollDy : transform.y,
-      scaleX: 1,
-      scaleY: 1,
-    })
-  }
-  return CSS.Transform.toString({
-    ...transform,
-    x: (transform.x - scrollDx) / uiScale + scrollDx,
-    y: (transform.y - scrollDy) / uiScale + scrollDy,
-  })
+  return `translate3d(${transform.x / uiScale}px, ${transform.y / uiScale}px, 0)`
 }
 
 interface ScaledSortableArgs {
@@ -144,9 +109,11 @@ interface ScaledSortableArgs {
  * regardless of UI scale or how far the list auto-scrolls. Returns a node ref to
  * spread onto the sortable element and the `style` (transform + transition).
  *
- * Falls back to the plain scaled transform when the row is not inside a scroll
- * container or scroll detection fails, so it can never behave worse than a naive
- * scale division.
+ * The active row uses viewport geometry throughout. dnd-kit's final transform
+ * mixes viewport pointer deltas with layout scroll offsets, and its scroll
+ * baseline can reset when the active rect is measured. Comparing the measured
+ * rect with the row's current untransformed rect accounts for all scrolling
+ * and layout shifts without depending on those internal scroll offsets.
  */
 export function useScaledSortableStyle({
   setNodeRef,
@@ -158,8 +125,8 @@ export function useScaledSortableStyle({
   style: { transform: string | undefined; transition: string | undefined }
 } {
   const nodeRef = useRef<HTMLElement | null>(null)
-  // Scroll container + its scroll offsets captured at drag start.
-  const scrollStart = useRef<{ el: Element | null; top: number; left: number } | null>(null)
+  const geometry = useContext(DragGeometryContext)
+  const [, redraw] = useReducer(value => value + 1, 0)
 
   const ref = useCallback(
     (element: HTMLElement | null) => {
@@ -169,27 +136,30 @@ export function useScaledSortableStyle({
     [setNodeRef],
   )
 
-  useEffect(() => {
-    if (isDragging) {
-      const el = getScrollableAncestor(nodeRef.current)
-      scrollStart.current = { el, top: el?.scrollTop ?? 0, left: el?.scrollLeft ?? 0 }
-    } else {
-      scrollStart.current = null
-    }
+  useLayoutEffect(() => {
+    if (!isDragging || !nodeRef.current) return
+    // A scroll can leave dnd-kit's transform unchanged (or reset its baseline).
+    // Repaint for scroll events even when the pointer is stationary.
+    const doc = nodeRef.current.ownerDocument
+    doc.addEventListener('scroll', redraw, { capture: true, passive: true })
+    return () => doc.removeEventListener('scroll', redraw, true)
   }, [isDragging])
 
-  let scrollDx = 0
-  let scrollDy = 0
-  const start = scrollStart.current
-  if (isDragging && start?.el) {
-    scrollDx = start.el.scrollLeft - start.left
-    scrollDy = start.el.scrollTop - start.top
+  let viewportTransform = transform
+  const drag = geometry?.current
+  if (isDragging && nodeRef.current && drag?.rect && !drag.overlay) {
+    const current = measureUiScaledRect(nodeRef.current)
+    viewportTransform = {
+      ...drag.transform,
+      x: drag.transform.x + drag.rect.left - current.left,
+      y: drag.transform.y + drag.rect.top - current.top,
+    }
   }
 
   return {
     setNodeRef: ref,
     style: {
-      transform: scaledTransform(transform, scrollDx, scrollDy, isDragging),
+      transform: scaledTransform(viewportTransform),
       transition,
     },
   }

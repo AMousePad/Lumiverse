@@ -378,11 +378,12 @@
     "headerValue": "값",
     "addHeader": "+ 헤더 추가",
     "command": "명령어",
-    "commandHint": "실행할 실행 파일(예: node, python3, npx)",
-    "commandPlaceholder": "npx",
+    "commandHint": "백엔드 호스트에서 실행할 프로그램입니다. 기본 허용: node, bun, deno, python, python3.",
+    "stdioPolicyHint": "다른 실행 파일은 MCP_STDIO_ALLOWED_COMMANDS 설정이 필요합니다. npx, uvx 같은 패키지 실행기는 MCP_STDIO_ALLOWED_PACKAGES에 허용된 패키지도 필요합니다. 백엔드 환경 변수를 설정하고 Lumiverse를 다시 시작하세요.",
+    "commandPlaceholder": "node",
     "args": "인수",
     "argsHint": "쉼표로 구분된 명령어 인수",
-    "argsPlaceholder": "-y, @modelcontextprotocol/server-filesystem, /path",
+    "argsPlaceholder": "./server.js",
     "env": "환경 변수",
     "envHint": "하위 프로세스에 전달할 환경 변수입니다. 값은 암호화되어 저장됩니다.",
     "varName": "변수 이름",
@@ -404,7 +405,8 @@
     "discoveredTools": "발견된 도구",
     "toolCount": "도구 {{count}}개",
     "toolCount_plural": "도구 {{count}}개",
-    "testRequestFailed": "테스트 요청 실패"
+    "testRequestFailed": "테스트 요청 실패",
+    "saveFailed": "MCP 서버 설정을 저장하지 못했습니다"
   },
   "tokenizers": {
     "loading": "토크나이저를 불러오는 중...",

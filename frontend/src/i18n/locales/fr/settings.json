@@ -341,11 +341,12 @@
     "headerValue": "Valeur",
     "addHeader": "+ Ajouter un en-tête",
     "command": "Commande",
-    "commandHint": "L'exécutable à exécuter (par exemple, node, python3, npx)",
-    "commandPlaceholder": "npx",
+    "commandHint": "Exécutable sur la machine du backend. Autorisés par défaut : node, bun, deno, python, python3.",
+    "stdioPolicyHint": "Les autres exécutables nécessitent MCP_STDIO_ALLOWED_COMMANDS. Les lanceurs de paquets comme npx et uvx nécessitent aussi des paquets autorisés dans MCP_STDIO_ALLOWED_PACKAGES. Définissez ces variables dans l’environnement du backend et redémarrez Lumiverse.",
+    "commandPlaceholder": "node",
     "args": "Arguments",
     "argsHint": "Arguments de commande séparés par des virgules",
-    "argsPlaceholder": "-y, @modelcontextprotocol/server-filesystem, /chemin",
+    "argsPlaceholder": "./server.js",
     "env": "Variables d'environnement",
     "envHint": "Env vars transmis au sous-processus. Les valeurs sont stockées cryptées.",
     "varName": "Nom de la variable",
@@ -367,7 +368,8 @@
     "discoveredTools": "Outils découverts",
     "toolCount": "{{count}} outil",
     "toolCount_plural": "{{count}} outils",
-    "testRequestFailed": "Échec de la demande de test"
+    "testRequestFailed": "Échec de la demande de test",
+    "saveFailed": "Échec de l’enregistrement de la configuration du serveur MCP"
   },
   "tokenizers": {
     "loading": "Chargement des tokenizers...",

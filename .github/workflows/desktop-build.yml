@@ -123,7 +123,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Test Windows tray runner and MSVC setup
         if: matrix.target == 'x86_64-pc-windows-msvc'

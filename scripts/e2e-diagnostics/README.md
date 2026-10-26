@@ -24,6 +24,9 @@ bun run diagnose
 
 ## Scripts
 
+- `node check-background-swipe.mjs`
+  Uses the native swipe controls and streaming store with controlled generation events. Checks background generation, Ctrl/Cmd-click, keyboard activation, unchanged selected text, completion navigation, and ordinary-click behavior at desktop and iPhone widths in Chromium and WebKit. No backend, credentials or personal chats are used. `SWIPE_BROWSERS` selects engines.
+
 - `node check-message-preview.mjs`
   Exercises the real native message-preview surface, display hooks, resolver registry and regex pipeline with controlled store/HTTP boundaries. Covers owned resolvers and backend display regex, exact source ranges, swipe changes, disabled regex actions, HTML-island disclosures, navigation, source removal and remount. Runs desktop and notched-iPhone-sized layouts in Chromium and WebKit without a live server, credentials or personal data. `PREVIEW_BROWSERS` selects engines; `PLAYWRIGHT_MODULE` can point to an existing installation. Pass `--serve` for a human-review fixture. This does not emulate a physical installed PWA or substitute for the required human live-environment audit.
 

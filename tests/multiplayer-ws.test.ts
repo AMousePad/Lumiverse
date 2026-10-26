@@ -54,7 +54,7 @@ beforeAll(async () => {
 
   // Stand up a real server with ONLY the ws route (avoids the full auth stack).
   const { wsHandler } = await import("../src/ws/handler");
-  const { websocket } = await import("hono/bun");
+  const { websocket } = await import("../src/ws/transport");
   const { Hono } = await import("hono");
   const app = new Hono();
   app.get("/api/ws", wsHandler);

@@ -100,6 +100,16 @@ export default function DecisionConnectionManager() {
     setCreating(false)
   }, [profiles, addProfile, updateProfile])
 
+  const handleOAuthComplete = useCallback((profile: DecisionConnectionProfile) => {
+    addProfile(profile)
+    if (profile.is_default) {
+      profiles.forEach((p) => {
+        if (p.id !== profile.id && p.is_default) updateProfile(p.id, { is_default: false })
+      })
+    }
+    setCreating(false)
+  }, [profiles, addProfile, updateProfile])
+
   const handleUpdate = useCallback((updated: DecisionConnectionProfile) => {
     updateProfile(updated.id, updated)
     if (updated.is_default) {
@@ -161,6 +171,7 @@ export default function DecisionConnectionManager() {
           providers={providers}
           onSave={handleCreate}
           onCancel={() => setCreating(false)}
+          onOAuthComplete={handleOAuthComplete}
         />
       )}
 

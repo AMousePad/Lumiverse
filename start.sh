@@ -20,7 +20,7 @@ set -euo pipefail
 #   ./start.sh --upgrade-bun    Upgrade Bun to the latest stable release before running
 #   ./start.sh --upgrade-bun-canary  Upgrade Bun to the latest canary build before running
 #
-# Bun versions older than 1.4.2 are automatically upgraded to latest stable.
+# Bun versions older than 1.4.4 are automatically upgraded to latest stable.
 #
 # Environment overrides:
 #   FRONTEND_PATH   Path to frontend directory (default: ./frontend)
@@ -198,7 +198,7 @@ FORCE_BUILD=false
 AUTO_OPEN=false
 SAFE_THEME=false
 BUN_UPGRADE_CHANNEL=""  # "" | "stable" | "canary"
-MINIMUM_BUN_VERSION="1.4.2"
+MINIMUM_BUN_VERSION="1.4.4"
 for arg in "$@"; do
   case "$arg" in
     --build|-b)     FORCE_BUILD=true ;;
@@ -597,14 +597,14 @@ upgrade_bun_channel() {
   # standard `bun upgrade` path below.
   if [[ "$IS_TERMUX" == true ]]; then
     if [[ "$channel" == "canary" ]]; then
-      warn "Bun canary builds are not supported on native Termux — the bun-termux"
-      warn "wrapper only packages stable releases. Skipping upgrade; continuing"
-      warn "with the existing $before binary."
+      warn "Bun canary upgrades are not supported by Lumiverse's native Termux path."
+      warn "The bun-termux manager downloads official stable Bun releases."
+      warn "Skipping this upgrade; keeping the existing $before binary."
       warn "If you specifically need canary, run inside a proot-distro Linux instead."
       return 0
     fi
 
-    info "Updating Bun to latest Termux stable (current: $before)..."
+    info "Updating Bun to official stable through bun-termux (current: $before)..."
     if ! upgrade_bun_termux "$before"; then
       err "bun-termux upgrade failed. Continuing with the available Bun runtime."
       return 0
@@ -685,13 +685,16 @@ ensure_minimum_bun_version() {
   _resolve_bun || true
   current="$(_bun --version 2>/dev/null | head -1 || echo unknown)"
   if bun_version_at_least "$current" "$MINIMUM_BUN_VERSION"; then
+    verify_termux_bun_install_path
     ok "Bun $current satisfies the minimum supported version"
     return 0
   fi
 
   err "Bun $current is still below the required $MINIMUM_BUN_VERSION."
   if [[ "$IS_TERMUX" == true ]]; then
-    err "Update bun-termux to a release containing Bun >= $MINIMUM_BUN_VERSION, then retry."
+    err "Retry ./start.sh --upgrade-bun when the official Bun download is reachable."
+    err "Runtime source: https://github.com/oven-sh/bun/releases (Bun >= $MINIMUM_BUN_VERSION)."
+    err "Wrapper source: https://github.com/Happ1ness-dev/bun-termux."
   else
     err "Install the latest stable Bun release from https://bun.sh, then retry."
   fi
@@ -821,7 +824,7 @@ verify_backend_dependencies() {
   local dir="$1"
   # glibc-runner/grun currently word-splits argv containing spaces on Termux.
   # Keep eval probes whitespace-free so fallback runtimes receive one intact -e arg.
-  (cd "$dir" && _bun -e "await(import('better-auth'));await(import('@better-auth/oauth-provider'))")
+  (cd "$dir" && _bun -e "await(import('./src/sharp-preflight.ts')).then(m=>m.configureSharpNativeOverride());await(import('sharp')).then(m=>m.default({create:{width:1,height:1,channels:4,background:'#000000'}}).png().toBuffer());await(import('better-auth'));await(import('@better-auth/oauth-provider'))")
 }
 
 verify_frontend_dependencies() {

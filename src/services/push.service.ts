@@ -273,7 +273,7 @@ export function deleteSubscription(userId: string, id: string): boolean {
 }
 
 export async function deleteNotificationDestination(userId: string, id: string): Promise<boolean> {
-  if (deleteAndroidDestination(userId, id)) return true;
+  if (await deleteAndroidDestination(userId, id)) return true;
   if (deleteSubscription(userId, id)) return true;
   const removed = getDb().query("DELETE FROM ios_push_destinations WHERE id = ? AND user_id = ? RETURNING bundle_id, delivery_mode, relay_credential")
     .get(id, userId) as { bundle_id: string; delivery_mode: string; relay_credential: string | null } | null;

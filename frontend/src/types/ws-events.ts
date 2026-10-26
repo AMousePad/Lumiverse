@@ -364,6 +364,7 @@ export interface GenerationStartedPayload {
   targetMessageId?: string
   /** Swipe index the generation streams into (for swipe-gated streaming display). */
   targetSwipeId?: number
+  backgroundSwipe?: boolean
   generationType?: string
   characterId?: string
   characterName?: string
@@ -539,6 +540,7 @@ export interface RoomHydrationGeneration {
   generationType?: string
   targetMessageId?: string
   targetSwipeId?: number
+  backgroundSwipe?: boolean
   characterName?: string
   characterId?: string
   reasoningStartedAt?: number

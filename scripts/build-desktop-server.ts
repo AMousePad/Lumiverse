@@ -25,6 +25,8 @@ async function run(cmd: string[], cwd = root) {
   if (await child.exited !== 0) throw new Error(`Build failed: ${cmd.join(" ")}`);
 }
 async function build() {
+  const pkg = await Bun.file(join(root, "package.json")).json();
+  if (`bun@${Bun.version}` !== pkg.packageManager) throw new Error(`Build with ${pkg.packageManager} for a reproducible desktop runtime.`);
   const args = process.argv.slice(2);
   const selected = desktopServerTarget(args);
   const reuse = args.includes("--reuse-server");

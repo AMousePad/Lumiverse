@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   extractBatchWithSidecar,
+  extractWithSidecar,
   getToolChoiceParams,
   parseToolCallResults,
 } from "./salience-sidecar";
@@ -24,6 +25,19 @@ describe("getToolChoiceParams", () => {
 });
 
 describe("parseToolCallResults", () => {
+  test("normalizes actual font colors and rejects invalid colors or usage types", () => {
+    const result = parseToolCallResults([{ name: "extract_font_colors", args: { color_attributions: [
+      { hex_color: "#abc", character_name: "Melina", usage_type: "thought" },
+      { hex_color: "rgb(255, 0, 0)", character_name: "Melina", usage_type: "speech" },
+      { hex_color: "rgb(999, 0, 0)", character_name: "Melina", usage_type: "thought" },
+      { hex_color: "#invented", character_name: "Melina", usage_type: "thought" },
+      { hex_color: "#abcdef", character_name: "Melina", usage_type: "invented" },
+    ] } }]);
+    expect(result.fontColors).toEqual([
+      { hexColor: "#aabbcc", characterName: "Melina", usageType: "thought" },
+      { hexColor: "#ff0000", characterName: "Melina", usageType: "speech" },
+    ]);
+  });
   test("filters low-signal sidecar junk while preserving supported extraction", () => {
     const result = parseToolCallResults([
       {
@@ -95,6 +109,29 @@ describe("parseToolCallResults", () => {
   });
 });
 
+test("live and batch extraction receive the same thought-channel rules and configured markers", async () => {
+  const prompts: Array<{ system: string; user: string }> = [];
+  const generate: Parameters<typeof extractWithSidecar>[1] = async (request) => {
+    prompts.push({ system: request.messages[0]!.content, user: request.messages[1]!.content });
+    const entry = { importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [],
+      relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] };
+    return { content: JSON.stringify(request.requestPurpose === "batch extraction" ? { results: [{ ...entry, index: 0 }, { ...entry, index: 1 }] } : entry) };
+  };
+  const options = { thoughtDelimiters: { prefix: "[private]", suffix: "[/private]" } };
+  await extractWithSidecar("Quiet weather.", generate, "fixture", options);
+  await extractBatchWithSidecar([{ index: 0, content: "Quiet weather." }, { index: 1, content: "Clear skies." }], generate, "fixture", options);
+  expect(prompts).toHaveLength(2);
+  for (const prompt of prompts) {
+    expect(prompt.system).toContain("a thought/italic wrapper takes precedence over quotation marks");
+    expect(prompt.system).toContain("report both usage types");
+    expect(prompt.system).toContain("standalone first-person thought paragraph continues");
+    expect(prompt.system).toContain("including message prefixes, supplied aliases, and unambiguous pronouns");
+    expect(prompt.system).toContain("Include both resolved endpoints in entities_present");
+    expect(prompt.system).toContain("serves = subordinate to superior");
+    expect(prompt.user).toContain(JSON.stringify(options.thoughtDelimiters));
+  }
+});
+
 describe("extractBatchWithSidecar", () => {
   test("a failed batch does not fan out into more provider requests", async () => {
     let calls = 0;
@@ -116,14 +153,14 @@ describe("extractBatchWithSidecar", () => {
       { index: 1, content: "Tovin crossed the river." },
     ], async () => {
       calls++;
-      return { content: JSON.stringify([{ index: 0, importance: 5, entities_present: [], key_facts: [] }]) };
+      return { content: JSON.stringify([{ index: 0, importance: 5, entities_present: [], key_facts: [], emotional_tones: [], narrative_flags: [], relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] }]) };
     }, "sidecar-test");
     expect(calls).toBe(1);
     expect(result[0]?.score).toBe(0.5);
     expect(result[1]).toBeNull();
   });
 
-  test("ignores sparse tool-call entries from a provider", async () => {
+  test("rejects an unexpected tool for a single passage", async () => {
     const result = await extractBatchWithSidecar([
       { index: 0, content: "Mara found the missing map." },
     ], async () => ({
@@ -150,7 +187,7 @@ describe("extractBatchWithSidecar", () => {
       ],
     }), "sidecar-test");
 
-    expect(result[0]?.score).toBe(0.5);
+    expect(result[0]).toBeNull();
   });
 
   test("uses one structured batch tool call and maps results by passage index", async () => {
@@ -200,5 +237,17 @@ describe("extractBatchWithSidecar", () => {
     expect(result.map((entry) => entry?.score)).toEqual([0.5, 0.7]);
     expect(result[0]?.entitiesPresent[0]?.name).toBe("Mara");
     expect(result[1]?.entitiesPresent[0]?.name).toBe("Tovin");
+  });
+});
+
+describe("extraction completeness", () => {
+  test("a salience-only response cannot warm a chunk", async () => {
+    await expect(extractWithSidecar("Mara found the map.", async () => ({ content: "", tool_calls: [
+      { name: "score_salience", args: { importance: 7, emotional_tones: [], narrative_flags: [], key_facts: [] } },
+    ] }), "test", { throwOnFailure: true })).rejects.toThrow("Incomplete extraction tool");
+  });
+  test("a complete empty JSON extraction succeeds", async () => {
+    const result = await extractWithSidecar("Quiet weather.", async () => ({ content: JSON.stringify({ importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [], relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] }) }), "test", { throwOnFailure: true });
+    expect(result?.score).toBe(0.2);
   });
 });

@@ -16,6 +16,7 @@ import { EventType } from './events'
 import { useStore } from '@/store'
 import type { DecisionConnectionProfile } from '@/types/api'
 import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
+import { createRegexRefreshScheduler } from './regex-refresh'
 import {
   createProviderRegistryProjection,
   FRONTEND_PROVIDER_SCOPE,
@@ -621,6 +622,8 @@ export function useWebSocket() {
     // Connect only once; the singleton client handles reconnects internally.
     wsClient.connect()
 
+    const regexRefresh = createRegexRefreshScheduler((shouldApply) => store.getState().loadRegexScripts(shouldApply))
+
     const unsubs = [
       wsClient.on(EventType.DECISION_CONNECTION_CHANGED, (payload: { id: string; deleted?: boolean; profile?: DecisionConnectionProfile }) => {
         const store = useStore.getState()
@@ -814,7 +817,7 @@ export function useWebSocket() {
           if (store.getState().activeGenerationId !== payload.generationId) return
           // Anchor the streaming buffer to its swipe so the user can navigate to
           // other swipes mid-generation without smearing live tokens onto them.
-          state.setStreamingSwipeId(payload.targetSwipeId ?? null)
+          state.setStreamingSwipeId(payload.targetSwipeId ?? null, payload.backgroundSwipe === true)
           // A new generation supersedes any stale "new swipe ready" badge on this
           // message — the upcoming completion will re-flag the fresh swipe if needed.
           if (payload.targetMessageId) state.clearUnseenSwipe(payload.targetMessageId)
@@ -844,7 +847,7 @@ export function useWebSocket() {
           if (store.getState().activeGenerationId !== payload.generationId) return
           // Refine (never clobber) the swipe anchor — GENERATION_STARTED is the
           // authoritative source; only overwrite if this event actually carries it.
-          if (payload.targetSwipeId != null) state.setStreamingSwipeId(payload.targetSwipeId)
+          if (payload.targetSwipeId != null) state.setStreamingSwipeId(payload.targetSwipeId, payload.backgroundSwipe === true)
 
           // Surface context clipping once the final assembly metadata is ready.
           const clip = payload.contextClipStats
@@ -1901,13 +1904,9 @@ export function useWebSocket() {
         }
       }),
 
-      // Regex script events — reload for multi-tab sync
-      wsClient.on(EventType.REGEX_SCRIPT_CHANGED, () => {
-        store.getState().loadRegexScripts()
-      }),
-      wsClient.on(EventType.REGEX_SCRIPT_DELETED, () => {
-        store.getState().loadRegexScripts()
-      }),
+      // Preset activation/import can emit hundreds of these in one burst.
+      wsClient.on(EventType.REGEX_SCRIPT_CHANGED, regexRefresh.request),
+      wsClient.on(EventType.REGEX_SCRIPT_DELETED, regexRefresh.request),
 
       // Expression change events
       wsClient.on(EventType.EXPRESSION_CHANGED, (payload: { chatId: string; characterId: string; label: string; imageId: string }) => {
@@ -2091,7 +2090,7 @@ export function useWebSocket() {
             if (gen?.active && gen.generationId) {
               const st = store.getState()
               st.startStreaming(gen.generationId, gen.targetMessageId, gen.generationType)
-              st.setStreamingSwipeId(gen.targetSwipeId ?? null)
+              st.setStreamingSwipeId(gen.targetSwipeId ?? null, gen.backgroundSwipe === true)
               if (gen.content) st.reconcileStreamContent(gen.content, gen.contentOffset ?? 0)
               if (gen.reasoning) st.reconcileStreamReasoning(gen.reasoning, gen.reasoningOffset ?? 0)
               if (gen.reasoningDurationMs) store.setState({ streamingReasoningDuration: gen.reasoningDurationMs })
@@ -2354,6 +2353,7 @@ export function useWebSocket() {
       clearInterval(chatHeadReconcile)
       unsubDrawerTabs()
       unsubPersonaRelay()
+      regexRefresh.dispose()
       store.getState().setWsResumeRecovering(false)
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()

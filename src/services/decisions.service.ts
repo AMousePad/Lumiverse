@@ -1,7 +1,7 @@
 import type { DecisionEvaluationInput, DecisionImageAsset, DecisionQuestion, DecisionResult } from "../decision/contract";
-import { validateDecisionInput, decisionImageByteLength, DecisionValidationError, DECISION_IMAGE_MAX_BYTES } from "../decision/validation";
+import { validateDecisionInput, decisionImageByteLength, DecisionValidationError, DECISION_IMAGE_MAX_BYTES, type DecisionAnswerReport } from "../decision/validation";
 import { ProviderRequestError } from "../utils/provider-errors";
-import { evaluateProviderDecision, redactDecisionError } from "../decision/providers";
+import { evaluateProviderDecision, evaluateProviderDecisionAnswers, redactDecisionError } from "../decision/providers";
 import * as connections from "./decision-connections.service";
 import * as secrets from "./secrets.service";
 import * as images from "./images.service";
@@ -38,6 +38,18 @@ async function resolveImageAssets<I extends DecisionEvaluationInput>(userId: str
   return resolved;
 }
 export async function evaluateDecision<const Q extends Record<string, DecisionQuestion>>(userId: string, input: DecisionEvaluationInput<Q>, signal?: AbortSignal): Promise<DecisionResult<Q>> {
+  return evaluateDecisionRequest(userId, input, evaluateProviderDecision, signal) as Promise<DecisionResult<Q>>;
+}
+
+/** Internal batch consumer; the public evaluate API continues to require
+ * every answer to be valid. Credentials, ownership and deadlines are shared. */
+export async function evaluateDecisionAnswers(userId: string, input: DecisionEvaluationInput, signal?: AbortSignal): Promise<DecisionAnswerReport> {
+  return evaluateDecisionRequest(userId, input, evaluateProviderDecisionAnswers, signal);
+}
+
+async function evaluateDecisionRequest<T>(userId: string, input: DecisionEvaluationInput,
+  evaluate: (profile: Parameters<typeof evaluateProviderDecision>[0], apiKey: string, input: DecisionEvaluationInput, signal: AbortSignal) => Promise<T>,
+  signal?: AbortSignal): Promise<T> {
   validateDecisionInput(input);
   signal?.throwIfAborted();
   const profile = input.connection_id ? connections.getConnection(userId, input.connection_id) : connections.getDefaultConnection(userId);
@@ -49,12 +61,12 @@ export async function evaluateDecision<const Q extends Record<string, DecisionQu
   try {
     const resolved = await resolveImageAssets(userId, input, effectiveSignal);
     effectiveSignal.throwIfAborted();
-    return await evaluateProviderDecision(profile, apiKey, resolved, effectiveSignal) as DecisionResult<Q>;
+    return await evaluate(profile, apiKey, resolved, effectiveSignal);
   } catch (error) {
     if (signal?.aborted) throw new Error("AbortError: Decision evaluation cancelled");
     if (timeout.aborted) throw new DecisionTimeoutError("Decision evaluation timed out after 30 seconds");
     if (error instanceof DecisionValidationError) throw new DecisionValidationError(redactDecisionError(error, apiKey));
-    if (error instanceof ProviderRequestError) throw new ProviderRequestError({ provider: error.provider, operation: error.operation, status: error.status, detail: String(redactDecisionError(error.detail || error.message, apiKey)), retryable: error.retryable, retryAfterMs: error.retryAfterMs });
+    if (error instanceof ProviderRequestError) throw new ProviderRequestError({ provider: error.provider, operation: error.operation, status: error.status, code: error.code, detail: String(redactDecisionError(error.detail || error.message, apiKey)), retryable: error.retryable, retryAfterMs: error.retryAfterMs });
     throw new Error(redactDecisionError(error, apiKey));
   }
 }

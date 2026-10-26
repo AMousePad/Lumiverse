@@ -9,6 +9,7 @@
  */
 
 import type { SidecarExtractionResult, SidecarFontColor, DiscoveredAlias, EmotionalTag, NarrativeFlag, StatusChange, ExtractedEntity, ExtractedRelationship, SidecarGradedHeuristics } from "./types";
+import { normalizeFontColor, type ThoughtDelimiters } from "./font-attribution";
 import { scoreChunkHeuristic } from "./salience-heuristic";
 
 // ─── Tool-Based Structured Extraction ──────────────────────────
@@ -92,8 +93,12 @@ When you detect an alias:
 Do NOT report aliases on superficial similarity alone (no shared substring, no shared role, no addressing, no clear in-passage referent). When unsure, omit.
 
 RELATIONSHIP RULES
-- Both source and target must be proper names present in the passage.
+- Output canonical proper names for both endpoints. Resolve references from the passage, including message prefixes, supplied aliases, and unambiguous pronouns; the two names need not be spelled out in the same sentence.
+- In first-person narration, I/me/my refers to the current [CHARACTER | Name] or [USER | Name] viewpoint unless explicit attribution identifies another speaker/thinker. Resolve you/your only when the passage identifies the addressee; do not assign every nearby name to it. A message author may also write other characters.
+- Include both resolved endpoints in entities_present, even when one appears only through a prefix, alias or unambiguous pronoun. Do not emit pronouns as entity names.
 - Only record a relationship when the passage directly supports an enduring or role-like connection, or explicitly states the relationship.
+- Explicit affectionate commitment or an identified partner is relationship evidence. Flirting or plans to share a room alone do not establish a partnership; when only romantic interest is explicit, use custom with a factual label instead of inventing a history.
+- Direction describes the source relative to the target: parent = parent to child; child = child to parent; mentor = teacher to student; serves = subordinate to superior; owns = owner to possession; member_of = member to group; located_in = entity to place; fears = fearful entity to feared entity. Do not reverse these roles or turn a student into a child.
 - Do NOT create a relationship just because two named entities appear in the same scene, speak once, stand near each other, or are mentioned together.
 - Do NOT infer hidden history, likely alliances, family ties, or romance unless the passage itself supports it.
 - If the passage shows only a transient interaction with no stable relationship signal, return no relationship for that pair.
@@ -107,7 +112,13 @@ SCORING RULES
 
 FONT COLOR RULES
 - Only report colors that are actually present in HTML color tags in the passage.
-- Map each color to the named character directly supported by the passage.
+- Inspect BOTH the colored text and wrappers around the color tag: *<font color="#abc">text</font>* and <font color="#abc">*text*</font> use the same thought/italic channel. The same applies to _..._, <i>, <em>, and any configured thought markers supplied with the passage.
+- Determine usage before ownership: a thought/italic wrapper takes precedence over quotation marks inside it. *"I should leave"* is thought, not speech. Quotes outside a thought wrapper indicate speech. Plain descriptive/action prose is narration; bold emphasis alone is not a thought marker.
+- Map each observed color AND usage to its actual speaker/thinker, using explicit dialogue/thought attribution, local viewpoint, and the current message's [CHARACTER | Name] or [USER | Name] prefix. One message author can write several characters.
+- A standalone first-person thought paragraph continues the established first-person viewpoint of its current message, including My/my/MY references. Other characters appearing in separate paragraphs do not change that viewpoint. Explicit attribution to a different thinker takes precedence.
+- A character addressed or mentioned inside someone else's speech/thought is not necessarily its owner. Do not attribute "Kael, help me" to Kael just because his name appears.
+- A character can use the same color for speech and thought: report both usage types when both are present. Do not assume a color belongs exclusively to one character or that an earlier color claim is evidence for this passage.
+- Normalize short hex, named colors and rgb values to #rrggbb. Never invent a color absent from the markup.
 - If the owner of a color is unclear, omit that attribution instead of guessing.`;
 
 const EXTRACTION_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
@@ -231,7 +242,7 @@ const TOOL_ENTITIES: ToolDefinition = {
             entity: { type: "string", description: "Proper name of the entity whose status changed." },
             change: {
               type: "string",
-              enum: ["injured", "healed", "died", "transformed", "betrayed", "allied", "departed", "arrived"],
+              enum: ["injured", "healed", "died", "destroyed", "transformed", "betrayed", "allied", "departed", "arrived"],
               description: "What explicitly happened to this entity in the passage.",
             },
             detail: { type: "string", description: "Brief factual description of the change, not interpretation." },
@@ -256,8 +267,8 @@ const TOOL_RELATIONSHIPS: ToolDefinition = {
         items: {
           type: "object",
           properties: {
-            source: { type: "string", description: "Proper name of the first entity (must appear in passage)." },
-            target: { type: "string", description: "Proper name of the second entity (must appear in passage)." },
+            source: { type: "string", description: "Canonical name of the entity holding the relationship role, resolved from passage names, prefixes, aliases or unambiguous pronouns. Include it in extract_entities." },
+            target: { type: "string", description: "Canonical name of the entity the source's relationship points to, resolved from passage references. Include it in extract_entities." },
             type: {
               type: "string",
               enum: ["ally", "enemy", "lover", "parent", "child", "sibling", "mentor", "rival", "owns", "member_of", "located_in", "fears", "serves", "custom"],
@@ -291,7 +302,7 @@ const TOOL_FONT_COLORS: ToolDefinition = {
             usage_type: {
               type: "string",
               enum: ["speech", "thought", "narration"],
-              description: "speech=quoted dialogue, thought=internal/italic text, narration=descriptive text.",
+              description: "thought=internal/italic channel (wrapping *...*, _..._, i/em or configured markers wins over quotes, inside or outside the color tag); speech=other quoted dialogue; narration=plain descriptive text. Report separate entries if a color has multiple usages.",
             },
           },
           required: ["hex_color", "character_name", "usage_type"],
@@ -671,6 +682,38 @@ function buildEntityHint(options?: {
   return "";
 }
 
+/** An empty extraction is valid; a missing tool or missing field is not. */
+function validateExtractionObject(json: any): void {
+  if (!json || typeof json.importance !== "number" || !Number.isFinite(json.importance)
+    || json.importance < 0 || json.importance > 10) throw new Error("Invalid or missing importance");
+  for (const field of ["emotional_tones", "narrative_flags", "key_facts", "entities_present", "relationships_shown", "status_changes", "color_attributions", "discovered_aliases"]) {
+    if (!Array.isArray(json[field])) throw new Error(`Incomplete extraction: ${field}`);
+  }
+}
+
+function validateExtractionTools(calls: Array<{ name: string; args: Record<string, unknown> }>, graded: boolean): void {
+  const required = ["score_salience", "extract_entities", "extract_relationships", "extract_font_colors", ...(graded ? ["grade_heuristic_candidates"] : [])];
+  for (const name of required) {
+    if (calls.filter((call) => call?.name === name && call.args && typeof call.args === "object").length !== 1) throw new Error(`Incomplete extraction tool: ${name}`);
+  }
+  const args = (name: string): any => calls.find((call) => call?.name === name)!.args;
+  validateExtractionObject({ ...args("score_salience"), ...args("extract_entities"),
+    entities_present: args("extract_entities").entities,
+    relationships_shown: args("extract_relationships").relationships,
+    color_attributions: args("extract_font_colors").color_attributions });
+}
+
+function validateLegacyGrading(value: any, arbiter: NonNullable<Parameters<typeof extractWithSidecar>[3]>["arbiter"], canonicals: string[]): void {
+  if (!arbiter) return;
+  for (const key of ["rejected_heuristic_entities", "transformed_heuristic_entities", "rejected_heuristic_relationships", "rejected_existing_entities"]) {
+    if (!Array.isArray(value?.[key])) throw new Error(`Incomplete legacy grading: ${key}`);
+  }
+  if (value.rejected_heuristic_entities.some((name: string) => !arbiter.heuristicEntities.some((e) => e.name === name))
+    || value.rejected_existing_entities.some((name: string) => !arbiter.existingGraphEntities.includes(name))
+    || value.transformed_heuristic_entities.some((entry: any) => !arbiter.heuristicEntities.some((e) => e.name === entry?.from) || !canonicals.includes(entry?.to))
+    || value.rejected_heuristic_relationships.some((r: any) => !arbiter.heuristicRelationships.some((c) => c.source === r?.source && c.target === r?.target && c.type === r?.type))) throw new Error("Legacy grading targeted an unsupplied candidate or canonical");
+}
+
 // Validate a parsed JSON extraction object into a SidecarExtractionResult.
 function buildResultFromJsonObject(
   json: any,
@@ -679,6 +722,7 @@ function buildResultFromJsonObject(
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
   },
 ): SidecarExtractionResult {
+  validateExtractionObject(json);
   const entities = validateEntities(json.entities_present).filter(
     (e) => !ENTITY_BLOCKLIST.has(e.name.toLowerCase().trim()),
   );
@@ -722,6 +766,7 @@ export async function extractWithSidecar(
   options?: {
     characterNames?: string[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
+    thoughtDelimiters?: ThoughtDelimiters;
     /** When provided, the sidecar is asked to judge these candidates and grading
      *  is returned in the result's gradedHeuristics field. */
     arbiter?: {
@@ -771,7 +816,7 @@ export async function extractWithSidecar(
       : "score_salience, extract_entities, extract_relationships, and extract_font_colors";
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze the exact roleplay passage below. Call ${toolListing} exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${arbiterBlock}\n\n<passage>\n${content}\n</passage>`;
+    const userContent = `Analyze the exact roleplay passage below. Call ${toolListing} exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${arbiterBlock}\n\n<passage>\n${content}\n</passage>`;
     const tag = options?.logTag ?? "single";
     logSidecarDispatch(tag, {
       chunks: 1,
@@ -798,6 +843,8 @@ export async function extractWithSidecar(
 
     // Tool calls: parse structured results from tool_calls
     if (response.tool_calls && response.tool_calls.length > 0) {
+      validateExtractionTools(response.tool_calls, arbiterActive);
+      if (arbiterActive) validateLegacyGrading(response.tool_calls.find((call) => call?.name === "grade_heuristic_candidates")?.args, arbiter, [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
       let result = parseToolCallResults(response.tool_calls);
       // Resolve any remaining aliases to canonical names (safety net if LLM used alias)
       if (options?.knownEntities?.length) {
@@ -815,6 +862,7 @@ export async function extractWithSidecar(
       return null;
     }
 
+    if (arbiterActive) validateLegacyGrading(json.grading, arbiter, [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
     return buildResultFromJsonObject(json, options);
   } catch (err) {
     if (options?.throwOnFailure) throw err;
@@ -854,15 +902,15 @@ function buildArbiterBlock(arbiter: NonNullable<Parameters<typeof extractWithSid
   if (!arbiter) return "";
   const sections: string[] = [];
   if (arbiter.heuristicEntities.length > 0) {
-    const lines = arbiter.heuristicEntities.slice(0, 60).map((e) => `- ${e.name} [${e.type}]`).join("\n");
+    const lines = arbiter.heuristicEntities.map((e) => `- ${e.name} [${e.type}]`).join("\n");
     sections.push(`<heuristic_entities>\n${lines}\n</heuristic_entities>`);
   }
   if (arbiter.heuristicRelationships.length > 0) {
-    const lines = arbiter.heuristicRelationships.slice(0, 60).map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
+    const lines = arbiter.heuristicRelationships.map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
     sections.push(`<heuristic_relationships>\n${lines}\n</heuristic_relationships>`);
   }
   if (arbiter.existingGraphEntities.length > 0) {
-    const lines = arbiter.existingGraphEntities.slice(0, 100).map((n) => `- ${n}`).join("\n");
+    const lines = arbiter.existingGraphEntities.map((n) => `- ${n}`).join("\n");
     sections.push(`<existing_graph_entities>\n${lines}\n</existing_graph_entities>`);
   }
   if (sections.length === 0) return "";
@@ -907,7 +955,7 @@ Analyze EACH passage independently and convert it into structured data.
 
 OUTPUT FORMAT
 Call analyze_passage_batch exactly once with arguments matching this shape:
-{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}]}]}
+{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|destroyed|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}]}]}
 - Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
 - Use empty arrays for any field with nothing to report.
 
@@ -927,7 +975,7 @@ block is present, grade those candidates.
 
 OUTPUT FORMAT
 Call analyze_passage_batch exactly once with arguments matching this shape:
-{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}],"grading":{"rejected_heuristic_entities":[],"transformed_heuristic_entities":[{"from":"","to":""}],"rejected_heuristic_relationships":[{"source":"","target":"","type":""}],"rejected_existing_entities":[]}}]}
+{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|destroyed|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}],"grading":{"rejected_heuristic_entities":[],"transformed_heuristic_entities":[{"from":"","to":""}],"rejected_heuristic_relationships":[{"source":"","target":"","type":""}],"rejected_existing_entities":[]}}]}
 - Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
 - Use empty arrays for any field with nothing to report.
 - Include "grading" ONLY for passages that had an <arbiter> block. For other passages, omit the grading field entirely.
@@ -960,6 +1008,7 @@ export async function extractBatchWithSidecar(
   options?: {
     characterNames?: string[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
+    thoughtDelimiters?: ThoughtDelimiters;
     /** Position-parallel to `chunks`. Entries may be null when a chunk has
      *  nothing to grade. When any entry is non-null with content, the batch
      *  uses the arbiter system prompt and embeds per-passage <arbiter> blocks. */
@@ -1020,11 +1069,11 @@ export async function extractBatchWithSidecar(
         const arbiter = options!.perChunkArbiter![i]!;
         const sections: string[] = [];
         if (arbiter.heuristicEntities.length > 0) {
-          const lines = arbiter.heuristicEntities.slice(0, 40).map((e) => `- ${e.name} [${e.type}]`).join("\n");
+          const lines = arbiter.heuristicEntities.map((e) => `- ${e.name} [${e.type}]`).join("\n");
           sections.push(`<heuristic_entities>\n${lines}\n</heuristic_entities>`);
         }
         if (arbiter.heuristicRelationships.length > 0) {
-          const lines = arbiter.heuristicRelationships.slice(0, 40).map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
+          const lines = arbiter.heuristicRelationships.map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
           sections.push(`<heuristic_relationships>\n${lines}\n</heuristic_relationships>`);
         }
         const arbiterBlock = `<arbiter index="${i}">\n${sections.join("\n")}\n</arbiter>`;
@@ -1036,7 +1085,7 @@ export async function extractBatchWithSidecar(
     // passage, so we render it once instead of duplicating it per chunk.
     const batchExisting = options?.batchExistingEntities ?? [];
     const batchExistingBlock = batchExisting.length > 0
-      ? `\n\n<batch_existing_entities>\n${batchExisting.slice(0, 60).map((n) => `- ${n}`).join("\n")}\n</batch_existing_entities>`
+      ? `\n\n<batch_existing_entities>\n${batchExisting.map((n) => `- ${n}`).join("\n")}\n</batch_existing_entities>`
       : "";
 
     const systemPrompt = anyArbiterActive ? BATCH_ARBITER_SYSTEM_PROMPT : BATCH_EXTRACTION_SYSTEM_PROMPT;
@@ -1045,7 +1094,7 @@ export async function extractBatchWithSidecar(
       : "";
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${arbiterInstruction}${entityHint}${aliasBlock}${batchExistingBlock}\n\n${passages}`;
+    const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${arbiterInstruction}${entityHint}${aliasBlock}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${batchExistingBlock}\n\n${passages}`;
     const tag = options?.logTag ?? "batch";
     logSidecarDispatch(tag, {
       chunks: chunks.length,
@@ -1079,18 +1128,25 @@ export async function extractBatchWithSidecar(
     const toolResults = batchToolCall?.args?.results;
     const parsed = Array.isArray(toolResults) ? toolResults : extractJsonArray(response.content);
     const byIndex = new Map<number, any>();
+    const duplicates = new Set<number>();
     if (parsed) {
       for (const item of parsed) {
-        if (item && typeof item.index === "number") byIndex.set(item.index, item);
+        if (item && Number.isInteger(item.index)) {
+          if (byIndex.has(item.index)) duplicates.add(item.index);
+          byIndex.set(item.index, item);
+        }
       }
     }
 
     const results: Array<SidecarExtractionResult | null> = new Array(chunks.length).fill(null);
     const missing: number[] = [];
     for (let i = 0; i < chunks.length; i++) {
-      const obj = byIndex.get(i);
+      const obj = duplicates.has(i) ? null : byIndex.get(i);
       if (obj) {
-        results[i] = buildResultFromJsonObject(obj, options);
+        try {
+          if (arbiterActiveByIndex[i] || batchExistingActive) validateLegacyGrading(obj.grading, singleChunkArbiterFor(i), [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
+          results[i] = buildResultFromJsonObject(obj, options);
+        } catch { missing.push(i); }
       } else {
         missing.push(i);
       }
@@ -1483,20 +1539,26 @@ function validateRelationships(raw: any): ExtractedRelationship[] {
 
 const VALID_FONT_USAGE = new Set(["speech", "thought", "narration"]);
 
+function buildThoughtMarkerHint(markers?: ThoughtDelimiters): string {
+  return markers?.prefix && markers?.suffix
+    ? `\n\nConfigured thought delimiters (formatting data): ${JSON.stringify(markers)}. These indicate thought usage even when they wrap a color tag or contain quotes.` : "";
+}
+
 function validateFontColors(raw: any): SidecarFontColor[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter(
       (c: any) =>
         c &&
-        typeof c.hex_color === "string" &&
+        typeof c.hex_color === "string" && normalizeFontColor(c.hex_color) !== null &&
+        VALID_FONT_USAGE.has(c.usage_type) &&
         typeof c.character_name === "string" &&
         c.character_name.length > 0 &&
         !ENTITY_BLOCKLIST.has(c.character_name.toLowerCase().trim()) &&
         isValidEntityName(c.character_name),
     )
     .map((c: any) => ({
-      hexColor: c.hex_color.toLowerCase().trim(),
+      hexColor: normalizeFontColor(c.hex_color)!,
       characterName: c.character_name.trim(),
       usageType: VALID_FONT_USAGE.has(c.usage_type) ? c.usage_type : "narration",
     }));

@@ -53,6 +53,14 @@ export interface CortexConfig {
     arbitratesHeuristics: boolean;
     gradesExistingRecords: boolean;
   };
+  arbitration?: {
+    backend: "sidecar" | "decision";
+    connectionProfileId: string | null;
+    model: string | null;
+    timeoutMs: number;
+    requestsPerMinute: number;
+    minConfidence: number;
+  };
   consolidation: {
     enabled: boolean;
     chunkThreshold: number;
@@ -380,6 +388,15 @@ export interface CortexHealthReport {
       fallbacks?: CortexSidecarEndpointHealth[];
     };
     connectivity: CortexProbeStatus;
+  };
+  arbitration?: {
+    enabled: boolean;
+    backend: "sidecar" | "decision";
+    ready: boolean;
+    connectionProfileId: string | null;
+    model: string | null;
+    minConfidence: number;
+    timeoutMs: number;
   };
   chat: {
     id: string;

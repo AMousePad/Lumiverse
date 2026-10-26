@@ -721,6 +721,7 @@ interface HydrationGeneration {
   generationType: string;
   targetMessageId?: string;
   targetSwipeId?: number;
+  backgroundSwipe?: boolean;
   characterName?: string;
   characterId?: string;
   reasoningStartedAt?: number;
@@ -762,6 +763,7 @@ function buildInFlightGeneration(room: Room): HydrationGeneration | null {
     generationType: entry.generationType,
     targetMessageId: entry.targetMessageId,
     targetSwipeId: entry.targetSwipeId,
+    backgroundSwipe: entry.backgroundSwipe,
     characterName: entry.characterName,
     characterId: entry.characterId,
     reasoningStartedAt: entry.reasoningStartedAt,
