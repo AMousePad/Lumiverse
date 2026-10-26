@@ -53,6 +53,14 @@ test('current auto-play still starts after its load-in animation', () => {
   finishAnimation()
   expect(play).toHaveBeenCalledTimes(1)
 })
+test('a voice preview starts immediately and pauses when its player closes', () => {
+  const pause = mock(() => {})
+  dom.window.HTMLMediaElement.prototype.pause = pause
+  act(() => root.render(<MessageAudioPlayer src="/audio/preview" autoPlay />))
+  expect(play).toHaveBeenCalledTimes(1)
+  act(() => root.render(null))
+  expect(pause).toHaveBeenCalledTimes(1)
+})
 test('a stop while the player animates prevents delayed auto-play', () => {
   mount()
   session++

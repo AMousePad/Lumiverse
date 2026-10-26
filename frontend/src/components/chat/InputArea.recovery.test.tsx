@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { JSDOM } from 'jsdom'
 import { MemoryRouter } from 'react-router'
 import type { Message } from '@/types/api'
+import type { STTEngine, STTResult } from '@/lib/sttEngine'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://lumiverse.test', pretendToBeVisual: true })
 Object.assign(globalThis, {
@@ -66,7 +67,23 @@ mock.module('@/lib/spindle/use-spindle-component-override', () => ({ useSpindleC
 mock.module('@/hooks/useDeviceFrameRadius', () => ({ useDeviceFrameRadius: () => 0 }))
 mock.module('@/hooks/useIsMobile', () => ({ default: () => false }))
 mock.module('@/lib/chatAppearance', () => ({ applyChatAppearance: () => () => {} }))
-mock.module('@/lib/sttEngine', () => ({ isWebSpeechAvailable: () => false, getSupportedSTTAudioFormat: () => null, createSTTEngine() {} }))
+let dictation: STTEngine & { emit(text: string, isFinal?: boolean): void }
+mock.module('@/lib/sttEngine', () => ({
+  isWebSpeechAvailable: () => true, getSupportedSTTAudioFormat: () => null,
+  createSTTEngine() {
+    let listening = false
+    let result: (value: STTResult) => void
+    let stopped: () => void
+    dictation = {
+      start() { listening = true }, stop() { listening = false; stopped() },
+      destroy() { listening = false }, isListening: () => listening,
+      onResult(cb) { result = cb }, onStop(cb) { stopped = cb },
+      onError() {}, onAudioFrame() {},
+      emit(text, isFinal = true) { result({ text, isFinal }) },
+    }
+    return dictation
+  },
+}))
 mock.module('@/lib/whistle/client', () => ({ whistleClient: { getState: () => ({}) } }))
 mock.module('@/components/quick-toolbar/useQuickToolbarActions', () => ({ useQuickToolbarActions: () => ({ actionById: new Map() }) }))
 mock.module('./InputAreaCustomizeModal', () => ({
@@ -105,6 +122,7 @@ beforeEach(async () => {
   state.isStreaming = false
   state.mpRoomId = null
   state.saveDraftInput = true
+  state.voiceSettings = {}
   createMessage.mockReset()
   createMessage.mockImplementation(() => Promise.reject(new Error('backend unavailable')))
   generate.mockReset()
@@ -238,4 +256,70 @@ test('a room submission failure retains the draft until a later confirmed send',
   await act(async () => bridge.handleSend())
   expect(bridge.text).toBe('')
   expect(saved()).toBeNull()
+})
+
+async function startDictation(base = '') {
+  state.voiceSettings = { sttProvider: 'webspeech', sttShowMicButton: true }
+  await remount()
+  await act(async () => bridge.setText(base))
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>('[aria-label="input.startStt"]')!.click()
+  })
+}
+
+test('dictation joins split commands and reparses interim prose without corrupting markers', async () => {
+  await startDictation()
+  await act(async () => dictation.emit('thought'))
+  await act(async () => dictation.emit('start I wait thought start maybe', false))
+  expect(bridge.text).toBe('*I wait **maybe')
+  await act(async () => dictation.emit('start I wait thought start quietly thought end thought end. Open qoute'))
+  await act(async () => dictation.emit('Hello close qoute.'))
+  expect(bridge.text).toBe('*I wait **quietly**.* "Hello."')
+  expect(createMessage).not.toHaveBeenCalled()
+  await act(async () => dictation.stop())
+  expect(createMessage.mock.calls.at(-1)?.[1]).toMatchObject({ content: '*I wait **quietly**.* "Hello."' })
+  expect(generate).not.toHaveBeenCalled()
+  // A failed queue keeps the normalized prose editable and persisted.
+  expect(bridge.text).toBe('*I wait **quietly**.* "Hello."')
+  expect(saved().text).toBe(bridge.text)
+})
+
+test('dictation sends for a punctuated command split across final recognition results', async () => {
+  await startDictation()
+  createMessage.mockResolvedValue(message)
+  await act(async () => dictation.emit('open quote Hello close quote. Send'))
+  await act(async () => dictation.emit('message.'))
+  expect(createMessage).not.toHaveBeenCalled()
+  await act(async () => dictation.stop())
+  expect(createMessage.mock.calls.at(-1)?.[1]).toMatchObject({ content: '"Hello."' })
+  expect(generate).toHaveBeenCalledTimes(1)
+  expect(bridge.text).toBe('')
+})
+
+test('dictation retains a send phrase when later speech makes it nonterminal', async () => {
+  await startDictation()
+  await act(async () => dictation.emit('Please send message.'))
+  await act(async () => dictation.emit('One more thing.'))
+  await act(async () => dictation.stop())
+  expect(createMessage.mock.calls.at(-1)?.[1]).toMatchObject({ content: 'Please send message. One more thing.' })
+  expect(generate).not.toHaveBeenCalled()
+})
+
+test('an interim send command cannot start generation', async () => {
+  await startDictation()
+  await act(async () => dictation.emit('Hello.'))
+  await act(async () => dictation.emit('Send message.', false))
+  await act(async () => dictation.stop())
+  expect(createMessage.mock.calls.at(-1)?.[1]).toMatchObject({ content: 'Hello.' })
+  expect(generate).not.toHaveBeenCalled()
+})
+
+test('a spoken send command dispatches an existing draft even when its text does not change', async () => {
+  await startDictation('my work')
+  createMessage.mockResolvedValue(message)
+  await act(async () => dictation.emit('Send message.'))
+  await act(async () => dictation.stop())
+  expect(createMessage.mock.calls.at(-1)?.[1]).toMatchObject({ content: 'my work' })
+  expect(generate).toHaveBeenCalledTimes(1)
+  expect(bridge.text).toBe('')
 })

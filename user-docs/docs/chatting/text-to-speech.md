@@ -50,7 +50,7 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 
 - **API key:** Required (sent as `xi-api-key`).
 - **Default URL:** `https://api.elevenlabs.io`.
-- **Voices:** Fetched live from your ElevenLabs account, including any custom voices you've created.
+- **Voices:** Fetched live from your ElevenLabs account, including any custom voices you've created. Click **Voice Library** in the connection form or any ElevenLabs voice picker to browse community voices in a modal. Search, filter by language or gender, sort, preview a voice, then click **Use voice**. Library voices can be used directly without saving them to your ElevenLabs account. API use requires a paid ElevenLabs plan; voices with a credit multiplier show it beside their name. See [ElevenLabs' Voice Library guide](https://elevenlabs.io/docs/eleven-creative/voices/voice-library).
 - **Models:** Eleven v3 (Most Expressive), Eleven Multilingual v2, Eleven Flash v2.5 (Low Latency).
 - **Parameters:**
 

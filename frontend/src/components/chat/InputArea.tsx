@@ -78,6 +78,7 @@ import {
   type RegexActionActivation,
 } from '@/lib/regex/actionBus'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
+import { parseSTTTranscript } from '@/lib/sttCommands'
 import { holdHostCapture } from '@/lib/sttHostCapture'
 import { isWhistleAvailable } from '@/lib/whistle/config'
 import { whistleClient } from '@/lib/whistle/client'
@@ -153,127 +154,6 @@ const STT_IDLE_BARS = Array.from({ length: STT_VISUALIZER_BARS }, (_, index) => 
   const centerBias = 1 - Math.abs(index - ((STT_VISUALIZER_BARS - 1) / 2)) / (STT_VISUALIZER_BARS / 2)
   return 0.12 + centerBias * 0.22
 })
-
-type STTCommandState = {
-  thoughtDepth: number
-}
-
-const STT_COMMAND_ALIASES: Record<string, string[]> = {
-  'quote': ['quote start', 'quote end', 'open quote', 'close quote'],
-  'single quote': ['single quote', 'apostrophe'],
-  'em dash': ['em dash'],
-  'asterisk': ['asterisk'],
-  'thought start': ['thought start', 'begin thought'],
-  'thought end': ['thought end', 'end thought'],
-}
-
-function normalizeSTTCommandWord(word: string): string {
-  if (word === 'quotes') return 'quote'
-  if (word === 'starts') return 'start'
-  if (word === 'ends') return 'end'
-  if (word === 'thoughts') return 'thought'
-  if (word === 'begins') return 'begin'
-  if (word === 'dashes') return 'dash'
-  if (word === 'apostrophes') return 'apostrophe'
-  if (word === 'asterisks') return 'asterisk'
-  return word
-}
-
-function sttCommandEditDistance(a: string, b: string): number {
-  if (a === b) return 0
-  if (Math.abs(a.length - b.length) > 1) return 2
-
-  let edits = 0
-  let i = 0
-  let j = 0
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i += 1
-      j += 1
-      continue
-    }
-    edits += 1
-    if (edits > 1) return edits
-    if (a.length > b.length) i += 1
-    else if (b.length > a.length) j += 1
-    else {
-      i += 1
-      j += 1
-    }
-  }
-
-  return edits + (i < a.length || j < b.length ? 1 : 0)
-}
-
-function normalizeSTTCommandCandidate(candidate: string): string | null {
-  const normalized = candidate
-    .toLowerCase()
-    .replace(/[^a-z\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  if (!normalized) return null
-
-  const candidateWords = normalized.split(' ').map(normalizeSTTCommandWord)
-  for (const [canonical, aliases] of Object.entries(STT_COMMAND_ALIASES)) {
-    for (const alias of aliases) {
-      const aliasWords = alias.split(' ')
-      if (candidateWords.length !== aliasWords.length) continue
-      const isSimilar = candidateWords.every((word, index) => {
-        const aliasWord = aliasWords[index]
-        return word === aliasWord || (word.length >= 4 && aliasWord.length >= 4 && sttCommandEditDistance(word, aliasWord) <= 1)
-      })
-      if (isSimilar) return canonical
-    }
-  }
-
-  return null
-}
-
-function normalizeSTTTranscript(raw: string, state: STTCommandState): string {
-  if (!raw.trim()) return ''
-
-  const commandPattern = /\b(?:quotes?\s+(?:starts?|ends?)|open\s+quotes?|close\s+quotes?|single\s+quotes?|apostrophes?|thoughts?\s+(?:starts?|ends?)|begins?\s+thoughts?|ends?\s+thoughts?|asterisks?|em\s+dashes?)\b(?:\s*[,.;:!?]+)?/gi
-
-  return raw
-    .replace(commandPattern, (match) => {
-      const command = normalizeSTTCommandCandidate(match)
-      if (!command) return match
-
-      if (command === 'quote') return '"'
-      if (command === 'single quote') return "'"
-      if (command === 'em dash') return '—'
-      if (command === 'asterisk') return '*'
-      if (command === 'thought start') {
-        const marker = state.thoughtDepth >= 1 ? '**' : '*'
-        state.thoughtDepth += 1
-        return marker
-      }
-      if (command === 'thought end') {
-        const marker = state.thoughtDepth > 1 ? '**' : '*'
-        state.thoughtDepth = Math.max(0, state.thoughtDepth - 1)
-        return marker
-      }
-
-      return match
-    })
-    .replace(/(^|[\s([{"'])(\*{1,2})\s*[.,;:!?]+\s*/g, '$1$2')
-    .replace(/(\*{1,2})\s+[.,;:!?]+(?=\s|$)/g, '$1')
-    .replace(/([.!?])\s+([.!?])(?=\s|$|\*)/g, '$1')
-    .replace(/([.!?])(\*{1,2})\.(?=\s|$)/g, '$1$2')
-    .replace(/\s+([,.;:!?])/g, '$1')
-    .replace(/\s+([”’])/g, '$1')
-    .replace(/([“‘])\s+/g, '$1')
-    .replace(/\s*—\s*/g, ' — ')
-    .replace(/\s{2,}/g, ' ')
-    .trim()
-}
-
-function stripSTTSendCommand(raw: string): { text: string; shouldSend: boolean } {
-  const match = raw.match(/^(.*?)(?:[\s,.;:!?-]*)send\s+message\s*$/i)
-  if (!match) return { text: raw.trim(), shouldSend: false }
-  return { text: (match[1] || '').trim(), shouldSend: true }
-}
 
 // Slugify a character name into a stable @mention token. Matches the
 // databank `#` convention (lowercase, hyphen-separated, diacritics stripped).
@@ -369,7 +249,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const [atActiveIdx, setAtActiveIdx] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const pendingSelectionRef = useRef<{ start: number; end: number; direction?: 'forward' | 'backward' | 'none' } | null>(null)
-  const pendingSTTActionRef = useRef<'queue' | 'send' | null>(null)
+  const [pendingSTTAction, setPendingSTTAction] = useState<'queue' | 'send' | null>(null)
   const sendingRef = useRef(false)
   const regexActionHandlingRef = useRef(false)
   const generationNonceRef = useRef(0)
@@ -1025,9 +905,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const sttDraftBaseRef = useRef('')
   const sttInterimTextRef = useRef('')
   const sttFinalSegmentsRef = useRef<string[]>([])
-  const sttNormalizedFinalSegmentsRef = useRef<string[]>([])
-  const sttCommandStateRef = useRef<STTCommandState>({ thoughtDepth: 0 })
-  const sttShouldSendRef = useRef(false)
 
   const isSTTSupported = useMemo(() => {
     if (voiceSettings.sttProvider === 'webspeech') return isWebSpeechAvailable()
@@ -2280,43 +2157,39 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   }, [chatId, handleSend, isGeneratingInChat, mpIsHost, mpRoomId, navigate, resizeTextarea, t, updateMessage, setText])
 
   const finalizeSTTTranscript = useCallback(() => {
-    const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
-    const shouldSend = sttShouldSendRef.current
+    const { text: transcript, shouldSend } = parseSTTTranscript(sttFinalSegmentsRef.current.join(' '))
 
     sttInterimTextRef.current = ''
     sttFinalSegmentsRef.current = []
-    sttNormalizedFinalSegmentsRef.current = []
-    sttCommandStateRef.current = { thoughtDepth: 0 }
-    sttShouldSendRef.current = false
 
     setSttStatus('idle')
     stopSTTSession('destroy')
 
-    if (!transcript) {
-      pendingSTTActionRef.current = null
+    if (!transcript && (!shouldSend || !sttDraftBaseRef.current.trim())) {
+      setPendingSTTAction(null)
       applySTTTranscript('', true)
       return
     }
 
-    pendingSTTActionRef.current = shouldSend ? 'send' : 'queue'
+    setPendingSTTAction(shouldSend ? 'send' : 'queue')
     applySTTTranscript(transcript, true)
   }, [applySTTTranscript, stopSTTSession])
 
   useEffect(() => {
-    const pendingAction = pendingSTTActionRef.current
+    const pendingAction = pendingSTTAction
     if (!pendingAction) return
     if (!text.trim()) {
-      pendingSTTActionRef.current = null
+      setPendingSTTAction(null)
       return
     }
 
-    pendingSTTActionRef.current = null
+    setPendingSTTAction(null)
     if (pendingAction === 'send') {
       void handleSend()
       return
     }
     void handleQueueMessage()
-  }, [text, handleQueueMessage, handleSend])
+  }, [text, handleQueueMessage, handleSend, pendingSTTAction])
 
   const doRegenerate = useCallback(async (feedback?: string | null) => {
     if (isGeneratingInChat) return
@@ -3018,9 +2891,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       sttDraftBaseRef.current = text.trimEnd()
       sttInterimTextRef.current = ''
       sttFinalSegmentsRef.current = []
-      sttNormalizedFinalSegmentsRef.current = []
-      sttCommandStateRef.current = { thoughtDepth: 0 }
-      sttShouldSendRef.current = false
 
       const engine = createSTTEngine({
         provider: voiceSettings.sttProvider,
@@ -3050,19 +2920,14 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       engine.onResult((result) => {
         if (sttEngineRef.current !== engine) return
         if (result.isFinal) {
-          const { text: commandStrippedText, shouldSend } = stripSTTSendCommand(result.text)
-          if (shouldSend) sttShouldSendRef.current = true
-
-          const normalizedSegment = normalizeSTTTranscript(commandStrippedText, sttCommandStateRef.current)
           sttFinalSegmentsRef.current = [...sttFinalSegmentsRef.current, result.text.trim()].filter(Boolean)
-          sttNormalizedFinalSegmentsRef.current = [...sttNormalizedFinalSegmentsRef.current, normalizedSegment].filter(Boolean)
           sttInterimTextRef.current = ''
         } else {
-          const { text: commandStrippedText } = stripSTTSendCommand(result.text)
-          sttInterimTextRef.current = normalizeSTTTranscript(commandStrippedText, { ...sttCommandStateRef.current })
+          sttInterimTextRef.current = result.text
         }
 
-        const transcript = [...sttNormalizedFinalSegmentsRef.current, sttInterimTextRef.current].filter(Boolean).join(' ')
+        const raw = [...sttFinalSegmentsRef.current, sttInterimTextRef.current].filter(Boolean).join(' ')
+        const { text: transcript } = parseSTTTranscript(raw)
         applySTTTranscript(transcript, result.isFinal)
         setSttStatus(engine.isListening() ? 'listening' : 'idle')
       })
@@ -3080,9 +2945,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         stopSTTSession('destroy')
         sttInterimTextRef.current = ''
         sttFinalSegmentsRef.current = []
-        sttNormalizedFinalSegmentsRef.current = []
-        sttCommandStateRef.current = { thoughtDepth: 0 }
-        sttShouldSendRef.current = false
         setSttAudioFrame(null)
         setSttStatus('idle')
         toast.error(msg, { title: t('toast.sttFailed') })

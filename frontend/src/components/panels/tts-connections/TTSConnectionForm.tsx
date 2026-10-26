@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { lazy, Suspense, useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FormField, TextInput, TextArea, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
@@ -15,6 +15,8 @@ import type {
   TtsVoice,
 } from '@/types/api'
 import styles from '../ConnectionManager.module.css'
+
+const VoiceLibraryModal = lazy(() => import('@/components/modals/VoiceLibraryModal'))
 
 interface Props {
   providers: TtsProviderInfo[]
@@ -43,6 +45,7 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
 
   const [voices, setVoices] = useState<TtsVoice[]>([])
   const [voicesLoading, setVoicesLoading] = useState(false)
+  const [libraryOpen, setLibraryOpen] = useState(false)
   const voicesRequestRef = useRef<{ generation: number; controller?: AbortController }>({ generation: 0 })
   const [models, setModels] = useState<Array<{ id: string; label: string }>>([])
   const [modelsLoading, setModelsLoading] = useState(false)
@@ -50,6 +53,13 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
   const providerOptions = providers.map((p) => ({ value: p.id, label: p.name }))
   const selectedProvider = providers.find((p) => p.id === provider)
   const capabilities = selectedProvider?.capabilities
+  const libraryConnection = useMemo(() => ({
+    connection_id: profile?.id,
+    provider,
+    api_url: apiUrl.trim() || undefined,
+    api_key: apiKey.trim() || undefined,
+  }), [profile?.id, provider, apiUrl, apiKey])
+  useEffect(() => { setLibraryOpen(false) }, [provider, profile?.id])
   const supportsGeminiSpeechStyle = (isGoogle || provider === 'openrouter_tts')
     && /(?:^|\/)gemini-3\.8-flash(?:-lite)?-tts(?:$|[-:])/i.test(model.trim())
   const geminiSpeechStyle = typeof defaultParameters.speech_style === 'string'
@@ -443,6 +453,17 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
           emptyMessage={t('ttsConnectionForm.noVoices')}
         />
       </FormField>
+
+      {capabilities?.supportsVoiceLibrary && <Button size="sm" onClick={() => setLibraryOpen(true)}>{t('shared:voicePicker.voiceLibrary')}</Button>}
+      {libraryOpen && capabilities?.supportsVoiceLibrary && <Suspense fallback={null}><VoiceLibraryModal
+        connection={libraryConnection}
+        value={voice}
+        onClose={() => setLibraryOpen(false)}
+        onSelect={(selected) => {
+          setVoices((previous) => [...previous.filter((item) => item.id !== selected.id), selected])
+          handleVoiceChange(selected.id)
+        }}
+      /></Suspense>}
 
       {supportsGeminiSpeechStyle && (
         <FormField label={t('ttsConnectionForm.geminiSpeechStyle')} hint={t('ttsConnectionForm.geminiSpeechStyleHint')}>
