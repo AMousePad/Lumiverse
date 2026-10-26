@@ -41,8 +41,50 @@ export interface AndroidNotificationStatus {
   reason: string | null
   enrollment: { destinationId: string; serverOrigin: string; serverInstanceId: string; accountId: string } | null
   connected: boolean
+  relayAvailable?: boolean
+  encryptionVersion?: number
+  packageName?: string
 }
-export interface AndroidPushRegistration { deviceId: string; accountId?: string; transport: 'local' | 'fcm'; deviceToken?: string; projectId?: string }
+export interface AndroidNotificationInfo {
+  configured: boolean; projectId: string | null; serverInstanceId: string; reason: string | null
+  delivery?: 'direct' | 'relay'; relayUrl?: string; encryptionRequired?: boolean; encryptionVersion?: number; packageName?: string
+}
+export interface AndroidPushRegistration {
+  deviceId: string; accountId?: string; transport: 'local' | 'fcm'; deviceToken?: string; projectId?: string
+  packageName?: string; delivery?: 'direct' | 'relay'; enrollmentId?: string; relayCredential?: string
+  encryption?: { key: string; keyId: string }
+}
 export const getAndroidNotificationStatus = () => androidNativeRequest<AndroidNotificationStatus>('notifications.status')
-export const registerAndroidPush = () => androidNativeRequest<AndroidPushRegistration | null>('notifications.register')
+export async function registerAndroidPush(info?: AndroidNotificationInfo, signal?: AbortSignal) {
+  type Pending = { pending: true; enrollmentId: string }
+  let result = await androidNativeRequest<AndroidPushRegistration | Pending | null>('notifications.register', info ? {
+    delivery: info.delivery || 'direct', relayUrl: info.relayUrl, serverInstanceId: info.serverInstanceId,
+    encryptionVersion: info.encryptionVersion,
+  } : {})
+  const pendingId = result && 'pending' in result ? result.enrollmentId : undefined
+  try {
+    const deadline = Date.now() + 120_000
+    while (result && 'pending' in result) {
+      if (signal?.aborted) throw new DOMException('Enrollment cancelled', 'AbortError')
+      if (Date.now() >= deadline) throw new Error('Notification verification expired. Try again.')
+      await new Promise(resolve => window.setTimeout(resolve, 750))
+      if (signal?.aborted) throw new DOMException('Enrollment cancelled', 'AbortError')
+      result = await androidNativeRequest<AndroidPushRegistration | Pending>('notifications.poll', { enrollmentId: result.enrollmentId })
+    }
+    if (signal?.aborted) throw new DOMException('Enrollment cancelled', 'AbortError')
+    return result as AndroidPushRegistration | null
+  } catch (error) {
+    if (pendingId) await androidNativeRequest('notifications.cancel', { enrollmentId: pendingId }).catch(() => {})
+    throw error
+  }
+}
+export function androidRegistrationReason(status: AndroidNotificationStatus, info: AndroidNotificationInfo) {
+  if (!status.available) return status.reason
+  if (status.transport !== 'fcm') return null
+  if (!info.configured) return info.reason
+  if (info.projectId !== status.projectId) return 'The APK and server Firebase projects do not match.'
+  if (info.delivery === 'relay' && (!status.relayAvailable || status.encryptionVersion !== 1)) return 'Update the Lumiverse Android app to enable verified relay notifications.'
+  if (info.packageName && status.packageName && info.packageName !== status.packageName) return 'The Android package and server configuration do not match.'
+  return null
+}
 export const clearAndroidEnrollment = (destinationId?: string) => androidNativeRequest('notifications.clear', { destinationId })

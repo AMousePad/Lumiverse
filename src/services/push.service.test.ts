@@ -9,6 +9,7 @@ db.exec(await Bun.file(new URL("../db/migrations/035_push_subscriptions.sql", im
 db.exec(await Bun.file(new URL("../db/migrations/117_desktop_notification_destinations.sql", import.meta.url)).text());
 db.exec(await Bun.file(new URL("../db/migrations/127_ios_push_destinations.sql", import.meta.url)).text());
 db.exec(await Bun.file(new URL("../db/migrations/130_android_push_destinations.sql", import.meta.url)).text());
+db.exec(await Bun.file(new URL("../db/migrations/133_android_notification_relay.sql", import.meta.url)).text());
 db.exec(`
   CREATE TABLE chats (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, character_id TEXT);
   CREATE TABLE characters (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL);

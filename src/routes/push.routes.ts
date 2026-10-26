@@ -13,7 +13,7 @@ app.get("/android/info", c => {
   c.header("Cache-Control", "no-store");
   return c.json(getAndroidNotificationInfo());
 });
-app.post("/android", async c => {
+app.post("/android", bodyLimit({ maxSize: 8192 }), async c => {
   c.header("Cache-Control", "no-store");
   try {
     const input = await c.req.json();

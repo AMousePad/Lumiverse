@@ -55,6 +55,7 @@ import InputBarExtensionActions from './InputBarExtensionActions'
 import { getMobileQueueHoldPreviewState, shouldQueueMobileHold } from './mobileQueueHold'
 import { getMobileQueueHintKey, type MobileQueueHoldState } from './mobileQueueHint'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
+import { playHaptic } from '@/lib/haptics'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
 import { orderGroupResponseIds, readGroupResponseOrder } from '@/lib/groupResponseOrder'
 import {
@@ -2872,9 +2873,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       touchQueueArmTimerRef.current = 0
       const nextState = syncMobileQueueHoldVisualState(holdStartedAt, holdStartedAt + MOBILE_QUEUE_HOLD_MS)
       if (nextState !== 'armed') return
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        navigator.vibrate(12)
-      }
+      playHaptic('selection')
     }, MOBILE_QUEUE_HOLD_MS)
   }, [hasDraftContent, isGeneratingInChat, clearTouchQueueTimers, setMobileQueueHoldVisualState, syncMobileQueueHoldVisualState])
 

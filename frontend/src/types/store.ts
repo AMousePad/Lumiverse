@@ -858,7 +858,8 @@ export interface SettingsSlice {
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
   setInputBarEnterToSend: (settings: EnterToSendSettings) => void
-  setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K], source?: SettingsWriteSource) => void
+  // Character filters also use coordinated persistence to survive startup hydration.
+  setSetting: <K extends keyof (SettingsSlice & Pick<CharactersSlice, 'filterTab'>)>(key: K, value: (SettingsSlice & Pick<CharactersSlice, 'filterTab'>)[K], source?: SettingsWriteSource) => void
   setTheme: (theme: ThemeConfig | null) => void
   setCharacterThemeOverlay: (overlay: CharacterThemeOverlay | null) => void
   setCustomCSS: (css: string) => void
