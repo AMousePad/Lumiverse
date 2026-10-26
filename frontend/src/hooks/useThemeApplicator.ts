@@ -422,6 +422,12 @@ function buildColorInterpolator(from: string, to: string): ((t: number) => strin
 /** Threshold: if an extension override provides this many variables, it IS the theme. */
 const FULL_THEME_MIN_KEYS = 40
 
+const GLASS_COLOR_KEYS = new Set([
+  '--lumiverse-bg', '--lumiverse-bg-elevated', '--lumiverse-bg-hover',
+  '--lumiverse-surface', '--lumiverse-surface-raised', '--lumiverse-surface-hover',
+  '--lcs-glass-bg', '--lcs-glass-bg-hover', '--lcs-glass-border', '--lcs-glass-border-hover',
+])
+
 export function buildResolvedThemeVars(
   theme: ThemeConfig | null,
   characterThemeOverlay: CharacterThemeOverlay | null,
@@ -478,11 +484,13 @@ export function buildResolvedThemeVars(
 
   const baseVars = generateThemeVariables(effectiveConfig, mode)
   let controlVars = baseVars
-  // Device preferences own these tokens even when an extension supplies a full palette.
+  // Device preferences own geometry and glass opacity; extensions still own palette colors.
   const preserveDeviceControls = (vars: Record<string, string>) => {
     if (deviceControls) {
       for (const key of Object.keys(controlVars)) {
-        if (key.startsWith('--lumiverse-radius') || key.startsWith('--lcs-radius')
+        if (GLASS_COLOR_KEYS.has(key)) {
+          vars[key] = withPreservedAlpha(vars[key], controlVars[key]) ?? vars[key]
+        } else if (key.startsWith('--lumiverse-radius') || key.startsWith('--lcs-radius')
           || key.startsWith('--lcs-glass-') || key === '--lumiverse-font-scale' || key === '--lumiverse-ui-scale') {
           vars[key] = controlVars[key]
         }

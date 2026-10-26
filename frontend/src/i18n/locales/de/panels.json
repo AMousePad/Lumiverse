@@ -2973,6 +2973,13 @@
     }
   },
   "themePanel": {
+    "deviceControls": {
+      "title": "Gerätespezifische Steuerelemente",
+      "enabled": "Gerätespezifische Steuerelemente verwenden",
+      "hint": "Wenn aktiviert, gelten die folgenden Einstellungen nur für diesen Browser oder diese App auf diesem Gerät. Deine Gerätewerte bleiben bei Theme-Wechseln erhalten. Kopiere sie vor dem Speichern oder Exportieren in das Theme, wenn du sie teilen möchtest.",
+      "copyToTheme": "Geräteeinstellungen in Theme kopieren",
+      "resetFromTheme": "Geräteeinstellungen aus Theme zurücksetzen"
+    },
     "lockControls": "Regler sperren",
     "unlockControls": "Regler entsperren",
     "lockSliders": "Schieberegler sperren",
