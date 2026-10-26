@@ -429,6 +429,8 @@ async function gracefulShutdown(signal: string) {
   if (shutdownInProgress) return;
   shutdownInProgress = true;
   console.log(`[Shutdown] Received ${signal}, shutting down...`);
+  const { interruptActiveImports } = await import("./services/user-data/import.service");
+  interruptActiveImports();
 
   // 1. Stop accepting new connections
   server.stop(true);

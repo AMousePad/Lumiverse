@@ -41,7 +41,7 @@ export interface ImportJobProgress {
 
 export interface ImportJobStatus {
   jobId: string
-  status: 'queued' | 'awaiting_ticket' | 'running' | 'complete' | 'failed' | 'cancelled'
+  status: 'queued' | 'awaiting_ticket' | 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted'
   startedAt: number
   finishedAt: number | null
   manifest: {
@@ -63,6 +63,14 @@ export interface ImportJobStatus {
 }
 
 export const userDataApi = {
+  getImportJobs(): Promise<{ jobs: Pick<ImportJobStatus, 'jobId' | 'status'>[] }> {
+    return get('/user-data/import')
+  },
+
+  resumeImport(jobId: string): Promise<{ jobId: string }> {
+    return post(`/user-data/import/${jobId}/resume`)
+  },
+
   /** Returns the URL the browser can navigate to / GET for a streamed export
    *  without API keys. */
   exportUrl(includeVectors: boolean): string {

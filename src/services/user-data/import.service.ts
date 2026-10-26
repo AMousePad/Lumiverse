@@ -22,7 +22,6 @@ import {
 import { putSecret } from "../secrets.service";
 import {
   closeSync,
-  constants as fsConstants,
   copyFileSync,
   createReadStream,
   existsSync,
@@ -58,6 +57,8 @@ import {
 import { sanitizeEntry, safeJoin, SanitizeError, type SanitizedEntry } from "./sanitize";
 import { markConnectionSecretRestored } from "./connection-secret-restore";
 import { MAX_ACCOUNT_ARCHIVE_BYTES } from "./archive-limits";
+import { loadImportJob, recentImportJobIds, saveImportJob } from "./import-job-store";
+import { listenForAndroidImportCancellation, notifyAndroidImport } from "../../runtime/android-import";
 
 // ---------------------------------------------------------------------------
 // Tunables / safety caps
@@ -128,6 +129,7 @@ export type ImportJobStatus =
   | "running"
   | "complete"
   | "failed"
+  | "interrupted"
   | "cancelled";
 
 export interface ImportProgress {
@@ -155,6 +157,9 @@ export interface ImportJob {
   error: string | null;
   /** Latest progress snapshot, also available when WebSocket delivery is interrupted. */
   progress: ImportProgress | null;
+  /** A resumed restore replays safely from its retained archive. */
+  resuming?: boolean;
+  interrupted?: boolean;
   /** Abort controller — exposed for cancel endpoint. */
   abort: AbortController;
   /**
@@ -177,13 +182,24 @@ export interface ImportJob {
 const JOBS: Map<string, ImportJob> = new Map();
 const USER_RUNNING: Map<string, string> = new Map(); // userId -> jobId
 const USER_UPLOAD_RESERVATIONS: Map<string, string> = new Map();
+const UPLOAD_ABORTS = new Map<string, AbortController>();
+const LAST_SAVED = new WeakMap<ImportJob, { at: number; status: string; phase?: string; table?: string }>();
 let globalImportSlot: string | null = null;
 
-export function getJob(jobId: string): ImportJob | undefined {
-  return JOBS.get(jobId);
+export function getJob(jobId: string, userId?: string): ImportJob | undefined {
+  let job = JOBS.get(jobId);
+  if (!job && userId) {
+    const stored = loadImportJob(userId, jobId);
+    if (stored) {
+      job = { ...stored, abort: new AbortController() };
+      JOBS.set(jobId, job);
+    }
+  }
+  return userId && job?.userId !== userId ? undefined : job;
 }
 
 export function listJobsForUser(userId: string): ImportJob[] {
+  for (const jobId of recentImportJobIds(userId)) getJob(jobId, userId);
   return [...JOBS.values()].filter((j) => j.userId === userId);
 }
 
@@ -200,13 +216,18 @@ export function reserveImportUpload(userId: string): string | null {
   if (isUserImportRunning(userId) || globalImportSlot !== null) return null;
   const jobId = crypto.randomUUID();
   USER_UPLOAD_RESERVATIONS.set(userId, jobId);
+  UPLOAD_ABORTS.set(jobId, new AbortController());
   globalImportSlot = jobId;
+  notifyAndroidImport({ jobId, status: "uploading", phase: "uploading" });
   return jobId;
 }
 
 export function releaseImportUpload(userId: string, jobId: string): void {
   if (USER_UPLOAD_RESERVATIONS.get(userId) === jobId) {
     USER_UPLOAD_RESERVATIONS.delete(userId);
+    const cancelled = UPLOAD_ABORTS.get(jobId)?.signal.aborted;
+    UPLOAD_ABORTS.delete(jobId);
+    notifyAndroidImport({ jobId, status: cancelled ? "cancelled" : "failed" });
   }
   if (globalImportSlot === jobId) globalImportSlot = null;
 }
@@ -215,6 +236,7 @@ export function releaseImportUpload(userId: string, jobId: string): void {
 function claimImportReservation(userId: string, jobId: string): void {
   if (USER_UPLOAD_RESERVATIONS.get(userId) === jobId) {
     USER_UPLOAD_RESERVATIONS.delete(userId);
+    UPLOAD_ABORTS.delete(jobId);
   }
 }
 
@@ -224,7 +246,11 @@ function releaseGlobalImportSlot(jobId: string): void {
 
 export function cancelJob(jobId: string): boolean {
   const job = JOBS.get(jobId);
-  if (!job) return false;
+  if (!job) {
+    const upload = UPLOAD_ABORTS.get(jobId);
+    upload?.abort();
+    return !!upload;
+  }
   if (
     job.status !== "running" &&
     job.status !== "queued" &&
@@ -242,11 +268,28 @@ export function cancelJob(jobId: string): boolean {
 // Entry point
 // ---------------------------------------------------------------------------
 
-/**
- * Errors thrown while staging or verifying an uploaded archive. The HTTP
- * route maps these onto specific 4xx codes (415 for the wrong format, 422
- * for a wrong/incompatible manifest, 413 for size).
- */
+export function importUploadSignal(jobId: string): AbortSignal | undefined {
+  return UPLOAD_ABORTS.get(jobId)?.signal;
+}
+
+/** Preserve recoverable state before normal shutdown closes SQLite or the IPC pipe. */
+export function interruptActiveImports(): void {
+  for (const job of JOBS.values()) {
+    if (!["queued", "running", "awaiting_ticket"].includes(job.status)) continue;
+    job.interrupted = true;
+    job.status = "interrupted";
+    job.finishedAt = Math.floor(Date.now() / 1000);
+    job.error = "The local server stopped during this import. Resume to continue from the saved archive.";
+    try { saveImportJob(job); }
+    catch (error) { console.warn("[Import] Could not save interrupted job:", error); }
+    job.abort.abort(new Error(job.error));
+  }
+  for (const upload of UPLOAD_ABORTS.values()) upload.abort();
+}
+
+listenForAndroidImportCancellation(cancelJob);
+
+/** Upload/validation errors mapped by the HTTP route to specific 4xx responses. */
 export class ArchiveValidationError extends Error {
   constructor(public code: "not_zip" | "size" | "no_manifest" | "bad_manifest", message: string) {
     super(message);
@@ -280,7 +323,9 @@ export async function persistUploadedArchive(
   body: ReadableStream<Uint8Array>,
   declaredSize: number | null,
   jobId: string = crypto.randomUUID(),
+  signal?: AbortSignal,
 ): Promise<{ path: string; jobId: string }> {
+  signal?.throwIfAborted();
   if (declaredSize !== null && (!Number.isSafeInteger(declaredSize) || declaredSize < 0)) {
     throw new ArchiveValidationError(
       "size",
@@ -296,11 +341,14 @@ export async function persistUploadedArchive(
   // intermediate runtime-owned queue to grow under slow Android storage.
   const fd = openSync(path, "w");
   const reader = body.getReader();
+  const abortUpload = () => { void reader.cancel(signal?.reason).catch(() => {}); };
+  signal?.addEventListener("abort", abortUpload, { once: true });
   const header = new Uint8Array(4);
   let headerBytes = 0;
   let magicChecked = false;
   let total = 0;
   let fdClosed = false;
+  let lastUploadProgress = 0;
 
   const closeFd = (ignoreError = false) => {
     if (fdClosed) return;
@@ -333,11 +381,16 @@ export async function persistUploadedArchive(
     }
     writeAllSync(fd, chunk);
     total += chunk.byteLength;
+    if (signal && Date.now() - lastUploadProgress >= 500) {
+      lastUploadProgress = Date.now();
+      notifyAndroidImport({ jobId, status: "uploading", phase: "uploading", bytesProcessed: total, bytesTotal: declaredSize ?? undefined });
+    }
   };
 
   try {
     while (true) {
       const { value, done } = await reader.read();
+      signal?.throwIfAborted();
       if (done) break;
       if (!value || value.byteLength === 0) continue;
 
@@ -377,7 +430,9 @@ export async function persistUploadedArchive(
     // Stop accepting network data immediately on validation/write failure,
     // then remove the partial archive after its fd has actually closed.
     try {
-      await reader.cancel(err);
+      // Cancellation closes reads immediately; a stalled source's cleanup
+      // promise must not prevent releasing the fd or deleting partial data.
+      void reader.cancel(err).catch(() => {});
     } catch {
       /* ignore */
     }
@@ -385,6 +440,7 @@ export async function persistUploadedArchive(
     throw err;
   } finally {
     try {
+      signal?.removeEventListener("abort", abortUpload);
       reader.releaseLock();
     } catch {
       /* ignore */
@@ -842,6 +898,7 @@ export function startImport(opts: {
   userId: string;
   archivePath: string;
   jobId: string;
+  resuming?: boolean;
 }): ImportJob {
   const existingJobId = USER_RUNNING.get(opts.userId);
   const reservation = USER_UPLOAD_RESERVATIONS.get(opts.userId);
@@ -872,12 +929,14 @@ export function startImport(opts: {
     fileSummary: {},
     error: null,
     progress: null,
+    resuming: opts.resuming ?? false,
     abort: new AbortController(),
     ticketGate,
     ticketResolver,
     ticketReused: false,
     secretsRestored: 0,
   };
+  saveImportJob(job);
   JOBS.set(job.jobId, job);
   USER_RUNNING.set(job.userId, job.jobId);
   globalImportSlot = job.jobId;
@@ -888,6 +947,13 @@ export function startImport(opts: {
   return job;
 }
 
+export function resumeImport(userId: string, jobId: string): ImportJob {
+  const job = getJob(jobId, userId);
+  if (!job || job.status !== "interrupted") throw new Error("this import cannot be resumed");
+  if (!existsSync(job.archivePath)) throw new Error("saved archive is unavailable; select the backup again");
+  return startImport({ userId, jobId, archivePath: job.archivePath, resuming: true });
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -896,6 +962,14 @@ function emit(job: ImportJob, type: EventType, payload: Record<string, any>): vo
   if (type === EventType.USER_IMPORT_PROGRESS && typeof payload.phase === "string") {
     job.progress = { ...payload, phase: payload.phase };
   }
+  const previous = LAST_SAVED.get(job);
+  if (!previous || Date.now() - previous.at >= 1000 || previous.status !== job.status || previous.phase !== job.progress?.phase || previous.table !== job.progress?.table) {
+    try {
+      saveImportJob(job);
+      LAST_SAVED.set(job, { at: Date.now(), status: job.status, phase: job.progress?.phase, table: job.progress?.table });
+    } catch (error) { console.warn("[user-data import] could not save recovery state:", error); }
+  }
+  notifyAndroidImport({ jobId: job.jobId, status: job.status, ...job.progress });
   try {
     eventBus.emit(type, { jobId: job.jobId, ...payload }, job.userId);
   } catch {
@@ -2219,6 +2293,7 @@ async function applyBinary(
     }
   })();
   if (!dest) return false;
+  if (existsSync(dest)) return false;
   ensureDir(dirname(dest));
 
   if (entry.bucket === "notification-sounds") {
@@ -2243,9 +2318,19 @@ async function applyBinary(
 
   try {
     // Keep this a filesystem copy instead of Bun.write(Bun.file(...)) so a
-    // large staged binary never re-enters Bun's Blob pipeline. EXCL makes the
-    // non-destructive merge atomic if another request creates the file first.
-    copyFileSync(entry.stagingPath, dest, fsConstants.COPYFILE_EXCL);
+    // large staged binary never re-enters Bun's Blob pipeline. Publish only
+    // a complete copy; a killed process can leave a private temporary file,
+    // which resume overwrites. Android forbids hard links in app storage.
+    const temporary = join(dirname(dest), `.lv-restore-${ctx.job.jobId}.tmp`);
+    try {
+      copyFileSync(entry.stagingPath, temporary);
+      // Imports hold the single writer slot. Keep the existence check and
+      // rename synchronous so another application request cannot interleave.
+      if (existsSync(dest)) return false;
+      renameSync(temporary, dest);
+    } finally {
+      try { unlinkSync(temporary); } catch { /* a crash may leave it for recovery */ }
+    }
   } catch (err: any) {
     if (err?.code === "EEXIST") return false;
     throw err;
@@ -2346,7 +2431,13 @@ async function applyLancedbVectors(
     let batchBytes = 0;
     let restored = 0;
     const commitBatch = async () => {
-      await table.add(batch);
+      if (ctx.job.resuming) {
+        // Replay must preserve existing vectors, including batches committed
+        // just before a process stopped. Match the account as well as the ID.
+        await table.mergeInsert(["id", "user_id"]).whenNotMatchedInsertAll().execute(batch);
+      } else {
+        await table.add(batch);
+      }
       restored += batch.length;
       batch.length = 0;
       batchBytes = 0;
@@ -2389,8 +2480,7 @@ async function applyLancedbVectors(
     }
     if (batch.length > 0) {
       try {
-        await table.add(batch);
-        restored += batch.length;
+        await commitBatch();
       } catch (err) {
         console.warn(`[user-data import] LanceDB final add failed for ${tableName}:`, err);
       }
@@ -2779,7 +2869,7 @@ async function runImportJob(job: ImportJob): Promise<void> {
     });
   } catch (err: any) {
     if (job.abort.signal.aborted) {
-      job.status = "cancelled";
+      job.status = job.interrupted ? "interrupted" : "cancelled";
     } else {
       job.status = "failed";
       job.error = String(err?.message || err);
