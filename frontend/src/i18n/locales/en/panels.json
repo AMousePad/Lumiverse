@@ -2973,6 +2973,13 @@
     }
   },
   "themePanel": {
+    "deviceControls": {
+      "title": "Device-specific controls",
+      "enabled": "Use device-specific controls",
+      "hint": "When enabled, the controls below apply only to this browser or app on this device. Theme changes keep your device values. Copy them into the theme before saving or exporting if you want to share them.",
+      "copyToTheme": "Copy device controls into theme",
+      "resetFromTheme": "Reset device controls from theme"
+    },
     "lockControls": "Lock controls",
     "unlockControls": "Unlock controls",
     "lockSliders": "Lock sliders",
