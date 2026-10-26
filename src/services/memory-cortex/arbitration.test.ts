@@ -95,3 +95,29 @@ test("new alias proposals cannot become canonical hints before review", () => {
   expect(result.graph.entities[0]?.aliases).not.toContain("Invented");
   expect(result.graph.aliases.map((a) => a.alias)).toEqual(["Red"]);
 });
+
+test("ambiguous accepted aliases cannot redirect a relationship endpoint", () => {
+  const plan = buildCortexArbitrationPlan({ passage: "Mara and Tovin both use Red. Red mentors Voss.", knownEntities: [], characterNames: [], gradeExisting: false,
+    graph: { entities: ["Mara", "Tovin", "Voss"].map((name) => ({ name, type: "character", aliases: [], confidence: 0.9 })),
+      relationships: [{ source: "Red", target: "Voss", type: "mentor", label: "mentor", sentiment: 0.3 }],
+      aliases: [{ canonicalName: "Mara", alias: "Red" }, { canonicalName: "Tovin", alias: "Red" }],
+    } });
+  expect(plan.apply(plan.input.candidates.map((candidate) => ({ id: candidate.id, action: "keep" }))).graph.relationships).toEqual([]);
+});
+
+test("color claims are reviewed independently and follow only accepted character identities", () => {
+  const plan = buildCortexArbitrationPlan({ passage: '*<font color="#abc">Red thought of home.</font>*',
+    knownEntities: [], characterNames: ["Mara"], gradeExisting: false, graph: {
+      entities: [{ name: "Red", type: "character", aliases: [], confidence: 0.8 }], relationships: [], aliases: [],
+      colors: [{ hexColor: "#aabbcc", entityName: "Red", usageType: "thought", confidence: 0.8, evidence: ['*<font color="#abc">Red thought of home.</font>*'] }],
+    } });
+  const candidate = plan.input.candidates.find((entry) => entry.kind === "color")!;
+  expect(candidate).toMatchObject({ id: "f0", name: "Red", hexColor: "#aabbcc", type: "thought" });
+  const verdicts = [{ id: "e0", action: "resolve" as const, canonicalId: "c0" }, { id: "f0", action: "keep" as const }];
+  expect(plan.apply(verdicts).graph.colors?.[0]?.entityName).toBe("Mara");
+  for (const action of ["reject", "defer"] as const) {
+    expect(plan.apply([{ ...verdicts[0]! }, { id: "f0", action }]).graph.colors).toEqual([]);
+  }
+  expect(plan.apply([{ id: "e0", action: "reject" }, { id: "f0", action: "keep" }]).graph.colors).toEqual([]);
+  expect(() => plan.apply([verdicts[0]!])).toThrow("Incomplete");
+});

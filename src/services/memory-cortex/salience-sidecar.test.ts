@@ -25,6 +25,19 @@ describe("getToolChoiceParams", () => {
 });
 
 describe("parseToolCallResults", () => {
+  test("normalizes actual font colors and rejects invalid colors or usage types", () => {
+    const result = parseToolCallResults([{ name: "extract_font_colors", args: { color_attributions: [
+      { hex_color: "#abc", character_name: "Melina", usage_type: "thought" },
+      { hex_color: "rgb(255, 0, 0)", character_name: "Melina", usage_type: "speech" },
+      { hex_color: "rgb(999, 0, 0)", character_name: "Melina", usage_type: "thought" },
+      { hex_color: "#invented", character_name: "Melina", usage_type: "thought" },
+      { hex_color: "#abcdef", character_name: "Melina", usage_type: "invented" },
+    ] } }]);
+    expect(result.fontColors).toEqual([
+      { hexColor: "#aabbcc", characterName: "Melina", usageType: "thought" },
+      { hexColor: "#ff0000", characterName: "Melina", usageType: "speech" },
+    ]);
+  });
   test("filters low-signal sidecar junk while preserving supported extraction", () => {
     const result = parseToolCallResults([
       {
@@ -94,6 +107,29 @@ describe("parseToolCallResults", () => {
       { hexColor: "#ff9999", characterName: "Melina", usageType: "speech" },
     ]);
   });
+});
+
+test("live and batch extraction receive the same thought-channel rules and configured markers", async () => {
+  const prompts: Array<{ system: string; user: string }> = [];
+  const generate: Parameters<typeof extractWithSidecar>[1] = async (request) => {
+    prompts.push({ system: request.messages[0]!.content, user: request.messages[1]!.content });
+    const entry = { importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [],
+      relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] };
+    return { content: JSON.stringify(request.requestPurpose === "batch extraction" ? { results: [{ ...entry, index: 0 }, { ...entry, index: 1 }] } : entry) };
+  };
+  const options = { thoughtDelimiters: { prefix: "[private]", suffix: "[/private]" } };
+  await extractWithSidecar("Quiet weather.", generate, "fixture", options);
+  await extractBatchWithSidecar([{ index: 0, content: "Quiet weather." }, { index: 1, content: "Clear skies." }], generate, "fixture", options);
+  expect(prompts).toHaveLength(2);
+  for (const prompt of prompts) {
+    expect(prompt.system).toContain("a thought/italic wrapper takes precedence over quotation marks");
+    expect(prompt.system).toContain("report both usage types");
+    expect(prompt.system).toContain("standalone first-person thought paragraph continues");
+    expect(prompt.system).toContain("including message prefixes, supplied aliases, and unambiguous pronouns");
+    expect(prompt.system).toContain("Include both resolved endpoints in entities_present");
+    expect(prompt.system).toContain("serves = subordinate to superior");
+    expect(prompt.user).toContain(JSON.stringify(options.thoughtDelimiters));
+  }
 });
 
 describe("extractBatchWithSidecar", () => {

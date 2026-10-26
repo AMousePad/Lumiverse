@@ -4,6 +4,7 @@ import { DEFAULT_CORTEX_CONFIG, getCortexConfig, putCortexConfig } from "../src/
 import { curateEntityFactsWithLLM, processChunk } from "../src/services/memory-cortex";
 import { runHeuristicAnalysis } from "../src/services/memory-cortex/heuristic-analysis";
 import * as graph from "../src/services/memory-cortex/entity-graph";
+import { getColorMap } from "../src/services/memory-cortex/font-attribution";
 
 beforeEach(async () => {
   closeDatabase(); initDatabase(":memory:");
@@ -11,6 +12,143 @@ beforeEach(async () => {
   getDb().run(await Bun.file(new URL("../src/db/baseline.sql", import.meta.url)).text());
 });
 afterEach(() => closeDatabase());
+
+test("heuristic-only ingestion records a wrapped thought without a sidecar", async () => {
+  const config = putCortexConfig("thought-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
+    consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
+  });
+  const passage = '[CHARACTER | Mara]: The spoon slipped from my fingers. Kama shoved his head through my collar.\n\n*<font color=#D987FF>A bed. A locked door. My mouth had better catch up before he decides the spoon spoke for me.</font>*\n\nI set the utensil across the rim. Auntie Mei arrived carrying a paper bag.';
+  getDb().query("INSERT INTO chats (id, user_id) VALUES ('thought-chat', 'thought-user')").run();
+  getDb().query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('thought-chunk', 'thought-chat', 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(passage);
+  const names = ["Mara", "Kama", "Auntie Mei"];
+  const heuristic = runHeuristicAnalysis({ cleanContent: passage, knownEntities: [], characterNames: names, entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
+  await processChunk({ chunkId: "thought-chunk", chatId: "thought-chat", userId: "thought-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, names, undefined, undefined, undefined, heuristic, true);
+  expect(getColorMap("thought-chat")).toEqual([expect.objectContaining({ hexColor: "#d987ff", usageType: "thought", sampleCount: 1 })]);
+});
+
+for (const { review, endpointAction } of [
+  { review: false, endpointAction: "keep" },
+  { review: true, endpointAction: "keep" },
+  { review: true, endpointAction: "reject" },
+  { review: true, endpointAction: "defer" },
+] as const) {
+  test(`omitted known relationship endpoints honor review=${review} and endpoint verdict ${endpointAction}`, async () => {
+    const config = putCortexConfig("relation-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
+      queryGeneration: { primary: { connectionProfileId: "reviewer", model: "fixture" }, secondary: null },
+      sidecarReliability: { ...DEFAULT_CORTEX_CONFIG.sidecarReliability, arbitratesHeuristics: review },
+      consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
+    });
+    const passage = '[CHARACTER | Mara]: Tovin has always been my mentor.';
+    getDb().query("INSERT INTO chats (id, user_id) VALUES ('relation-chat', 'relation-user')").run();
+    getDb().query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('relation-chunk', 'relation-chat', 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(passage);
+    const tovin = graph.upsertEntity("relation-chat", { name: "Tovin", type: "character", aliases: ["Tov"], confidence: 1 }, "old", 1);
+    const heuristic = runHeuristicAnalysis({ cleanContent: "Quiet weather.", knownEntities: [], characterNames: [], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
+    let reviewed = false;
+    await processChunk({ chunkId: "relation-chunk", chatId: "relation-chat", userId: "relation-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara"], async (request) => {
+      const state = JSON.parse(request.messages[1]!.content);
+      expect(state.candidates).toContainEqual(expect.objectContaining({ kind: "relationship", source: "Tovin", target: "Mara", type: "mentor" }));
+      reviewed = true;
+      return { content: JSON.stringify({ verdicts: state.candidates.map((candidate: any) => ({ id: candidate.id,
+        action: candidate.kind === "entity" && candidate.name === "Tovin" ? endpointAction
+          : candidate.kind === "relationship" || ["Mara", "Tovin"].includes(candidate.name) ? "keep" : "reject" })) }) };
+    }, "reviewer", undefined, heuristic, true, undefined, {
+      score: 0.3, emotionalTags: [], narrativeFlags: [], entitiesPresent: [], statusChanges: [], keyFacts: [], discoveredAliases: [], fontColors: [],
+      relationshipsShown: [{ source: "Tov", target: "mara", type: "mentor", label: "longstanding mentor", sentiment: 0.5 }],
+    });
+    const mara = graph.findEntityByName("relation-chat", "Mara")!;
+    expect(mara).not.toBeNull();
+    expect(getDb().query("SELECT source_entity_id, target_entity_id, relation_type FROM memory_relations WHERE chat_id = 'relation-chat'").all())
+      .toEqual(endpointAction === "keep" ? [{ source_entity_id: tovin, target_entity_id: mara.id, relation_type: "mentor" }] : []);
+    expect(graph.getEntity(tovin)).not.toBeNull();
+    expect(reviewed).toBe(review);
+  });
+}
+
+for (const aliasAction of ["keep", "reject", "defer"] as const) {
+  test(`a relationship follows a new alias only after alias verdict ${aliasAction}`, async () => {
+    const config = putCortexConfig("alias-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
+      queryGeneration: { primary: { connectionProfileId: "reviewer", model: "fixture" }, secondary: null },
+      sidecarReliability: { ...DEFAULT_CORTEX_CONFIG.sidecarReliability, arbitratesHeuristics: true },
+      consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
+    });
+    const passage = 'Mara, known as Red, is Tovin’s mentor.';
+    getDb().query("INSERT INTO chats (id, user_id) VALUES ('alias-chat', 'alias-user')").run();
+    getDb().query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('alias-chunk', 'alias-chat', 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(passage);
+    const heuristic = runHeuristicAnalysis({ cleanContent: "Quiet weather.", knownEntities: [], characterNames: [], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
+    await processChunk({ chunkId: "alias-chunk", chatId: "alias-chat", userId: "alias-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara", "Tovin"], async (request) => {
+      const state = JSON.parse(request.messages[1]!.content);
+      expect(state.candidates).toContainEqual(expect.objectContaining({ kind: "relationship", source: "Red", target: "Tovin" }));
+      return { content: JSON.stringify({ verdicts: state.candidates.map((candidate: any) => ({ id: candidate.id,
+        action: candidate.kind === "alias" ? aliasAction : candidate.kind === "relationship" || ["Mara", "Tovin"].includes(candidate.name) ? "keep" : "reject" })) }) };
+    }, "reviewer", undefined, heuristic, true, undefined, {
+      score: 0.3, emotionalTags: [], narrativeFlags: [], entitiesPresent: [{ name: "Mara", type: "character" }], statusChanges: [], keyFacts: [], fontColors: [],
+      discoveredAliases: [{ canonicalName: "Mara", alias: "Red", evidence: "Mara, known as Red" }],
+      relationshipsShown: [{ source: "Red", target: "Tovin", type: "mentor", label: "mentor", sentiment: 0.5 }],
+    });
+    const relations = getDb().query("SELECT source_entity_id, target_entity_id, relation_type FROM memory_relations WHERE chat_id = 'alias-chat'").all();
+    expect(relations).toEqual(aliasAction === "keep" ? [{ source_entity_id: graph.findEntityByName("alias-chat", "Mara")!.id,
+      target_entity_id: graph.findEntityByName("alias-chat", "Tovin")!.id, relation_type: "mentor" }] : []);
+  });
+}
+
+for (const entityAction of ["keep", "reject"] as const) {
+  test(`color claims for a newly discovered character follow its ${entityAction} identity verdict`, async () => {
+    const config = putCortexConfig("new-color-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
+      queryGeneration: { primary: { connectionProfileId: "reviewer", model: "fixture" }, secondary: null },
+      sidecarReliability: { ...DEFAULT_CORTEX_CONFIG.sidecarReliability, arbitratesHeuristics: true },
+      consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
+    });
+    const passage = 'Selene thought: *<font color=#abc>My secret is safe.</font>*';
+    getDb().query("INSERT INTO chats (id, user_id) VALUES ('new-color-chat', 'new-color-user')").run();
+    getDb().query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('new-color-chunk', 'new-color-chat', 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(passage);
+    const heuristic = runHeuristicAnalysis({ cleanContent: "Quiet weather.", knownEntities: [], characterNames: [], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
+    await processChunk({ chunkId: "new-color-chunk", chatId: "new-color-chat", userId: "new-color-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, [], async (request) => {
+      const state = JSON.parse(request.messages[1]!.content);
+      expect(state.candidates).toContainEqual(expect.objectContaining({ kind: "color", name: "Selene", type: "thought" }));
+      return { content: JSON.stringify({ verdicts: state.candidates.map((candidate: any) => ({ id: candidate.id,
+        action: candidate.kind === "color" ? "keep" : candidate.name === "Selene" ? entityAction : "reject" })) }) };
+    }, "reviewer", undefined, heuristic, true, undefined, {
+      score: 0.3, emotionalTags: [], narrativeFlags: [], entitiesPresent: [{ name: "Selene", type: "character" }], statusChanges: [], keyFacts: [], discoveredAliases: [], relationshipsShown: [],
+      fontColors: [{ hexColor: "#abc", characterName: "Selene", usageType: "thought" }],
+    });
+    expect(getColorMap("new-color-chat")).toHaveLength(entityAction === "keep" ? 1 : 0);
+  });
+}
+
+for (const action of ["keep", "reject", "defer"] as const) {
+  test(`ingestion explicitly reviews colored thoughts and applies ${action} without double counting`, async () => {
+    const config = putCortexConfig("color-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
+      queryGeneration: { primary: { connectionProfileId: "reviewer", model: "fixture" }, secondary: null },
+      sidecarReliability: { ...DEFAULT_CORTEX_CONFIG.sidecarReliability, arbitratesHeuristics: true },
+      consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
+    });
+    const passage = '[CHARACTER | Mara]\n*<font color=#abc>"I must keep going."</font>* *<font color=#abc>"I cannot turn back."</font>*';
+    getDb().query("INSERT INTO chats (id, user_id) VALUES ('color-chat', 'color-user')").run();
+    getDb().query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('color-chunk', 'color-chat', 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(passage);
+    const heuristic = runHeuristicAnalysis({ cleanContent: passage, knownEntities: [], characterNames: ["Mara"], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
+    let reviewedColors = 0;
+    await processChunk({ chunkId: "color-chunk", chatId: "color-chat", userId: "color-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara"], async (request) => {
+      const state = JSON.parse(request.messages[1]!.content);
+      const colors = state.candidates.filter((candidate: any) => candidate.kind === "color");
+      reviewedColors += colors.length;
+      expect(colors).toHaveLength(1);
+      expect(colors[0]).toMatchObject({ name: "Mara", hexColor: "#aabbcc", type: "thought" });
+      expect(colors[0].evidence.join(" ")).toContain("<font color=#abc>");
+      return { content: JSON.stringify({ verdicts: state.candidates.map((candidate: any) => ({ id: candidate.id, action: candidate.kind === "color" ? action : "keep" })) }) };
+    }, "reviewer", undefined, heuristic, true, undefined, {
+      score: 0.3, emotionalTags: [], narrativeFlags: [], entitiesPresent: [{ name: "Mara", type: "character" }],
+      statusChanges: [], keyFacts: [], relationshipsShown: [], discoveredAliases: [], fontColors: [
+        { hexColor: "#abc", characterName: "Mara", usageType: "thought" },
+        { hexColor: "#123456", characterName: "Mara", usageType: "thought" },
+        { hexColor: "#abc", characterName: "Mara", usageType: "speech" },
+      ],
+    });
+    expect(reviewedColors).toBe(1);
+    const colors = getColorMap("color-chat");
+    expect(colors).toHaveLength(action === "keep" ? 1 : 0);
+    if (action === "keep") expect(colors[0]).toMatchObject({ hexColor: "#aabbcc", usageType: "thought", sampleCount: 1 });
+  });
+}
 
 test("automatic cleanup preserves an unedited endpoint of a manually edited relationship", () => {
   const first = graph.upsertEntity("chat", { name: "Mara", type: "character", aliases: [], confidence: 1 }, "chunk", 1);

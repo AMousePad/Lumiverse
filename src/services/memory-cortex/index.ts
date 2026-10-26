@@ -44,7 +44,7 @@ import { buildEmotionalContext } from "./emotional-context";
 import { queryCortex as queryCortexImpl, queryVaultCortex as queryVaultCortexImpl } from "./retrieval";
 import { formatShadowPrompt, type FormatterMode, type ShadowPromptResult } from "./shadow-formatter";
 import { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
-import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap, recordColorAttribution, stripFontTags, stripThoughtDelimiters } from "./font-attribution";
+import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap, recordColorAttribution, stripFontTags, stripThoughtDelimiters, mergeColorAttributions, FONT_ATTRIBUTION_VERSION } from "./font-attribution";
 import { extractNPsFromChunk } from "./np-chunker";
 import { stripNonProseTags } from "../../utils/content-sanitizer";
 import * as regexScriptsSvc from "../regex-scripts.service";
@@ -323,6 +323,7 @@ export function getCortexStructuralSignature(config: MemoryCortexConfig): string
     entityTracking: config.entityTracking,
     entityExtractionMode: config.entityExtractionMode,
     thoughtMarkers: config.thoughtMarkers,
+    fontAttributionVersion: FONT_ATTRIBUTION_VERSION,
     salienceScoring: config.salienceScoring,
     salienceScoringMode: config.salienceScoringMode,
     entityWhitelist: config.entityWhitelist,
@@ -1553,7 +1554,7 @@ export async function processChunk(
     const fontResult = processChunkFontColors(
       data.chatId,
       proseContent,
-      [...new Set([...characterNames, ...knownEntities.map((e) => e.name)])],
+      [...new Set([...characterNames, ...knownEntities.filter((entity) => entity.entityType === "character").flatMap((entity) => [entity.name, ...entity.aliases]), ...allowedColorNames])],
       entityIdByName,
       thoughtDelimiters,
       false,
@@ -1633,6 +1634,7 @@ export async function processChunk(
           {
             characterNames,
             knownEntities: entityContext,
+            thoughtDelimiters,
             descriptionAliases: buildSidecarAliasList(descriptionAliases, knownEntities),
             samplingParameters: buildSidecarSamplingParameters(config.sidecar, {
               model: target.model,
@@ -1729,6 +1731,11 @@ export async function processChunk(
       sidecarFacts = extraction.keyFacts;
       sidecarFontColors = extraction.fontColors;
       sidecarDiscoveredAliases = extraction.discoveredAliases;
+      // A character first discovered in this chunk is eligible too. Its entity
+      // and color still pass extraction filters and the independent reviewer.
+      for (const entity of sidecarEntities) {
+        if (entity.type === "character") allowedColorNames.add(entity.name.trim().toLowerCase());
+      }
     } else if (heuristicResult) {
       salienceResult = heuristicResult.salienceResult;
     } else {
@@ -1746,12 +1753,15 @@ export async function processChunk(
     let cleanupActions: CortexCleanupAction[] = [];
     if (config.entityTracking && config.entityExtractionMode !== "off") {
       const canonicalNames = new Map<string, string>();
+      for (const name of characterNames) canonicalNames.set(name.toLowerCase(), name);
       for (const entity of knownEntities) {
         canonicalNames.set(entity.name.toLowerCase(), entity.name);
         for (const alias of entity.aliases) canonicalNames.set(alias.toLowerCase(), entity.name);
       }
       for (const [alias, canonical] of descriptionAliases ?? []) canonicalNames.set(alias.toLowerCase(), canonical);
       const canonicalize = (name: string) => canonicalNames.get(name.toLowerCase()) ?? name;
+      const colorProposals = mergeColorAttributions(proseContent, fontResult.attributions, sidecarFontColors, thoughtDelimiters, canonicalize)
+        .filter((color) => isAllowedColorName(color.entityName!));
       const provisionalEntities: import("./types").ExtractedEntity[] = sidecarActive ? extractNPsFromChunk(cleanContent)
         .filter((np) => np.text.length >= 2 && np.text.length <= 50)
         .map((np) => {
@@ -1766,19 +1776,48 @@ export async function processChunk(
             confidence: 0.5, provisional: existing?.confidence !== "confirmed" };
         }) : [];
       const heuristicEntities = (heuristicResult?.entities ?? []).map((e) => ({ ...e, name: canonicalize(e.name) }));
+      const aliases = [...sidecarDiscoveredAliases, ...(heuristicResult?.aliases ?? [])]
+        .map((a) => ({ ...a, canonicalName: canonicalize(a.canonicalName) }))
+        .filter((a) => isPlausibleAlias(a.alias, a.canonicalName));
+      const aliasTargets = new Map<string, Set<string>>();
+      for (const alias of aliases) {
+        const key = alias.alias.toLowerCase();
+        const targets = aliasTargets.get(key) ?? new Set<string>();
+        targets.add(alias.canonicalName);
+        aliasTargets.set(key, targets);
+      }
+      // This lookup admits a proposal for review; only an accepted alias can
+      // actually redirect an endpoint when the arbitration plan is applied.
+      const proposedEndpoint = (name: string) => {
+        const targets = aliasTargets.get(name.toLowerCase());
+        return targets?.size === 1 ? [...targets][0]! : name;
+      };
+      const relationships = mergeRelationships(heuristicResult?.relationships ?? [], sidecarRelationships)
+        .map((r) => ({ ...r, source: canonicalize(r.source), target: canonicalize(r.target) }));
+      const knownReferences = new Map([
+        ...characterNames.map((name) => [name.toLowerCase(), { name, type: "character" }] as const),
+        ...knownEntities.map((entity) => [entity.name.toLowerCase(), { name: entity.name, type: entity.entityType }] as const),
+      ]);
+      const referencedEntities = relationships.flatMap((r) => [r.source, r.target])
+        .map((name) => knownReferences.get(proposedEndpoint(name).toLowerCase()))
+        .filter((entity) => entity !== undefined)
+        .map((entity) => ({ ...entity, aliases: [], confidence: 0.9 }));
       const entities = filterEntitiesByExtractionFilters(
-        mergeExtractedEntities([...provisionalEntities, ...heuristicEntities], sidecarEntities.map((e) => ({ ...e, name: canonicalize(e.name) }))),
+        mergeExtractedEntities([...referencedEntities, ...provisionalEntities, ...heuristicEntities], [
+          ...sidecarEntities.map((e) => ({ ...e, name: canonicalize(e.name) })),
+          // A colored first-person thought can identify a participant through
+          // its message prefix even when their name is absent from the prose.
+          ...colorProposals.map((color) => ({ name: color.entityName!, type: "character" })),
+        ]),
         cleanContent, config.entityExtractionFilters,
       );
       const allowedNames = new Set(entities.map((e) => e.name.toLowerCase()));
+      const allowedEndpoint = (name: string) => allowedNames.has(name.toLowerCase()) || allowedNames.has(proposedEndpoint(name).toLowerCase());
       graphPlan = {
         entities,
-        relationships: mergeRelationships(heuristicResult?.relationships ?? [], sidecarRelationships)
-          .map((r) => ({ ...r, source: canonicalize(r.source), target: canonicalize(r.target) }))
-          .filter((r) => allowedNames.has(r.source.toLowerCase()) && allowedNames.has(r.target.toLowerCase()) && r.source.toLowerCase() !== r.target.toLowerCase()) as any,
-        aliases: [...sidecarDiscoveredAliases, ...(heuristicResult?.aliases ?? [])]
-          .map((a) => ({ ...a, canonicalName: canonicalize(a.canonicalName) }))
-          .filter((a) => isPlausibleAlias(a.alias, a.canonicalName)),
+        colors: colorProposals,
+        relationships: relationships.filter((r) => allowedEndpoint(r.source) && allowedEndpoint(r.target) && r.source.toLowerCase() !== r.target.toLowerCase()) as any,
+        aliases,
       };
       if (arbitrationActive) {
         const reviewEntities = config.sidecarReliability.gradesExistingRecords ? entityGraph.getEntities(data.chatId) : knownEntities;
@@ -1894,26 +1933,20 @@ export async function processChunk(
 
         const dbStart = performance.now();
         db.query("UPDATE chat_chunks SET entity_ids = ? WHERE id = ?").run(JSON.stringify(entityIds), data.chunkId);
-        // Allowlist (characterNames + description aliases + persisted
-        // character-type entities) is the authoritative gate. Don't add an
+        // Allowlist (participants, aliases and known/newly extracted
+        // characters) plus accepted graph identity is the gate. Don't add an
         // entityType check here: resolveEntityTypeFromEvidence can promote or
         // demote a freshly-extracted character entity to a different type
         // based on accumulated metadata, and that would silently drop
         // legitimate attributions. If the name passes the allowlist, we know
         // it's a real character regardless of what the graph's evidence
         // resolution currently says about its type.
-        for (const attr of fontResult.attributions) {
+        for (const attr of graphPlan.colors ?? []) {
           if (!attr.entityName) continue;
           if (!isAllowedColorName(attr.entityName) || !mergedEntities.some((e) => e.name.toLowerCase() === attr.entityName!.toLowerCase())) continue;
           const entity = entityGraph.findEntityByName(data.chatId, attr.entityName);
           if (!entity) continue;
-          recordColorAttribution(data.chatId, attr.hexColor, entity.id, attr.usageType, null);
-        }
-        for (const fc of sidecarFontColors) {
-          if (!isAllowedColorName(fc.characterName) || !mergedEntities.some((e) => e.name.toLowerCase() === fc.characterName.toLowerCase())) continue;
-          const entity = entityGraph.findEntityByName(data.chatId, fc.characterName);
-          if (!entity) continue;
-          recordColorAttribution(data.chatId, fc.hexColor, entity.id, fc.usageType, null);
+          recordColorAttribution(data.chatId, attr.hexColor, entity.id, attr.usageType, attr.evidence?.[0]?.slice(0, 500) ?? null, attr.confidence);
         }
         timings.dbMs += performance.now() - dbStart;
 
@@ -2365,6 +2398,7 @@ export async function rebuildCortex(
               activeSidecarConnectionId,
               {
                 characterNames,
+                thoughtDelimiters: config.thoughtMarkers,
                 knownEntities: entityGraph.getActiveEntities(chatId).map((e) => ({ name: e.name, type: e.entityType, aliases: e.aliases })),
                 descriptionAliases: buildSidecarAliasList(
                   descriptionAliases,

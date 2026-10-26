@@ -71,7 +71,7 @@ export interface SidecarReliabilityConfig {
    *    warmup signature. The next cortex warmup re-processes it. Equivalent to
    *    the "AI Only" mode users have asked for. */
   fallback: "heuristic" | "skip";
-  /** Review every entity, relationship and alias proposal before persistence.
+  /** Review every entity, relationship, alias and font-color proposal before persistence.
    *  The arbitration backend can be the generative sidecar or a native Decision
    *  connection. Failed/incomplete reviews leave the chunk pending. */
   arbitratesHeuristics: boolean;

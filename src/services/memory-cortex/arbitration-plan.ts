@@ -2,11 +2,13 @@ import { isPlausibleAlias } from "./alias-validation";
 import { validateArbitrationVerdicts } from "./arbitration";
 import type { ArbitrationCanonical, ArbitrationCandidate, ArbitrationVerdict, CortexArbitrationInput } from "./arbitration";
 import type { DiscoveredAlias, ExtractedEntity, ExtractedRelationship, MemoryEntity } from "./types";
+import type { ColorAttribution } from "./font-attribution";
 
 export interface CortexGraphPlan {
   entities: ExtractedEntity[];
   relationships: ExtractedRelationship[];
   aliases: DiscoveredAlias[];
+  colors?: ColorAttribution[];
 }
 
 export interface CortexCleanupAction {
@@ -56,6 +58,8 @@ export function buildCortexArbitrationPlan(options: {
       origin: e.provisional ? "noun_phrase" : "extraction", canonicalIds: shortlist(e.name) })),
     ...graph.relationships.map((r, i): ArbitrationCandidate => ({ id: `r${i}`, kind: "relationship", source: r.source, target: r.target, type: r.type, evidence: [r.label] })),
     ...graph.aliases.map((a, i): ArbitrationCandidate => ({ id: `a${i}`, kind: "alias", source: a.alias, target: a.canonicalName, evidence: a.evidence ? [a.evidence] : [] })),
+    ...(graph.colors ?? []).map((color, i): ArbitrationCandidate => ({ id: `f${i}`, kind: "color", name: color.entityName!,
+      type: color.usageType, hexColor: color.hexColor, evidence: color.evidence ?? [] })),
     ...cleanupEntities.map((e, i): ArbitrationCandidate => ({ id: `x${i}`, kind: "existing", name: e.name, type: e.entityType,
       evidence: options.existingEvidence?.get(e.id) ?? [], canonicalIds: shortlist(e.name).filter((id) => canonicalEntityIds.has(id)) })),
   ];
@@ -82,7 +86,21 @@ export function buildCortexArbitrationPlan(options: {
         const prior = uniqueEntities.get(entity.name.toLowerCase());
         uniqueEntities.set(entity.name.toLowerCase(), prior ? { ...entity, aliases: [...new Set([...prior.aliases, ...entity.aliases])], provisional: prior.provisional && entity.provisional } : entity);
       }
-      const resolve = (name: string) => renames.get(name.toLowerCase()) ?? name;
+      const acceptedAliasTargets = new Map<string, Set<string>>();
+      for (const alias of aliases) {
+        const key = alias.alias.toLowerCase();
+        const targets = acceptedAliasTargets.get(key) ?? new Set<string>();
+        targets.add(renames.get(alias.canonicalName.toLowerCase()) ?? alias.canonicalName);
+        acceptedAliasTargets.set(key, targets);
+      }
+      const resolve = (name: string) => {
+        const renamed = renames.get(name.toLowerCase());
+        if (renamed) return renamed;
+        // A real retained entity takes precedence over a conflicting alias.
+        if (uniqueEntities.has(name.toLowerCase())) return uniqueEntities.get(name.toLowerCase())!.name;
+        const targets = acceptedAliasTargets.get(name.toLowerCase());
+        return targets?.size === 1 ? [...targets][0]! : name;
+      };
       const relationships = graph.relationships.filter((_, i) => byId.get(`r${i}`)?.action === "keep")
         .map((r) => ({ ...r, source: resolve(r.source), target: resolve(r.target) }))
         .filter((r) => r.source.toLowerCase() !== r.target.toLowerCase() && uniqueEntities.has(r.source.toLowerCase()) && uniqueEntities.has(r.target.toLowerCase()));
@@ -93,7 +111,11 @@ export function buildCortexArbitrationPlan(options: {
         const target = verdict?.canonicalId && canonicalEntityIds.get(verdict.canonicalId);
         return verdict?.action === "resolve" && target && target !== e.id ? [{ entityId: e.id, action: "resolve", targetEntityId: target }] : [];
       });
-      return { graph: { entities: [...uniqueEntities.values()], relationships, aliases: aliases.map((a) => ({ ...a, canonicalName: resolve(a.canonicalName) })).filter((a) => uniqueEntities.has(a.canonicalName.toLowerCase())) }, cleanup };
+      const colors = graph.colors?.filter((_, i) => byId.get(`f${i}`)?.action === "keep")
+        .map((color) => ({ ...color, entityName: resolve(color.entityName!) }))
+        .filter((color) => uniqueEntities.has(color.entityName.toLowerCase()));
+      return { graph: { entities: [...uniqueEntities.values()], relationships, aliases: aliases.map((a) => ({ ...a, canonicalName: resolve(a.canonicalName) })).filter((a) => uniqueEntities.has(a.canonicalName.toLowerCase())),
+        ...(colors ? { colors } : {}) }, cleanup };
     },
   };
 }

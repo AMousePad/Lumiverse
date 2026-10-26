@@ -9,6 +9,7 @@
  */
 
 import type { SidecarExtractionResult, SidecarFontColor, DiscoveredAlias, EmotionalTag, NarrativeFlag, StatusChange, ExtractedEntity, ExtractedRelationship, SidecarGradedHeuristics } from "./types";
+import { normalizeFontColor, type ThoughtDelimiters } from "./font-attribution";
 import { scoreChunkHeuristic } from "./salience-heuristic";
 
 // ─── Tool-Based Structured Extraction ──────────────────────────
@@ -92,8 +93,12 @@ When you detect an alias:
 Do NOT report aliases on superficial similarity alone (no shared substring, no shared role, no addressing, no clear in-passage referent). When unsure, omit.
 
 RELATIONSHIP RULES
-- Both source and target must be proper names present in the passage.
+- Output canonical proper names for both endpoints. Resolve references from the passage, including message prefixes, supplied aliases, and unambiguous pronouns; the two names need not be spelled out in the same sentence.
+- In first-person narration, I/me/my refers to the current [CHARACTER | Name] or [USER | Name] viewpoint unless explicit attribution identifies another speaker/thinker. Resolve you/your only when the passage identifies the addressee; do not assign every nearby name to it. A message author may also write other characters.
+- Include both resolved endpoints in entities_present, even when one appears only through a prefix, alias or unambiguous pronoun. Do not emit pronouns as entity names.
 - Only record a relationship when the passage directly supports an enduring or role-like connection, or explicitly states the relationship.
+- Explicit affectionate commitment or an identified partner is relationship evidence. Flirting or plans to share a room alone do not establish a partnership; when only romantic interest is explicit, use custom with a factual label instead of inventing a history.
+- Direction describes the source relative to the target: parent = parent to child; child = child to parent; mentor = teacher to student; serves = subordinate to superior; owns = owner to possession; member_of = member to group; located_in = entity to place; fears = fearful entity to feared entity. Do not reverse these roles or turn a student into a child.
 - Do NOT create a relationship just because two named entities appear in the same scene, speak once, stand near each other, or are mentioned together.
 - Do NOT infer hidden history, likely alliances, family ties, or romance unless the passage itself supports it.
 - If the passage shows only a transient interaction with no stable relationship signal, return no relationship for that pair.
@@ -107,7 +112,13 @@ SCORING RULES
 
 FONT COLOR RULES
 - Only report colors that are actually present in HTML color tags in the passage.
-- Map each color to the named character directly supported by the passage.
+- Inspect BOTH the colored text and wrappers around the color tag: *<font color="#abc">text</font>* and <font color="#abc">*text*</font> use the same thought/italic channel. The same applies to _..._, <i>, <em>, and any configured thought markers supplied with the passage.
+- Determine usage before ownership: a thought/italic wrapper takes precedence over quotation marks inside it. *"I should leave"* is thought, not speech. Quotes outside a thought wrapper indicate speech. Plain descriptive/action prose is narration; bold emphasis alone is not a thought marker.
+- Map each observed color AND usage to its actual speaker/thinker, using explicit dialogue/thought attribution, local viewpoint, and the current message's [CHARACTER | Name] or [USER | Name] prefix. One message author can write several characters.
+- A standalone first-person thought paragraph continues the established first-person viewpoint of its current message, including My/my/MY references. Other characters appearing in separate paragraphs do not change that viewpoint. Explicit attribution to a different thinker takes precedence.
+- A character addressed or mentioned inside someone else's speech/thought is not necessarily its owner. Do not attribute "Kael, help me" to Kael just because his name appears.
+- A character can use the same color for speech and thought: report both usage types when both are present. Do not assume a color belongs exclusively to one character or that an earlier color claim is evidence for this passage.
+- Normalize short hex, named colors and rgb values to #rrggbb. Never invent a color absent from the markup.
 - If the owner of a color is unclear, omit that attribution instead of guessing.`;
 
 const EXTRACTION_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
@@ -256,8 +267,8 @@ const TOOL_RELATIONSHIPS: ToolDefinition = {
         items: {
           type: "object",
           properties: {
-            source: { type: "string", description: "Proper name of the first entity (must appear in passage)." },
-            target: { type: "string", description: "Proper name of the second entity (must appear in passage)." },
+            source: { type: "string", description: "Canonical name of the entity holding the relationship role, resolved from passage names, prefixes, aliases or unambiguous pronouns. Include it in extract_entities." },
+            target: { type: "string", description: "Canonical name of the entity the source's relationship points to, resolved from passage references. Include it in extract_entities." },
             type: {
               type: "string",
               enum: ["ally", "enemy", "lover", "parent", "child", "sibling", "mentor", "rival", "owns", "member_of", "located_in", "fears", "serves", "custom"],
@@ -291,7 +302,7 @@ const TOOL_FONT_COLORS: ToolDefinition = {
             usage_type: {
               type: "string",
               enum: ["speech", "thought", "narration"],
-              description: "speech=quoted dialogue, thought=internal/italic text, narration=descriptive text.",
+              description: "thought=internal/italic channel (wrapping *...*, _..._, i/em or configured markers wins over quotes, inside or outside the color tag); speech=other quoted dialogue; narration=plain descriptive text. Report separate entries if a color has multiple usages.",
             },
           },
           required: ["hex_color", "character_name", "usage_type"],
@@ -755,6 +766,7 @@ export async function extractWithSidecar(
   options?: {
     characterNames?: string[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
+    thoughtDelimiters?: ThoughtDelimiters;
     /** When provided, the sidecar is asked to judge these candidates and grading
      *  is returned in the result's gradedHeuristics field. */
     arbiter?: {
@@ -804,7 +816,7 @@ export async function extractWithSidecar(
       : "score_salience, extract_entities, extract_relationships, and extract_font_colors";
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze the exact roleplay passage below. Call ${toolListing} exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${arbiterBlock}\n\n<passage>\n${content}\n</passage>`;
+    const userContent = `Analyze the exact roleplay passage below. Call ${toolListing} exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${arbiterBlock}\n\n<passage>\n${content}\n</passage>`;
     const tag = options?.logTag ?? "single";
     logSidecarDispatch(tag, {
       chunks: 1,
@@ -996,6 +1008,7 @@ export async function extractBatchWithSidecar(
   options?: {
     characterNames?: string[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
+    thoughtDelimiters?: ThoughtDelimiters;
     /** Position-parallel to `chunks`. Entries may be null when a chunk has
      *  nothing to grade. When any entry is non-null with content, the batch
      *  uses the arbiter system prompt and embeds per-passage <arbiter> blocks. */
@@ -1081,7 +1094,7 @@ export async function extractBatchWithSidecar(
       : "";
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${arbiterInstruction}${entityHint}${aliasBlock}${batchExistingBlock}\n\n${passages}`;
+    const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${arbiterInstruction}${entityHint}${aliasBlock}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${batchExistingBlock}\n\n${passages}`;
     const tag = options?.logTag ?? "batch";
     logSidecarDispatch(tag, {
       chunks: chunks.length,
@@ -1526,20 +1539,26 @@ function validateRelationships(raw: any): ExtractedRelationship[] {
 
 const VALID_FONT_USAGE = new Set(["speech", "thought", "narration"]);
 
+function buildThoughtMarkerHint(markers?: ThoughtDelimiters): string {
+  return markers?.prefix && markers?.suffix
+    ? `\n\nConfigured thought delimiters (formatting data): ${JSON.stringify(markers)}. These indicate thought usage even when they wrap a color tag or contain quotes.` : "";
+}
+
 function validateFontColors(raw: any): SidecarFontColor[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter(
       (c: any) =>
         c &&
-        typeof c.hex_color === "string" &&
+        typeof c.hex_color === "string" && normalizeFontColor(c.hex_color) !== null &&
+        VALID_FONT_USAGE.has(c.usage_type) &&
         typeof c.character_name === "string" &&
         c.character_name.length > 0 &&
         !ENTITY_BLOCKLIST.has(c.character_name.toLowerCase().trim()) &&
         isValidEntityName(c.character_name),
     )
     .map((c: any) => ({
-      hexColor: c.hex_color.toLowerCase().trim(),
+      hexColor: normalizeFontColor(c.hex_color)!,
       characterName: c.character_name.trim(),
       usageType: VALID_FONT_USAGE.has(c.usage_type) ? c.usage_type : "narration",
     }));

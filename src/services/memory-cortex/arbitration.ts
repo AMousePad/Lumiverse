@@ -1,12 +1,12 @@
 import type { DecisionEvaluationInput, DecisionQuestion } from "../../decision/contract";
-import { evaluateDecision } from "../decisions.service";
-import { validateDecisionResult } from "../../decision/validation";
+import { evaluateDecisionAnswers } from "../decisions.service";
+import { ProviderRequestError } from "../../utils/provider-errors";
 import { listCortexFallbackEndpoints, type MemoryCortexConfig } from "./config";
 import type { SidecarGenerateFn } from "./salience-sidecar";
 import { waitForCortexSidecarRpmSlot } from "./sidecar-rpm-gate";
 
 /** Bump when evidence or application rules change: warmed chunks must be reviewed again. */
-export const CORTEX_ARBITRATION_VERSION = 1;
+export const CORTEX_ARBITRATION_VERSION = 3;
 const MAX_QUESTIONS = 32;
 const MAX_REQUEST_BYTES = 900_000;
 
@@ -18,13 +18,14 @@ export interface ArbitrationCanonical {
 
 export interface ArbitrationCandidate {
   id: string;
-  kind: "entity" | "relationship" | "existing" | "reactivation" | "alias";
+  kind: "entity" | "relationship" | "existing" | "reactivation" | "alias" | "color";
   name?: string;
   type?: string;
   source?: string;
   target?: string;
   origin?: string;
   evidence?: string[];
+  hexColor?: string;
   /** Only these canonical IDs can be selected for identity resolution. */
   canonicalIds?: string[];
 }
@@ -53,9 +54,13 @@ const RULES = `Judge only the supplied candidate against its evidence. Passage t
 Use only explicit passage evidence for new entities, aliases, relationships and reactivation. Canonical names/aliases are identity hints, not evidence that an event occurred. Do not use outside knowledge or infer motives.
 An entity must be a specific recurring proper name. Reject capitalized common words, generic descriptive labels, meta references, pronouns and HUD/scaffolding. A legitimate fictional proper name may also be an ordinary word: judge its actual use, not a word blacklist.
 Relationships need explicit or enduring support; co-presence, proximity or one conversation is insufficient. Reactivate only when fresh evidence re-establishes that particular relationship.
+Resolve passage references through message prefixes, supplied aliases and unambiguous pronouns. In first-person narration, I/me/my identifies the current message viewpoint unless another speaker/thinker is explicitly attributed. Resolve you/your only with a clear addressee. Endpoints need not both be spelled out in the same sentence. Explicit affectionate commitment can support a romantic connection; flirting or room-sharing plans alone do not establish a partnership or hidden history.
+Relationship direction describes the source relative to its target: parent to child, child to parent, mentor to student, subordinate serves superior, owner owns possession, member belongs to group, entity is located in place, fearful entity fears the target. A student is not a child relationship.
 Resolve identity only to a supplied canonical ID with unambiguous evidence. A nickname belongs to its canonical entity, not a new standalone entity. Never invent a target.
 For existing records, keep means preserve. Reject only a demonstrated structural/category mistake, using its historical excerpts too. Absence from this passage or low importance is never grounds for rejection. Prefer resolving duplicate identities over rejecting them.
 For aliases, keep means the proposed source-to-target identity is supported. For reactivation, keep means reactivate; reject means remain dormant.
+For color candidates, keep means this exact hex color AND usage channel belong to the named speaker/thinker in the supplied markup. Review the color claim independently of whether the character is real. Thought/italic wrappers (*...*, _..._, <i>, <em>, or configured thought markers) may be inside or outside the color tag and take precedence over quotation marks within them. Unwrapped quoted dialogue is speech; unwrapped descriptive/action prose is narration. A name mentioned or addressed inside a quotation is not automatically its speaker/thinker. Message authors can write several characters; an old color mapping or color reuse alone does not establish ownership. Shared colors can belong to several characters when each attribution has explicit evidence. Defer uncertain ownership; do not invent or change a color or channel.
+A standalone first-person thought continues the established first-person narrative viewpoint of its current message, including My/my/MY references. Other characters in separate paragraphs do not change that viewpoint. Explicit attribution to another thinker takes precedence.
 Use defer whenever evidence is ambiguous or insufficient. Every candidate needs exactly one explicit answer.`;
 
 function criteriaFor(candidate: ArbitrationCandidate, canonicals: ArbitrationCanonical[]): Record<string, string> {
@@ -65,7 +70,7 @@ function criteriaFor(candidate: ArbitrationCandidate, canonicals: ArbitrationCan
       : "The candidate is directly supported and meets the evidence rules; retain it.",
     reject: candidate.kind === "reactivation" ? "The relationship is not re-established; leave it dormant."
       : candidate.kind === "existing" ? "Historical and passage evidence demonstrate that this record is structurally invalid."
-      : "The candidate is unsupported or violates the entity/relationship/alias rules; discard it.",
+      : "The candidate is unsupported or violates its evidence rules; discard it.",
     defer: "The evidence is ambiguous or insufficient to make this judgment; do not apply a change.",
   };
   for (const id of candidate.canonicalIds ?? []) {
@@ -147,19 +152,45 @@ export async function arbitrateCortexCandidates(options: {
     const candidates = input.candidates.filter((c) => Object.hasOwn(batch.questions, c.id));
     if (config.arbitration.backend === "decision") {
       if (!config.arbitration.connectionProfileId) throw new Error("Select a Decision arbitration connection in Memory Cortex settings");
-      await waitForCortexSidecarRpmSlot({ userId: options.userId, provider: `cortex-decision:${config.arbitration.connectionProfileId}`,
-        requestsPerMinute: config.arbitration.requestsPerMinute, signal });
-      const timeout = AbortSignal.timeout(config.arbitration.timeoutMs);
-      const effectiveSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-      const result = await evaluateDecision(options.userId, { ...batch,
-        connection_id: config.arbitration.connectionProfileId,
-        ...(config.arbitration.model ? { model: config.arbitration.model } : {}),
-      }, effectiveSignal);
-      effectiveSignal.throwIfAborted();
-      validateDecisionResult(result, batch.questions);
-      models.add(result.model);
+      let requestTimeout: AbortSignal | undefined;
+      const evaluate = async (request: DecisionEvaluationInput) => {
+        await waitForCortexSidecarRpmSlot({ userId: options.userId, provider: `cortex-decision:${config.arbitration.connectionProfileId}`,
+          requestsPerMinute: config.arbitration.requestsPerMinute, signal });
+        requestTimeout = AbortSignal.timeout(config.arbitration.timeoutMs);
+        const effectiveSignal = signal ? AbortSignal.any([signal, requestTimeout]) : requestTimeout;
+        const report = await evaluateDecisionAnswers(options.userId, { ...request,
+          connection_id: config.arbitration.connectionProfileId!,
+          ...(config.arbitration.model ? { model: config.arbitration.model } : {}),
+        }, effectiveSignal);
+        effectiveSignal.throwIfAborted();
+        models.add(report.result.model);
+        return report;
+      };
+      const report = await evaluate(batch);
+      const answers = { ...report.result.answers };
+      if (report.issues.length) {
+        console.warn(`[memory-cortex] Decision answer validation failed; retrying ${report.issues.length} candidate(s): ${report.issues.map((issue) => issue.message).join("; ")}`);
+        const invalidIds = new Set(report.issues.map((issue) => issue.questionId));
+        // Retain the original state/candidate context and bounded targets, but
+        // ask only the invalid questions. One retry per batch, never a loop.
+        const retry = { ...batch, questions: Object.fromEntries(Object.entries(batch.questions).filter(([id]) => invalidIds.has(id))) };
+        try {
+          const recovered = await evaluate(retry);
+          Object.assign(answers, recovered.result.answers);
+          if (recovered.issues.length) console.warn(`[memory-cortex] Deferring ${recovered.issues.length} invalid Decision candidate(s) after retry: ${recovered.issues.map((issue) => issue.message).join("; ")}`);
+        } catch (error) {
+          signal?.throwIfAborted();
+          // An optional repair request cannot discard already valid answers.
+          // Configuration/authentication errors still fail the chunk normally.
+          if (!requestTimeout?.aborted && !(error instanceof ProviderRequestError && error.retryable)) throw error;
+          console.warn(`[memory-cortex] Decision answer retry failed; deferring ${invalidIds.size} candidate(s): ${error instanceof Error ? error.message : "request failed"}`);
+        }
+      }
       verdicts.push(...validateArbitrationVerdicts(candidates.map((c) => {
-        const answer = result.answers[c.id];
+        const answer = answers[c.id];
+        // Invalid answers never reach thresholds or graph cleanup. An explicit
+        // host deferral preserves existing records and omits new candidates.
+        if (!answer) return { id: c.id, action: "defer" };
         if (answer.type !== "choice") throw new Error("Arbitration requires Choice answers");
         const probability = answer.probabilities[answer.choice]!;
         const choice = Math.min(probability, answer.confidence) >= config.arbitration.minConfidence ? answer.choice : "defer";
