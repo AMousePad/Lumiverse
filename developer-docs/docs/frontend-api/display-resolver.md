@@ -71,8 +71,8 @@ Each resolve method receives a `context`:
 | `isUser` | `boolean` | Whether the message is from the user |
 | `depth` | `number` | Message depth |
 | `dynamicMacros` | `Record<string, string>?` | Per-call macro values supplied by the host |
-| `presetContext` | `MessagePresetContextDTO?` | Source preset and optional captured variable scopes for the selected swipe |
-| `presetRegexIds` | `string[]?` | Native source-preset script IDs in the effective chain; supplied to template and script resolution |
+| `presetContext` | `MessagePresetContextDTO?` | Preset and saved variables for the selected swipe |
+| `presetRegexIds` | `string[]?` | IDs of that preset's regexes, supplied to `resolveTemplates` and `applyScripts` |
 
 The method-specific arguments alongside `context` are: `content` for `resolveBody`, `templates` (a `Record<key, string>`) for `resolveTemplates`, and `content`, `scripts`, plus optional `processingState` for `applyScripts`.
 
@@ -105,47 +105,31 @@ Completed append-only prefixes can advance the visible message while a newer sna
 
 For host-owned display, a missing required terminal literal can prove that a script cannot match before any worker or backend dispatch. This uses a cached literal guard, not execution of the user-authored regex. Patterns outside the recognized subset keep isolated execution. Trimming, repeat-back, macro side effects and ordered replacement chains retain their semantics. Extension-owned resolvers remain authoritative and bypass this host guard.
 
+## Per-swipe presets
+
+Requires host capability `message-preset-context-v1: 1`. Store
+`{ preset_id, variables? }` entries in `message.extra.spindle_metadata.preset_contexts`,
+matching the indexes in `message.swipes`. Use `null` for normal rendering.
+The host keeps entries aligned when swipes are added or deleted.
+
+Each swipe uses its preset's current enabled regexes in place of the active
+preset's regexes. They run in order against the whole message, preserving nested
+replacements, anchors, and lookarounds. Global, character, chat, and extension
+rules keep their scope and order. The active preset and saved rules stay unchanged.
+Deleted or inaccessible presets never fall back to the active preset's regexes.
+
+Save `dryRun.variable_state` as `variables` to reuse the values from prompt
+assembly. It contains `local`, `global`, `chat`, and `prompt_defaults` string
+records, plus `prompt_selections` string-array records. Each field is optional
+in a saved entry.
+
+Custom resolvers receive `presetContext` and must apply its variables themselves.
+Use `presetRegexIds` to identify the preset's rules and keep their variables
+separate from your character state. Copy the saved variables before changing
+them during rendering. Messages without an entry use normal rendering and
+receive neither field.
+
 ## Caching and invalidation
-
-### Per-swipe preset context
-
-Hosts advertising `message-preset-context-v1: 1` support an optional
-`message.extra.spindle_metadata.preset_contexts` array. Its indexes match
-`message.swipes`; use `null` for a swipe without an override. Each entry contains
-`preset_id` and optional `variables` with string-valued `local`, `global`, `chat`,
-and `prompt_defaults` records, plus `prompt_selections` as a record of string
-arrays. The host keeps these slots aligned when swipes are added or deleted.
-
-The source preset's current enabled native regex chain replaces the active
-preset's native chain for that swipe. Global, character, chat, and
-extension-owned rules retain their scope and order. Rules run on the complete
-message in order, so nested replacements, anchors, and lookarounds retain their
-normal meaning. This does not activate a preset or modify any rule.
-
-An owning resolver remains responsible for rendering. Use `presetRegexIds` to
-apply captured native variables to the source preset's rules while keeping your
-own character or scripting state separate. Treat the snapshot as read-only;
-render-time variable writes must stay in a transient copy. A resolver that
-ignores these optional fields retains its existing behavior, but does not gain
-captured-variable support automatically. Unmarked messages receive neither
-field and retain the normal pipeline.
-
-Source definitions are shared across mounted messages and refreshed when the
-regex registry changes. Pending loads keep cold rows provisional; failures
-release the row with fallback text and a notification, and are retried on
-remount. Cache identities include the message, selected source, and captured
-variables. Deleted or inaccessible presets cannot resolve through a different
-active preset.
-
-For a synthetic selection and backend-fallback benchmark, run
-`bun scripts/bench-message-preset-rendering.ts 10000 300` from the repository
-root. It creates an in-memory database with 10,000 users and 300,000 rules,
-compares one selected profile with one ordinary active profile and all three
-profiles, and reports median/p95 timings. It never reads application data.
-This measures sequential work, not concurrent-user capacity or browser frame
-time; browser and owning-resolver performance must be measured separately.
-
-### Resolver results
 
 The host caches your results so it does not call you on every render, using `touchedVars` as the dependency key. When a variable changes, only cached entries that listed it are dropped. Mark a result `cacheable: false` if it depends on something that is not a variable (time, randomness).
 
