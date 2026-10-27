@@ -85,13 +85,15 @@ export default function ThemePanel() {
     [updateControls]
   )
 
-  // Liquid glass refracts the frosted glass layer, so it can never be the only
-  // one on: turning the base layer off drops the refraction flag with it,
-  // keeping the stored config truthful about what the applicator will render.
+  // Local glass controls must not change the authored theme on other devices.
+  // When editing the theme itself, clear both layers in a single settings write.
   const handleGlassToggle = useCallback(
     (enableGlass: boolean) => {
-      updateControls({ enableGlass })
-      if (!enableGlass) update({ liquidGlass: false })
+      if (activeDeviceThemeControls(useDeviceThemeControls.getState())) {
+        updateControls({ enableGlass })
+      } else {
+        update({ enableGlass, ...(!enableGlass ? { liquidGlass: false } : {}) })
+      }
     },
     [update, updateControls]
   )

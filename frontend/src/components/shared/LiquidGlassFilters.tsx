@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '@/store'
+import { activeDeviceThemeControls, resolveDeviceTheme, useDeviceThemeControls } from '@/lib/deviceThemeControls'
 import { isLiquidGlassActive, liquidGlassNormalMapUri, LENS_SCALE } from '@/lib/liquidGlass'
 
 /**
@@ -26,7 +27,11 @@ import { isLiquidGlassActive, liquidGlassNormalMapUri, LENS_SCALE } from '@/lib/
  */
 export default function LiquidGlassFilters() {
   const theme = useStore((s) => s.theme)
-  const [reducedMotion, setReducedMotion] = useState(false)
+  const deviceControls = useDeviceThemeControls(activeDeviceThemeControls)
+  const config = resolveDeviceTheme(theme, deviceControls)
+  const [reducedMotion, setReducedMotion] = useState(() =>
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  )
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -36,7 +41,7 @@ export default function LiquidGlassFilters() {
     return () => mq.removeEventListener('change', sync)
   }, [])
 
-  if (!isLiquidGlassActive(theme, reducedMotion)) return null
+  if (!isLiquidGlassActive(config, reducedMotion)) return null
 
   const normalMap = liquidGlassNormalMapUri()
   if (!normalMap) return null
@@ -54,7 +59,10 @@ export default function LiquidGlassFilters() {
             viewport-sized, so every surface shows whichever slice of the map it
             happens to sit on and only elements at the viewport edge get a rim.
             `primitiveUnits="objectBoundingBox"` makes the image exactly 1x1 of
-            the element, so the lens lands on the surface wherever it is. */}
+            the element, so the lens lands on the surface wherever it is.
+
+            The PNG encodes displacement in sRGB. The default linearRGB turns
+            neutral 128 into ~0.216, translating even the flat map interior. */}
         <filter
           id="liquid-glass-lens"
           x="0"
@@ -62,6 +70,7 @@ export default function LiquidGlassFilters() {
           width="100%"
           height="100%"
           primitiveUnits="objectBoundingBox"
+          colorInterpolationFilters="sRGB"
         >
           <feImage
             x="0"
