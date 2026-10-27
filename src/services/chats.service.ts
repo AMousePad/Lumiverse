@@ -2660,7 +2660,7 @@ export function patchMessageExtra(userId: string, id: string, extra: Record<stri
 }
 
 /** Top-level extra keys that are persisted per-swipe (folded into `*BySwipe[]`). */
-const SWIPE_SCOPED_EXTRA_KEYS = [
+export const SWIPE_SCOPED_EXTRA_KEYS = [
   "promptActivation",
   "reasoning",
   "reasoningDuration",
