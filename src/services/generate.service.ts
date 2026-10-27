@@ -171,12 +171,18 @@ import {
   registerActiveGeneration,
   removeActiveGeneration,
   setActiveChatGeneration,
+  setActiveGenerationWaitingForInference,
   touchActiveGeneration,
 } from "./generation/active-generation-registry";
 import {
   clearCouncilRetry,
   waitForCouncilRetryDecision,
 } from "./generation/council-retry";
+import {
+  withInferenceLease,
+  withInferenceLeaseStream,
+  withLeaseAbort,
+} from "./inference-scheduler";
 import {
   applyDelimitedReasoningParsing,
   applyEffectiveReasoningSettings,
@@ -3665,39 +3671,57 @@ async function runGeneration(
 
       // Non-streaming path: call generate() once, then synthesize a single-chunk stream.
       // Each tool round gets one provider attempt; failures surface without retries.
-      const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
-        ? provider.generateStream(apiKey, apiUrl, {
-            onProviderRequest: lifecycle.onProviderRequest,
-            messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
-            model,
-            parameters,
-            stream: true,
-            tools,
-            signal,
-          })
-        : (async function* () {
-            const result = await provider.generate(apiKey, apiUrl, {
-              onProviderRequest: lifecycle.onProviderRequest,
-              messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
-              model,
-              parameters,
-              stream: false,
-              tools,
-              signal,
-            });
-            yield {
-              token: result.content,
-              reasoning: result.reasoning,
-              finish_reason: result.finish_reason,
-              stop_details: result.stop_details,
-              stop_sequence: result.stop_sequence,
-              tool_calls: result.tool_calls,
-              thinking_blocks: result.thinking_blocks,
-              reasoning_details: result.reasoning_details,
-              thought_signature: result.thought_signature,
-              usage: result.usage,
-            };
-          })();
+      //
+      // The scheduler lease wraps the provider stream rather than the whole
+      // tool loop: interactive chat preempts background cleanup, and the GPU is
+      // released while tools run between rounds.
+      setActiveGenerationWaitingForInference(generationId, true);
+      const stream: AsyncGenerator<StreamChunk, void, unknown> = withInferenceLeaseStream(
+        {
+          userId,
+          endpoint: apiUrl,
+          requestClass: "interactive",
+          purpose: "chat",
+          signal,
+        },
+        (lease) => {
+          setActiveGenerationWaitingForInference(generationId, false);
+          const leasedSignal = withLeaseAbort(signal, lease);
+          return useStreaming
+            ? provider.generateStream(apiKey, apiUrl, {
+                onProviderRequest: lifecycle.onProviderRequest,
+                messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
+                model,
+                parameters,
+                stream: true,
+                tools,
+                signal: leasedSignal,
+              })
+            : (async function* () {
+                const result = await provider.generate(apiKey, apiUrl, {
+                  onProviderRequest: lifecycle.onProviderRequest,
+                  messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
+                  model,
+                  parameters,
+                  stream: false,
+                  tools,
+                  signal: leasedSignal,
+                });
+                yield {
+                  token: result.content,
+                  reasoning: result.reasoning,
+                  finish_reason: result.finish_reason,
+                  stop_details: result.stop_details,
+                  stop_sequence: result.stop_sequence,
+                  tool_calls: result.tool_calls,
+                  thinking_blocks: result.thinking_blocks,
+                  reasoning_details: result.reasoning_details,
+                  thought_signature: result.thought_signature,
+                  usage: result.usage,
+                };
+              })();
+        },
+      );
 
       const iter = stream[Symbol.asyncIterator]();
 
@@ -3707,106 +3731,119 @@ async function runGeneration(
       // switch to user-space read cancellation to avoid Bun's mid-stream abort
       // crash on Windows.
       const maybeYieldDuringStream = createCooperativeYielder(32, signal);
-      while (true) {
-        let result: IteratorResult<StreamChunk, void>;
+      try {
+        while (true) {
+          let result: IteratorResult<StreamChunk, void>;
+          try {
+            result = await raceWithSignal(iter.next(), signal);
+          } catch (err) {
+            // Close the generator on abort or provider failure, then let the
+            // outer catch surface the error and persist any partial output.
+            try {
+              await iter.return?.(undefined);
+            } catch {
+              /* best-effort */
+            }
+            throw err;
+          }
+          if (result.done) {
+            if (poolEntry && !signal.aborted) poolEntry.responseStoppedAt = Date.now();
+            break;
+          }
+          const chunk = result.value;
+          const receivedAt = Date.now();
+
+          if (signal.aborted) {
+            const persisted = await persistPartialContent();
+            flushPendingStreamSegments();
+            pool.stopPool(generationId);
+            eventBus.emit(
+              EventType.GENERATION_STOPPED,
+              { generationId, chatId, content: persisted.content },
+              userId,
+            );
+            emittedStopped = true;
+            try {
+              await iter.return?.(undefined);
+            } catch {
+              /* best-effort */
+            }
+            break;
+          }
+
+          // The generation watchdog is based on upstream token activity, not
+          // total request age. Count reasoning as well as visible content: both
+          // are streamed model output and demonstrate the provider is healthy.
+          if (chunk.reasoning || chunk.token) {
+            touchActiveGeneration(generationId);
+            if (poolEntry && poolEntry.firstTokenAt == null) poolEntry.firstTokenAt = receivedAt;
+          }
+
+          // Emit reasoning tokens (provider thinking/extended thinking)
+          if (chunk.reasoning) {
+            if (!reasoningStartedAt) reasoningStartedAt = Date.now();
+            fullReasoning += chunk.reasoning;
+            nativeReasoningContent += chunk.reasoning;
+            const appended = pool.appendPoolReasoning(generationId, chunk.reasoning);
+            queueStreamSegment(chunk.reasoning, appended.seq, appended.offset, "reasoning");
+          }
+
+          if (chunk.token) {
+            lastProviderContentAt = receivedAt;
+            processContentToken(chunk.token, receivedAt);
+          }
+
+          if (chunk.tool_calls) {
+            pendingToolCalls = chunk.tool_calls;
+          }
+
+          if (chunk.thinking_blocks) {
+            pendingThinkingBlocks = chunk.thinking_blocks;
+            nativeThinkingBlocks = [
+              ...(nativeThinkingBlocks ?? []),
+              ...chunk.thinking_blocks,
+            ];
+          }
+
+          if (chunk.reasoning_details) {
+            pendingReasoningDetails = chunk.reasoning_details;
+            nativeReasoningDetails = [
+              ...(nativeReasoningDetails ?? []),
+              ...chunk.reasoning_details,
+            ];
+          }
+
+          if (chunk.thought_signature) {
+            pendingThoughtSignature = chunk.thought_signature;
+            nativeThoughtSignature = chunk.thought_signature;
+          }
+
+          // Capture provider usage data (token counts) from the stream
+          if (chunk.usage) {
+            streamUsage = chunk.usage;
+          }
+          if (chunk.stop_details !== undefined) stopDetails = chunk.stop_details;
+          if (chunk.stop_sequence !== undefined) stopSequence = chunk.stop_sequence;
+
+          await maybeYieldDuringStream();
+
+          if (chunk.finish_reason) {
+            finishReason = chunk.finish_reason;
+            if (poolEntry) poolEntry.responseStoppedAt = Math.max(chunk.stopReceivedAt ?? receivedAt, lastProviderContentAt ?? 0);
+            await iter.return?.(undefined);
+            break;
+          }
+        }
+      } finally {
+        setActiveGenerationWaitingForInference(generationId, false);
+        // Abandoning the leased iterator without closing it would hold the
+        // interactive admission lease forever. This runs on normal completion,
+        // provider errors, and consumer throws such as Stop firing inside the
+        // cooperative yielder.
         try {
-          result = await raceWithSignal(iter.next(), signal);
-        } catch (err) {
-          // Close the generator on abort or provider failure, then let the
-          // outer catch surface the error and persist any partial output.
-          try {
-            await iter.return?.(undefined);
-          } catch {
-            /* best-effort */
-          }
-          throw err;
-        }
-        if (result.done) {
-          if (poolEntry && !signal.aborted) poolEntry.responseStoppedAt = Date.now();
-          break;
-        }
-        const chunk = result.value;
-        const receivedAt = Date.now();
-
-        if (signal.aborted) {
-          const persisted = await persistPartialContent();
-          flushPendingStreamSegments();
-          pool.stopPool(generationId);
-          eventBus.emit(
-            EventType.GENERATION_STOPPED,
-            { generationId, chatId, content: persisted.content },
-            userId,
-          );
-          emittedStopped = true;
-          try {
-            await iter.return?.(undefined);
-          } catch {
-            /* best-effort */
-          }
-          break;
-        }
-
-        // The generation watchdog is based on upstream token activity, not
-        // total request age. Count reasoning as well as visible content: both
-        // are streamed model output and demonstrate the provider is healthy.
-        if (chunk.reasoning || chunk.token) {
-          touchActiveGeneration(generationId);
-          if (poolEntry && poolEntry.firstTokenAt == null) poolEntry.firstTokenAt = receivedAt;
-        }
-
-        // Emit reasoning tokens (provider thinking/extended thinking)
-        if (chunk.reasoning) {
-          if (!reasoningStartedAt) reasoningStartedAt = Date.now();
-          fullReasoning += chunk.reasoning;
-          nativeReasoningContent += chunk.reasoning;
-          const appended = pool.appendPoolReasoning(generationId, chunk.reasoning);
-          queueStreamSegment(chunk.reasoning, appended.seq, appended.offset, "reasoning");
-        }
-
-        if (chunk.token) {
-          lastProviderContentAt = receivedAt;
-          processContentToken(chunk.token, receivedAt);
-        }
-
-        if (chunk.tool_calls) {
-          pendingToolCalls = chunk.tool_calls;
-        }
-
-        if (chunk.thinking_blocks) {
-          pendingThinkingBlocks = chunk.thinking_blocks;
-          nativeThinkingBlocks = [
-            ...(nativeThinkingBlocks ?? []),
-            ...chunk.thinking_blocks,
-          ];
-        }
-
-        if (chunk.reasoning_details) {
-          pendingReasoningDetails = chunk.reasoning_details;
-          nativeReasoningDetails = [
-            ...(nativeReasoningDetails ?? []),
-            ...chunk.reasoning_details,
-          ];
-        }
-
-        if (chunk.thought_signature) {
-          pendingThoughtSignature = chunk.thought_signature;
-          nativeThoughtSignature = chunk.thought_signature;
-        }
-
-        // Capture provider usage data (token counts) from the stream
-        if (chunk.usage) {
-          streamUsage = chunk.usage;
-        }
-        if (chunk.stop_details !== undefined) stopDetails = chunk.stop_details;
-        if (chunk.stop_sequence !== undefined) stopSequence = chunk.stop_sequence;
-
-        await maybeYieldDuringStream();
-
-        if (chunk.finish_reason) {
-          finishReason = chunk.finish_reason;
-          if (poolEntry) poolEntry.responseStoppedAt = Math.max(chunk.stopReceivedAt ?? receivedAt, lastProviderContentAt ?? 0);
           await iter.return?.(undefined);
-          break;
+        } catch {
+          /* best-effort */
         }
       }
 
@@ -4810,10 +4847,20 @@ export async function summarizeGenerate(
 
     const result = applyDelimitedReasoningParsing(
       userId,
-      await provider.generate(apiKey, apiUrl, {
-        ...request,
-        stream: false,
-      }),
+      await withInferenceLease(
+        {
+          userId,
+          endpoint: apiUrl,
+          requestClass: "user",
+          purpose: "chat-summary",
+          signal: request.signal,
+        },
+        (lease) => provider.generate(apiKey, apiUrl, {
+          ...request,
+          signal: withLeaseAbort(request.signal, lease),
+          stream: false,
+        }),
+      ),
     );
 
     if (chatId) {
@@ -4937,7 +4984,18 @@ async function processRebuildBatch(
   try {
     result = applyDelimitedReasoningParsing(
       userId,
-      await provider.generate(apiKey, apiUrl, request),
+      await withInferenceLease(
+        {
+          userId,
+          endpoint: apiUrl,
+          requestClass: "user",
+          purpose: "chat-summary-rebuild",
+        },
+        (lease) => provider.generate(apiKey, apiUrl, {
+          ...request,
+          signal: withLeaseAbort(undefined, lease),
+        }),
+      ),
     );
   } catch (err: any) {
     console.warn(
