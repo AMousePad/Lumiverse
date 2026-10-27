@@ -5,6 +5,11 @@ import styles from './ModalShell.module.css'
 import clsx from 'clsx'
 import useIsMobile from '@/hooks/useIsMobile'
 
+// A library browser can open above a voice-settings dialog. Only the top
+// shell should dismiss on Escape, and scrolling stays locked until both close.
+const openShells: symbol[] = []
+let previousBodyOverflow = ''
+
 interface ModalShellProps {
   isOpen: boolean
   onClose: () => void
@@ -56,17 +61,23 @@ export function ModalShell({
     return `min(${isMobile && !alreadyScaled ? `calc((${length}) / var(--lumiverse-ui-scale, 1))` : length}, 100%)`
   }
   const backdropPointerDownRef = useRef<EventTarget | null>(null)
+  const shellId = useRef(Symbol('modal-shell'))
   const handleEscape = useEffectEvent((e: KeyboardEvent) => {
-    if (closeOnEscape && e.key === 'Escape') onClose()
+    if (!e.defaultPrevented && closeOnEscape && e.key === 'Escape' && openShells.at(-1) === shellId.current) onClose()
   })
 
   useEffect(() => {
     if (!isOpen) return
+    const id = shellId.current
+    if (openShells.length === 0) previousBodyOverflow = document.body.style.overflow
+    openShells.push(id)
     document.addEventListener('keydown', handleEscape)
     document.body.style.overflow = 'hidden'
     return () => {
       document.removeEventListener('keydown', handleEscape)
-      document.body.style.overflow = ''
+      const index = openShells.indexOf(id)
+      if (index !== -1) openShells.splice(index, 1)
+      if (openShells.length === 0) document.body.style.overflow = previousBodyOverflow
     }
   }, [isOpen])
 

@@ -32,13 +32,28 @@ export function watchImportJob(userId: string, refresh: (jobId: string) => Promi
   let polling = false
   let timer: ReturnType<typeof setTimeout> | undefined
   const current = () => !stopped && useStore.getState().isAuthenticated && useStore.getState().user?.id === userId
+  // The Android restore notification reconnects to the local server first.
+  // Open its controls after authentication, including after a process restart.
+  const location = new URL(window.location.href)
+  if (current() && location.searchParams.get('restoreImport') === '1') {
+    location.searchParams.delete('restoreImport')
+    window.history.replaceState(window.history.state, '', location)
+    useStore.getState().openSettings('dataPortability')
+  }
   const poll = async () => {
     if (polling || !current()) return
     clearTimeout(timer)
-    const jobId = pendingImportJob(userId)
-    if (!jobId) return
+    let jobId = pendingImportJob(userId)
     polling = true
     try {
+      // A restarted Android backend can have a new origin and no localStorage.
+      if (!jobId) {
+        const { jobs } = await userDataApi.getImportJobs()
+        if (!current()) return
+        jobId = pendingImportJob(userId) ?? jobs[0]?.jobId
+        if (!jobId) return
+        trackImportJob(userId, jobId)
+      }
       const job = await userDataApi.getImportStatus(jobId)
       if (!current() || pendingImportJob(userId) !== jobId) return
       if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') {

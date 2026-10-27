@@ -2973,6 +2973,13 @@
     }
   },
   "themePanel": {
+    "deviceControls": {
+      "title": "기기별 컨트롤",
+      "enabled": "기기별 컨트롤 사용",
+      "hint": "활성화하면 아래 설정은 이 기기의 현재 브라우저 또는 앱에만 적용됩니다. 테마를 변경해도 기기별 설정은 유지됩니다. 이 값을 공유하려면 테마를 저장하거나 내보내기 전에 테마에 복사하세요.",
+      "copyToTheme": "기기별 설정을 테마에 복사",
+      "resetFromTheme": "테마에서 기기별 설정 초기화"
+    },
     "lockControls": "컨트롤 잠금",
     "unlockControls": "컨트롤 잠금 해제",
     "lockSliders": "슬라이더 잠금",

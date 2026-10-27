@@ -10,6 +10,7 @@
 
 import type { SidecarExtractionResult, SidecarFontColor, DiscoveredAlias, EmotionalTag, NarrativeFlag, StatusChange, ExtractedEntity, ExtractedRelationship, SidecarGradedHeuristics } from "./types";
 import { normalizeFontColor, type ThoughtDelimiters } from "./font-attribution";
+import { buildConversationHint, type CortexParticipant } from "./conversation-context";
 import { scoreChunkHeuristic } from "./salience-heuristic";
 
 // ─── Tool-Based Structured Extraction ──────────────────────────
@@ -43,7 +44,8 @@ const EXTRACTION_GLOBAL_RULES = `GLOBAL RULES
 - Do NOT use genre knowledge, outside world knowledge, or likely guesses.
 - Do NOT invent names, relationships, motives, symbolism, themes, or implications.
 - If a detail is ambiguous, weakly implied, or unsupported, omit it.
-- Prefer omission over contamination. Missing data is acceptable; wrong data is harmful.`;
+- Prefer omission over contamination. Missing data is acceptable; wrong data is harmful.
+- Supplied participant identity metadata can resolve passage references; it never proves an event or relationship.`;
 
 // Entity, alias, relationship, scoring and font color rules, shared verbatim by
 // both extraction paths so behavior stays identical regardless of batching.
@@ -66,6 +68,7 @@ Prefer "no entity" over "wrong entity". When in doubt, omit.
 
 KNOWN ENTITY RULE
 When known entities are supplied with aliases, ALWAYS use the canonical name in output, never the alias. For truly new entities, use the exact proper name from the passage.
+Configured participants referenced through unambiguous I/you narration are named entities even when their proper names appear only in message prefixes or identity metadata. Emit their canonical names, not pronouns.
 
 CANONICAL ALIAS RULE
 When a <canonical_aliases> block is present in the user message, treat it as authoritative — it comes from character/persona definitions, not heuristic guessing.
@@ -94,14 +97,14 @@ Do NOT report aliases on superficial similarity alone (no shared substring, no s
 
 RELATIONSHIP RULES
 - Output canonical proper names for both endpoints. Resolve references from the passage, including message prefixes, supplied aliases, and unambiguous pronouns; the two names need not be spelled out in the same sentence.
-- In first-person narration, I/me/my refers to the current [CHARACTER | Name] or [USER | Name] viewpoint unless explicit attribution identifies another speaker/thinker. Resolve you/your only when the passage identifies the addressee; do not assign every nearby name to it. A message author may also write other characters.
+- In first-person narration, I/me/my refers to the current [CHARACTER | Name] or [USER | Name] viewpoint unless explicit attribution identifies another speaker/thinker. Use conversation_participants identity metadata to resolve you/your to the unique opposite-role participant in a direct exchange unless local evidence addresses someone else. Do not guess in group scenes or assign every nearby name to it. A message author may also write other characters.
 - Include both resolved endpoints in entities_present, even when one appears only through a prefix, alias or unambiguous pronoun. Do not emit pronouns as entity names.
-- Only record a relationship when the passage directly supports an enduring or role-like connection, or explicitly states the relationship.
-- Explicit affectionate commitment or an identified partner is relationship evidence. Flirting or plans to share a room alone do not establish a partnership; when only romantic interest is explicit, use custom with a factual label instead of inventing a history.
+- Record connections supported by concrete statements, actions or dialogue. Relationships need not be enduring, exclusive or formally declared.
+- Use lover for supported romantic interest or affection, including love interests, courtship, romantic kissing, confessions and established partners. A love interest is a relationship even before a formal partnership. Use a precise label such as romantic interest or dating; do not invent reciprocity, exclusivity, marriage, sex or a history. Room-sharing alone is insufficient. Negated, hypothetical, mocking or third-party affection is not evidence for this pair.
 - Direction describes the source relative to the target: parent = parent to child; child = child to parent; mentor = teacher to student; serves = subordinate to superior; owns = owner to possession; member_of = member to group; located_in = entity to place; fears = fearful entity to feared entity. Do not reverse these roles or turn a student into a child.
 - Do NOT create a relationship just because two named entities appear in the same scene, speak once, stand near each other, or are mentioned together.
 - Do NOT infer hidden history, likely alliances, family ties, or romance unless the passage itself supports it.
-- If the passage shows only a transient interaction with no stable relationship signal, return no relationship for that pair.
+- Return no relationship for routine transient interactions without a relationship signal. A romantic confession or clearly romantic action is itself a relationship signal; do not omit it merely because it occurs in one passage.
 
 SCORING RULES
 - Importance is about lasting narrative consequence, not prose intensity.
@@ -196,7 +199,7 @@ const TOOL_SALIENCE: ToolDefinition = {
 
 const TOOL_ENTITIES: ToolDefinition = {
   name: "extract_entities",
-  description: "Extract only proper-name entities that appear in the passage. Reject capitalized common words, pronouns, meta references, and formatting noise. Use canonical known names when provided. Return empty arrays when nothing qualifies.",
+  description: "Extract named entities referenced by the passage, including canonical participants referred to through message prefixes or unambiguous I/you narration. Reject capitalized common words, meta references and formatting noise. Output canonical names, never pronouns. Return empty arrays when nothing qualifies.",
   parameters: {
     type: "object",
     properties: {
@@ -205,7 +208,7 @@ const TOOL_ENTITIES: ToolDefinition = {
         items: {
           type: "object",
           properties: {
-            name: { type: "string", description: "The entity's proper name exactly as it appears in the text." },
+            name: { type: "string", description: "The canonical proper name of a known entity or participant, resolved from passage references. For a new entity, use its exact proper name from the passage." },
             type: {
               type: "string",
               enum: ["character", "location", "item", "faction", "event", "concept"],
@@ -258,7 +261,7 @@ const TOOL_ENTITIES: ToolDefinition = {
 
 const TOOL_RELATIONSHIPS: ToolDefinition = {
   name: "extract_relationships",
-  description: "Extract only directly supported relationships between named entities in the passage. Do not infer relationships from co-presence alone. Return an empty array if no stable or explicit relationship is supported.",
+  description: "Extract relationships supported by statements, actions or dialogue, including love interests and romantic affection before a formal partnership. Resolve named endpoints through passage references and participant identities. Do not infer a connection from co-presence alone. Return an empty array when no relationship is supported.",
   parameters: {
     type: "object",
     properties: {
@@ -272,7 +275,7 @@ const TOOL_RELATIONSHIPS: ToolDefinition = {
             type: {
               type: "string",
               enum: ["ally", "enemy", "lover", "parent", "child", "sibling", "mentor", "rival", "owns", "member_of", "located_in", "fears", "serves", "custom"],
-              description: "The relationship directly supported by the passage. Use custom when the connection is explicit but does not fit another enum.",
+              description: "The relationship supported by the passage. lover includes love interests, romantic affection, courtship and partners; a formal partnership is not required. Use custom for supported connections outside these types.",
             },
             label: { type: "string", description: "Short factual descriptor, e.g. 'childhood friends', 'captain of', 'sworn enemies'. Do not use poetic language." },
             sentiment: { type: "number", minimum: -1, maximum: 1, description: "Emotional valence of the relationship as shown in the passage: -1.0 hostile, 0 neutral/unclear, 1.0 warm." },
@@ -667,6 +670,7 @@ function buildEntityHint(options?: {
   characterNames?: string[];
   knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
 }): string {
+  let hint = "";
   if (options?.knownEntities?.length) {
     const lines = options.knownEntities
       .slice(0, 50) // Cap to avoid prompt bloat
@@ -674,12 +678,12 @@ function buildEntityHint(options?: {
         const aliasStr = e.aliases.length > 0 ? ` (aka ${e.aliases.join(", ")})` : "";
         return `- ${e.name} [${e.type}]${aliasStr}`;
       });
-    return `\n\n<known_entities>\nUse these canonical names when they match the passage. Never output an alias when a canonical name is listed here.\n${lines.join("\n")}\n</known_entities>`;
+    hint += `\n\n<known_entities>\nUse these canonical names when they match the passage. Never output an alias when a canonical name is listed here.\n${lines.join("\n")}\n</known_entities>`;
   }
   if (options?.characterNames?.length) {
-    return `\n\n<known_characters>\n${options.characterNames.join(", ")}\n</known_characters>\nUse these names exactly if they appear.`;
+    hint += `\n\n<known_characters>\n${options.characterNames.join(", ")}\n</known_characters>\nUse these canonical participant names when the passage refers to them, including through prefixes or unambiguous pronouns.`;
   }
-  return "";
+  return hint;
 }
 
 /** An empty extraction is valid; a missing tool or missing field is not. */
@@ -765,6 +769,7 @@ export async function extractWithSidecar(
   sidecarConnectionId: string,
   options?: {
     characterNames?: string[];
+    participants?: CortexParticipant[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
     thoughtDelimiters?: ThoughtDelimiters;
     /** When provided, the sidecar is asked to judge these candidates and grading
@@ -816,7 +821,7 @@ export async function extractWithSidecar(
       : "score_salience, extract_entities, extract_relationships, and extract_font_colors";
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze the exact roleplay passage below. Call ${toolListing} exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${arbiterBlock}\n\n<passage>\n${content}\n</passage>`;
+    const userContent = `Analyze the exact roleplay passage below. Call ${toolListing} exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${buildConversationHint(content, options?.characterNames ?? [], options?.descriptionAliases, options?.participants)}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${arbiterBlock}\n\n<passage>\n${content}\n</passage>`;
     const tag = options?.logTag ?? "single";
     logSidecarDispatch(tag, {
       chunks: 1,
@@ -1007,6 +1012,7 @@ export async function extractBatchWithSidecar(
   sidecarConnectionId: string,
   options?: {
     characterNames?: string[];
+    participants?: CortexParticipant[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
     thoughtDelimiters?: ThoughtDelimiters;
     /** Position-parallel to `chunks`. Entries may be null when a chunk has
@@ -1064,7 +1070,7 @@ export async function extractBatchWithSidecar(
     // Array position is the prompt index so results map back positionally.
     const passages = chunks
       .map((c, i) => {
-        const passage = `<passage index="${i}">\n${c.content}\n</passage>`;
+        const passage = `<passage index="${i}">\n${c.content}\n</passage>${buildConversationHint(c.content, options?.characterNames ?? [], options?.descriptionAliases, options?.participants)}`;
         if (!arbiterActiveByIndex[i]) return passage;
         const arbiter = options!.perChunkArbiter![i]!;
         const sections: string[] = [];

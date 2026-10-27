@@ -30,9 +30,18 @@ export interface TicketSubmissionResponse {
   uses: number
 }
 
+export interface ImportJobProgress {
+  phase: string
+  table?: string
+  processed?: number
+  total?: number
+  bytesProcessed?: number
+  bytesTotal?: number
+}
+
 export interface ImportJobStatus {
   jobId: string
-  status: 'queued' | 'awaiting_ticket' | 'running' | 'complete' | 'failed' | 'cancelled'
+  status: 'queued' | 'awaiting_ticket' | 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted'
   startedAt: number
   finishedAt: number | null
   manifest: {
@@ -50,9 +59,18 @@ export interface ImportJobStatus {
   summary: Record<string, { imported: number; skipped: number }>
   fileSummary: Record<string, number>
   error: string | null
+  progress?: ImportJobProgress | null
 }
 
 export const userDataApi = {
+  getImportJobs(): Promise<{ jobs: Pick<ImportJobStatus, 'jobId' | 'status'>[] }> {
+    return get('/user-data/import')
+  },
+
+  resumeImport(jobId: string): Promise<{ jobId: string }> {
+    return post(`/user-data/import/${jobId}/resume`)
+  },
+
   /** Returns the URL the browser can navigate to / GET for a streamed export
    *  without API keys. */
   exportUrl(includeVectors: boolean): string {

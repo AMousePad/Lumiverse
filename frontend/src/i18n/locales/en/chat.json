@@ -210,6 +210,8 @@
     "failedUploadAttachment": "Failed to upload attachment",
     "messageQueued": "Message queued",
     "failedQueueMessage": "Failed to queue message",
+    "roomMessageUnconfirmed": "The room did not confirm your message. Your draft has been kept; check the chat before retrying.",
+    "messageDraftKept": "Message could not be confirmed — your draft has been kept",
     "regexActionSelected": "Choice selected",
     "regexActionQueued": "This choice will be appended invisibly to your next message.",
     "regexActionDraftQueued": "Queued to input — edit and send when ready.",

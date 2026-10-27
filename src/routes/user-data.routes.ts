@@ -17,6 +17,9 @@ import {
   persistUploadedArchive,
   startImport,
   getJob,
+  listJobsForUser,
+  resumeImport,
+  importUploadSignal,
   reserveImportUpload,
   releaseImportUpload,
   cancelJob,
@@ -257,7 +260,7 @@ app.post("/import", async (c) => {
       const size = declared > 0 ? declared : null;
       if (!body) return c.json({ error: "request body is empty" }, 400);
 
-      const persisted = await persistUploadedArchive(userId, body, size, jobId);
+      const persisted = await persistUploadedArchive(userId, body, size, jobId, importUploadSignal(jobId));
       archivePath = persisted.path;
     } catch (err: any) {
       if (err instanceof ArchiveValidationError) {
@@ -275,6 +278,7 @@ app.post("/import", async (c) => {
     );
     try {
       await verifyArchiveFast(archivePath);
+      importUploadSignal(jobId)?.throwIfAborted();
     } catch (err: any) {
       try {
         unlinkSync(archivePath);
@@ -305,9 +309,25 @@ app.post("/import", async (c) => {
   }
 });
 
+app.get("/import", (c) => {
+  const jobs = listJobsForUser(c.get("userId"))
+    .filter(job => ["queued", "running", "awaiting_ticket", "interrupted"].includes(job.status))
+    .sort((a, b) => Number(a.status === "interrupted") - Number(b.status === "interrupted") || b.startedAt - a.startedAt);
+  return c.json({ jobs: jobs.map(job => ({ jobId: job.jobId, status: job.status })) });
+});
+
+app.post("/import/:jobId/resume", (c) => {
+  const userId = c.get("userId");
+  if (!getJob(c.req.param("jobId"), userId)) return c.json({ error: "job not found" }, 404);
+  try {
+    const job = resumeImport(userId, c.req.param("jobId"));
+    return c.json({ jobId: job.jobId, status: job.status }, 202);
+  } catch (error) { return c.json({ error: (error as Error).message }, 409); }
+});
+
 app.get("/import/:jobId/status", (c) => {
   const userId = c.get("userId");
-  const job = getJob(c.req.param("jobId"));
+  const job = getJob(c.req.param("jobId"), userId);
   if (!job || job.userId !== userId) {
     return c.json({ error: "job not found" }, 404);
   }
@@ -319,6 +339,7 @@ app.get("/import/:jobId/status", (c) => {
     manifest: job.manifest,
     summary: job.summary,
     fileSummary: job.fileSummary,
+    progress: job.progress,
     error: job.error,
   });
 });

@@ -71,7 +71,8 @@ export interface SidecarReliabilityConfig {
    *    warmup signature. The next cortex warmup re-processes it. Equivalent to
    *    the "AI Only" mode users have asked for. */
   fallback: "heuristic" | "skip";
-  /** Review every entity, relationship, alias and font-color proposal before persistence.
+  /** Opt-in: only an explicit boolean true enables candidate review. Default: false.
+   *  Review every entity, relationship, alias and font-color proposal before persistence.
    *  The arbitration backend can be the generative sidecar or a native Decision
    *  connection. Failed/incomplete reviews leave the chunk pending. */
   arbitratesHeuristics: boolean;
@@ -711,10 +712,8 @@ export function normalizeCortexConfig(
     sidecarTimeoutMs: input.sidecarTimeoutMs ?? defaults.sidecarTimeoutMs,
     sidecarReliability: {
       fallback: input.sidecarReliability?.fallback === "skip" ? "skip" : defaults.sidecarReliability.fallback,
-      arbitratesHeuristics: input.sidecarReliability?.arbitratesHeuristics
-        ?? defaults.sidecarReliability.arbitratesHeuristics,
-      gradesExistingRecords: input.sidecarReliability?.gradesExistingRecords
-        ?? defaults.sidecarReliability.gradesExistingRecords,
+      arbitratesHeuristics: input.sidecarReliability?.arbitratesHeuristics === true,
+      gradesExistingRecords: input.sidecarReliability?.gradesExistingRecords === true,
     },
     arbitration: {
       backend: input.arbitration?.backend === "decision" ? "decision" : "sidecar",

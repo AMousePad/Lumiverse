@@ -31,6 +31,7 @@ import { subscribeImportedDataRefresh } from '@/lib/import-data-events'
 import { getCharacterAvatarLargeUrlById, getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { useStore } from '@/store'
+import { activeDeviceThemeControls, useDeviceThemeControls } from '@/lib/deviceThemeControls'
 import useIsMobile from '@/hooks/useIsMobile'
 import { resolveGlobalWallpaper } from '@/lib/wallpaper'
 import { useScrollGate } from '@/hooks/useScrollGate'
@@ -965,7 +966,9 @@ function LandingPageNative() {
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const landingPageLayoutMode = useStore((s) => s.landingPageLayoutMode)
   const landingPageGalleryWidth = useStore((s) => s.landingPageGalleryWidth)
-  const fontScale = useStore((s) => s.theme?.fontScale ?? 1)
+  const themeFontScale = useStore((s) => s.theme?.fontScale ?? 1)
+  const deviceControls = useDeviceThemeControls(activeDeviceThemeControls)
+  const fontScale = deviceControls?.fontScale ?? themeFontScale
   const favorites = useStore((s) => s.favorites)
   const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
   const settingsLoaded = useStore((s) => s.settingsLoaded)

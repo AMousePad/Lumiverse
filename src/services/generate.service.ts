@@ -171,6 +171,7 @@ import {
   registerActiveGeneration,
   removeActiveGeneration,
   setActiveChatGeneration,
+  setActiveGenerationWaitingForInference,
   touchActiveGeneration,
 } from "./generation/active-generation-registry";
 import {
@@ -1938,7 +1939,7 @@ export async function startGeneration(
         targetSwipeId = lastMsg.swipe_id;
         // Resolve continuePostfix from the preset's completion settings so it can
         // be inserted between original content and generated text when saving.
-        const cpPresetId = input.preset_id || connection.preset_id;
+        const cpPresetId = isNoPresetChat ? undefined : input.preset_id || connection.preset_id;
         const cpPreset = cpPresetId
           ? (await presetsSvc.getPresetAsync(input.userId, cpPresetId))
           : null;
@@ -2884,8 +2885,10 @@ export async function startGeneration(
         }
 
         // Use the preset assembly actually selected, including profile overrides.
-        const presetId = pipeline.resolvedPreset?.id
-          ?? (input.messages ? input.preset_id || connection.preset_id : undefined);
+        const presetId = isNoPresetChat
+          ? undefined
+          : pipeline.resolvedPreset?.id
+            ?? (input.messages ? input.preset_id || connection.preset_id : undefined);
         if (presetId) {
           const presetName = pipeline.resolvedPreset?.name
             ?? (await presetsSvc.getPresetAsync(input.userId, presetId))?.name;
@@ -3086,7 +3089,7 @@ export async function dryRunGeneration(
         ? sourceMessagesById.get(input.message_id) ?? null
         : [...sourceMessages].reverse().find((message) => !message.is_user) ?? null
       : null;
-  const dryRunPresetId = input.preset_id || connection.preset_id;
+  const dryRunPresetId = isNoPresetChat ? undefined : input.preset_id || connection.preset_id;
   const dryRunContinueConfiguredPostfix = dryRunPresetId
     ? (await presetsSvc.getPresetAsync(input.userId, dryRunPresetId))?.prompts
         ?.completionSettings?.continuePostfix || ""
@@ -3672,6 +3675,7 @@ async function runGeneration(
       // The scheduler lease wraps the provider stream rather than the whole
       // tool loop: interactive chat preempts background cleanup, and the GPU is
       // released while tools run between rounds.
+      setActiveGenerationWaitingForInference(generationId, true);
       const stream: AsyncGenerator<StreamChunk, void, unknown> = withInferenceLeaseStream(
         {
           userId,
@@ -3681,6 +3685,7 @@ async function runGeneration(
           signal,
         },
         (lease) => {
+          setActiveGenerationWaitingForInference(generationId, false);
           const leasedSignal = withLeaseAbort(signal, lease);
           return useStreaming
             ? provider.generateStream(apiKey, apiUrl, {
@@ -3830,6 +3835,7 @@ async function runGeneration(
           }
         }
       } finally {
+        setActiveGenerationWaitingForInference(generationId, false);
         // Abandoning the leased iterator without closing it would hold the
         // interactive admission lease forever. This runs on normal completion,
         // provider errors, and consumer throws such as Stop firing inside the

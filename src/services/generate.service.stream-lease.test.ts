@@ -8,9 +8,9 @@ import * as connections from "./connections.service";
 import * as secrets from "./secrets.service";
 import * as pool from "./generation-pool.service";
 import { startGeneration, stopAllGenerations, stopGeneration, stopGenerationSweep } from "./generate.service";
-import { getActiveGeneration } from "./generation/active-generation-registry";
+import { getActiveGeneration, sweepInactiveGenerations } from "./generation/active-generation-registry";
 import { DEFAULT_INFERENCE_SCHEDULER_CONFIG } from "./inference-scheduler/config";
-import { __test__ as schedulerTest, getInferenceSchedulerStatus } from "./inference-scheduler/scheduler";
+import { __test__ as schedulerTest, getInferenceSchedulerStatus, withInferenceLease } from "./inference-scheduler/scheduler";
 
 const userId = "stream-lease-test";
 const ended: any[] = [];
@@ -98,6 +98,47 @@ function hasActiveChatLease(): boolean {
 }
 
 describe("chat stream admission lease", () => {
+  test("queue time does not consume the provider inactivity budget", async () => {
+    schedulerTest.setHost(true);
+    schedulerTest.setConfig({ ...DEFAULT_INFERENCE_SCHEDULER_CONFIG, enabled: true, preemptBackground: false });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const holder = withInferenceLease(
+      { userId, endpoint: LOCAL_ENDPOINT, requestClass: "background" },
+      async () => gate,
+    );
+    const chat = chats.createChat(userId, {
+      character_id: null,
+      name: "Queued lease test",
+      metadata: { temporary: true, no_preset: true },
+    });
+    chats.createMessage(chat.id, { is_user: true, name: "User", content: "Hello." }, userId);
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => (
+      new Response(sseStream(), { headers: { "content-type": "text/event-stream" } })
+    )) as unknown as typeof fetch);
+    const { generationId } = await startGeneration({
+      userId, chat_id: chat.id, connection_id: connectionId, generation_type: "normal",
+    });
+    try {
+      await waitFor(() => getInferenceSchedulerStatus(userId).resources.some((resource) => resource.waiting.length > 0));
+      const entry = getActiveGeneration(generationId)!;
+      expect(entry).toBeDefined();
+      sweepInactiveGenerations(entry.lastTokenAt + 11 * 60_000);
+      expect(entry.controller.signal.aborted).toBe(false);
+      release();
+      await holder;
+      await waitFor(hasActiveChatLease);
+      // Once admitted, a provider that stops sending tokens must still time out.
+      sweepInactiveGenerations(entry.lastTokenAt + 11 * 60_000);
+      expect(entry.controller.signal.aborted).toBe(true);
+    } finally {
+      release();
+      await holder;
+      stopGeneration(userId, generationId);
+      await waitFor(() => getActiveGeneration(generationId) === undefined);
+    }
+  });
+
   test("stopping a generation releases the interactive lease", async () => {
     schedulerTest.setHost(true);
     schedulerTest.setConfig({

@@ -9,7 +9,7 @@ import {
   embeddingProfileSecretKey,
 } from "./embeddings.service";
 import { DEFAULT_INFERENCE_SCHEDULER_CONFIG } from "./inference-scheduler/config";
-import { __test__ } from "./inference-scheduler/scheduler";
+import { __test__, withInferenceLease } from "./inference-scheduler/scheduler";
 
 const USER = "scheduler-embedding-user";
 const PROFILE_ID = "55555555-5555-4555-8555-555555555555";
@@ -101,6 +101,36 @@ afterEach(() => {
 });
 
 describe("embedding requests respect the inference scheduler", () => {
+  test.skipIf(!process.env.INFERENCE_SCHEDULER_SIMULATION_URL)("serializes and preempts nested embedding HTTP requests", async () => {
+    const baseUrl = process.env.INFERENCE_SCHEDULER_SIMULATION_URL!;
+    configureEmbedding(`${baseUrl}/v1/embeddings`);
+    expect((await fetch(`${baseUrl}/__reset`, { method: "POST" })).ok).toBe(true);
+    await Promise.all([embedTexts(USER, ["first"]), embedTexts(USER, ["second"])]);
+    const metrics = async (): Promise<{ active: number; peak: number; started: number; cancelled: number }> =>
+      (await fetch(`${baseUrl}/__metrics`)).json();
+    expect((await metrics()).peak).toBe(1);
+
+    __test__.setConfig({ ...DEFAULT_INFERENCE_SCHEDULER_CONFIG, enabled: true });
+    const background = withInferenceLease(
+      { userId: USER, endpoint: baseUrl, requestClass: "background" },
+      async () => embedTexts(USER, ["slow"], { signal: new AbortController().signal }),
+    );
+    // Attach rejection handling before preemption so cancellation is never unhandled.
+    const result = background.then(() => null, (err: unknown) => err);
+    const deadline = Date.now() + 1000;
+    while ((await metrics()).started < 3 && Date.now() < deadline) await Bun.sleep(5);
+    expect((await metrics()).started).toBe(3);
+    const interactive = withInferenceLease(
+      { userId: USER, endpoint: baseUrl, requestClass: "interactive" },
+      async () => embedTexts(USER, ["recovery"]),
+    );
+    expect(await result).toMatchObject({ name: "AbortError" });
+    expect(await interactive).toEqual([[0.5, 0.25]]);
+    // The fixture holds slow requests for 2s. Cancellation and the next request
+    // must complete before that response, even if the proxy keeps forwarding it.
+    expect(Date.now()).toBeLessThan(deadline);
+  });
+
   test("serializes concurrent requests to one local endpoint", async () => {
     configureEmbedding("http://127.0.0.1:5999/v1/embeddings");
     let inFlight = 0;

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { DEFAULT_INFERENCE_SCHEDULER_CONFIG } from "./config";
+import { withLeaseAbort } from "./signals";
 import {
   __test__,
   acquireInferenceLease,
@@ -128,6 +129,46 @@ describe("inference scheduler serialization", () => {
 });
 
 describe("inference scheduler priority and preemption", () => {
+  test("nested work inherits the outer lease's cancellation", async () => {
+    const nested = deferred();
+    const finish = deferred();
+    let nestedSignal: AbortSignal | undefined;
+    const background = withInferenceLease(
+      { userId: "user-a", endpoint: ENDPOINT_A, requestClass: "background" },
+      async () => withInferenceLease(
+        { userId: "user-a", endpoint: ENDPOINT_B },
+        async (lease) => {
+          nestedSignal = withLeaseAbort(new AbortController().signal, lease);
+          nested.resolve();
+          await finish.promise;
+        },
+      ),
+    );
+    await nested.promise;
+    const interactive = withInferenceLease(
+      { userId: "user-a", endpoint: ENDPOINT_A, requestClass: "interactive" },
+      async () => {},
+    );
+    await flush();
+    const aborted = nestedSignal?.aborted;
+    finish.resolve();
+    await Promise.all([background, interactive]);
+    expect(aborted).toBe(true);
+  });
+
+  test("async work cannot reuse an outer lease after it has been released", async () => {
+    const runLater = deferred();
+    let later!: Promise<boolean>;
+    await withInferenceLease({ userId: "user-a", endpoint: ENDPOINT_A }, async () => {
+      later = (async () => {
+        await runLater.promise;
+        return withInferenceLease({ userId: "user-a", endpoint: ENDPOINT_A }, async (lease) => lease.scheduled);
+      })();
+    });
+    runLater.resolve();
+    expect(await later).toBe(true);
+  });
+
   test("interactive work preempts an active background lease", async () => {
     const started = deferred();
     const order: string[] = [];
@@ -489,6 +530,46 @@ describe("inference scheduler streams", () => {
 });
 
 describe("inference scheduler status", () => {
+  test("keeps shared-pool labels, counters, and activity timestamps private", async () => {
+    const origin = new URL(ENDPOINT_A).origin;
+    __test__.setConfigForUser(new Map([
+      ["user-a", config({ groups: [{ id: "gpu", name: "Alice's pool", origins: [origin] }] })],
+      ["user-b", config({ groups: [{ id: "gpu", name: "Bob's private pool", origins: [origin] }] })],
+    ]));
+    __test__.setClock(() => 100);
+    await withInferenceLease({ userId: "user-a", endpoint: ENDPOINT_A }, async () => {});
+    const before = getInferenceSchedulerStatus("user-a").resources[0];
+    __test__.setClock(() => 200);
+    await withInferenceLease({ userId: "user-b", endpoint: ENDPOINT_A }, async () => {});
+    const after = getInferenceSchedulerStatus("user-a").resources[0];
+    expect(after.label).toBe("Alice's pool");
+    expect(after.stats).toEqual(before.stats);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(getInferenceSchedulerStatus("user-b").resources[0].stats.completed).toBe(1);
+  });
+
+  test("preemption errors do not disclose another user's request purpose", async () => {
+    const started = deferred();
+    let reason: Error | undefined;
+    const background = withInferenceLease(
+      { userId: "user-a", endpoint: ENDPOINT_A, requestClass: "background" },
+      async (lease) => {
+        started.resolve();
+        await new Promise<void>((resolve) => lease.signal.addEventListener("abort", () => {
+          reason = lease.signal.reason;
+          resolve();
+        }, { once: true }));
+      },
+    );
+    await started.promise;
+    await withInferenceLease(
+      { userId: "user-b", endpoint: ENDPOINT_A, requestClass: "interactive", purpose: "private-extension-name" },
+      async () => {},
+    );
+    await background;
+    expect(reason?.message).not.toContain("private-extension-name");
+  });
+
   test("reports active and queued work to the owning user only", async () => {
     const gate = deferred();
     const active = withInferenceLease(

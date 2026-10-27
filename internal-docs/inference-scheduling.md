@@ -31,9 +31,14 @@ unchanged.
   another account's limit; a participant's entry drops when it has no active or
   waiting work.
 
+Queue labels, counters, activity timestamps, and request details are scoped to
+the authenticated user, including when several accounts share a pool.
+
 Leases are re-entrant within an async call stack using `AsyncLocalStorage`: a
 nested call for the same resource is unscheduled and reuses the outer slot
-rather than deadlocking. For streams, each pull and iterator cleanup run inside
+rather than deadlocking. Nested work inherits the outer cancellation signal;
+async work that outlives a released lease must acquire a new slot.
+For streams, each pull and iterator cleanup run inside
 the lease context. The slot stays held until provider cleanup finishes, even
 when the consumer closes the stream early; cleanup failures still release it.
 
@@ -48,12 +53,16 @@ this.
 | --- | --- | --- |
 | `generate.service.ts` chat stream | `interactive` | Wraps each provider round; released while tools run |
 | `generation/direct-generation.ts` quiet/raw generate | `background` / `user` | Sidecar and extension calls; `GenerationCallOptions.leaseClass` overrides |
-| `generate.service.ts` summaries and rebuild batches | `background` | |
+| `generate.service.ts` summaries / rebuild batches | `user` / `background` | |
 | `image-gen.service.ts` `runProviderGeneration` | `user` | Resolves the provider's default URL before admission so connections without `api_url` still queue |
 | `weaver/visual/service.ts` | `user` | Visual Studio jobs |
 | `embeddings.service.ts` driver | `retrieval` for query input, `bulk` otherwise | Endpoint comes from the driver's `api_url` |
 | `vectorization-queue.service.ts` subprocess dispatch | `bulk` | Host leases the batch; aborting terminates the child and waits for exit |
 | `cortex-warm-worker-client.ts` | `background` | Per-chat dedup happens before admission; aborting terminates the worker |
+
+Chat's inactivity watchdog excludes admission wait and starts a fresh provider
+inactivity budget when the lease is granted. Explicit Stop still cancels queued
+requests.
 
 ### Worker threads and subprocesses
 
@@ -67,8 +76,8 @@ Queues only exist in the host process.
   the dispatch call; aborting removes a queued batch or terminates the child and
   waits for it to exit before the lease is released.
 - Cortex warm jobs deduplicate per chat **before** admission. A newer warm
-  request supersedes a waiting one by aborting its admission; an in-flight one
-  has its worker terminated.
+  request supersedes a waiting one by aborting its admission. Preempting an
+  active job terminates its worker.
 
 Do not wrap CPU-only work (tokenization, prompt assembly) in a lease: it would
 serialize unrelated work for no GPU benefit.
@@ -100,6 +109,9 @@ worker/subprocess imports.
   aging, max wait, abort, re-entrancy during consumption and cleanup, stream
   release after cleanup (including errors), per-user concurrency limits,
   status isolation.
+- `embeddings.service.inference-scheduling.test.ts` — optional real HTTP
+  serialization and nested cancellation against the committed Postman fixture;
+  see `postman/simulations/inference-scheduler/inference-scheduler.context.md`.
 - `notifier.test.ts` — debounced `INFERENCE_SCHEDULER_STATE` payloads and
   per-user isolation.
 - `discovery.test.ts` — manual origin listing and de-duplication.

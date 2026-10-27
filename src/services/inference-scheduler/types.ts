@@ -135,6 +135,7 @@ export interface InferenceResourceSnapshot {
   concurrency: number;
   active: InferenceActiveLeaseSnapshot[];
   waiting: InferenceWaitingRequestSnapshot[];
+  /** Counters for the requesting user's work only, even on shared resources. */
   stats: InferenceResourceStats;
   updatedAt: number;
 }

@@ -18,13 +18,18 @@ import {
   type InferenceWaitingRequestSnapshot,
 } from "./types";
 
-const EMPTY_SCOPE: ReadonlySet<string> = new Set();
+interface LeaseScopeEntry {
+  signal: AbortSignal;
+  active: boolean;
+}
+
+const EMPTY_SCOPE: ReadonlyMap<string, LeaseScopeEntry> = new Map();
 const MIN_AGED_PRIORITY = INFERENCE_CLASS_PRIORITY.retrieval;
 const PREEMPTIBLE_MIN_PRIORITY = INFERENCE_CLASS_PRIORITY.background;
 const MAX_RESOURCES = 256;
 const IDLE_RESOURCE_TTL_MS = 60 * 60_000;
 
-const leaseScope = new AsyncLocalStorage<ReadonlySet<string>>();
+const leaseScope = new AsyncLocalStorage<ReadonlyMap<string, LeaseScopeEntry>>();
 const neverAbortedSignal = new AbortController().signal;
 
 interface ResourceStats {
@@ -34,6 +39,13 @@ interface ResourceStats {
   timedOut: number;
   aborted: number;
   lastWaitMs: number | null;
+}
+
+interface ResourceParticipant {
+  label: string;
+  local: boolean;
+  stats: ResourceStats;
+  updatedAt: number;
 }
 
 interface ActiveRecord {
@@ -55,7 +67,7 @@ interface WaiterRecord {
   purpose: string;
   origin: string | null;
   enqueuedAt: number;
-  outerScope: ReadonlySet<string>;
+  outerScope: ReadonlyMap<string, LeaseScopeEntry>;
   signal?: AbortSignal;
   onAbort: (() => void) | null;
   timer: ReturnType<typeof setTimeout> | null;
@@ -66,8 +78,6 @@ interface WaiterRecord {
 
 interface ResourceState {
   key: string;
-  label: string;
-  local: boolean;
   concurrency: number;
   /**
    * Per-participant limits on a shared resource. The effective limit is the
@@ -77,16 +87,14 @@ interface ResourceState {
   concurrencyByUser: Map<string, number>;
   active: ActiveRecord[];
   waiting: WaiterRecord[];
-  stats: ResourceStats;
-  users: Set<string>;
-  updatedAt: number;
+  participants: Map<string, ResourceParticipant>;
   lastUsedAt: number;
 }
 
 export interface LeaseHandoff {
   lease: InferenceLease;
   /** Held-resource keys for the async context that owns the lease. */
-  context: ReadonlySet<string>;
+  context: ReadonlyMap<string, LeaseScopeEntry>;
 }
 
 const resources = new Map<string, ResourceState>();
@@ -125,7 +133,7 @@ function isHost(): boolean {
   return hostOverride ?? isInferenceSchedulerHost();
 }
 
-function currentScope(): ReadonlySet<string> {
+function currentScope(): ReadonlyMap<string, LeaseScopeEntry> {
   return leaseScope.getStore() ?? EMPTY_SCOPE;
 }
 
@@ -141,15 +149,11 @@ function createResource(resolved: ResolvedInferenceResource, concurrency: number
   pruneIdleResources();
   const resource: ResourceState = {
     key: resolved.key,
-    label: resolved.label,
-    local: resolved.local,
     concurrency,
     concurrencyByUser: new Map(),
     active: [],
     waiting: [],
-    stats: { granted: 0, completed: 0, preempted: 0, timedOut: 0, aborted: 0, lastWaitMs: null },
-    users: new Set(),
-    updatedAt: now(),
+    participants: new Map(),
     lastUsedAt: now(),
   };
   resources.set(resource.key, resource);
@@ -168,7 +172,20 @@ function noteParticipantConcurrency(
   resource: ResourceState,
   userId: string,
   concurrency: number,
+  resolved: ResolvedInferenceResource,
 ): void {
+  const participant = resource.participants.get(userId);
+  if (participant) {
+    participant.label = resolved.label;
+    participant.local = resolved.local;
+  } else {
+    resource.participants.set(userId, {
+      label: resolved.label,
+      local: resolved.local,
+      stats: { granted: 0, completed: 0, preempted: 0, timedOut: 0, aborted: 0, lastWaitMs: null },
+      updatedAt: now(),
+    });
+  }
   resource.concurrencyByUser.set(userId, Math.max(1, Math.floor(concurrency)));
   updateResourceConcurrency(resource);
 }
@@ -195,11 +212,7 @@ function getOrCreateResource(
   concurrency: number,
 ): ResourceState {
   const existing = resources.get(resolved.key);
-  if (existing) {
-    existing.label = resolved.label;
-    existing.local = resolved.local;
-    return existing;
-  }
+  if (existing) return existing;
   return createResource(resolved, concurrency);
 }
 
@@ -230,12 +243,16 @@ function pickBestWaiter(
   return best;
 }
 
-function makeUnscheduledLease(requestClass: InferenceRequestClass, resourceKey: string | null): InferenceLease {
+function makeUnscheduledLease(
+  requestClass: InferenceRequestClass,
+  resourceKey: string | null,
+  signal = neverAbortedSignal,
+): InferenceLease {
   return {
     scheduled: false,
     resourceKey,
     requestClass,
-    signal: neverAbortedSignal,
+    signal,
     waitedMs: 0,
     release() {},
   };
@@ -259,7 +276,6 @@ function removeWaiter(resource: ResourceState, waiter: WaiterRecord): void {
 function grantWaiter(
   resource: ResourceState,
   waiter: WaiterRecord,
-  config: InferenceSchedulerConfig,
 ): void {
   if (waiter.settled) return;
   waiter.settled = true;
@@ -288,15 +304,16 @@ function grantWaiter(
   }
 
   resource.active.push(record);
-  resource.users.add(waiter.userId);
-  resource.stats.granted += 1;
+  const participant = resource.participants.get(waiter.userId)!;
+  participant.stats.granted += 1;
   const waitedMs = Math.max(0, now() - waiter.enqueuedAt);
-  resource.stats.lastWaitMs = waitedMs;
-  resource.updatedAt = now();
+  participant.stats.lastWaitMs = waitedMs;
+  participant.updatedAt = now();
   resource.lastUsedAt = now();
   notifyChange([waiter.userId]);
 
   let released = false;
+  const scopeEntry: LeaseScopeEntry = { signal: controller.signal, active: true };
   const lease: InferenceLease = {
     scheduled: true,
     resourceKey: resource.key,
@@ -306,13 +323,14 @@ function grantWaiter(
     release: () => {
       if (released) return;
       released = true;
+      scopeEntry.active = false;
       if (record.callerSignal && record.onCallerAbort) {
         record.callerSignal.removeEventListener("abort", record.onCallerAbort);
       }
       const index = resource.active.indexOf(record);
       if (index >= 0) resource.active.splice(index, 1);
-      resource.stats.completed += 1;
-      resource.updatedAt = now();
+      participant.stats.completed += 1;
+      participant.updatedAt = now();
       resource.lastUsedAt = now();
       releaseIdleParticipant(resource, record.userId);
       notifyChange([record.userId]);
@@ -320,8 +338,8 @@ function grantWaiter(
     },
   };
 
-  const context = new Set(waiter.outerScope);
-  context.add(resource.key);
+  const context = new Map(waiter.outerScope);
+  context.set(resource.key, scopeEntry);
   waiter.resolve({ lease, context });
 }
 
@@ -357,10 +375,12 @@ function maybePreempt(resource: ResourceState, config: InferenceSchedulerConfig)
   const target = pickPreemptableActive(resource, INFERENCE_CLASS_PRIORITY[next.requestClass]);
   if (!target) return;
 
-  resource.stats.preempted += 1;
+  const participant = resource.participants.get(target.userId)!;
+  participant.stats.preempted += 1;
+  participant.updatedAt = now();
   target.controller.abort(
     new InferencePreemptedError(
-      `${target.purpose || target.requestClass} was preempted by ${next.purpose || next.requestClass}`,
+      `${target.purpose || target.requestClass} was preempted by a higher-priority request`,
     ),
   );
   notifyChange([target.userId]);
@@ -370,10 +390,9 @@ function pumpResource(resource: ResourceState, config: InferenceSchedulerConfig)
   while (resource.waiting.length > 0 && resource.active.length < resource.concurrency) {
     const waiter = pickBestWaiter(resource, config);
     if (!waiter) break;
-    grantWaiter(resource, waiter, config);
+    grantWaiter(resource, waiter);
   }
   maybePreempt(resource, config);
-  resource.updatedAt = now();
 }
 
 function resolveMaxWait(
@@ -394,6 +413,7 @@ function enqueue(
   requestClass: InferenceRequestClass,
 ): Promise<LeaseHandoff> {
   const outerScope = currentScope();
+  const participant = resource.participants.get(options.userId)!;
   return new Promise<LeaseHandoff>((resolve, reject) => {
     const waiter: WaiterRecord = {
       id: newId(),
@@ -416,7 +436,7 @@ function enqueue(
       waiter.settled = true;
       cleanupWaiter(waiter);
       removeWaiter(resource, waiter);
-      resource.updatedAt = now();
+      participant.updatedAt = now();
       releaseIdleParticipant(resource, waiter.userId);
       notifyChange([waiter.userId]);
       pumpResource(resource, config);
@@ -431,7 +451,7 @@ function enqueue(
     if (options.signal) {
       const signal = options.signal;
       waiter.onAbort = () => {
-        resource.stats.aborted += 1;
+        participant.stats.aborted += 1;
         fail(signal.reason ?? new DOMException("Aborted", "AbortError"));
       };
       signal.addEventListener("abort", waiter.onAbort, { once: true });
@@ -441,17 +461,17 @@ function enqueue(
     if (maxWaitMs > 0) {
       waiter.timer = setTimeout(() => {
         if (waiter.settled) return;
-        resource.stats.timedOut += 1;
+        participant.stats.timedOut += 1;
         fail(
           new InferenceQueueTimeoutError(
-            `${waiter.purpose} waited ${maxWaitMs}ms for ${resource.label} and gave up`,
+            `${waiter.purpose} waited ${maxWaitMs}ms for ${participant.label} and gave up`,
           ),
         );
       }, maxWaitMs);
     }
 
     resource.waiting.push(waiter);
-    resource.users.add(options.userId);
+    participant.updatedAt = now();
     pumpResource(resource, config);
   });
 }
@@ -480,14 +500,15 @@ export async function acquireInferenceLease(options: InferenceLeaseOptions): Pro
   }
 
   const scope = currentScope();
-  if (scope.has(resolved.key)) {
+  const outerLease = scope.get(resolved.key);
+  if (outerLease?.active) {
     // Nested call (e.g. a council tool call inside an active generation). The
     // outer lease already owns the slot; queueing again would deadlock.
-    return { lease: makeUnscheduledLease(requestClass, resolved.key), context: scope };
+    return { lease: makeUnscheduledLease(requestClass, resolved.key, outerLease.signal), context: scope };
   }
 
   const resource = getOrCreateResource(resolved, config.concurrency);
-  noteParticipantConcurrency(resource, options.userId, config.concurrency);
+  noteParticipantConcurrency(resource, options.userId, config.concurrency, resolved);
   return enqueue(resource, config, options, origin, requestClass);
 }
 
@@ -548,7 +569,8 @@ export async function* withInferenceLeaseStream<T>(
 }
 
 function snapshotResource(resource: ResourceState, userId: string): InferenceResourceSnapshot | null {
-  if (!resource.users.has(userId)) return null;
+  const participant = resource.participants.get(userId);
+  if (!participant) return null;
   const waiting: InferenceWaitingRequestSnapshot[] = resource.waiting
     .filter((waiter) => waiter.userId === userId)
     .map((waiter) => ({
@@ -564,8 +586,8 @@ function snapshotResource(resource: ResourceState, userId: string): InferenceRes
 
   return {
     key: resource.key,
-    label: resource.label,
-    local: resource.local,
+    label: participant.label,
+    local: participant.local,
     concurrency: resource.concurrency,
     active: resource.active
       .filter((active) => active.userId === userId)
@@ -579,8 +601,8 @@ function snapshotResource(resource: ResourceState, userId: string): InferenceRes
         durationMs: Math.max(0, now() - active.startedAt),
       })),
     waiting,
-    stats: { ...resource.stats },
-    updatedAt: resource.updatedAt,
+    stats: { ...participant.stats },
+    updatedAt: participant.updatedAt,
   };
 }
 

@@ -111,7 +111,11 @@ After updating from older color detection behavior, rebuild Cortex for an existi
 
 AI extraction resolves relationship endpoints from names, message prefixes, aliases and unambiguous pronouns. It requires evidence for the connection; sharing a scene or a room alone does not establish a partnership. Known endpoints omitted from the entity extraction list can still be proposed for review. Rejected or deferred endpoints cannot acquire new relationships, and new aliases redirect endpoints only after approval when review is enabled.
 
-Directed types describe the source's role relative to the target: a parent points to their child, a mentor to their student, and a subordinate to the superior they serve. Heuristic extraction remains limited to supported text patterns; Decision review judges supplied candidates and does not generate missing relationships.
+The **lover** type includes supported love interests, romantic affection, courtship and established partners. Its label records the supported scope, such as “romantic interest”; it does not imply marriage, exclusivity, sex or reciprocal feelings. A confession or clearly romantic action can establish a connection before a formal partnership. Room-sharing alone cannot.
+
+Cortex also proposes relationships from clear first-person romantic statements and actions, such as “I have a crush on you” or “I kissed you,” even when AI extraction returns an empty relationship list. Stored message roles and current message prefixes identify the participants. Ambiguous group addressees, negated/hypothetical statements and third-party dialogue do not qualify for this extra detection. With candidate review enabled, these proposals still require approval at the configured confidence threshold.
+
+Directed types describe the source's role relative to the target: a parent points to their child, a mentor to their student, and a subordinate to the superior they serve. Heuristic extraction remains limited to supported text patterns; Decision review judges supplied candidates. Arbitration logs show relationship extraction, proposal and approval counts to distinguish missing detections from rejected or deferred proposals.
 
 ## Vaults & Interlinks
 

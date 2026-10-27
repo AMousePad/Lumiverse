@@ -60,6 +60,23 @@ test('modal Escape reads updated props without releasing the scroll lock or repl
   expect(remove.mock.calls.filter(([type]) => type === 'keydown')).toHaveLength(1)
 })
 
+test('closing a voice-library shell keeps its parent open and the page locked', async () => {
+  const closed: string[] = []
+  document.body.style.overflow = 'clip'
+  const parent = <ModalShell key="parent" isOpen onClose={() => closed.push('parent')}>Voice settings</ModalShell>
+  await mount(parent)
+  await act(async () => root.render(<>{parent}<ModalShell key="library" isOpen onClose={() => closed.push('library')}>Library</ModalShell></>))
+  escape()
+  expect(closed).toEqual(['library'])
+  await act(async () => root.render(parent))
+  expect(document.body.style.overflow).toBe('hidden')
+  escape()
+  expect(closed).toEqual(['library', 'parent'])
+  await act(async () => root.render(null))
+  expect(document.body.style.overflow).toBe('clip')
+  document.body.style.overflow = ''
+})
+
 test('context-menu callback updates keep the original touch guard and latest dismissal callback', async () => {
   let now = 0
   spyOn(performance, 'now').mockImplementation(() => now)

@@ -31,6 +31,8 @@ interface MessageAudioPlayerProps {
   src: string
   /** Original filename, used for the player tooltip and audio download. */
   title?: string
+  /** Start a preview opened by a user gesture; ordinary message playback is unchanged. */
+  autoPlay?: boolean
   /** Tagged onto the root so chat-bubble layout can flip alignment. */
   isUser?: boolean
   /**
@@ -80,6 +82,7 @@ function formatTime(seconds: number): string {
 export default function MessageAudioPlayer({
   src,
   title,
+  autoPlay = false,
   isUser,
   messageId,
   exiting = false,
@@ -303,6 +306,17 @@ export default function MessageAudioPlayer({
       el.pause()
     }
   }, [messageId])
+
+  useEffect(() => {
+    if (!autoPlay) return
+    const el = audioRef.current
+    if (!el) return
+    stopTTSEngine()
+    void el.play().catch((err) => {
+      console.warn('[MessageAudioPlayer] preview playback rejected:', err)
+    })
+    return () => el.pause()
+  }, [autoPlay, src])
 
   const toggleMute = useCallback(() => {
     const el = audioRef.current

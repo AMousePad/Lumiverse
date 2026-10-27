@@ -3,20 +3,24 @@ import { JSDOM } from 'jsdom'
 
 let user = 'owner'
 const getImportStatus = mock()
-mock.module('@/store', () => ({ useStore: { getState: () => ({ isAuthenticated: true, user: { id: user } }) } }))
-mock.module('@/api/user-data', () => ({ userDataApi: { getImportStatus } }))
+const getImportJobs = mock(async () => ({ jobs: [] as { jobId: string; status: string }[] }))
+mock.module('@/store', () => ({ useStore: { getState: () => ({ isAuthenticated: true, user: { id: user }, openSettings }) } }))
+mock.module('@/api/user-data', () => ({ userDataApi: { getImportStatus, getImportJobs } }))
 const { pendingImportJob, trackImportJob, watchImportJob } = await import('./import-recovery')
 let dom: JSDOM
 let stop: (() => void) | undefined
 let previous: Record<string, unknown>
 const refresh = mock(async () => {})
+const openSettings = mock()
 beforeEach(() => {
   dom = new JSDOM('', { url: 'http://localhost/' })
   previous = Object.fromEntries(['window', 'document', 'localStorage'].map(key => [key, Reflect.get(globalThis, key)]))
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage })
   user = 'owner'
   getImportStatus.mockReset()
+  getImportJobs.mockReset().mockResolvedValue({ jobs: [] })
   refresh.mockReset().mockResolvedValue(undefined)
+  openSettings.mockClear()
   jest.useFakeTimers()
 })
 afterEach(() => {
@@ -84,4 +88,18 @@ test('refreshes committed batches after cancellation as well as successful impor
   stop = watchImportJob(user, refresh)
   await settle()
   expect(refresh).toHaveBeenCalledWith('cancelled-job')
+})
+
+test('discovers an interrupted job on a new origin and opens its controls from the Android notification', async () => {
+  user = 'restarted-owner'
+  dom.window.history.replaceState(null, '', '/?restoreImport=1')
+  getImportJobs.mockResolvedValue({ jobs: [{ jobId: 'retained-job', status: 'interrupted' }] })
+  getImportStatus.mockResolvedValue({ status: 'interrupted' })
+  stop = watchImportJob(user, refresh)
+  await settle()
+  expect(getImportStatus).toHaveBeenCalledWith('retained-job')
+  expect(pendingImportJob(user)).toBe('retained-job')
+  expect(openSettings).toHaveBeenCalledWith('dataPortability')
+  expect(dom.window.location.search).toBe('')
+  expect(refresh).not.toHaveBeenCalled()
 })

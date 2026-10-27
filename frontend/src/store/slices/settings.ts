@@ -7,6 +7,7 @@ import { activeTab } from '@/lib/active-tab'
 import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/lib/loom/preset-selection-coordinator'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
+import { setDeviceThemeControlsScope } from '@/lib/deviceThemeControls'
 import { PRODUCTIVITY_DEFAULTS, migrateProductivitySetting } from '@/lib/uiProductivityDefaults'
 import { isMobileViewportOrDevice } from '@/lib/mobile'
 import { DEFAULT_IMPERSONATION_MODE, resolveImpersonationMode } from '@/lib/impersonationPreset'
@@ -287,6 +288,7 @@ function persistDeviceEnterToSend(value: EnterToSendSettings): void {
 /** Select the authenticated user's local persistence bridge. */
 export function setSettingsPersistenceScope(userId: string | null): void {
   persistenceScope = userId
+  setDeviceThemeControlsScope(userId)
 }
 
 let settingsSelectionAbort: AbortController | null = null
@@ -682,6 +684,7 @@ export function resetSettingsPersistence(): void {
   activeFlushBatch = null
   lastCommittedSettingsKeys.clear()
   persistenceScope = null
+  setDeviceThemeControlsScope(null)
 }
 
 // Flush on page unload so slider drags / rapid changes are never lost
@@ -713,7 +716,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   bubbleUseFullAvatar: false,
   bubbleOpacity: 1,
   inputBarEnterToSend: { ...DEFAULT_ENTER_TO_SEND_SETTINGS },
-  saveDraftInput: false,
+  saveDraftInput: true,
   composerActionBar: null,
   defaultImpersonationMode: DEFAULT_IMPERSONATION_MODE,
   chatWidthMode: 'full',
