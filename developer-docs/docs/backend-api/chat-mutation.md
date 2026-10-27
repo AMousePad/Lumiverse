@@ -136,6 +136,7 @@ The generated assistant reply is delivered through the normal generation event s
 type UpdateMessagePatch = {
   content?: string
   metadata?: Record<string, unknown>
+  metadata_patch?: Record<string, unknown>
   swipes?: string[]
   swipe_id?: number
   swipe_dates?: number[]
@@ -149,6 +150,7 @@ type UpdateMessagePatch = {
 
 All fields are optional; `undefined` leaves the field untouched. Precedence rules:
 
+- **Metadata.** `metadata` replaces all extension metadata. `metadata_patch` merges only the supplied top-level fields into the latest stored metadata. Nested values are replaced and `null` is stored as a value. Do not combine the two. Patching requires host capability `chat-metadata-patch-v1`.
 - **`content` wins.** If you supply `content`, it overwrites both `message.content` and `swipes[swipe_id]` (the active slot).
 - **Swipes without content.** Supply `swipes` alone and the new active content is derived from `swipes[swipe_id]` (either the supplied `swipe_id` or the existing one if you didn't patch it).
 - **Navigation-only.** Supply `swipe_id` alone to cycle the active slot; content is re-derived from the existing `swipes` array.
