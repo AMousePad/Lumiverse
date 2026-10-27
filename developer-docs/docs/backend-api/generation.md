@@ -447,6 +447,7 @@ const result = await spindle.generate.dryRun({
 | `personaId` | `string` | Optional. Use a specific persona. |
 | `presetId` | `string` | Optional. Use a specific preset. |
 | `forcePresetId` | `boolean` | Default `false`. Set `true` to use `presetId` over the chat's preset and return `variable_state`. Requires host capability `message-preset-context-v1: 1`. |
+| `includeRequestMessages` | `boolean` | Default `false`. Return `request_messages` with media, tool calls and reasoning intact. Requires `generation-request-messages-v1`. |
 | `generationType` | `string` | Optional. One of `"normal"`, `"continue"`, `"regenerate"`, `"swipe"`, `"impersonate"`. |
 | `parameters` | `Record<string, unknown>` | Optional. Override sampler parameters. |
 
@@ -464,6 +465,7 @@ const result = await spindle.generate.dryRun({
 | `breakdown` | `AssemblyBreakdownEntryDTO[]` | Ordered list of prompt blocks showing how the prompt was built. |
 | `parameters` | `Record<string, unknown>` | Final merged sampler parameters. |
 | `variable_state` | `MacroVariableSnapshotDTO` | Variables from prompt assembly. Returned only with `forcePresetId: true`, without saving changes to variables. Save as `variables` in a [per-swipe preset entry](../frontend-api/display-resolver.md#per-swipe-presets) to reuse them during rendering. |
+| `request_messages` | `LlmMessageDTO[]` | Prepared messages, returned with `includeRequestMessages: true`. Use these for provider requests; `messages` contains display text. `assistantPrefill` contains any prepared assistant prefix. |
 | `model` | `string` | The model that would be used. |
 | `provider` | `string` | The provider that would be used. |
 | `tokenCount` | `DryRunTokenCountDTO` | Optional. Per-block token counts (if a tokenizer is available). |

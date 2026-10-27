@@ -1322,6 +1322,7 @@ export class WorkerHost {
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
           "message-preset-context-v1": 1,
+          "generation-request-messages-v1": 1,
           "frontend-runtime-capabilities-v1": 1,
           "frontend-session-origin-v1": 1,
           "frontend-session-routing-v1": 1,
@@ -4740,6 +4741,7 @@ export class WorkerHost {
         persona_id: input.personaId,
         preset_id: input.presetId,
         ...(input.forcePresetId === true ? { force_preset_id: true } : {}),
+        ...(input.includeRequestMessages !== undefined ? { include_request_messages: input.includeRequestMessages } : {}),
         generation_type: input.generationType,
         parameters: input.parameters,
       });
@@ -4767,6 +4769,7 @@ export class WorkerHost {
           extensionName: b.extensionName,
         })),
         parameters: dryRunResult.parameters,
+        ...(dryRunResult.request_messages ? { request_messages: dryRunResult.request_messages, assistantPrefill: dryRunResult.assistantPrefill } : {}),
         ...(dryRunResult.variable_state ? { variable_state: dryRunResult.variable_state } : {}),
         model: dryRunResult.model,
         provider: dryRunResult.provider,

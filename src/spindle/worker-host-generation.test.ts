@@ -53,6 +53,17 @@ const baseResult: generateSvc.DryRunResult = {
   messages: [], breakdown: [], parameters: {}, model: "test", provider: "test",
 };
 
+test("dry runs opt into lossless request messages without changing the display messages", async () => {
+  const requestMessages = [{ role: "assistant" as const, content: [{ type: "text", text: "Answer" }, { type: "audio", data: "UklGRg==", mime_type: "audio/wav" }],
+    reasoning_content: "Thought", tool_calls: [{ id: "call", type: "function", function: { name: "lookup", arguments: "{}" } }] }];
+  dryRun.mockResolvedValue({ ...baseResult, messages: [{ role: "assistant", content: "Answer [audio: audio/wav]" }], request_messages: requestMessages, assistantPrefill: "Prefix" } as any);
+  const response = await fixture()({ type: "generate_dry_run", input: { chatId: "chat", includeRequestMessages: true } });
+  expect(dryRun.mock.calls[0]![0]).toMatchObject({ include_request_messages: true });
+  expect(response.result.request_messages).toEqual(requestMessages);
+  expect(response.result.messages[0].content).toBe("Answer [audio: audio/wav]");
+  expect(response.result.assistantPrefill).toBe("Prefix");
+});
+
 test("dry run preserves context clipping statistics and a zero history-token count", async () => {
   const contextClipStats = {
     enabled: true, maxContext: 8192, maxResponseTokens: 1024, safetyMargin: 128,
