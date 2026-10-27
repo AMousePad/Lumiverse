@@ -403,6 +403,18 @@ describe('isolated regex pipeline', () => {
     expect(applyScripts).toHaveBeenCalledTimes(1)
   })
 
+  test('owned chats receive selected preset context through their resolver bypass', async () => {
+    const { spawned } = makeHarness();
+    registryState.owned = true;
+    const applyScripts = mock(async (_args: unknown) => ({ content: 'owned:source', cacheable: false }));
+    registryState.resolver = { applyScripts };
+    const presetContext = { preset_id: 'source', variables: { local: { mode: 'captured' } } };
+    const result = await applyDisplayRegexTiered('body', [], { ...context, chatId: 'chat', presetContext, presetRegexIds: ['source-rule'] });
+    expect(result.result).toBe('owned:source');
+    expect(applyScripts.mock.calls[0]?.[0]).toMatchObject({ context: { presetContext, presetRegexIds: ['source-rule'] } });
+    expect(spawned).toHaveLength(0);
+  });
+
   test('owned chats retain their resolver bypass', async () => {
     const { spawned } = makeHarness()
     registryState.owned = true

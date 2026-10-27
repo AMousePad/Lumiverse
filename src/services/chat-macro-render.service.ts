@@ -4,8 +4,39 @@ import { captureMessageLiterals, shieldMessageLiterals, withMessageLiteralExtra 
 import type { Message } from "../types/message";
 import { healFormattingArtifacts } from "../utils/format-healing";
 import * as chatsSvc from "./chats.service";
+import { contentHasMacroHints } from "./vectorization-content.service";
+import { getActivatedWorldInfoEntriesForChat, resolveWorldInfoOutlets } from "./prompt-assembly.service";
+import { applyMessagePresetContext } from "./message-preset-context.service";
+import { readMessagePresetContext } from "../types/preset-context";
 
 const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
+const OUTLET_MACRO_RE = /\{\{(?:outlet|persona_outlet|personaoutlet)::/i;
+
+/** Share the displayed body with server-side verification of rendered choices. */
+export async function resolveDisplayMessageBody(
+  userId: string,
+  chatId: string,
+  content: string,
+  message?: Message,
+  swipeIndex = message?.swipe_id ?? 0,
+  signal?: AbortSignal,
+): Promise<string> {
+  const source = message?.chat_id === chatId ? message : undefined;
+  const presetContext = readMessagePresetContext(source?.extra, swipeIndex);
+  if (source) content = shieldMessageLiterals(content, source);
+  if (!contentHasMacroHints(content)) return content;
+  const env = chatsSvc.buildMacroEnvForChat(userId, chatId);
+  if (!env || (presetContext && !applyMessagePresetContext(env, userId, presetContext))) return content;
+  if (OUTLET_MACRO_RE.test(content)) {
+    try {
+      const entries = await getActivatedWorldInfoEntriesForChat(userId, chatId);
+      await resolveWorldInfoOutlets(entries, env, signal);
+    } catch {
+      // Leave outlets unresolved; other display macros can still resolve.
+    }
+  }
+  return resolveRenderedMessageContent(content, env, true);
+}
 
 interface ReconcileChatMessageMacrosInput {
   userId: string;

@@ -57,11 +57,13 @@ import styles from './MessageContent.module.css'
 import clsx from 'clsx'
 
 interface MessageContentProps {
+  presetContext?: import('@/types/regex').MessagePresetContext
   content: string
   isUser: boolean
   userName: string
   isStreaming?: boolean
   messageId?: string
+  swipeIndex?: number
   chatId?: string
   depth?: number
   characterNameOverride?: string
@@ -1653,6 +1655,8 @@ export default function MessageContent({
   userName,
   isStreaming = false,
   messageId,
+  swipeIndex,
+  presetContext,
   chatId,
   depth = 0,
   characterNameOverride,
@@ -1667,7 +1671,7 @@ export default function MessageContent({
   const getWrappingSnapshot = useCallback(() => shouldSkipInlineCardWrapping(chatId), [chatId])
   const skipInlineCardWrapping = useSyncExternalStore(subscribeDisplayFormatting, getWrappingSnapshot, getWrappingSnapshot)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
-  const regexScripts = useStore((s) => s.regexScripts)
+  const configuredRegexScripts = useStore((s) => s.regexScripts)
   const actionUsage = useStore((s) => {
     if (!messageId) return undefined
     return s.messages.find((message) => message.id === messageId)?.extra?.associative_regex_action_usage
@@ -1730,13 +1734,14 @@ export default function MessageContent({
   const macroCtx = useMemo(() => ({ charName, userName }), [charName, userName])
   const preprocessOpts = useMemo(
     () => (messageId
-      ? { messageId, chatId, role: (isUser ? 'user' : 'assistant') as 'user' | 'assistant' }
+      ? { messageId, chatId, swipeIndex, presetContext, role: (isUser ? 'user' : 'assistant') as 'user' | 'assistant' }
       : undefined),
-    [messageId, chatId, isUser],
+    [messageId, chatId, swipeIndex, presetContext, isUser],
   )
-  const { content: regexAppliedContent, pending: displayPending } = useDisplayRegexState(
+  const { content: regexAppliedContent, pending: displayPending, scripts: routedRegexScripts } = useDisplayRegexState(
     interceptorCleanedContent, isUser, depth, macroCtx, preprocessOpts, isStreaming,
   )
+  const regexScripts = routedRegexScripts ?? configuredRegexScripts
 
   const risuResolvedContent = useMemo(
     () => {

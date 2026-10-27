@@ -729,7 +729,18 @@ export function useWebSocket() {
       wsClient.on(EventType.MESSAGE_EDITED, (payload: MessageEditedPayload) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
-          if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
+          const next = payload.message
+          const preset = next?.extra?.spindle_metadata?.preset_contexts?.[next.swipe_id]
+          const previous = preset?.preset_id ? state.messages.find(message => message.id === next?.id) : undefined
+          const previousFields = previous as unknown as Record<string, unknown> | undefined
+          const nextFields = next as unknown as Record<string, unknown>
+          // Hidden swipes can stream without changing the selected message's render inputs.
+          const samePresetFrame = !!preset?.preset_id && previousFields && Object.keys({ ...previousFields, ...nextFields }).every(key =>
+            ['swipes', 'swipe_dates', 'revision'].includes(key) || (key === 'extra'
+              ? JSON.stringify(previousFields.extra) === JSON.stringify(nextFields.extra)
+              : previousFields[key] === nextFields[key]),
+          )
+          if (next?.id && !samePresetFrame) invalidateDisplayRegexCacheForMessage(next.id)
 
           // A continue buffer appends to saved text until the terminal event.
           // Adopt later edits atomically with buffer cleanup to avoid duplicating it.

@@ -15,6 +15,10 @@ import { applyRegexScripts, hasRegexMatchAction } from "./regex-scripts.service"
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { readPromptActivation } from "../utils/regex-prompt-activation";
+import type { MessagePresetContext } from "../types/preset-context";
+import { applyMessagePresetContext } from "./message-preset-context.service";
+import { createHash } from "node:crypto";
+import { resolveDisplayMessageBody } from "./chat-macro-render.service";
 
 initMacros();
 
@@ -38,6 +42,9 @@ export interface ApplyDisplayRegexInput {
   resolvedReplacements?: Map<string, string>;
   dynamicMacros?: Record<string, string>;
   signal?: AbortSignal;
+  /** Server-validated context from the stored message, never a client-selected preset. */
+  presetContext?: MessagePresetContext;
+  preprocessed?: boolean;
 }
 
 function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv | undefined {
@@ -187,6 +194,25 @@ type DisplayVarEnv = { variables: { local: Map<string, unknown>; chat: Map<strin
 
 const DISPLAY_REGEX_CACHE = new Map<string, { result: string; touched: ReadonlyArray<readonly [string, string]> }>();
 const DISPLAY_REGEX_CACHE_MAX = 1000;
+const presetScriptDigests = new WeakMap<RegexScript[], string>();
+
+function presetScriptDigest(scripts: RegexScript[]): string {
+  let digest = presetScriptDigests.get(scripts);
+  if (!digest) {
+    digest = createHash("sha256").update(JSON.stringify(scripts)).digest("hex");
+    presetScriptDigests.set(scripts, digest);
+  }
+  return digest;
+}
+
+function presetRenderDigest(input: ApplyDisplayRegexInput, env: MacroEnv | undefined): string {
+  // Prompt defaults and selections live outside the variable maps tracked by the evaluator.
+  return createHash("sha256").update(JSON.stringify([
+    input.userId, input.context.message_id, input.presetContext,
+    env?.extra.presetMetadata, env?.extra.promptVariables,
+    env?.extra.promptVariableDefaults, env?.extra.promptVariableSelections,
+  ])).digest("hex");
+}
 
 function varStateForKey(env: DisplayVarEnv, name: string): string {
   if (!env) return "";
@@ -257,7 +283,7 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
 
   let content = input.content;
   if (
-    messageContentProcessorChain.count > 0
+    !input.preprocessed && messageContentProcessorChain.count > 0
     && input.context.chat_id
     && content.length > 0
   ) {
@@ -288,7 +314,15 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
     }
   }
 
+  if (input.presetContext && !input.preprocessed && input.context.chat_id && input.context.message_id) {
+    const source = chatsSvc.getMessage(input.userId, input.context.message_id);
+    content = await resolveDisplayMessageBody(input.userId, input.context.chat_id, content, source ?? undefined, undefined, input.signal);
+  }
+
   const env = buildEnvFromContext(input.userId, input.context);
+  if (input.presetContext && (!env || !applyMessagePresetContext(env, input.userId, input.presetContext))) {
+    return { result: content, touchedVars: new Set(), cacheable: false, timedOutScriptIds: new Set() };
+  }
   const dyn: Record<string, string> = { ...(input.dynamicMacros ?? {}) };
   if (env) {
     env.extra.activationPreviewContext = {
@@ -307,7 +341,9 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
   }
   const noCache = input.scripts.some((script) => script.preset_id && readPromptActivation(script.metadata) && script.find_regex.includes("{{"))
     || (globalThis as { Bun?: { env?: Record<string, string | undefined> } }).Bun?.env?.LUMIVERSE_DISPLAY_REGEX_NO_CACHE === "1";
-  const cacheKey = displayRegexCacheKey(input.context.chat_id, content, placement, input.context.depth, input.scripts, dyn, input.resolvedFindPatterns, input.resolvedReplacements);
+  const cacheKey = displayRegexCacheKey(input.context.chat_id, content, placement, input.context.depth, input.scripts, dyn, input.resolvedFindPatterns, input.resolvedReplacements)
+    // Preset edits can share a one-second updated_at value; retain the exact definition identity.
+    + (input.presetContext ? `\x00P${presetScriptDigest(input.scripts)}:${presetRenderDigest(input, env)}` : "");
   if (!noCache) {
     const cached = DISPLAY_REGEX_CACHE.get(cacheKey);
     if (cached && (env ? cached.touched.every(([n, val]) => varStateForKey(env, n) === val) : cached.touched.length === 0)) {

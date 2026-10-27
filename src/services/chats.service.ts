@@ -266,6 +266,12 @@ function normalizeStoredMessageExtra(
       ? legacySwipeId
       : 0;
   const normalized: Record<string, unknown> = { ...(extra || {}) };
+  const spindleMetadata = normalized.spindle_metadata as Record<string, unknown> | undefined;
+  if (Array.isArray(spindleMetadata?.preset_contexts)) {
+    const contexts = spindleMetadata.preset_contexts;
+    normalized.spindle_metadata = { ...spindleMetadata,
+      preset_contexts: Array.from({ length: safeSwipeCount }, (_, i) => contexts[i] ?? null) };
+  }
   const reasoningBySwipe = normalizeReasoningEntries(
     normalized.reasoningBySwipe,
     safeSwipeCount,
@@ -478,6 +484,11 @@ function removeSwipeScopedExtraEntry(
   removedSwipeId: number,
 ): Record<string, unknown> {
   const normalized = normalizeStoredMessageExtra(extra, swipeCount, legacySwipeId);
+  const spindleMetadata = normalized.spindle_metadata as Record<string, unknown> | undefined;
+  if (Array.isArray(spindleMetadata?.preset_contexts)) {
+    const contexts = [...spindleMetadata.preset_contexts]; contexts.splice(removedSwipeId, 1);
+    normalized.spindle_metadata = { ...spindleMetadata, preset_contexts: contexts };
+  }
   if (Array.isArray(normalized.promptActivationBySwipe)) {
     const entries = [...normalized.promptActivationBySwipe];
     entries.splice(removedSwipeId, 1);

@@ -2,6 +2,18 @@ import type { RegexActionEffect } from "../types/regex-script";
 import { applyDisplayRegex } from "./display-regex.service";
 import * as chatsSvc from "./chats.service";
 import * as regexScriptsSvc from "./regex-scripts.service";
+import { readMessagePresetContext } from "../types/preset-context";
+
+/** Check the effective source pipeline, including a message's inactive preset. */
+export function getMessageDisplayScripts(userId: string, chatId: string, messageId: string) {
+  const source = chatsSvc.getMessage(userId, messageId);
+  const chat = chatsSvc.getChat(userId, chatId);
+  if (!source || source.chat_id !== chatId || !chat) return [];
+  const context = readMessagePresetContext(source.extra, source.swipe_id);
+  const options = { chatId, ...(chat.character_id ? { characterId: chat.character_id } : {}), target: "display" as const };
+  return context ? regexScriptsSvc.getActiveScriptsForPreset(userId, { ...options, presetId: context.preset_id })
+    : regexScriptsSvc.getActiveScripts(userId, options);
+}
 
 const ACTION_PAYLOAD_RE = /\bdata-lumiverse-regex-action="([^"]+)"/g;
 const MAX_RESOLVED_STATE_VALUE_LENGTH = 10_000;
@@ -34,16 +46,11 @@ export async function resolveRegexActionEffects(
   if (configuredEffects.length === 0) return { status: "resolved", effects: [] };
   if (source.is_user) return { status: "user_source" };
   if (
-    configuredScript.disabled ||
     !configuredScript.target.includes("display") ||
     !configuredScript.placement.includes("ai_output")
   ) return { status: "unavailable" };
 
-  const scripts = regexScriptsSvc.getActiveScripts(userId, {
-    ...(chat.character_id ? { characterId: chat.character_id } : {}),
-    chatId,
-    target: "display",
-  });
+  const scripts = getMessageDisplayScripts(userId, chatId, messageId);
   if (!scripts.some((script) => script.id === configuredScript.id)) {
     return { status: "unavailable" };
   }
@@ -66,6 +73,7 @@ export async function resolveRegexActionEffects(
       message_index: messageIndex,
     },
     userId,
+    presetContext: readMessagePresetContext(source.extra, source.swipe_id) ?? undefined,
     dynamicMacros: { chat_index: String(messageIndex), role: "assistant" },
   });
 

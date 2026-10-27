@@ -774,11 +774,15 @@ async function applyPromptRegexScriptsBeforeClipping(
 ): Promise<void> {
   if (ctx.skipPromptRegex) return;
 
-  const scripts = regexScriptsSvc.getActiveScripts(ctx.userId, {
+  const options = {
     characterId: characterId ?? undefined,
     chatId: ctx.chatId,
-    target: "prompt",
-  });
+    target: "prompt" as const,
+  };
+  const presetId = macroEnv.extra.presetId;
+  const scripts = ctx.forcePresetId && typeof presetId === "string"
+    ? regexScriptsSvc.getActiveScriptsForPreset(ctx.userId, { ...options, presetId })
+    : regexScriptsSvc.getActiveScripts(ctx.userId, options);
   if (scripts.length === 0) return;
 
   const chatHistoryDepth = new Map<number, number>();

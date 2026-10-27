@@ -73,6 +73,17 @@ test("dry run leaves unavailable counts and clipping statistics undefined", asyn
   const response = await fixture()({ type: "generate_dry_run", input: { chatId: "chat" } });
   expect(response.result.chatHistoryTokens).toBeUndefined();
   expect(response.result.contextClipStats).toBeUndefined();
+  expect(Object.hasOwn(response.result, "variable_state")).toBe(false);
+  expect(Object.hasOwn(dryRun.mock.calls[0]![0], "force_preset_id")).toBe(false);
+});
+
+test("forced preset dry runs forward the opt-in and return captured variables", async () => {
+  const variable_state = { local: { mode: "source" }, global: {}, chat: {}, prompt_selections: { choice: ["x"] } };
+  dryRun.mockResolvedValue({ ...baseResult, variable_state });
+  const response = await fixture()({ type: "generate_dry_run", input: { chatId: "chat", presetId: "source", forcePresetId: true } });
+  expect(dryRun.mock.calls[0]?.[0]).toMatchObject({ userId: "alice", chat_id: "chat", preset_id: "source", force_preset_id: true });
+  expect(response.result.variable_state).toEqual(variable_state);
+  expect((await fixture("user", false)({ type: "generate_dry_run", input: { chatId: "chat", forcePresetId: true } })).error).toContain("generation");
 });
 
 test("dry run still requires generation permission and enforces user scope", async () => {

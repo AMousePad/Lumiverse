@@ -62,7 +62,7 @@ function setup(optimistic = false) {
     getEmptyGeneratedSwipeTarget: () => null,
     deleteEmptyGeneratedSwipe: async (_target: unknown, messages: Message[]) => messages,
     isLocalStreamPlaceholderId: (id: string) => !!id && id.startsWith('__'),
-    invalidateDisplayRegexCacheForMessage() {}, sanitizeToastMessage: (value: string) => value,
+    invalidateDisplayRegexCacheForMessage: mock(() => {}), sanitizeToastMessage: (value: string) => value,
     toast: { error() {} }, i18n: { t: (key: string) => key },
     document: { hidden: false, visibilityState: 'visible', hasFocus: () => true },
   }
@@ -80,14 +80,14 @@ function setup(optimistic = false) {
     invoke(name, payload)
     void pending.catch((error) => { rejections.push(error) })
   }
-  const update = (message = edited) => receive('MESSAGE_EDITED', { chatId: 'chat', message })
+  const update = (message: Message = edited) => receive('MESSAGE_EDITED', { chatId: 'chat', message })
   const finish = async (reject = false) => {
     if (reject) tail.reject(new Error('Tail unavailable'))
     else tail.resolve({ data: [saved], total: 1, offset: 0 })
     await pending
     expect(rejections).toEqual([])
   }
-  return { store, receive, update, finish, fetchLatestMessages }
+  return { store, receive, update, finish, fetchLatestMessages, invalidations: dependencies.invalidateDisplayRegexCacheForMessage }
 }
 
 describe('continuation terminal message ordering', () => {
@@ -292,3 +292,18 @@ describe('continuation terminal message ordering', () => {
     expect(h.fetchLatestMessages).not.toHaveBeenCalled()
   })
 })
+
+
+test('hidden-swipe edits reuse the selected preset rendering; selected and vanilla edits still invalidate', () => {
+  const h = setup(); h.store.getState().endStreaming();
+  const message = { ...original, extra: { spindle_metadata: { preset_contexts: [{ preset_id: 'source' }, { preset_id: 'other' }] } }, swipes: ['Prefix', 'sibling'] };
+  h.store.getState().setMessages([message]);
+  h.update({ ...message, swipes: ['Prefix', 'sibling grows'], revision: 2 });
+  expect(h.invalidations).not.toHaveBeenCalled();
+  h.update({ ...message, content: 'Selected grows', swipes: ['Selected grows', 'sibling grows'], revision: 3 });
+  expect(h.invalidations).toHaveBeenCalledTimes(1);
+  h.update({ ...message, extra: { spindle_metadata: { preset_contexts: [{ preset_id: 'changed' }] } }, revision: 4 });
+  expect(h.invalidations).toHaveBeenCalledTimes(2);
+  h.store.getState().setMessages([original]); h.update(saved as typeof edited);
+  expect(h.invalidations).toHaveBeenCalledTimes(3);
+});
