@@ -11,10 +11,11 @@
 }
 
 :global([data-glass]) .overlay {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px)) var(--lcs-liquid-filter, );
 }
 
 .modal {
+  position: relative;
   width: clamp(340px, calc(94vw / var(--lumiverse-ui-scale, 1)), min(1200px, var(--lumiverse-content-max-width, 1200px)));
   height: clamp(400px, calc(88vh / var(--lumiverse-ui-scale, 1)), 860px);
   background: var(--lumiverse-bg-deep);

@@ -71,8 +71,8 @@ describe('DeferredColorInput', () => {
 
 test('shows the native restart requirement and clears it when the requested surface matches', async () => {
   act(() => root.render(
-    <DepthControls radiusScale={1} enableGlass={false} fontScale={1} uiScale={1}
-      onRadiusChange={() => {}} onGlassToggle={() => {}} onFontScaleChange={() => {}} onUiScaleChange={() => {}}
+    <DepthControls radiusScale={1} enableGlass={false} liquidGlass={false} fontScale={1} uiScale={1}
+      onRadiusChange={() => {}} onGlassToggle={() => {}} onLiquidGlassToggle={() => {}} onFontScaleChange={() => {}} onUiScaleChange={() => {}}
       showDesktopBackgroundControls onDesktopBackgroundChange={() => {}} />,
   ))
   expect(host.querySelector('[role="status"]')).toBeNull()

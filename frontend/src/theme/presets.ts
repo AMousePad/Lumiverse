@@ -112,6 +112,8 @@ export function normalizeTheme(input: unknown): ThemeConfig | null {
     ...t,
     accent: accentValid ? (t.accent as ThemeConfig['accent']) : DEFAULT_THEME.accent,
     radiusScale: typeof t.radiusScale === 'number' ? t.radiusScale : DEFAULT_THEME.radiusScale,
+    enableGlass: typeof t.enableGlass === 'boolean' ? t.enableGlass : DEFAULT_THEME.enableGlass,
+    liquidGlass: typeof t.liquidGlass === 'boolean' ? t.liquidGlass : DEFAULT_THEME.liquidGlass,
     fontScale: typeof t.fontScale === 'number' ? t.fontScale : DEFAULT_THEME.fontScale,
     renderingMode:
       renderingMode === 'efficiency' || renderingMode === 'quality' || renderingMode === 'balanced'

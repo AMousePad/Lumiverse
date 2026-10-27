@@ -63,6 +63,12 @@ Enables a frosted-glass look with backdrop blur on panels, modals, and headers. 
 !!! note "Performance"
     Glass effects use CSS `backdrop-filter: blur()`, which can be GPU-intensive. If you notice performance issues (especially on older devices), disable glass effects.
 
+### Liquid Glass
+
+Enable **Liquid glass** in the Controls section to add refraction and highlights to glass surfaces and slider thumbs. It is off by default and requires **Glass effects**. Efficiency rendering and the system's reduced-motion preference disable the effect. Browsers without SVG backdrop refraction retain the frosted appearance.
+
+Liquid glass belongs to the saved theme. Turning off **Glass effects** with device-specific controls enabled pauses the effect on that device without changing the saved theme or other devices.
+
 ---
 
 ## Locking Theme Sliders

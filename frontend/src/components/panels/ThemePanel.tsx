@@ -85,9 +85,22 @@ export default function ThemePanel() {
     [updateControls]
   )
 
+  // Local glass controls must not change the authored theme on other devices.
+  // When editing the theme itself, clear both layers in a single settings write.
   const handleGlassToggle = useCallback(
-    (enableGlass: boolean) => updateControls({ enableGlass }),
-    [updateControls]
+    (enableGlass: boolean) => {
+      if (activeDeviceThemeControls(useDeviceThemeControls.getState())) {
+        updateControls({ enableGlass })
+      } else {
+        update({ enableGlass, ...(!enableGlass ? { liquidGlass: false } : {}) })
+      }
+    },
+    [update, updateControls]
+  )
+
+  const handleLiquidGlassToggle = useCallback(
+    (liquidGlass: boolean) => update({ liquidGlass }),
+    [update]
   )
 
   const handleFontScaleChange = useCallback(
@@ -212,10 +225,12 @@ export default function ThemePanel() {
           slidersLocked={slidersLocked}
           radiusScale={appearance.radiusScale}
           enableGlass={appearance.enableGlass}
+          liquidGlass={Boolean(appearance.liquidGlass)}
           fontScale={appearance.fontScale}
           uiScale={appearance.uiScale ?? 1}
           onRadiusChange={handleRadiusChange}
           onGlassToggle={handleGlassToggle}
+          onLiquidGlassToggle={handleLiquidGlassToggle}
           onFontScaleChange={handleFontScaleChange}
           onUiScaleChange={handleUiScaleChange}
           showDesktopBackgroundControls={isTauriDesktop}

@@ -2658,6 +2658,11 @@
     "fontScale": "字体缩放",
     "uiScale": "界面缩放",
     "glassEffects": "玻璃效果",
+    "liquidGlass": {
+      "label": "液态玻璃",
+      "hint": "折射并模糊表面后方的背景。需要开启玻璃效果。",
+      "requiresGlass": "请先开启玻璃效果"
+    },
     "renderingMode": {
       "label": "渲染",
       "hint": "节能模式会移除模糊；高质量模式会在桌面窗口重启后，于支持的 macOS 显示器上启用高刷新率渲染。",

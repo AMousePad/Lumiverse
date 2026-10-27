@@ -93,3 +93,27 @@
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
 }
+
+.switchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.switchText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.switchText .label {
+  width: auto;
+}
+
+.hint {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  line-height: 1.4;
+}
