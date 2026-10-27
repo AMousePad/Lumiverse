@@ -18,6 +18,7 @@ import { readPromptActivation } from "../utils/regex-prompt-activation";
 import type { MessagePresetContext } from "../types/preset-context";
 import { applyMessagePresetContext } from "./message-preset-context.service";
 import { createHash } from "node:crypto";
+import { resolveDisplayMessageBody } from "./chat-macro-render.service";
 
 initMacros();
 
@@ -311,6 +312,11 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
     } catch {
       // Render-MCP failure should not block regex application; fall through with the raw content.
     }
+  }
+
+  if (input.presetContext && !input.preprocessed && input.context.chat_id && input.context.message_id) {
+    const source = chatsSvc.getMessage(input.userId, input.context.message_id);
+    content = await resolveDisplayMessageBody(input.userId, input.context.chat_id, content, source ?? undefined, undefined, input.signal);
   }
 
   const env = buildEnvFromContext(input.userId, input.context);

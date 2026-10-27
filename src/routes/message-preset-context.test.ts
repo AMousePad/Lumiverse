@@ -136,6 +136,32 @@ test("preset-specific interactive buttons remain claimable through the native pi
     body: JSON.stringify({ script_id: script.id, action_id: "go", instance_id: payload.instanceId }) });
   expect(claimed.status).toBe(200);
 });
+
+test("preset action effects verify the same captured body macros shown to the user", async () => {
+  const preset = presets.createPreset(user, { name: "Captured choice", provider: "loom" });
+  const script = regex.createRegexScript(user, {
+    name: "Choice effect", preset_id: preset.id, target: ["display"], placement: ["ai_output"],
+    find_regex: "^choice$", replace_string: '<button data-regex-action="go">Continue</button>',
+    actions: [{ id: "go", type: "effects", multi_select: false, cost: "", limit: "", title: "", subtitle: "", content: "",
+      effects: [{ type: "set_state", key: "chosen", value: "yes" }] }],
+  });
+  if (typeof script === "string") throw new Error(script);
+  getDb().query("INSERT INTO settings (user_id,key,value,updated_at) VALUES (?,?,?,0)")
+    .run(user, `presetRegexEnabled:${preset.id}`, JSON.stringify([script.id]));
+  const chat = chats.createChat(user, {});
+  const message = chats.createMessage(chat.id, {
+    is_user: false, name: "Cat", content: "{{getvar::label}}",
+    extra: { spindle_metadata: { preset_contexts: [{ preset_id: preset.id, variables: { local: { label: "choice" } } }] } },
+  }, user);
+  const rendered = await renderNative(chat.id, message.id, preset.id, message.content);
+  const payload = JSON.parse(decodeURIComponent(rendered.content.match(/data-lumiverse-regex-action="([^"]+)"/)[1]));
+  const claimed = await app.request(`http://localhost/${chat.id}/messages/${message.id}/regex-action`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ script_id: script.id, action_id: "go", instance_id: payload.instanceId }),
+  });
+  expect(claimed.status).toBe(200);
+  expect(chats.getChat(user, chat.id)!.metadata.chat_variables).toEqual({ chosen: "yes" });
+});
 test("backend cache separates captured defaults and selections", async () => {
   const preset = presets.createPreset(user, { name: "Cache boundary", provider: "loom" });
   const rule = regex.createRegexScript(user, { name: "Snapshot", preset_id: preset.id, target: ["display"], placement: ["ai_output"], find_regex: "^TOKEN$", replace_string: "{{varDefault::mode}}/{{var::choice::ison::x}}", substitute_macros: "after" });

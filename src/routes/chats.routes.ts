@@ -12,14 +12,8 @@ import {
   messageContentProcessorChain,
   type MessageContentProcessorCtx,
 } from "../spindle/message-content-processor";
-import { resolveRenderedMessageContent } from "../services/chat-macro-render.service";
-import { shieldMessageLiterals } from "../macros/message-literals";
-import { contentHasMacroHints } from "../services/vectorization-content.service";
+import { resolveDisplayMessageBody } from "../services/chat-macro-render.service";
 import { computeMessageTokenCount } from "../services/message-token-count";
-import {
-  getActivatedWorldInfoEntriesForChat,
-  resolveWorldInfoOutlets,
-} from "../services/prompt-assembly.service";
 import { resolveRegexActionEffects, getMessageDisplayScripts } from "../services/associative-regex-effects.service";
 import {
   personaHasAddon,
@@ -27,8 +21,7 @@ import {
 } from "../services/persona-addon-states";
 import type { RegexActionEffect } from "../types/regex-script";
 import { dispatchEditAndSendRequest } from "../services/edit-and-send-dispatcher.service";
-import { readMessagePresetContext } from "../types/preset-context";
-import { applyMessagePresetContext, getMessagePresetContext } from "../services/message-preset-context.service";
+import { getMessagePresetContext } from "../services/message-preset-context.service";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -91,9 +84,6 @@ async function processChatGreeting(userId: string, chat: { id: string }) {
 
 const app = new Hono();
 
-/** Matches an outlet macro so display resolution can populate Lorebook
- * outlets when a directly or indirectly referenced persona outlet needs one. */
-const OUTLET_MACRO_RE = /\{\{(?:outlet|persona_outlet|personaoutlet)::/i;
 const DISPLAY_PREPROCESS_BATCH_MAX = 100;
 
 interface DisplayPreprocessItem {
@@ -146,27 +136,10 @@ async function runDisplayPreprocessItem(
       }, userId, signal)
     : { content: item.rawContent };
 
-  let content = processed.content ?? item.rawContent;
   const savedMessage = item.messageId ? svc.getMessage(userId, item.messageId) : null;
-  const presetContext = savedMessage?.chat_id === chatId
-    ? readMessagePresetContext(savedMessage.extra, item.swipeIndex ?? savedMessage.swipe_id) : null;
-  if (savedMessage?.chat_id === chatId) content = shieldMessageLiterals(content, savedMessage);
-  if (contentHasMacroHints(content)) {
-    const env = svc.buildMacroEnvForChat(userId, chatId);
-    if (env && (!presetContext || applyMessagePresetContext(env, userId, presetContext))) {
-      // {{outlet::name}} is only populated during prompt assembly; mirror it
-      // here so displayed messages match what the model actually receives.
-      if (OUTLET_MACRO_RE.test(content)) {
-        try {
-          const entries = await getActivatedWorldInfoEntriesForChat(userId, chatId);
-          await resolveWorldInfoOutlets(entries, env, signal);
-        } catch {
-          // Leave outlets unresolved — base macro resolution still runs.
-        }
-      }
-      content = await resolveRenderedMessageContent(content, env, true);
-    }
-  }
+  const content = await resolveDisplayMessageBody(
+    userId, chatId, processed.content ?? item.rawContent, savedMessage ?? undefined, item.swipeIndex, signal,
+  );
 
   return {
     messageId: item.messageId,
