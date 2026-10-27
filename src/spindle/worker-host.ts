@@ -114,6 +114,7 @@ import {
 } from "./frontend-runtime-capabilities";
 import type { CreatePresetInput, PromptBlock, UpdatePresetInput } from "../types/preset";
 import { getDb } from "../db/connection";
+import { MAX_LIMIT } from "../types/pagination";
 import {
   getMessages as getChatMessages,
   createMessage as createChatMessage,
@@ -154,6 +155,53 @@ type ChatAppendMessageOptions =
       triggerGeneration?: boolean;
       generation?: ChatAppendGenerationOptions;
     };
+
+type ChatGetMessagesOptions = {
+  limit?: number;
+  offset?: number;
+  tail?: number;
+  light?: boolean;
+  includeExtra?: boolean;
+  ownMetadataOnly?: boolean;
+};
+
+/** Host-owned `extra.spindle_metadata` keys; an extension whose identifier matches one has no own entry. */
+const HOST_OWNED_SPINDLE_METADATA_KEYS = new Set(["preset_contexts"]);
+
+function parseChatGetMessagesOptions(raw: unknown): ChatGetMessagesOptions {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new Error("options must be an object");
+  const input = raw as Record<string, unknown>;
+  const integer = (key: "limit" | "offset" | "tail", min: number, max: number): number | undefined => {
+    const value = input[key];
+    if (value === undefined) return undefined;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) {
+      throw new Error(`options.${key} must be an integer between ${min} and ${max}`);
+    }
+    return value;
+  };
+  const flag = (key: "light" | "includeExtra" | "ownMetadataOnly"): boolean | undefined => {
+    const value = input[key];
+    if (value === undefined) return undefined;
+    if (typeof value !== "boolean") throw new Error(`options.${key} must be a boolean`);
+    return value;
+  };
+  const options: ChatGetMessagesOptions = {
+    limit: integer("limit", 1, MAX_LIMIT),
+    offset: integer("offset", 0, Number.MAX_SAFE_INTEGER),
+    tail: integer("tail", 1, MAX_LIMIT),
+    light: flag("light"),
+    includeExtra: flag("includeExtra"),
+    ownMetadataOnly: flag("ownMetadataOnly"),
+  };
+  if (options.tail !== undefined && (options.limit !== undefined || options.offset !== undefined)) {
+    throw new Error("options.tail cannot be combined with options.limit or options.offset");
+  }
+  if (options.offset !== undefined && options.limit === undefined) {
+    throw new Error("options.offset requires options.limit");
+  }
+  return options;
+}
 
 type TokenCountResult = {
   total_tokens: number;
@@ -1333,6 +1381,7 @@ export class WorkerHost {
           "decision-images-v1": 1,
           "embeddings-v1": 1,
           "desktop-capture-worker-v1": 1,
+          "chat-lean-messages-v1": 1,
         }),
         extensionInstallationId: this.extensionId,
       },
@@ -1948,7 +1997,7 @@ export class WorkerHost {
         this.handleConnectionsResolveDispatch(msg.requestId, msg.connectionId);
         break;
       case "chat_get_messages":
-        this.handleChatGetMessages(msg.requestId, msg.chatId);
+        this.handleChatGetMessages(msg.requestId, msg.chatId, "options" in msg ? msg.options : undefined);
         break;
       case "chat_append_message":
         void this.handleChatAppendMessage(
@@ -3874,27 +3923,50 @@ export class WorkerHost {
     return "assistant";
   }
 
-  private handleChatGetMessages(requestId: string, chatId: string): void {
+  /** This extension's own entry in `extra.spindle_metadata`, keyed like its preset metadata namespace. */
+  private getOwnSpindleMetadataKey(): string | null {
+    const identifier = this.manifest.identifier;
+    return identifier && !HOST_OWNED_SPINDLE_METADATA_KEYS.has(identifier) ? identifier : null;
+  }
+
+  private handleChatGetMessages(requestId: string, chatId: string, rawOptions?: unknown): void {
     try {
       if (!this.hasPermission("chat_mutation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
       }
 
+      const options = parseChatGetMessagesOptions(rawOptions);
       const userId = this.getChatOwnerId(chatId);
       if (!userId) throw new Error("Chat not found");
       this.enforceScopedUser(userId);
 
-      const messages = getChatMessages(userId, chatId).map((m) => {
+      const light = options.light === true;
+      const includeExtra = options.includeExtra !== false;
+      const ownMetadataKey = options.ownMetadataOnly === true ? this.getOwnSpindleMetadataKey() : undefined;
+      const source =
+        options.tail !== undefined
+          ? chatsSvc.listMessagesTail(userId, chatId, options.tail, { light }).data
+          : options.limit !== undefined
+            ? chatsSvc.listMessages(userId, chatId, { limit: options.limit, offset: options.offset ?? 0 }, { light }).data
+            : getChatMessages(userId, chatId, { light });
+
+      const messages = source.map((m) => {
         const rawExtra = (m.extra || {}) as Record<string, unknown>;
         const role = this.mapChatRole(m.is_user, rawExtra);
 
         // Split spindle_metadata out of extra so it's surfaced as `metadata`
         // and not echoed twice on the wire.
         const { spindle_metadata, ...extra } = rawExtra;
-        const metadata =
+        let metadata =
           typeof spindle_metadata === "object" && spindle_metadata
             ? (spindle_metadata as Record<string, unknown>)
             : undefined;
+        if (ownMetadataKey !== undefined) {
+          metadata =
+            metadata && ownMetadataKey && Object.prototype.hasOwnProperty.call(metadata, ownMetadataKey)
+              ? { [ownMetadataKey]: metadata[ownMetadataKey] }
+              : undefined;
+        }
 
         const swipes = Array.isArray(m.swipes) ? m.swipes.slice() : [];
         const swipeId =
@@ -3910,7 +3982,8 @@ export class WorkerHost {
           role,
           content: m.content,
           send_date: m.send_date,
-          extra,
+          ...(includeExtra ? { extra } : {}),
+          hidden: rawExtra.hidden === true,
           metadata,
           swipe_id: swipeId,
           swipes,
@@ -4016,6 +4089,7 @@ export class WorkerHost {
     patch: {
       content?: string;
       metadata?: Record<string, unknown>;
+      ownMetadata?: unknown;
       swipes?: string[];
       swipe_id?: number;
       swipe_dates?: number[];
@@ -4042,6 +4116,24 @@ export class WorkerHost {
 
       if (patch.metadata !== undefined) {
         extra.spindle_metadata = patch.metadata;
+        extraDirty = true;
+      }
+
+      // Merge only this extension's entry into whatever bag is stored now (or
+      // was just written above). Read and write share this synchronous handler,
+      // so no other extension's write can land in between.
+      if (patch.ownMetadata !== undefined) {
+        const key = this.getOwnSpindleMetadataKey();
+        if (!key) {
+          throw new Error(`Extension identifier "${this.manifest.identifier}" is a host-owned spindle_metadata key`);
+        }
+        const stored = extra.spindle_metadata;
+        const bag: Record<string, unknown> =
+          typeof stored === "object" && stored && !Array.isArray(stored) ? { ...(stored as Record<string, unknown>) } : {};
+        if (patch.ownMetadata === null) delete bag[key];
+        else bag[key] = patch.ownMetadata;
+        if (Object.keys(bag).length > 0) extra.spindle_metadata = bag;
+        else delete extra.spindle_metadata;
         extraDirty = true;
       }
 

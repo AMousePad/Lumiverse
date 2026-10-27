@@ -2025,9 +2025,9 @@ export function messagesHaveRevisionColumn(): boolean {
   return _msgRevisionCol;
 }
 
-export function getMessages(userId: string, chatId: string): Message[] {
+export function getMessages(userId: string, chatId: string, opts?: { light?: boolean }): Message[] {
   const rows = getMsgStmts().all.all(chatId, userId) as any[];
-  return rows.map(rowToMessage);
+  return rows.map(opts?.light ? rowToMessageLight : rowToMessage);
 }
 
 /**

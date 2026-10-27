@@ -55,6 +55,7 @@ import type {
   ImageUploadDTO,
   ImageUploadFromDataUrlOptionsDTO,
   ChatMessageDTO,
+  SpindleMessageMetadataDTO,
   ChatChunkDTO,
   ChatLinkAttachDTO,
   ChatLinkDTO,
@@ -343,6 +344,7 @@ type RuntimeWorkerToHost =
       userId?: string;
     }
   | { type: "register_context_handler"; priority?: number; timeoutMs?: number; required?: boolean }
+  | { type: "chat_get_messages"; requestId: string; chatId: string; options?: RuntimeChatGetMessagesOptions }
   | {
       type: "chat_append_message";
       requestId: string;
@@ -734,6 +736,40 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
   };
 };
 
+/** Options for `spindle.chat.getMessages()`; mirrors `ChatGetMessagesOptionsDTO` in lumiverse-spindle-types. */
+type RuntimeChatGetMessagesOptions = {
+  limit?: number;
+  offset?: number;
+  tail?: number;
+  light?: boolean;
+  includeExtra?: boolean;
+  ownMetadataOnly?: boolean;
+};
+type RuntimeChatMessage = ChatMessageDTO & {
+  role: "system" | "user" | "assistant";
+  /** Mirrors `extra.hidden`; present even when `extra` is omitted. */
+  hidden: boolean;
+  metadata?: SpindleMessageMetadataDTO;
+};
+/** `includeExtra: false` drops `extra`; `light: true` nulls non-active `swipes` slots. */
+type RuntimeChatGetMessagesResult<O extends RuntimeChatGetMessagesOptions> =
+  Omit<RuntimeChatMessage, (O extends { includeExtra: false } ? "extra" : never) | (O extends { light: true } ? "swipes" : never)>
+  & (O extends { light: true } ? { swipes: Array<string | null> } : unknown);
+type RuntimeChatAPI = Omit<SpindleAPI["chat"], "getMessages" | "updateMessage"> & {
+  getMessages<O extends RuntimeChatGetMessagesOptions = Record<never, never>>(
+    chatId: string,
+    options?: O,
+  ): Promise<Array<RuntimeChatGetMessagesResult<O>>>;
+  updateMessage(
+    chatId: string,
+    messageId: string,
+    patch: Parameters<SpindleAPI["chat"]["updateMessage"]>[2] & {
+      /** Set (or with `null`, remove) only this extension's `spindle_metadata` entry. */
+      ownMetadata?: unknown;
+    },
+  ): Promise<void>;
+};
+
 // `presets` is replaced wholesale (not intersected) because the local
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
@@ -746,7 +782,8 @@ interface RuntimeLumiverseVersionInfo {
   branch: string | null;
 }
 
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version" | "chat"> & {
+  chat: RuntimeChatAPI;
   version: SpindleAPI["version"] & {
     getCommit(): Promise<string | null>;
     getBranch(): Promise<string | null>;
@@ -2341,13 +2378,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   chat: {
-    async getMessages(chatId: string) {
+    async getMessages<O extends RuntimeChatGetMessagesOptions = Record<never, never>>(chatId: string, options?: O) {
       const requestId = crypto.randomUUID();
-      const result = await request({ type: "chat_get_messages", requestId, chatId });
-      return result as Array<ChatMessageDTO & {
-        role: "system" | "user" | "assistant";
-        metadata?: Record<string, unknown>;
-      }>;
+      const result = await request({ type: "chat_get_messages", requestId, chatId, options });
+      return result as Array<RuntimeChatGetMessagesResult<O>>;
     },
     async appendMessage(chatId: string, message, options?: ChatAppendMessageOptions) {
       assertMutationAllowed("spindle.chat.appendMessage()");
