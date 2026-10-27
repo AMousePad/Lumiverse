@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, mkdtempSync, rmdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
@@ -40,9 +41,9 @@ import {
 } from "./chats.service";
 import { makePromptActivationSource, promptActivationSource } from "./prompt-activation.service";
 
-function initChatsTestDb(): void {
+function initChatsTestDb(path = ":memory:"): void {
   closeDatabase();
-  initDatabase(":memory:");
+  initDatabase(path);
   const db = getDb();
 
   db.run(`CREATE TABLE settings (
@@ -304,6 +305,46 @@ describe("chat greeting selection", () => {
 });
 
 describe("chat lifecycle events", () => {
+  test("forks reserve the write transaction before reading while background writers are active", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "chat-fork-contention-"));
+    const path = join(directory, "database.sqlite");
+    initChatsTestDb(path);
+    seedCharacter("c1", "Alpha");
+    seedChat("source", "c1", "Source", "{}", 100);
+    seedMessage("reply", "source", "Reply", {}, { index: 0 });
+    const writer = new Database(path);
+    writer.exec("PRAGMA busy_timeout = 0");
+    const db = getDb(), query = db.query.bind(db);
+    let attempted = false, blocked = false;
+    const backgroundWrite = () => writer.query("INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)").run("u1", "concurrent", "true");
+    const hook = spyOn(db, "query").mockImplementation(((sql: string) => {
+      const statement = query(sql);
+      if (!sql.startsWith("SELECT COUNT(*) as count FROM chats")) return statement;
+      return { get: (...values: any[]) => {
+        const result = statement.get(...values);
+        attempted = true;
+        try { backgroundWrite(); } catch (error: any) {
+          if (error.code !== "SQLITE_BUSY") throw error;
+          blocked = true;
+        }
+        return result;
+      } };
+    }) as typeof db.query);
+    try {
+      const fork = branchChat("u1", "source", "reply");
+      expect(attempted).toBe(true);
+      expect(fork).not.toBeNull();
+      expect(blocked).toBe(true);
+      expect(getMessages("u1", fork!.id).map(message => message.content)).toEqual(["Reply"]);
+      backgroundWrite();
+      expect(writer.query("SELECT value FROM settings WHERE key = 'concurrent'").get()).toEqual({ value: "true" });
+      await Bun.sleep(0);
+    } finally {
+      hook.mockRestore(); writer.close(); closeDatabase();
+      for (const suffix of ["", "-wal", "-shm"]) if (existsSync(path + suffix)) rmSync(path + suffix);
+      rmdirSync(directory);
+    }
+  });
   test("emits CHAT_CREATED after solo creation and group conversion", async () => {
     const events: EventMessage[] = [];
     const unsubscribe = eventBus.on(EventType.CHAT_CREATED, (event) => events.push(event));
