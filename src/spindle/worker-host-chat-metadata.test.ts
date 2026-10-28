@@ -58,3 +58,9 @@ test("metadata patches keep mutation permission and user scoping", async () => {
   }
 });
 
+test("metadata patches cannot target a message in a different chat", async () => {
+  const { send, write } = fixture();
+  expect((await send({ metadata_patch: { value: 1 } }, "other-chat")).error).toBe("Message not found");
+  expect(write).not.toHaveBeenCalled();
+});
+
