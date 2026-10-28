@@ -70,7 +70,7 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
   ) return
 
   if (genStatus.active && genStatus.generationId) {
-    latest.startStreaming(genStatus.generationId, genStatus.targetMessageId, getLocalStreamingType(genStatus.generationType))
+    latest.startStreaming(genStatus.generationId, genStatus.targetMessageId, getLocalStreamingType(genStatus.generationType), genStatus.renderMode)
     // startStreaming rejects already-ended generations. Do not attach their
     // swipe anchors or replay their buffers after that rejection.
     if (useStore.getState().activeGenerationId !== genStatus.generationId) return
@@ -94,6 +94,11 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
         showCouncilRetryModal(genStatus.councilToolsFailure)
       }
     }
+    return
+  }
+
+  if (genStatus.active && genStatus.renderMode === 'persisted-message' && genStatus.targetMessageId) {
+    await refreshPersistedMessage(chatId, genStatus.targetMessageId)
     return
   }
 
@@ -145,6 +150,10 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
       return
     }
 
+    if (genStatus.renderMode === 'persisted-message' && genStatus.targetMessageId) {
+      await refreshPersistedMessage(chatId, genStatus.targetMessageId)
+      return
+    }
     if (!genStatus.completedMessageId) return
 
     const pageSize = latest.messagesPerPage || 50
@@ -164,6 +173,22 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
       }
     } catch { /* best-effort */ }
   }
+}
+
+async function refreshPersistedMessage(chatId: string, messageId: string): Promise<void> {
+  const before = useStore.getState()
+  const epoch = before.getGenerationEpoch()
+  const prior = before.messages.find(message => message.id === messageId)
+  try {
+    const message = await messagesApi.get(chatId, messageId)
+    const current = useStore.getState()
+    if (current.activeChatId === chatId && !current.streamingNavigationPaused && current.getGenerationEpoch() === epoch &&
+        current.activeGenerationId === before.activeGenerationId && current.isStreaming === before.isStreaming &&
+        current.messages.find(value => value.id === message.id) === prior) {
+      if (prior) current.updateMessage(message.id, message)
+      else current.addMessage(message)
+    }
+  } catch { /* Message deletion can race recovery. */ }
 }
 
 // ── Gap recovery ─────────────────────────────────────────────────────────────

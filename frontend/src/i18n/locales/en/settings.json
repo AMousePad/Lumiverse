@@ -468,6 +468,20 @@
     "hfSaved": "Token saved."
   },
   "chat": {
+    "inlineImages": {
+      "title": "Inline Images",
+      "size": "Inline image size",
+      "hint": "Choose which image types use these controls, including images in greetings and HTML sections. Percentages scale images to the message width while keeping their proportions. Default keeps existing sizing.",
+      "default": "Default",
+      "applyTo": "Apply to",
+      "markdown": "Markdown / asset images",
+      "html": "HTML / XML images",
+      "attachments": "Attachments",
+      "alignment": "Image alignment",
+      "left": "Left",
+      "center": "Center",
+      "right": "Right"
+    },
     "greetingImages": {
       "title": "Greeting Images",
       "show": "Show greeting images",

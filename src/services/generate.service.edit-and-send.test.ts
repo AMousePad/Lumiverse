@@ -152,6 +152,7 @@ describe("startGeneration edit-and-send", () => {
     track(spyOn(chatsSvc, "deleteMessage").mockImplementation(() => true));
     track(spyOn(chatsSvc, "deleteSwipe").mockImplementation(() => assistant));
     track(spyOn(chatsSvc, "patchMessageExtra").mockImplementation(() => assistant));
+    track(spyOn(chatsSvc, "prepareNativeSwipeVariables").mockReturnValue(undefined));
 
     addSwipe = track(spyOn(chatsSvc, "addSwipe").mockImplementation((_userId, messageId, _content, options) => {
       expect(messageId).toBe(ASSISTANT_ID);

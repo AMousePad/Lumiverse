@@ -1,5 +1,6 @@
 import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, GroupedRecentChat, PaginatedResult, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
 import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, WeaverNarrationMode, WeaverPersonaRegister, WeaverPersonaPlan, PersonaDraft, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
+import type { ChatImageSize, ChatImageAlignment, ChatImageTargets } from '@/lib/chatImagePresentation'
 import type { ImpersonationPreference } from '@/lib/impersonationPreset'
 import type { UiLanguage } from '@/i18n/languages'
 
@@ -35,6 +36,7 @@ export interface ChatSlice {
   /** Index of the swipe the active generation streams into. Lets the UI gate the
    *  streaming buffer to that swipe so the user can navigate to other swipes
    *  mid-generation. null when unknown (pre-GENERATION_STARTED) or idle. */
+  streamingRenderMode: "persisted-message" | null
   streamingSwipeId: number | null
   streamingPreserveSwipe: boolean
   streamingGenerationType: string | null
@@ -78,7 +80,7 @@ export interface ChatSlice {
   updateMessage: (id: string, updates: Partial<Message>) => void
   removeMessage: (id: string) => void
   beginStreaming: (regeneratingMessageId?: string, generationType?: string, backgroundSwipeId?: number) => void
-  startStreaming: (generationId: string, regeneratingMessageId?: string, generationType?: string) => void
+  startStreaming: (generationId: string, regeneratingMessageId?: string, generationType?: string, renderMode?: "persisted-message") => void
   pauseStreamingForNavigation: () => void
   /** Append a live stream segment. When `offset` (char position of the segment
    *  start in the server's cumulative buffer) is provided, overlap with already-
@@ -769,6 +771,9 @@ export interface SettingsSlice {
   /** Show the selected greeting's artwork with the starting message. Opt-in. */
   showGreetingImage: boolean
   greetingImagePosition: 'top' | 'bottom'
+  chatImageSize: ChatImageSize
+  chatImageAlignment: ChatImageAlignment
+  chatImageTargets: ChatImageTargets
   longMessageCollapseEnabled: boolean
   longMessageCollapsePreset: LongMessageCollapsePreset
   longMessageCollapseCustomHeight: number

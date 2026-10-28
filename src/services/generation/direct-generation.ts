@@ -33,6 +33,8 @@ import {
 } from "./reasoning";
 
 export interface RawGenerateInput {
+  onProviderChunk?: (chunk: StreamChunk) => void;
+  onInferenceWait?: (waiting: boolean) => void;
   provider: string;
   model: string;
   messages: LlmMessage[];
@@ -303,17 +305,21 @@ export async function rawGenerateStream(
   options?: GenerationCallOptions,
 ): Promise<AsyncGenerator<StreamChunk, void, unknown>> {
   const { provider, apiKey, apiUrl, request } = await prepareRawCall(userId, input, options);
-  return wrapDelimitedReasoningForUser(
-    userId,
-    withInferenceLeaseStream(
-      leaseOptionsFor(userId, apiUrl, input.signal, options, "user", "raw-generate-stream"),
-      (lease) => provider.generateStream(apiKey, apiUrl, {
-        ...request,
-        signal: withLeaseAbort(request.signal, lease),
-        stream: true,
-      }),
-    ),
+  const stream = withInferenceLeaseStream(
+    leaseOptionsFor(userId, apiUrl, input.signal, options, "user", "raw-generate-stream"),
+    (lease) => {
+      input.onInferenceWait?.(false);
+      const source = provider.generateStream(apiKey, apiUrl, { ...request, signal: withLeaseAbort(request.signal, lease), stream: true });
+      if (!input.onProviderChunk) return source;
+      return (async function* () { for await (const chunk of source) { input.onProviderChunk!(chunk); yield chunk; } })();
+    },
   );
+  if (!input.onInferenceWait) return wrapDelimitedReasoningForUser(userId, stream);
+  return (async function* () {
+    input.onInferenceWait!(true);
+    try { yield* wrapDelimitedReasoningForUser(userId, stream); }
+    finally { input.onInferenceWait!(false); }
+  })();
 }
 
 /**

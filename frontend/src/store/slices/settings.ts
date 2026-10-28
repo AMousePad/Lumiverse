@@ -12,6 +12,7 @@ import { setDeviceThemeControlsScope } from '@/lib/deviceThemeControls'
 import { PRODUCTIVITY_DEFAULTS, migrateProductivitySetting } from '@/lib/uiProductivityDefaults'
 import { isMobileViewportOrDevice } from '@/lib/mobile'
 import { DEFAULT_IMPERSONATION_MODE, resolveImpersonationMode } from '@/lib/impersonationPreset'
+import { isChatImageSize, isChatImageAlignment, isChatImageTargets, DEFAULT_CHAT_IMAGE_TARGETS } from '@/lib/chatImagePresentation'
 import { whistleLanguage } from '@/lib/whistle/config'
 import { createSettingsLoadGenerationGuard } from './settings-load-generation'
 import {
@@ -44,6 +45,9 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'chatDisplayMode',
   'showGreetingImage',
   'greetingImagePosition',
+  'chatImageSize',
+  'chatImageAlignment',
+  'chatImageTargets',
   'longMessageCollapseEnabled',
   'longMessageCollapsePreset',
   'longMessageCollapseCustomHeight',
@@ -174,6 +178,9 @@ function isToastPosition(value: unknown): value is ToastPosition {
 
 function isValidSettingValue(key: string, value: unknown): boolean {
   if (key === 'uiLanguage') return isUiLanguage(value)
+  if (key === 'chatImageSize') return isChatImageSize(value)
+  if (key === 'chatImageAlignment') return isChatImageAlignment(value)
+  if (key === 'chatImageTargets') return isChatImageTargets(value)
   if (key === 'showGreetingImage') return typeof value === 'boolean'
   if (key === 'greetingImagePosition') return value === 'top' || value === 'bottom'
   return true
@@ -709,6 +716,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   chatDisplayMode: 'minimal',
   showGreetingImage: false,
   greetingImagePosition: 'top',
+  chatImageSize: 'default',
+  chatImageAlignment: 'left',
+  chatImageTargets: { ...DEFAULT_CHAT_IMAGE_TARGETS },
   longMessageCollapseEnabled: false,
   longMessageCollapsePreset: 'comfortable',
   longMessageCollapseCustomHeight: 500,

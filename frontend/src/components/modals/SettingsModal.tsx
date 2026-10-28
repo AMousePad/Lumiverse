@@ -26,6 +26,7 @@ import { useTranslation } from 'react-i18next'
 import { translateSettingsField } from '@/lib/i18n/resolveLabel'
 import { Button, TextInput } from '@/components/shared/FormComponents'
 import NumericInput from '@/components/shared/NumericInput'
+import ChatImageSettings from '@/components/settings/ChatImageSettings'
 import DrawerWidthSettings from '@/components/settings/DrawerWidthSettings'
 import { Toggle } from '@/components/shared/Toggle'
 import { spinClass } from '@/components/shared/Spinner'
@@ -1100,6 +1101,9 @@ function ChatSettings() {
           </div>
         </>
       )}
+
+      <h3 id={sectionAnchorId('chat', 'inlineImages')} className={sectionTitleClass} style={{ marginTop: 12 }}>{t('chat.inlineImages.title')}</h3>
+      <ChatImageSettings />
 
       <h3 id={sectionAnchorId('chat', 'greetingImages')} className={sectionTitleClass} style={{ marginTop: 12 }}>{t('chat.greetingImages.title')}</h3>
       <Toggle.Checkbox

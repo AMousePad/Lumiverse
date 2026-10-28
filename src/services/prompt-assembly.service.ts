@@ -1,3 +1,5 @@
+import { readGenerationVariableSeed } from "../db/swipe-variable-state";
+import { withVariableValues } from "../utils/variable-checkpoint";
 import {
   getTextContent,
   type LlmMessage,
@@ -1826,11 +1828,15 @@ export async function assemblePrompt(
   let phaseStartedAt = performance.now();
 
   // ---- Load data (use prefetched when available, fallback to DB) ----
-  const chat = pf?.chat ?? (await chatsSvc.getChatAsync(ctx.userId, ctx.chatId));
+  let chat = pf?.chat ?? (await chatsSvc.getChatAsync(ctx.userId, ctx.chatId));
   if (!chat) throw new Error("Chat not found");
 
   const allMessages =
     pf?.messages ?? chatsSvc.getMessages(ctx.userId, ctx.chatId);
+  const variableTarget = allMessages.find(message => message.id === ctx.excludeMessageId);
+  const variableStateSeed = structuredClone(pf?.variableStateSeed ?? readGenerationVariableSeed(chat.metadata, variableTarget?.extra,
+    variableTarget?.swipe_id, ctx.generationType === "regenerate" || ctx.generationType === "swipe"));
+  chat = { ...chat, metadata: withVariableValues(chat.metadata, variableStateSeed.values) };
 
   // Validate the snapshot and live row, then cap history at the committed turn
   // before WI, macros, and MessageLimit. Context errors survive the worker boundary.
@@ -2023,6 +2029,7 @@ export async function assemblePrompt(
     );
     return {
       ...legacyResult,
+      variableStateSeed,
       ...(preset
         ? { resolvedPreset: { id: preset.id, name: preset.name, metadata: preset.metadata } }
         : {}),
@@ -4576,6 +4583,7 @@ export async function assemblePrompt(
       ._deliberationMacroUsed,
     macroEnv,
     macroEnvSeed,
+    variableStateSeed,
   };
   } finally {
     // Release the deferred cortex warm-cache task now that the hot path is
