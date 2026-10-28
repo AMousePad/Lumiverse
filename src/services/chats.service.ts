@@ -2281,6 +2281,8 @@ export interface AssociativeRegexActionUsage {
   script_id: string;
   action_id: string;
   used_at: number;
+  /** Distinguish a source block from another block whose display offset overlaps it. */
+  source_instance_id?: string;
 }
 
 const ASSOCIATIVE_REGEX_STATE_KEY_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/;
@@ -2309,10 +2311,34 @@ export type ClaimAssociativeRegexActionResult =
 export interface AssociativeRegexActionBatchInput {
   messageId: string;
   instanceId: string;
+  /** Server-reconstructed identities for the same block after display transforms. */
+  instanceAliases?: string[];
+  usageInstanceId?: string;
   scriptId: string;
   actionId: string;
   multiSelect: boolean;
   stateEffects?: Array<{ key: string; value: string }>;
+}
+
+function regexActionInstances(input: { instanceId: string; instanceAliases?: string[]; usageInstanceId?: string }): string[] {
+  return [...new Set([input.instanceId, ...(input.usageInstanceId ? [input.usageInstanceId] : []), ...(input.instanceAliases ?? [])])];
+}
+
+function priorRegexActionUsage(
+  usage: Record<string, AssociativeRegexActionUsage>,
+  input: { instanceId: string; instanceAliases?: string[]; usageInstanceId?: string; actionId: string; multiSelect?: boolean },
+  includePartialBlock = true,
+): AssociativeRegexActionUsage | undefined {
+  for (const instance of regexActionInstances(input)) {
+    const belongsToBlock = (prior: AssociativeRegexActionUsage | undefined) => prior && typeof prior === "object" && (
+      !input.usageInstanceId || (prior.source_instance_id ? prior.source_instance_id === input.usageInstanceId
+        // Pre-upgrade numeric keys came from the server's source coordinates.
+        : instance !== input.instanceId || input.instanceAliases?.includes(instance))
+    );
+    const prior = usage[instance] ?? usage[`${instance}:${input.actionId}`]
+      ?? (!input.multiSelect && includePartialBlock ? Object.entries(usage).find(([key, value]) => key.startsWith(`${instance}:`) && belongsToBlock(value))?.[1] : undefined);
+    if (belongsToBlock(prior)) return prior;
+  }
 }
 
 export type ClaimAssociativeRegexActionsResult =
@@ -2350,15 +2376,12 @@ export function claimAssociativeRegexActions(
       }
 
       const usageByInstance = usageMaps.get(input.messageId)!;
-      const claimKey = input.multiSelect ? `${input.instanceId}:${input.actionId}` : input.instanceId;
+      const instance = input.usageInstanceId ?? input.instanceId;
+      const claimKey = input.multiSelect ? `${instance}:${input.actionId}` : instance;
       const uniqueKey = `${input.messageId}:${claimKey}`;
       if (seenClaims.has(uniqueKey)) continue;
       seenClaims.add(uniqueKey);
-      const prior = usageByInstance[input.instanceId]
-        ?? usageByInstance[claimKey]
-        ?? (!input.multiSelect
-          ? Object.entries(usageByInstance).find(([key]) => key.startsWith(`${input.instanceId}:`))?.[1]
-          : undefined);
+      const prior = priorRegexActionUsage(usageByInstance, input);
       if (prior && typeof prior === "object") return { status: "used" as const, usage: prior };
     }
 
@@ -2370,14 +2393,16 @@ export function claimAssociativeRegexActions(
     const now = Math.floor(Date.now() / 1000);
     for (const input of inputs) {
       const usageByInstance = usageMaps.get(input.messageId)!;
-      const claimKey = input.multiSelect ? `${input.instanceId}:${input.actionId}` : input.instanceId;
-      if (usageByInstance[claimKey]) continue;
+      if (priorRegexActionUsage(usageByInstance, input, false)) continue;
       const usage: AssociativeRegexActionUsage = {
         script_id: input.scriptId,
         action_id: input.actionId,
         used_at: now,
+        ...(input.usageInstanceId ? { source_instance_id: input.usageInstanceId } : {}),
       };
-      usageByInstance[claimKey] = usage;
+      for (const instance of new Set([input.instanceId, input.usageInstanceId ?? input.instanceId])) {
+        usageByInstance[input.multiSelect ? `${instance}:${input.actionId}` : instance] = usage;
+      }
       usages.push(usage);
       for (const effect of input.stateEffects ?? []) {
         if (chatVariables[effect.key] === effect.value) continue;
@@ -2432,6 +2457,8 @@ export function claimAssociativeRegexAction(
   messageId: string,
   input: {
     instanceId: string;
+    instanceAliases?: string[];
+    usageInstanceId?: string;
     scriptId: string;
     actionId: string;
     multiSelect?: boolean;
@@ -2456,12 +2483,7 @@ export function claimAssociativeRegexAction(
       stored && typeof stored === "object" && !Array.isArray(stored)
         ? { ...stored }
         : {};
-    const claimKey = input.multiSelect ? `${input.instanceId}:${input.actionId}` : input.instanceId;
-    const prior = usageByInstance[input.instanceId]
-      ?? usageByInstance[claimKey]
-      ?? (!input.multiSelect
-        ? Object.entries(usageByInstance).find(([key]) => key.startsWith(`${input.instanceId}:`))?.[1]
-        : undefined);
+    const prior = priorRegexActionUsage(usageByInstance, input);
     if (prior && typeof prior === "object") {
       return { status: "used" as const, usage: prior };
     }
@@ -2470,8 +2492,11 @@ export function claimAssociativeRegexAction(
       script_id: input.scriptId,
       action_id: input.actionId,
       used_at: Math.floor(Date.now() / 1000),
+      ...(input.usageInstanceId ? { source_instance_id: input.usageInstanceId } : {}),
     };
-    usageByInstance[claimKey] = usage;
+    for (const instance of new Set([input.instanceId, input.usageInstanceId ?? input.instanceId])) {
+      usageByInstance[input.multiSelect ? `${instance}:${input.actionId}` : instance] = usage;
+    }
     const nextExtra = normalizeStoredMessageExtra(
       { ...(existing.extra || {}), associative_regex_action_usage: usageByInstance },
       existing.swipes.length,

@@ -259,6 +259,7 @@ export const messagesApi = {
     script_id: string
     action_id: string
     instance_id: string
+    action_signature?: string
   }) {
     return post<{
       message: Message
@@ -273,6 +274,7 @@ export const messagesApi = {
     script_id: string
     action_id: string
     instance_id: string
+    action_signature?: string
   }>) {
     return post<{
       messages: Message[]

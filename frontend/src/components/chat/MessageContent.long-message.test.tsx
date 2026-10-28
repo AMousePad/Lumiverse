@@ -176,6 +176,42 @@ afterEach(async () => {
 })
 
 describe('MessageContent inline HTML rendering', () => {
+  test('action activation identifies displayed captures while retaining configured effect templates', async () => {
+    const { REGEX_ACTION_EVENT } = await import('@/lib/regex/actionBus')
+    const { regexActionSignature } = await import('../../../../src/utils/regex-action-signature')
+    const payload = { id: 'go', scriptId: 'capture-rule', instanceId: 'capture-rule:0:6', type: 'send', multi_select: false,
+      cost: 1, limit: 0, content: 'Take north', title: '', subtitle: '', effects: [{ type: 'set_state', key: 'route', value: 'north' }] }
+    const configured = { ...payload, content: 'Take $1', effects: [{ type: 'set_state', key: 'route', value: '$1' }] }
+    const html = `<button data-lumiverse-regex-action="${encodeURIComponent(JSON.stringify(payload))}">North</button>`
+    const previous = useStore.getState()
+    const activations: any[] = []
+    const record = (event: Event) => activations.push((event as CustomEvent).detail)
+    window.addEventListener(REGEX_ACTION_EVENT, record)
+    useStore.setState({ activeChatId: 'capture-chat', activeChatDisplayOwner: 'capture-owner',
+      messages: [{ id: 'capture-message', content: 'choice', is_user: false, swipe_id: 0, swipes: ['choice'] }] as any,
+      regexScripts: [{ id: 'capture-rule', disabled: false, scope: 'global', target: ['display'], placement: ['ai_output'], find_regex: 'choice',
+        replace_string: '', flags: 'g', substitute_macros: 'none', trim_strings: [], min_depth: null, max_depth: null, actions: [configured] }] as any,
+    })
+    const dispose = registerDisplayResolver('capture-owner', { ready: () => true,
+      resolveBody: async () => ({ content: 'choice' }), resolveTemplates: async () => ({ resolved: {} }), applyScripts: async () => ({ content: html }) })
+    try {
+      await act(async () => { root?.render(<MessageContent content="choice" isUser={false} userName="Reader" chatId="capture-chat" messageId="capture-message" />) })
+      const findAction = () => host.querySelector<HTMLButtonElement>('button[data-lumiverse-regex-action]')
+        ?? host.querySelector('[data-lumiverse-html-island]')?.shadowRoot?.querySelector<HTMLButtonElement>('button[data-lumiverse-regex-action]')
+      for (let i = 0; i < 40 && !findAction(); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
+      expect(findAction()).toBeTruthy()
+      findAction()!.dispatchEvent(new domWindow.MouseEvent('click', { bubbles: true, composed: true }))
+      expect(activations).toHaveLength(1)
+      expect(activations[0].actionSignature).toBe(regexActionSignature(payload))
+      expect(activations[0].effects).toEqual(configured.effects)
+    } finally {
+      await act(async () => {
+        root?.unmount(); root = null; dispose()
+        window.removeEventListener(REGEX_ACTION_EVENT, record)
+        useStore.setState({ activeChatId: previous.activeChatId, activeChatDisplayOwner: previous.activeChatDisplayOwner, messages: previous.messages, regexScripts: previous.regexScripts })
+      })
+    }
+  })
   test('read-only previews resolve owned display but never deliver tags or activate regex actions', async () => {
     const { registerTagInterceptor } = await import('@/lib/spindle/message-interceptors')
     const { REGEX_ACTION_EVENT } = await import('@/lib/regex/actionBus')

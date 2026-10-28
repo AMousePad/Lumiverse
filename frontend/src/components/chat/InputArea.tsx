@@ -1707,6 +1707,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           script_id: selection.scriptId,
           action_id: selection.id,
           instance_id: selection.instanceId,
+          action_signature: selection.actionSignature,
         }] : []
       )))
       for (const message of result.messages) updateMessage(message.id, { extra: message.extra })
@@ -2101,6 +2102,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             script_id: action.scriptId,
             action_id: action.id,
             instance_id: action.instanceId,
+            action_signature: action.actionSignature,
           })
           updateMessage(claimed.message.id, { extra: claimed.message.extra })
           const draft = claimed.effects?.find((effect) => effect.type === 'draft')
@@ -2147,6 +2149,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             script_id: action.scriptId,
             action_id: action.id,
             instance_id: action.instanceId,
+            action_signature: action.actionSignature,
           })
           updateMessage(claimed.message.id, { extra: claimed.message.extra })
           queueRegexSelection(action)

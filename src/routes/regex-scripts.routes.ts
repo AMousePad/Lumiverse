@@ -206,7 +206,9 @@ app.post("/apply", async (c) => {
       ...(ctxRole ? { role: ctxRole } : {}),
     },
     userId,
-    ...(presetContext ? { presetContext, preprocessed: true } : {}),
+    // Native display has already run the body stage, including when no preset is stored.
+    preprocessed: body.preprocessed === true || !!presetContext,
+    ...(presetContext ? { presetContext } : {}),
     resolvedFindPatterns: normalizeResolvedMap(body.resolved_find_patterns),
     resolvedReplacements: normalizeResolvedMap(body.resolved_replacements),
     dynamicMacros,

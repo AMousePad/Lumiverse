@@ -7,7 +7,7 @@ import * as chatsSvc from "./chats.service";
 import { contentHasMacroHints } from "./vectorization-content.service";
 import { getActivatedWorldInfoEntriesForChat, resolveWorldInfoOutlets } from "./prompt-assembly.service";
 import { applyMessagePresetContext } from "./message-preset-context.service";
-import { readMessagePresetContext } from "../types/preset-context";
+import { readMessagePresetContext, type MessagePresetContext } from "../types/preset-context";
 
 const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
 const OUTLET_MACRO_RE = /\{\{(?:outlet|persona_outlet|personaoutlet)::/i;
@@ -20,9 +20,10 @@ export async function resolveDisplayMessageBody(
   message?: Message,
   swipeIndex = message?.swipe_id ?? 0,
   signal?: AbortSignal,
+  presetContextOverride?: MessagePresetContext,
 ): Promise<string> {
   const source = message?.chat_id === chatId ? message : undefined;
-  const presetContext = readMessagePresetContext(source?.extra, swipeIndex);
+  const presetContext = presetContextOverride ?? readMessagePresetContext(source?.extra, swipeIndex);
   if (source) content = shieldMessageLiterals(content, source);
   if (!contentHasMacroHints(content)) return content;
   const env = chatsSvc.buildMacroEnvForChat(userId, chatId);

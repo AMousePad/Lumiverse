@@ -170,7 +170,7 @@ describe('isolated regex pipeline', () => {
 
   test('gating preserves ordered matches introduced across worker and backend batches', async () => {
     const { spawned } = makeHarness()
-    const bodies: Array<{ content: string; scripts: RegexScript[] }> = []
+    const bodies: Array<{ content: string; preprocessed?: boolean; scripts: RegexScript[] }> = []
     const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (_url, init) => {
       bodies.push(JSON.parse(String(init?.body)))
       return new Response(JSON.stringify({ result: 'Alice' }), { status: 200 })
@@ -187,6 +187,7 @@ describe('isolated regex pipeline', () => {
       expect((await promise).result).toBe('done')
       expect(bodies).toHaveLength(1)
       expect(bodies[0].content).toBe('statusENDING')
+      expect(bodies[0].preprocessed).toBe(true)
       expect(bodies[0].scripts.map((s) => s.id)).toEqual(['consume'])
     } finally {
       fetchSpy.mockRestore()

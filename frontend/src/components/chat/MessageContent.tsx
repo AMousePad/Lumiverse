@@ -50,6 +50,7 @@ import {
   type ResolvedRegexActionPayload,
 } from '@/lib/regex/actionBus'
 import { attachRegexActionLongPress } from '@/lib/regex/actionLongPress'
+import { regexActionSignature } from '../../../../src/utils/regex-action-signature'
 import { toast } from '@/lib/toast'
 import { OOCBlock as OOCBlockComponent, OOCIrcChatRoom } from './ooc'
 import type { IrcEntry } from './ooc'
@@ -1986,6 +1987,7 @@ export default function MessageContent({
         chatId,
         messageId,
         ...(configured.effects?.length ? { effects: configured.effects } : {}),
+        actionSignature: regexActionSignature(payload),
         ...(queue ? { queue: true } : {}),
       })
     }

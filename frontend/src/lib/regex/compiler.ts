@@ -467,6 +467,7 @@ export async function applyDisplayRegexOnBackend(
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         content,
+        preprocessed: true,
         scripts,
         resolved_find_patterns: mapToRecord(context.resolvedFindPatterns),
         resolved_replacements: mapToRecord(context.resolvedReplacements),

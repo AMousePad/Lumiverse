@@ -740,8 +740,8 @@ export function useDisplayRegexState(
     isStreaming,
     (isStreaming || !!presetContext) && !displayOwned,
   )
-  // When an extension owns display, regex runs on preprocessed content only.
-  const regexGated = (displayOwned || !!presetContext) && !preprocessReady || !presetScripts.ready
+  // Every saved message runs the body stage once before regex, including unowned chats.
+  const regexGated = (!!preprocessOpts?.messageId && !preprocessReady) || !presetScripts.ready
   const needsPreviousContent = useMemo(
     () => displayScripts.some(
       (script) =>

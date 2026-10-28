@@ -604,6 +604,27 @@ describe('useDisplayRegex resolver lifecycle', () => {
     }
   })
 
+  test('native saved messages wait for their body stage before applying regex', async () => {
+    const { host, root } = await createHarness()
+    const props = { content: 'chunk before preprocess', identity: { chatId: 'native-once-chat', messageId: 'native-once-message' }, isStreaming: false }
+    isDisplayChatOwnedMock.mockImplementation(() => false)
+    heldRemotePreprocess.add(props.content)
+    try {
+      await renderWhilePreprocessPending(root, props)
+      for (let i = 0; i < 20 && !pendingRemotePreprocess.has(props.content); i++) await flushReact()
+      expect(applyDisplayRegexTiered).not.toHaveBeenCalled()
+      await act(async () => {
+        pendingRemotePreprocess.get(props.content)!(remotePreprocessResponse(['prefix chunk after preprocess']))
+      })
+      await waitForPending('prefix chunk after preprocess')
+      expect(applyDisplayRegexTiered).toHaveBeenCalledTimes(1)
+      await settle('prefix chunk after preprocess', '<button>Verified choice</button>')
+      expect(readRendered(host)).toBe('<button>Verified choice</button>')
+    } finally {
+      await destroyHarness(host, root)
+    }
+  })
+
   test('a regex that expires at the new depth replaces retained HTML once preprocessing settles', async () => {
     const { host, root } = await createHarness()
     const props = {

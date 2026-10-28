@@ -1,6 +1,5 @@
 import { buildEnv, initMacros, mergeDynamicMacros, resolveGroupCharacterNames } from "../macros";
 import type { MacroEnv } from "../macros";
-import { messageContentProcessorChain } from "../spindle/message-content-processor";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Chat } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
@@ -18,7 +17,7 @@ import { readPromptActivation } from "../utils/regex-prompt-activation";
 import type { MessagePresetContext } from "../types/preset-context";
 import { applyMessagePresetContext } from "./message-preset-context.service";
 import { createHash } from "node:crypto";
-import { resolveDisplayMessageBody } from "./chat-macro-render.service";
+import { preprocessDisplayMessage } from "./display-message-preprocess.service";
 
 initMacros();
 
@@ -45,6 +44,8 @@ export interface ApplyDisplayRegexInput {
   /** Server-validated context from the stored message, never a client-selected preset. */
   presetContext?: MessagePresetContext;
   preprocessed?: boolean;
+  /** Internal verification replay: mark only actions minted by this execution. */
+  actionVerificationNonce?: string;
 }
 
 function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv | undefined {
@@ -282,41 +283,15 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
   const placement: RegexPlacement = input.context.is_user ? "user_input" : "ai_output";
 
   let content = input.content;
-  if (
-    !input.preprocessed && messageContentProcessorChain.count > 0
-    && input.context.chat_id
-    && content.length > 0
-  ) {
-    try {
-      const pre = await messageContentProcessorChain.run(
-        {
-          chatId: input.context.chat_id,
-          content,
-          isUser: input.context.is_user,
-          origin: "render",
-          userId: input.userId,
-          ...(input.context.message_id ? { messageId: input.context.message_id } : {}),
-          extra: {
-            ...(typeof input.context.message_index === "number"
-              ? { messageIndex: input.context.message_index }
-              : {}),
-            ...(input.context.role
-              ? { role: input.context.role, is_user: input.context.role === "user" }
-              : {}),
-          },
-        },
-        input.userId,
-        input.signal,
-      );
-      if (typeof pre.content === "string") content = pre.content;
-    } catch {
-      // Render-MCP failure should not block regex application; fall through with the raw content.
-    }
-  }
-
-  if (input.presetContext && !input.preprocessed && input.context.chat_id && input.context.message_id) {
-    const source = chatsSvc.getMessage(input.userId, input.context.message_id);
-    content = await resolveDisplayMessageBody(input.userId, input.context.chat_id, content, source ?? undefined, undefined, input.signal);
+  if (!input.preprocessed && input.context.chat_id) {
+    const source = input.context.message_id ? chatsSvc.getMessage(input.userId, input.context.message_id) : null;
+    const processed = await preprocessDisplayMessage({
+      userId: input.userId, chatId: input.context.chat_id, content, message: source ?? undefined,
+      messageId: input.context.message_id, messageIndex: input.context.message_index,
+      role: input.context.role ?? (input.context.is_user ? "user" : "assistant"),
+      presetContext: input.presetContext, signal: input.signal,
+    });
+    content = processed.content;
   }
 
   const env = buildEnvFromContext(input.userId, input.context);
@@ -339,7 +314,8 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
       mergeDynamicMacros(env, dyn);
     }
   }
-  const noCache = input.scripts.some((script) => script.preset_id && readPromptActivation(script.metadata) && script.find_regex.includes("{{"))
+  const noCache = !!input.actionVerificationNonce
+    || input.scripts.some((script) => script.preset_id && readPromptActivation(script.metadata) && script.find_regex.includes("{{"))
     || (globalThis as { Bun?: { env?: Record<string, string | undefined> } }).Bun?.env?.LUMIVERSE_DISPLAY_REGEX_NO_CACHE === "1";
   const cacheKey = displayRegexCacheKey(input.context.chat_id, content, placement, input.context.depth, input.scripts, dyn, input.resolvedFindPatterns, input.resolvedReplacements)
     // Preset edits can share a one-second updated_at value; retain the exact definition identity.
@@ -364,7 +340,10 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
     : undefined;
   const result = await applyRegexScripts(
     content,
-    input.scripts,
+    input.actionVerificationNonce ? input.scripts.map(script => ({
+      ...script,
+      actions: script.actions.map(action => ({ ...action, verificationNonce: input.actionVerificationNonce })),
+    })) : input.scripts,
     placement,
     input.context.depth,
     env,

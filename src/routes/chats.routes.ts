@@ -14,7 +14,7 @@ import {
   messageContentProcessorChain,
   type MessageContentProcessorCtx,
 } from "../spindle/message-content-processor";
-import { resolveDisplayMessageBody } from "../services/chat-macro-render.service";
+import { preprocessDisplayMessage } from "../services/display-message-preprocess.service";
 import { computeMessageTokenCount } from "../services/message-token-count";
 import { resolveRegexActionEffects, getMessageDisplayScripts } from "../services/associative-regex-effects.service";
 import {
@@ -24,6 +24,7 @@ import {
 import type { RegexActionEffect } from "../types/regex-script";
 import { dispatchEditAndSendRequest } from "../services/edit-and-send-dispatcher.service";
 import { getMessagePresetContext } from "../services/message-preset-context.service";
+import { isValidRegexActionSignature } from "../utils/regex-action-signature";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -122,34 +123,20 @@ async function runDisplayPreprocessItem(
   item: DisplayPreprocessItem,
   signal?: AbortSignal,
 ) {
-  const hasContentProcessor = messageContentProcessorChain.hasForUser(userId);
-  const processed = hasContentProcessor
-    ? await messageContentProcessorChain.run({
-        chatId,
-        content: item.rawContent,
-        isUser: item.role === "user",
-        origin: "render",
-        userId,
-        ...(item.messageId ? { messageId: item.messageId } : {}),
-        extra: {
-          ...(typeof item.messageIndex === "number" ? { messageIndex: item.messageIndex } : {}),
-          ...(item.role ? { role: item.role, is_user: item.role === "user" } : {}),
-        },
-      }, userId, signal)
-    : { content: item.rawContent };
-
   const savedMessage = item.messageId ? svc.getMessage(userId, item.messageId) : null;
-  const content = await resolveDisplayMessageBody(
-    userId, chatId, processed.content ?? item.rawContent, savedMessage ?? undefined, item.swipeIndex, signal,
-  );
+  const processed = await preprocessDisplayMessage({
+    userId, chatId, content: item.rawContent, message: savedMessage ?? undefined,
+    messageId: item.messageId, messageIndex: item.messageIndex, role: item.role,
+    swipeIndex: item.swipeIndex, signal,
+  });
 
   return {
     messageId: item.messageId,
-    content,
+    content: processed.content,
     // Lets the client paint an append-only plain-text suffix while its next
     // coalesced preprocess request is pending. Macro-looking suffixes remain
     // gated client-side, and any applicable processor disables the fast path.
-    incrementalRawAppendSafe: !hasContentProcessor,
+    incrementalRawAppendSafe: processed.incrementalRawAppendSafe,
   };
 }
 
@@ -895,6 +882,7 @@ app.post("/:chatId/messages/regex-actions/claim", async (c) => {
     const scriptId = typeof raw?.script_id === "string" ? raw.script_id : "";
     const actionId = typeof raw?.action_id === "string" ? raw.action_id : "";
     const instanceId = typeof raw?.instance_id === "string" ? raw.instance_id : "";
+    if (!isValidRegexActionSignature(raw?.action_signature)) return c.json({ error: "invalid regex action signature" }, 400);
     if (!messageId || !scriptId || !actionId || !instanceId ||
       !instanceId.startsWith(`${scriptId}:`) ||
       !/^\d+:\d+$/.test(instanceId.slice(scriptId.length + 1))) {
@@ -912,8 +900,10 @@ app.post("/:chatId/messages/regex-actions/claim", async (c) => {
       return c.json({ error: "only Send actions can trigger a mixed batch claim" }, 400);
     }
     let stateEffects: Array<{ key: string; value: string }> | undefined;
-    if (action.effects?.length) {
-      const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId);
+    let instanceAliases: string[] | undefined;
+    let usageInstanceId: string | undefined;
+    if (action.effects?.length || raw.action_signature !== undefined) {
+      const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId, raw.action_signature);
       if (resolved.status === "user_source") {
         return c.json({ error: "composable effects require an assistant source message" }, 403);
       }
@@ -923,12 +913,16 @@ app.post("/:chatId/messages/regex-actions/claim", async (c) => {
       stateEffects = resolved.effects
         .filter((effect) => effect.type === "set_state")
         .map(({ key, value }) => ({ key, value }));
+      instanceAliases = resolved.instanceAliases;
+      usageInstanceId = resolved.usageInstanceId;
     }
     selections.push({
       messageId,
       scriptId,
       actionId,
       instanceId,
+      ...(instanceAliases ? { instanceAliases } : {}),
+      ...(usageInstanceId ? { usageInstanceId } : {}),
       multiSelect: action.multi_select,
       ...(stateEffects ? { stateEffects } : {}),
     });
@@ -951,6 +945,7 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
   const scriptId = typeof body?.script_id === "string" ? body.script_id : "";
   const actionId = typeof body?.action_id === "string" ? body.action_id : "";
   const instanceId = typeof body?.instance_id === "string" ? body.instance_id : "";
+  if (!isValidRegexActionSignature(body?.action_signature)) return c.json({ error: "invalid regex action signature" }, 400);
   if (!scriptId || !actionId || !instanceId) {
     return c.json({ error: "script_id, action_id, and instance_id are required" }, 400);
   }
@@ -972,8 +967,10 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
 
   let resolvedEffects: RegexActionEffect[] = [];
   let stateEffects: Array<{ key: string; value: string }> | undefined;
-  if (action.effects?.length) {
-    const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId);
+  let instanceAliases: string[] | undefined;
+  let usageInstanceId: string | undefined;
+  if (action.effects?.length || body.action_signature !== undefined) {
+    const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId, body.action_signature);
     if (resolved.status === "user_source") {
       return c.json({ error: "composable effects require an assistant source message" }, 403);
     }
@@ -981,6 +978,8 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
       return c.json({ error: "regex action could not be verified from its source message" }, 404);
     }
     resolvedEffects = resolved.effects;
+    instanceAliases = resolved.instanceAliases;
+    usageInstanceId = resolved.usageInstanceId;
     stateEffects = resolvedEffects
       .filter((effect) => effect.type === "set_state")
       .map(({ key, value }) => ({ key, value }));
@@ -988,6 +987,8 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
 
   const result = svc.claimAssociativeRegexAction(userId, chatId, messageId, {
     instanceId,
+    ...(instanceAliases ? { instanceAliases } : {}),
+    ...(usageInstanceId ? { usageInstanceId } : {}),
     scriptId,
     actionId,
     multiSelect: false,
