@@ -18,6 +18,7 @@ import { EventType } from "../ws/events";
 export type PoolStatus = "assembling" | "council" | "waiting" | "reasoning" | "streaming" | "completed" | "stopped" | "error";
 
 export interface PooledTokensEntry {
+  renderMode?: "persisted-message";
   frontendSessionId?: string;
   generationId: string;
   userId: string;
@@ -108,6 +109,7 @@ const SWEEP_INTERVAL_MS = 60 * 1000; // 60 seconds
 // ── CRUD ─────────────────────────────────────────────────────────────────────
 
 export function createPoolEntry(opts: {
+  renderMode?: "persisted-message";
   frontendSessionId?: string;
   generationId: string;
   userId: string;
@@ -122,6 +124,7 @@ export function createPoolEntry(opts: {
   backgroundSwipe?: boolean;
 }): void {
   const entry: PooledTokensEntry = {
+    renderMode: opts.renderMode,
     frontendSessionId: opts.frontendSessionId,
     generationId: opts.generationId,
     userId: opts.userId,

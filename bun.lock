@@ -24,7 +24,7 @@
         "hono": "^4.7.0",
         "js-tiktoken": "^1.0.16",
         "linkedom": "0.18.13",
-        "lumiverse-spindle-types": "0.6.66",
+        "lumiverse-spindle-types": "0.6.67",
         "mute-stream": "^3.0.0",
         "sharp": "^0.34.5",
         "ssh2-sftp-client": "^12.1.1",
@@ -716,7 +716,7 @@
 
     "lru-cache": ["lru-cache@11.2.7", "", {}, "sha512-aY/R+aEsRelme17KGQa/1ZSIpLpNYYrhcrepKTZgE+W3WM16YMCaPwOHLHsmopZHELU0Ojin1lPVxKR0MihncA=="],
 
-    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.66", "", {}, "sha512-tVnlgSjAAY/KZqRs0jD51sCMtawd4V8nH/jnCvAQblr7QRask7mHFE4usUQkYjJlWxKXB5Yuv9HAWNW2NqpI4Q=="],
+    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.67", "", {}, "sha512-b0+fL1DZ4jgCRrw+0Y2sL7JfPFGa+zanZY8RWm8aY0sYFduv/r2r48gmmljDeG8pclGPah8Umo2Z8TBL1sGK6A=="],
 
     "math-intrinsics": ["math-intrinsics@1.1.0", "", {}, "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g=="],
 

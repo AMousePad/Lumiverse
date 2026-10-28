@@ -289,6 +289,7 @@ export interface GenerationStatusResponse {
   generationType?: string
   targetMessageId?: string
   targetSwipeId?: number
+  renderMode?: "persisted-message"
   backgroundSwipe?: boolean
   characterName?: string
   characterId?: string

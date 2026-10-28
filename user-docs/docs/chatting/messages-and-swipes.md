@@ -57,6 +57,14 @@ Think of swipes as a deck of cards — each one is a different take on the same 
 - **Edit** any individual swipe
 - The currently displayed swipe is what the AI sees as "the message" in subsequent turns
 
+### Variables and swipes
+
+Lumiverse saves the starting and resulting macro variables for each newly generated swipe. Regenerating starts from the state before the original reply, so alternative replies apply their variable changes independently. Continuing a reply starts from its current state.
+
+Switching swipes on the final reply restores that swipe's variables. Switching an older reply leaves the current variables alone until later messages are deleted or you branch the chat at that point. Later manual variable edits are preserved.
+
+Existing replies without saved variable history cannot have their earlier state reconstructed.
+
 ### Generate while reading
 
 On the final assistant reply, **Ctrl+click** the right swipe arrow (Windows/Linux)

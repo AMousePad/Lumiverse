@@ -204,6 +204,14 @@ By default, `spindle.chat.updateMessage()` keeps retrieval data in sync with can
 
 Use it sparingly. If you suppress rebuilds for semantic content edits, retrieval and memory-cortex data can drift away from the stored transcript until some later operation rebuilds the chat.
 
+## Variables per swipe
+
+Native generation saves each swipe's starting and resulting variables. Regeneration uses the starting state; continuation uses the current state. Older swipe selections leave current variables unchanged until later messages are deleted or a branch is created. Manual variable edits are preserved. Existing replies without saved state cannot be reconstructed.
+
+For extension-generated replies, `spindle.chat.setSwipeVariables(chatId, messageId, input)` initializes the swipes of a new assistant message at the end of the chat. Requires `chats`, `chat_mutation`, and `chat-swipe-variables-v1`.
+
+Pass `expected_variables: { global, chat }` from before prompt assembly, `expected_revision: chat.variable_revision ?? null`, the current `expected_swipes`, and the resulting `variables` as `{ global, chat }` string maps in swipe order. Returns `false` when the expected state changed; prepare again before retrying. Each message can be initialized once. Use this API instead of writing internal variable records.
+
 ## Hidden Messages
 
 !!! tip

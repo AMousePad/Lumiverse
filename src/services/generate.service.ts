@@ -1,3 +1,5 @@
+import { processResponseText, type PreparedResponseContext } from "./generation/response-processing";
+import { readVariableValues } from "../utils/variable-checkpoint";
 import { getActiveFrontendSession } from "../spindle/frontend-session";
 import { describeGenerationStop } from "../llm/generation-stop";
 import type { LlmProvider } from "../llm/provider";
@@ -9,6 +11,7 @@ import * as presetsSvc from "./presets.service";
 import * as presetProfilesSvc from "./preset-profiles.service";
 import * as settingsSvc from "./settings.service";
 import * as personasSvc from "./personas.service";
+import { readGenerationVariableSeed } from "../db/swipe-variable-state";
 import {
   assemblePrompt,
   collectVectorActivatedWorldInfo,
@@ -41,7 +44,6 @@ import {
 } from "../llm/types";
 import { trimIncompleteTrailingWord } from "../utils/trim-incomplete-word";
 import { readMessageRevision } from "../utils/message-revision";
-import { healFormattingArtifacts } from "../utils/format-healing";
 import {
   buildInlineToolContinuation,
   type InlineCouncilToolResult,
@@ -286,6 +288,10 @@ const readEditAndSendAlwaysUseActiveConnection = (userId: string): boolean =>
 
 /** Lifecycle context passed from startGeneration → runGeneration */
 interface GenerationLifecycle {
+  variableStateId?: string;
+  variableMessageId?: string;
+  variableStateSeed?: import("../utils/variable-checkpoint").VariableStateSeed;
+  deferredChatVariables?: Record<string, string>;
   frontendSessionId?: string;
   onProviderRequest?: ProviderRequestObserver;
   /** User-authored messages that immediately preceded this generation. */
@@ -522,6 +528,7 @@ class GenerationCancelledByExtensionError extends Error {
 
 /** Result of assembling + post-processing the prompt pipeline. */
 interface PromptPipelineResult {
+  variableStateSeed?: import("../utils/variable-checkpoint").VariableStateSeed;
   messages: LlmMessage[];
   parameters: GenerationParameters;
   /** Preset selected by profile/request resolution for this generation. */
@@ -1090,6 +1097,7 @@ async function runPromptPipeline(opts: {
     | { chatId: string; partial: Record<string, any> }
     | undefined;
   let macroEnv: import("../macros/types").MacroEnv | undefined;
+  let variableStateSeed: import("../utils/variable-checkpoint").VariableStateSeed | undefined;
   let trimIncompleteWords = false;
   let resolvedPreset:
     | { id: string; name: string; metadata?: Record<string, unknown> }
@@ -1099,6 +1107,12 @@ async function runPromptPipeline(opts: {
 
   if (opts.inputMessages) {
     messages = opts.inputMessages;
+    const chat = await chatsSvc.getChatAsync(opts.userId, opts.chatId);
+    if (chat) {
+      const target = opts.excludeMessageId ? chatsSvc.getMessage(opts.userId, opts.excludeMessageId) : null;
+      variableStateSeed = readGenerationVariableSeed(chat.metadata, target?.extra, target?.swipe_id,
+        opts.generationType === "regenerate" || opts.generationType === "swipe");
+    }
   } else {
     const assemblyCtx = {
       userId: opts.userId,
@@ -1175,6 +1189,7 @@ async function runPromptPipeline(opts: {
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
     macroEnv = assemblyResult.macroEnv;
+    variableStateSeed = assemblyResult.variableStateSeed;
     trimIncompleteWords = assemblyResult.trimIncompleteWords === true;
     resolvedPreset = assemblyResult.resolvedPreset;
   }
@@ -1445,6 +1460,7 @@ async function runPromptPipeline(opts: {
     spindleContext,
     deliberationHandledByMacro,
     macroEnv,
+    variableStateSeed,
     trimIncompleteWords,
   };
 }
@@ -1983,6 +1999,13 @@ export async function startGeneration(
     // emit (different scope) can surface it too.
     lifecycle.streamingSwipeId = targetSwipeId;
     lifecycle.backgroundSwipe = backgroundSwipe;
+    const variableMessageId = lifecycle.continueMessageId ?? lifecycle.targetMessageId ?? lifecycle.stagedMessageId;
+    if (chat && genType !== "impersonate" && variableMessageId && targetSwipeId !== undefined) {
+      const source = stagedSwipeOriginal ?? targetAssistantMessage;
+      const seed = readGenerationVariableSeed(chat.metadata, source?.extra, source?.swipe_id, genType === "regenerate" || genType === "swipe");
+      lifecycle.variableStateId = chatsSvc.prepareNativeSwipeVariables(input.userId, input.chat_id, variableMessageId, targetSwipeId, seed, undefined, genType === "continue");
+      if (lifecycle.variableStateId) lifecycle.variableMessageId = variableMessageId;
+    }
 
     // Register pool entry for recovery — at this point we have all the metadata
     pool.createPoolEntry({
@@ -2794,6 +2817,16 @@ export async function startGeneration(
         // (alternate field selections, world book attachments, etc.) that landed
         // during generation survive these background writes.
         {
+          if (pipeline.variableStateSeed && genType !== "impersonate") {
+            lifecycle.variableStateSeed = pipeline.variableStateSeed;
+            const targetId = lifecycle.variableMessageId ?? lifecycle.continueMessageId ?? lifecycle.targetMessageId ?? lifecycle.stagedMessageId;
+            if (targetId) {
+              lifecycle.streamingSwipeId ??= 0;
+              lifecycle.variableStateId = chatsSvc.prepareNativeSwipeVariables(input.userId, input.chat_id, targetId,
+                lifecycle.streamingSwipeId, pipeline.variableStateSeed, lifecycle.variableStateId, genType === "continue");
+              lifecycle.variableMessageId = targetId;
+            }
+          }
           const partial: Record<string, any> = {
             ...(pipeline.deferredWiState?.partial ?? {}),
           };
@@ -2802,11 +2835,20 @@ export async function startGeneration(
               pipeline.macroEnv.variables.chat,
             );
           }
+          // Late-created replies own their prompt effects only after a message is saved.
+          if (lifecycle.variableStateSeed && !lifecycle.variableStateId && partial.chat_variables) {
+            lifecycle.deferredChatVariables = partial.chat_variables;
+            delete partial.chat_variables;
+          }
           if (Object.keys(partial).length > 0) {
             await chatsSvc.mergeChatMetadataAsync(
               input.userId,
               pipeline.deferredWiState?.chatId ?? input.chat_id,
               partial,
+              lifecycle.variableStateId && partial.chat_variables ? { variableSource: {
+                messageId: lifecycle.variableMessageId!, stateId: lifecycle.variableStateId,
+                values: { chat: partial.chat_variables }, replaceScopes: ["chat"],
+              } } : {},
             );
           }
         }
@@ -3025,6 +3067,7 @@ export async function startGeneration(
  */
 export async function dryRunGeneration(
   input: GenerateInput,
+  onPrepared?: (context: PreparedResponseContext) => void,
 ): Promise<DryRunResult> {
   if (
     input.include_request_messages !== undefined &&
@@ -3169,6 +3212,17 @@ export async function dryRunGeneration(
       provider.capabilities.parameters.max_tokens?.default ?? 4096;
   }
 
+  onPrepared?.({
+    env: pipeline.macroEnv ? cloneEnv(pipeline.macroEnv) : undefined,
+    model: connection.model,
+    presetId: pipeline.resolvedPreset?.id,
+    characterId: dryRunTargetCharacterId ?? dryRunChat?.character_id ?? undefined,
+    before: readVariableValues(dryRunChat?.metadata ?? {}),
+    revision: dryRunChat?.metadata?._swipe_variable_state?.revision ?? null,
+    prefill: pipeline.assistantPrefill ?? "",
+    reasoningPrefill: pipeline.assistantReasoningPrefill ?? "",
+    trimIncompleteWords: pipeline.trimIncompleteWords === true,
+  });
   return {
     // The dry-run viewer is display-only and assumes string content. Flatten
     // multimodal parts (image/audio/tool) to placeholder-annotated strings so
@@ -3470,6 +3524,32 @@ async function runGeneration(
   // initiated abort and mid-stream errors (e.g. socket close) so the UI never
   // loses content that the user already saw. Routes to the same targets the
   // success path uses (regen swipe, continue merge, staged slot, or new row).
+  function refreshVariableTarget(): void {
+    if (!lifecycle.variableStateId) return;
+    const message = chatsSvc.getMessage(userId, lifecycle.variableMessageId!);
+    const records = message?.extra.variableStateBySwipe as Array<{ id: string } | null> | undefined;
+    const index = records?.findIndex(record => record?.id === lifecycle.variableStateId) ?? -1;
+    if (index < 0 || index >= message!.swipes.length) throw new Error("The generation's target swipe was deleted");
+    lifecycle.streamingSwipeId = index;
+    if (lifecycle.targetSwipeIdx !== undefined) lifecycle.targetSwipeIdx = index;
+    if (poolEntry) poolEntry.targetSwipeId = index;
+  }
+
+  async function attachDeferredVariableState(messageId: string): Promise<void> {
+    if (!lifecycle.variableStateSeed || lifecycle.variableStateId) return;
+    lifecycle.streamingSwipeId ??= 0;
+    lifecycle.variableStateId = chatsSvc.prepareNativeSwipeVariables(userId, chatId, messageId,
+      lifecycle.streamingSwipeId, lifecycle.variableStateSeed);
+    lifecycle.variableMessageId = messageId;
+    if (lifecycle.variableStateId && lifecycle.deferredChatVariables) {
+      await chatsSvc.mergeChatMetadataAsync(userId, chatId, {}, { variableSource: {
+        messageId, stateId: lifecycle.variableStateId, values: { chat: lifecycle.deferredChatVariables }, replaceScopes: ["chat"],
+      } });
+      lifecycle.deferredChatVariables = undefined;
+    }
+    refreshVariableTarget();
+  }
+
   async function persistPartialContent(): Promise<{
     messageId?: string;
     content: string;
@@ -3485,29 +3565,10 @@ async function runGeneration(
       chatId,
       target: "response",
     });
-    if (responseScripts.length > 0) {
-      closedContent = await regexScriptsSvc.applyRegexScripts(
-        closedContent,
-        responseScripts,
-        "ai_output",
-        0,
-        macroEnv,
-        undefined,
-        responseOptionsFor(responseScripts),
-      );
-      if (fullReasoning) {
-        fullReasoning = await regexScriptsSvc.applyRegexScripts(
-          fullReasoning,
-          responseScripts,
-          "reasoning",
-          0,
-          macroEnv,
-          undefined,
-          responseOptionsFor(responseScripts),
-        );
-      }
-    }
-    closedContent = healFormattingArtifacts(closedContent);
+    ({ content: closedContent, reasoning: fullReasoning } = await processResponseText(
+      closedContent, fullReasoning, responseScripts, macroEnv, responseOptionsFor(responseScripts),
+    ));
+    refreshVariableTarget();
     const carrier = storedReasoningCarrier();
 
     let messageId: string | undefined;
@@ -3554,6 +3615,7 @@ async function runGeneration(
           : existingStagedExtra;
       chatsSvc.updateMessage(userId, lifecycle.stagedMessageId, {
         content: closedContent,
+        ...(lifecycle.variableStateId ? { contentSwipeId: lifecycle.streamingSwipeId } : {}),
         ...(Object.keys(partialExtra).length > 0
           ? { extra: partialExtra }
           : {}),
@@ -3612,6 +3674,7 @@ async function runGeneration(
     }
 
     if (messageId && lifecycle.generationType !== "impersonate") {
+      await attachDeferredVariableState(messageId);
       const saved = chatsSvc.getMessage(userId, messageId);
       const savedContent = saved?.swipes[lifecycle.streamingSwipeId ?? saved.swipe_id] ?? closedContent;
       chatsSvc.setSwipeScopedExtra(userId, messageId, lifecycle.streamingSwipeId, {
@@ -4034,31 +4097,12 @@ async function runGeneration(
           chatId,
           target: "response",
         });
-        if (responseScripts.length > 0) {
-          fullContent = await regexScriptsSvc.applyRegexScripts(
-            fullContent,
-            responseScripts,
-            "ai_output",
-            0,
-            macroEnv,
-            undefined,
-            responseOptionsFor(responseScripts),
-          );
-          if (fullReasoning) {
-            fullReasoning = await regexScriptsSvc.applyRegexScripts(
-              fullReasoning,
-              responseScripts,
-              "reasoning",
-              0,
-              macroEnv,
-              undefined,
-              responseOptionsFor(responseScripts),
-            );
-          }
-        }
+        ({ content: fullContent, reasoning: fullReasoning } = await processResponseText(
+          fullContent, fullReasoning, responseScripts, macroEnv, responseOptionsFor(responseScripts),
+        ));
       }
-      fullContent = healFormattingArtifacts(fullContent);
 
+      refreshVariableTarget();
       let messageId: string | undefined;
 
       if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {
@@ -4102,6 +4146,7 @@ async function runGeneration(
             : undefined;
         chatsSvc.updateMessage(userId, lifecycle.stagedMessageId, {
           content: fullContent,
+          ...(lifecycle.variableStateId ? { contentSwipeId: lifecycle.streamingSwipeId } : {}),
           ...(stagedExtra ? { extra: stagedExtra } : {}),
           skipCouncilCacheInvalidation: true,
         });
@@ -4146,12 +4191,13 @@ async function runGeneration(
       }
 
       if (messageId) {
+        await attachDeferredVariableState(messageId);
         const savedMessage = chatsSvc.getMessage(userId, messageId);
         // The generated content lives on the generation's swipe (streamingSwipeId),
         // which may differ from the displayed swipe_id if the user navigated
         // mid-stream. Read and rewrite that swipe so macro resolution targets the
         // right one (identical to the old path when not navigated, idx === swipe_id).
-        const genSwipeId =
+        let genSwipeId =
           lifecycle.streamingSwipeId != null &&
           savedMessage != null &&
           lifecycle.streamingSwipeId >= 0 &&
@@ -4174,7 +4220,9 @@ async function runGeneration(
           if (savedMessage) {
             resolvedExtra = withMessageLiteralExtra(savedMessage.extra, rendered);
           }
-          await persistMacroVariableStateAsync(userId, chatId, assistantEnv);
+          await persistMacroVariableStateAsync(userId, chatId, assistantEnv, lifecycle.variableStateId
+            ? { messageId: lifecycle.variableMessageId!, stateId: lifecycle.variableStateId } : undefined);
+          if (lifecycle.variableStateId) { refreshVariableTarget(); genSwipeId = lifecycle.streamingSwipeId!; }
         }
         if (savedMessage && (baseContent !== resolvedMessage || JSON.stringify(resolvedExtra) !== JSON.stringify(savedMessage.extra))) {
           chatsSvc.updateMessage(userId, messageId, {

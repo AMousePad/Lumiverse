@@ -367,6 +367,7 @@ export interface AssemblyContext {
  * one or more individual DB queries inside `assemblePrompt()`.
  */
 export interface PrefetchedData {
+  variableStateSeed?: import("../utils/variable-checkpoint").VariableStateSeed;
   chat: import("../types/chat").Chat;
   messages: import("../types/message").Message[];
   character: import("../types/character").Character;
@@ -582,6 +583,7 @@ export interface AssemblyResult {
   macroEnv?: MacroEnv;
   /** Snapshot of the macro environment before chat-history evaluation mutates it. */
   macroEnvSeed?: MacroEnv;
+  variableStateSeed?: import("../utils/variable-checkpoint").VariableStateSeed;
 }
 
 export interface AssemblyBreakdownEntry {
