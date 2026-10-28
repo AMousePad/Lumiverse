@@ -4,6 +4,7 @@ import { Trash2 } from 'lucide-react'
 import type { MessageAttachment } from '@/types/api'
 import { imagesApi } from '@/api/images'
 import { messagesApi } from '@/api/chats'
+import { chatImagePresentationStyle, DEFAULT_CHAT_IMAGE_TARGETS } from '@/lib/chatImagePresentation'
 import { useStore } from '@/store'
 import { useLongPress } from '@/hooks/useLongPress'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
@@ -56,6 +57,11 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
   const [lightboxImageId, setLightboxImageId] = useState<string | null>(null)
   const [contextMenuPos, setContextMenuPos] = useState<ContextMenuPos | null>(null)
   const [targetImageId, setTargetImageId] = useState<string | null>(null)
+  const size = useStore(s => s.chatImageSize ?? 'default')
+  const alignment = useStore(s => s.chatImageAlignment ?? 'left')
+  const targets = useStore(s => s.chatImageTargets ?? DEFAULT_CHAT_IMAGE_TARGETS)
+  const customSize = !!chatId && !!messageId && targets.attachments && size !== 'default'
+  const customPresentation = !!chatId && !!messageId && targets.attachments && (customSize || alignment !== 'left')
   const messageContextMenuEnabled = useStore((s) => s.messageContextMenuEnabled ?? true)
   const addToast = useStore((s) => s.addToast)
 
@@ -155,7 +161,10 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
 
   return (
     <>
-      <div className={clsx(styles.attachments, isUser && styles.attachmentsUser)}>
+      <div
+        className={clsx(styles.attachments, isUser && styles.attachmentsUser, customPresentation && styles.customPresentation, customSize && styles.customSize)}
+        style={customPresentation ? chatImagePresentationStyle(size, alignment) : undefined}
+      >
         {visualMedia.map((att) =>
           att.type === 'video' ? (
             <video
@@ -186,7 +195,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               title={att.original_filename}
             >
               <LazyImage
-                src={getLocalImagePreviewUrl(att)}
+                src={customSize ? getLocalImageUrl(att) : getLocalImagePreviewUrl(att)}
                 alt={att.original_filename}
                 style={{ objectFit: 'contain' }}
                 spinnerSize={18}
@@ -217,7 +226,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               onTouchEnd={canActOnImage ? longPress.onTouchEnd : undefined}
             >
               <LazyImage
-                src={getLocalImagePreviewUrl(att)}
+                src={customSize ? getLocalImageUrl(att) : getLocalImagePreviewUrl(att)}
                 alt={att.original_filename}
                 className={styles.inlineImage}
                 style={att.width && att.height

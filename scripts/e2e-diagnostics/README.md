@@ -24,6 +24,9 @@ bun run diagnose
 
 ## Scripts
 
+- `node check-chat-image-presentation.mjs`
+  Exercises the real image settings, message renderer and attachments with controlled preferences and image responses. Covers all eight combinations of Markdown/asset, HTML/XML and attachment selection (including all unchecked), checkbox keyboard input and reload persistence, Default/100%/75%/50%, left/center/right alignment, Markdown and linked/empty-alt images, raw/self-closing HTML, asset references, isolated HTML and both attachment styles. Checks proportions, keyboard selection, close/reopen and reload persistence, remount, profile-preview isolation and canonical safe-top containment at desktop/iPhone-sized widths and UI scales 1/1.25 in Chromium, Firefox and WebKit. Uses the shared minimal/bubble content styles; it does not replace a human live-environment audit or physical installed-PWA testing. No account or personal data. `IMAGE_BROWSERS` selects engines; `IMAGE_SCOPES_ONLY=1` runs the focused type-selection matrix; `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH` can select an existing installation. Pass `--serve` for a review fixture.
+
 - `node check-background-swipe.mjs`
   Uses the native swipe controls and streaming store with controlled generation events. Checks background generation, Ctrl/Cmd-click, keyboard activation, unchanged selected text, completion navigation, and ordinary-click behavior at desktop and iPhone widths in Chromium and WebKit. No backend, credentials or personal chats are used. `SWIPE_BROWSERS` selects engines.
 
