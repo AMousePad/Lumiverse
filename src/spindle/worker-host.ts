@@ -314,6 +314,7 @@ type RuntimeWorkerToHost =
   | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
   | { type: "chat_set_swipe_variables"; requestId: string; chatId: string; messageId: string; input: import("../db/swipe-variable-state").SetSwipeVariablesInput }
+  | { type: "chats_compare_metadata"; requestId: string; chatId: string; input: import("../types/chat").ConditionalChatMetadataInput; userId?: string }
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -1330,6 +1331,9 @@ export class WorkerHost {
           "message-preset-context-v1": 1,
           "chat-swipe-variables-v1": 1,
           "generation-message-sessions-v1": 1,
+          "chat-conditional-metadata-v1": 1,
+          "generation-request-messages-v1": 1,
+          "chat-metadata-patch-v1": 1,
           "chat-swipe-reasoning-v1": 1,
           "frontend-runtime-capabilities-v1": 1,
           "frontend-session-origin-v1": 1,
@@ -2128,6 +2132,9 @@ export class WorkerHost {
         break;
       case "chats_update":
         this.contentApi.handleChatsUpdate(msg.requestId, msg.chatId, msg.input, msg.userId);
+        break;
+      case "chats_compare_metadata":
+        this.contentApi.handleChatsCompareAndSetMetadata(msg.requestId, msg.chatId, msg.input, msg.userId);
         break;
       case "chats_delete":
         this.contentApi.handleChatsDelete(msg.requestId, msg.chatId, msg.userId);
@@ -4086,6 +4093,7 @@ export class WorkerHost {
     patch: {
       content?: string;
       metadata?: Record<string, unknown>;
+      metadata_patch?: Record<string, unknown>;
       swipes?: string[];
       swipe_id?: number;
       swipe_dates?: number[];
@@ -4111,8 +4119,28 @@ export class WorkerHost {
       const extra = { ...(current.extra || {}) } as Record<string, unknown>;
       let extraDirty = false;
 
+      if (patch.swipe_id !== undefined && patch.swipe_id !== current.swipe_id) {
+        // Projected fields belong to the old selection. Preserve their canonical
+        // per-swipe arrays before applying explicit writes to the new selection.
+        for (const key of chatsSvc.SWIPE_SCOPED_EXTRA_KEYS) delete extra[key];
+        delete extra.reasoning_duration;
+      }
+
       if (patch.metadata !== undefined) {
         extra.spindle_metadata = patch.metadata;
+        extraDirty = true;
+      }
+
+      if (patch.metadata_patch !== undefined) {
+        if (patch.metadata !== undefined) throw new Error("Supply metadata or metadata_patch, not both");
+        if (!patch.metadata_patch || typeof patch.metadata_patch !== "object" || Array.isArray(patch.metadata_patch)) {
+          throw new Error("metadata_patch must be an object");
+        }
+        const currentMetadata = current.extra?.spindle_metadata;
+        extra.spindle_metadata = {
+          ...(currentMetadata && typeof currentMetadata === "object" && !Array.isArray(currentMetadata) ? currentMetadata : {}),
+          ...patch.metadata_patch,
+        };
         extraDirty = true;
       }
 
@@ -4835,6 +4863,9 @@ export class WorkerHost {
         persona_id: input.personaId,
         preset_id: input.presetId,
         ...(input.forcePresetId === true ? { force_preset_id: true } : {}),
+        ...(input.includeRequestMessages !== undefined
+          ? { include_request_messages: input.includeRequestMessages }
+          : {}),
         generation_type: input.generationType,
         parameters: input.parameters,
       }, input.retainResponseContext === true ? context => {
@@ -4865,6 +4896,12 @@ export class WorkerHost {
           extensionName: b.extensionName,
         })),
         parameters: dryRunResult.parameters,
+        ...(dryRunResult.request_messages
+          ? {
+              request_messages: dryRunResult.request_messages,
+              assistantPrefill: dryRunResult.assistantPrefill,
+            }
+          : {}),
         ...(dryRunResult.variable_state ? { variable_state: dryRunResult.variable_state } : {}),
         model: dryRunResult.model,
         provider: dryRunResult.provider,

@@ -236,6 +236,7 @@ interface GenerateInput {
   persona_addon_states?: Record<string, boolean>;
   preset_id?: string;
   force_preset_id?: boolean;
+  include_request_messages?: boolean;
   message_id?: string;
   messages?: LlmMessage[];
   parameters?: GenerationParameters;
@@ -418,6 +419,7 @@ export interface SummarizeGenerateInput {
 }
 
 export interface DryRunResult {
+  request_messages?: LlmMessage[];
   variable_state?: import("../types/preset-context").MacroVariableSnapshot;
   messages: DryRunDisplayMessage[];
   breakdown: AssemblyBreakdownEntry[];
@@ -3067,6 +3069,12 @@ export async function dryRunGeneration(
   input: GenerateInput,
   onPrepared?: (context: PreparedResponseContext) => void,
 ): Promise<DryRunResult> {
+  if (
+    input.include_request_messages !== undefined &&
+    typeof input.include_request_messages !== "boolean"
+  ) {
+    throw new Error("include_request_messages must be a boolean");
+  }
   input = { ...input, frontendSessionId: getActiveFrontendSession(input.userId) };
   const genType = input.generation_type || "normal";
   const sourceMessages = chatsSvc.getMessages(input.userId, input.chat_id);
@@ -3206,6 +3214,7 @@ export async function dryRunGeneration(
 
   onPrepared?.({
     env: pipeline.macroEnv ? cloneEnv(pipeline.macroEnv) : undefined,
+    model: connection.model,
     presetId: pipeline.resolvedPreset?.id,
     characterId: dryRunTargetCharacterId ?? dryRunChat?.character_id ?? undefined,
     before: readVariableValues(dryRunChat?.metadata ?? {}),
@@ -3230,6 +3239,7 @@ export async function dryRunGeneration(
       sourceMessagesById,
       dryRunReasoningSettings,
     ),
+    ...(input.include_request_messages ? { request_messages: pipeline.messages } : {}),
     breakdown: omitChatHistoryBreakdownEntries(pipeline.breakdown || []),
     parameters: outboundParams,
     assistantPrefill: pipeline.assistantPrefill,

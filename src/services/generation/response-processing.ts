@@ -8,6 +8,7 @@ export interface PreparedResponseContext {
   env?: MacroEnv;
   presetId?: string;
   characterId?: string;
+  model?: string;
   before: VariableValues;
   revision: string | null;
   prefill: string;

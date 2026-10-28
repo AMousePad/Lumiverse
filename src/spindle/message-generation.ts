@@ -99,11 +99,11 @@ export class MessageGenerations {
     active.registerActiveGeneration(id, { userId, chatId: input.chatId, controller, startedAt: Date.now(), lastTokenAt: Date.now(), completion });
     active.setActiveChatGeneration(userId, input.chatId, id);
     pool.createPoolEntry({ generationId: id, userId, chatId: input.chatId, generationType: "normal", characterName: message.name,
-      characterId: first.characterId, model: "", targetMessageId: message.id, frontendSessionId: input.frontendSessionId,
+      characterId: first.characterId, model: first.model ?? "", targetMessageId: message.id, frontendSessionId: input.frontendSessionId,
       renderMode: "persisted-message" });
     pool.setPoolStatus(id, "streaming");
     const payload = { generationId: id, chatId: input.chatId, targetMessageId: message.id, generationType: "normal",
-      characterName: message.name, characterId: first.characterId, frontendSessionId: input.frontendSessionId,
+      characterName: message.name, characterId: first.characterId, model: first.model ?? "", frontendSessionId: input.frontendSessionId,
       renderMode: "persisted-message", extensionId: this.extensionId };
     eventBus.emit(EventType.GENERATION_STARTED, payload, userId);
     eventBus.emit(EventType.GENERATION_IN_PROGRESS, payload, userId);

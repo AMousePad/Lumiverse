@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite";
-import type { Chat, UpdateChatInput } from "../types/chat";
 import { trackVariableWrite, type VariableWriteSource } from "./swipe-variable-state";
+import type { Chat, ConditionalChatMetadataInput, UpdateChatInput } from "../types/chat";
+import { isDeepStrictEqual } from "node:util";
+import { normalizeSpindleMessageMetadata } from "../utils/message-metadata";
 export interface ChatMetadataMergeOptions {
   variableSource?: VariableWriteSource;
   touchUpdatedAt?: boolean;
@@ -9,6 +11,7 @@ export interface ChatMetadataMergeOptions {
 }
 export type ChatMutation =
   | { action: "update"; userId: string; id: string; input: UpdateChatInput; touchUpdatedAt?: boolean }
+  | { action: "compare-metadata"; userId: string; id: string; input: ConditionalChatMetadataInput }
   | ({ action: "merge"; userId: string; id: string; partial: Record<string, any> } & ChatMetadataMergeOptions)
   | { action: "remove-group-member"; userId: string; id: string; characterId: string };
 export interface ChatUpdateResult { before: Chat; after: Chat; changed: boolean }
@@ -34,6 +37,24 @@ export function mutateChatWithDb(db: Database, mutation: ChatMutation): ChatUpda
     if (mutation.action === "update") return updateChatWithDb(db, mutation.userId, mutation.id, mutation.input, mutation);
     const before = getChatWithDb(db, mutation.userId, mutation.id);
     if (!before) return null;
+    if (mutation.action === "compare-metadata") {
+      const input = mutation.input;
+      if (!isDeepStrictEqual(before.metadata, input.expected_metadata)) return null;
+      if (input.expected_last_message_id !== undefined) {
+        const last = db.query("SELECT id FROM messages WHERE chat_id = ? ORDER BY index_in_chat DESC LIMIT 1").get(mutation.id) as { id: string } | null;
+        if ((last?.id ?? null) !== input.expected_last_message_id) return null;
+      }
+      if (input.expected_message) {
+        const expected = input.expected_message;
+        const row = db.query("SELECT swipe_id, swipes, extra, content FROM messages WHERE id = ? AND chat_id = ?").get(expected.id, mutation.id) as { swipe_id: number; swipes: string; extra: string; content: string } | null;
+        if (!row || (typeof row.swipe_id === "number" && Number.isFinite(row.swipe_id) ? row.swipe_id : 0) !== expected.swipe_id) return null;
+        let swipes: string[];
+        try { swipes = JSON.parse(row.swipes); } catch { swipes = [row.content ?? ""]; }
+        if (!isDeepStrictEqual(swipes, expected.swipes) ||
+            !isDeepStrictEqual(normalizeSpindleMessageMetadata(parseMetadataObject(row.extra).spindle_metadata, swipes.length) ?? {}, expected.metadata)) return null;
+      }
+      return updateChatWithDb(db, mutation.userId, mutation.id, { metadata: input.metadata }, {}, before);
+    }
     const metadata = mergeMetadata(before.metadata, mutation.partial, mutation.mergeObjectPaths ?? []);
     return updateChatWithDb(db, mutation.userId, mutation.id, { metadata }, mutation, before);
   }).immediate();

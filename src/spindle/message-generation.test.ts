@@ -39,7 +39,7 @@ function fixture(count = 2, pause?: () => Promise<string>) {
       ...(pause ? { dynamicMacros: { pause } } : {}) });
     env.variables.local.set("tone", `T${index}`);
     return { id: owner.remember(user, chat.id, { env, presetId: preset.id, before: readVariableValues(chat.metadata), revision: null,
-      prefill: "", reasoningPrefill: "", trimIncompleteWords: false }),
+      model: `prepared-model-${index}`, prefill: "", reasoningPrefill: "", trimIncompleteWords: false }),
       preset: { preset_id: preset.id, variables: { local: { tone: `T${index}` }, global: {}, chat: { baseline: "keep" } } } };
   });
   const message = chats.createMessage(chat.id, { is_user: false, name: character.name, content: "",
@@ -56,6 +56,15 @@ function fixture(count = 2, pause?: () => Promise<string>) {
   };
   return { user, owner, chat, message, presets, contexts, input, begin, save, read: () => chats.getMessage(user, message.id)! };
 }
+
+test("message sessions include the prepared model in lifecycle events and recovery", () => {
+  const f = fixture();
+  const id = f.begin();
+  for (const type of ["GENERATION_STARTED", "GENERATION_IN_PROGRESS"]) {
+    expect(events.find(event => event.type === type)?.payload).toMatchObject({ generationId: id, model: "prepared-model-0" });
+  }
+  expect(pool.getPoolEntry(id)?.model).toBe("prepared-model-0");
+});
 
 test("completion applies each preset's response rules, native carriers and variables before one selected-reply event", async () => {
   const f = fixture();

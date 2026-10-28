@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { Hono } from "hono";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { getProvider } from "../llm/registry";
-import type { GenerationRequest } from "../llm/types";
+import type { GenerationRequest, LlmMessage } from "../llm/types";
 import { chatsRoutes } from "../routes/chats.routes";
 import type { Chat } from "../types/chat";
 import { eventBus } from "../ws/bus";
@@ -156,4 +156,63 @@ test("temporary chats with a preset still apply its blocks, sampler, and Continu
   expect(request.parameters?.temperature).toBe(0.123);
   const continued = await generate(chat.id, "continue");
   expect(continued.content).toBe(`Reply.${POSTFIX_MARKER}Reply.`);
+});
+
+test("dry runs preserve media, tool parts and reasoning only when opted in", async () => {
+  const chat = await createChat();
+  const messages: LlmMessage[] = [{
+    role: "assistant",
+    content: [
+      { type: "text", text: "Answer", thought_signature: "text-signature" },
+      { type: "image", data: "aW1hZ2U=", mime_type: "image/png" },
+      { type: "audio", data: "YXVkaW8=", mime_type: "audio/wav" },
+      { type: "video", data: "dmlkZW8=", mime_type: "video/mp4" },
+      { type: "tool_use", id: "call", name: "lookup", input: { query: "test" } },
+    ],
+    reasoning_content: "Thought",
+    thinking_blocks: [{ type: "thinking", thinking: "Thought", signature: "signature" }],
+    reasoning_details: [{ type: "reasoning.encrypted", data: "opaque" }],
+    thought_signature: "message-signature",
+  }, {
+    role: "user", content: [{ type: "tool_result", tool_use_id: "call", content: "Found" }],
+  }];
+  const original = structuredClone(messages);
+  const input = { userId: USER, chat_id: chat.id, connection_id: connectionId, messages };
+  const requestCount = requests.length;
+  const preview = await dryRunGeneration({ ...input, include_request_messages: true });
+  expect(preview.request_messages).toEqual(original);
+  expect(preview.messages[0].content).toContain("[image: image/png]");
+  expect(preview.messages[0].content).toContain("[tool_call: lookup");
+  expect(typeof preview.messages[0].content).toBe("string");
+  for (const optIn of [undefined, false]) {
+    const displayOnly = await dryRunGeneration({ ...input, include_request_messages: optIn });
+    expect(Object.hasOwn(displayOnly, "request_messages")).toBe(false);
+    expect(displayOnly.messages).toEqual(preview.messages);
+  }
+  expect(messages).toEqual(original);
+  expect(requests.length).toBe(requestCount);
+});
+
+test("dry runs retain the assembled assistant prefix and native partial marker", async () => {
+  const chat = await createChat(false);
+  const preset = presets.createPreset(USER, {
+    name: "Prepared prefix", provider: "openai",
+    prompts: { completionSettings: { assistantPrefill: "Prefix" } },
+    prompt_order: presets.getPreset(USER, presetId)!.prompt_order,
+  });
+  chats.createMessage(chat.id, { is_user: true, name: "User", content: "Hello" }, USER);
+  const preview = await dryRunGeneration({
+    userId: USER, chat_id: chat.id, connection_id: connectionId,
+    preset_id: preset.id, force_preset_id: true, include_request_messages: true,
+  });
+  expect(preview.request_messages?.at(-1)).toMatchObject({ role: "assistant", content: "Prefix", partial: true });
+  expect(preview.assistantPrefill).toBe("Prefix");
+});
+
+test("dry runs reject non-boolean request-message opt-ins before assembly", async () => {
+  for (const value of [null, "true", 1, {}, []]) {
+    await expect(dryRunGeneration({
+      userId: USER, chat_id: "missing", include_request_messages: value as boolean,
+    })).rejects.toThrow("include_request_messages must be a boolean");
+  }
 });
