@@ -4,6 +4,10 @@ import type { GenerationParameters, GenerationRequest } from "../types";
 import { stopVertexTokenSweep } from "./google-vertex";
 
 const penaltyKeys = ["frequency_penalty", "presence_penalty", "repetition_penalty"] as const;
+const disabledPenaltyCases = [
+  ...[0, null, undefined].map((value) => Object.fromEntries(penaltyKeys.map((key) => [key, value]))),
+  { frequency_penalty: 0, presence_penalty: 0, repetition_penalty: 1 },
+];
 
 let vertexKey: string;
 beforeAll(async () => {
@@ -41,8 +45,8 @@ for (const provider of getProviderList()) {
         }) as typeof fetch);
 
         try {
-          for (const value of [0, null, undefined]) {
-            const parameters: GenerationParameters = Object.fromEntries(penaltyKeys.map((key) => [key, value]));
+          for (const disabledPenalties of disabledPenaltyCases) {
+            const parameters: GenerationParameters = { ...disabledPenalties };
             if (variant === "responses") parameters.use_responses_api = true;
             const request: GenerationRequest = {
               model: variant === "responses" ? "test-model" : variant,
@@ -59,7 +63,7 @@ for (const provider of getProviderList()) {
             expect(sent).toHaveLength(1);
             const body = sent.pop()!;
             for (const penalty of penaltyKeys) expect(body).not.toHaveProperty(penalty);
-            for (const penalty of penaltyKeys) expect(parameters[penalty]).toBe(value);
+            for (const penalty of penaltyKeys) expect(parameters[penalty]).toBe(disabledPenalties[penalty]);
           }
         } finally {
           fetchSpy.mockRestore();
@@ -70,21 +74,19 @@ for (const provider of getProviderList()) {
 }
 
 for (const provider of getProviderList().filter((entry) => ["openrouter", "nanogpt", "custom", "infermatic"].includes(entry.name))) {
-  test(`${provider.name}: preserves nonzero penalties and unrelated zero parameters`, () => {
-    const parameters = {
-      repetition_penalty: 1.15,
-      frequency_penalty: -0.5,
-      presence_penalty: 0.25,
-      temperature: 0,
-      top_k: 0,
-      seed: 0,
-    };
-    const body = (provider as any).buildBody({
-      model: "test-model",
-      messages: [{ role: "user", content: "Hello" }],
-      parameters: Object.freeze(parameters),
-    }, false);
+  test(`${provider.name}: preserves active penalties and unrelated zero parameters`, () => {
+    for (const penalties of [
+      { repetition_penalty: 1.15, frequency_penalty: -0.5, presence_penalty: 0.25 },
+      { repetition_penalty: 0.75, frequency_penalty: 1, presence_penalty: 1 },
+    ]) {
+      const parameters = { ...penalties, temperature: 0, top_k: 0, seed: 0 };
+      const body = (provider as any).buildBody({
+        model: "test-model",
+        messages: [{ role: "user", content: "Hello" }],
+        parameters: Object.freeze(parameters),
+      }, false);
 
-    expect(body).toMatchObject(parameters);
+      expect(body).toMatchObject(parameters);
+    }
   });
 }

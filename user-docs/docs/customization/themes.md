@@ -196,6 +196,8 @@ Theme Packs travel with their assets, so a recipient sees exactly what you see w
 
 If custom CSS or a component override makes the interface inaccessible, open Lumiverse with `?safe-theme=1` appended to its URL, for example `https://lumiverse.example.com/?safe-theme=1`. This suppresses custom CSS and component CSS/TSX overrides for that browser session without deleting them. Remove the query parameter and reload when the theme has been repaired.
 
+In the iOS app, hold two fingers still on the screen for just over half a second to open the native app controls, then choose **Disable custom theme**. VoiceOver and Switch Control users can use the **App controls** button. This reloads the current page in safe theme mode so you can repair or disable the saved overrides, even when the themed interface is inaccessible. Choose **Restore custom theme** to remove the recovery query and reload; any server-wide safe theme setting still applies. Recovery lasts for the loaded frontend session, so repair the saved overrides before reconnecting or loading a page without the query.
+
 Server operators and theme developers can also start Lumiverse with safe theme mode enabled:
 
 ```bash

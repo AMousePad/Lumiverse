@@ -30,8 +30,9 @@ describe("sampler parameter assembly", () => {
   ] as const;
 
   for (const [samplerKey, apiKey] of penalties) {
-    for (const value of [null, 0]) {
-      test(`omits ${apiKey} when its sampler is ${value === null ? "off" : "zero"}`, () => {
+    const disabledValues = samplerKey === "repetitionPenalty" ? [null, 0, 1] : [null, 0];
+    for (const value of disabledValues) {
+      test(`omits ${apiKey} when its sampler is ${value === null ? "off" : value}`, () => {
         expect(buildParameters(samplerOverrides({ [samplerKey]: value }), null))
           .not.toHaveProperty(apiKey);
       });
@@ -52,9 +53,11 @@ describe("sampler parameter assembly", () => {
         .not.toHaveProperty(apiKey);
     });
 
-    test(`preserves an enabled ${apiKey}`, () => {
-      expect(buildParameters(samplerOverrides({ [samplerKey]: 1.2 }), null)[apiKey]).toBe(1.2);
-    });
+    for (const value of samplerKey === "repetitionPenalty" ? [0.75, 1.2] : [1, 1.2]) {
+      test(`preserves an enabled ${apiKey} of ${value}`, () => {
+        expect(buildParameters(samplerOverrides({ [samplerKey]: value }), null)[apiKey]).toBe(value);
+      });
+    }
   }
 
   test("omits Top P when its include checkbox is unchecked", () => {
