@@ -98,6 +98,7 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     keywords: ['chat', 'behavior', 'enter to send', 'bubble', 'minimal', 'immersive', 'streaming', 'message'],
     sections: [
       { key: 'general', titleKey: 'chat.title', titleFallback: 'Chat', keywords: ['message display', 'display mode', 'bubble', 'minimal', 'immersive', 'enter to send', 'streaming', 'markdown'] },
+      { key: 'inlineImages', titleKey: 'chat.inlineImages.title', titleFallback: 'Inline Images', keywords: ['image', 'inline', 'size', 'width', 'height', 'alignment', 'left', 'center', 'right', 'markdown', 'greeting'] },
       { key: 'greetingImages', titleKey: 'chat.greetingImages.title', titleFallback: 'Greeting Images', keywords: ['greeting', 'starting message', 'first message', 'image', 'artwork', 'top', 'bottom'] },
       { key: 'width', titleKey: 'chat.widthTitle', titleFallback: 'Chat Width', keywords: ['chat width', 'content width', 'message width', 'center chat', 'sidebar', 'reflow'] },
       { key: 'messagesPerPage', titleKey: 'chat.messagesPerPageTitle', titleFallback: 'Messages Per Page', keywords: ['messages per page', 'pagination', 'page size', 'load more'] },

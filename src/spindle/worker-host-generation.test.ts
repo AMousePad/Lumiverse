@@ -43,15 +43,84 @@ function fixture(scope: "user" | "operator" = "user", permitted = true) {
     runtime: { mode: string; pid: null; postMessage(message: unknown): void; terminate(): void };
   };
   internal.hasPermission = permission => permitted && permission === "generation";
-  return (message: Record<string, unknown>) => new Promise<any>(resolve => {
+  const dispatch = (message: Record<string, unknown>) => new Promise<any>(resolve => {
     internal.runtime = { mode: "worker", pid: null, postMessage: resolve, terminate() {} };
     internal.handleMessage({ requestId: "request", ...message });
   });
+  return Object.assign(dispatch, { internal });
 }
 
 const baseResult: generateSvc.DryRunResult = {
   messages: [], breakdown: [], parameters: {}, model: "test", provider: "test",
 };
+
+test("message sessions require chat read and mutation permissions in addition to generation", async () => {
+  for (const type of ["message_generation_begin", "message_generation_finish", "message_generation_abort"]) {
+    const response = await fixture()({ type, input: { chatId: "chat" }, sessionId: "session" });
+    expect(response.error).toContain("generation, chat_mutation and chats");
+  }
+});
+
+test("stopping during provider setup cannot emit a late reasoning prefill", async () => {
+  const { internal } = fixture();
+  internal.hasPermission = () => true;
+  const messages: any[] = [];
+  internal.runtime = { mode: "worker", pid: null, postMessage: message => { messages.push(message); }, terminate() {} };
+  const host = internal as any;
+  const controller = new AbortController();
+  let observed = 0, success: boolean | undefined, ready!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { ready = resolve; });
+  const setup = new Promise<void>(resolve => { release = resolve; });
+  const bind = spyOn(host.messageGenerations, "bind").mockReturnValue({ signal: controller.signal, reasoningPrefill: "prefill",
+    observe() { observed++; }, native() {}, waiting() {}, end(value: boolean) { success = value; } });
+  const raw = spyOn(generateSvc, "rawGenerateStream").mockImplementation(async () => {
+    ready(); await setup; return (async function* () { yield { token: "late" }; })();
+  });
+  try {
+    const work = host.handleGenerationStream("stream", { type: "raw", messages: [], sessionId: "session", swipeIndex: 0 });
+    await waiting; controller.abort(); release(); await work;
+    expect(observed).toBe(0); expect(success).toBe(false);
+    expect(messages.some(message => message.type === "generation_stream_chunk")).toBe(false);
+    expect(messages.at(-1).type).toBe("generation_stream_error");
+    expect(host.generationAbortControllers.size).toBe(0);
+  } finally { raw.mockRestore(); bind.mockRestore(); host.messageGenerations.dispose(); }
+});
+
+test("retained response contexts return their prefill without requiring structured request output", async () => {
+  const dispatch = fixture();
+  const host = dispatch.internal as any;
+  const remember = spyOn(host.messageGenerations, "remember").mockReturnValue("context");
+  dryRun.mockImplementation(async (_input, prepared) => {
+    prepared?.({ prefill: "Prefix" } as any);
+    return { ...baseResult, assistantPrefill: "Prefix" };
+  });
+  try {
+    const response = await dispatch({ type: "generate_dry_run", input: { chatId: "chat", retainResponseContext: true } });
+    expect(response.result).toMatchObject({ responseContextId: "context", assistantPrefill: "Prefix" });
+    expect(response.result.request_messages).toBeUndefined();
+    expect(remember.mock.calls[0]).toEqual(["alice", "chat", { prefill: "Prefix" }]);
+  } finally { remember.mockRestore(); host.messageGenerations.dispose(); }
+});
+
+test("dry runs opt into lossless request messages without changing the display messages", async () => {
+  const requestMessages: NonNullable<generateSvc.DryRunResult["request_messages"]> = [{
+    role: "assistant",
+    content: [
+      { type: "text", text: "Answer", thought_signature: "text-signature" },
+      { type: "audio", data: "UklGRg==", mime_type: "audio/wav" },
+      { type: "tool_use", id: "call", name: "lookup", input: {} },
+    ],
+    reasoning_content: "Thought",
+    thinking_blocks: [{ type: "thinking", thinking: "Thought", signature: "signature" }],
+    reasoning_details: [{ type: "reasoning.encrypted", data: "opaque" }],
+  }, { role: "assistant", content: "Prefix", partial: true }];
+  dryRun.mockResolvedValue({ ...baseResult, messages: [{ role: "assistant", content: "Answer [audio: audio/wav]" }], request_messages: requestMessages, assistantPrefill: "Prefix" });
+  const response = await fixture()({ type: "generate_dry_run", input: { chatId: "chat", includeRequestMessages: true } });
+  expect(dryRun.mock.calls[0]![0]).toMatchObject({ include_request_messages: true });
+  expect(response.result.request_messages).toEqual(requestMessages);
+  expect(response.result.messages[0].content).toBe("Answer [audio: audio/wav]");
+  expect(response.result.assistantPrefill).toBe("Prefix");
+});
 
 test("dry run preserves context clipping statistics and a zero history-token count", async () => {
   const contextClipStats = {
@@ -75,6 +144,8 @@ test("dry run leaves unavailable counts and clipping statistics undefined", asyn
   expect(response.result.contextClipStats).toBeUndefined();
   expect(Object.hasOwn(response.result, "variable_state")).toBe(false);
   expect(Object.hasOwn(dryRun.mock.calls[0]![0], "force_preset_id")).toBe(false);
+  expect(Object.hasOwn(response.result, "request_messages")).toBe(false);
+  expect(Object.hasOwn(dryRun.mock.calls[0]![0], "include_request_messages")).toBe(false);
 });
 
 test("forced preset dry runs forward the opt-in and return captured variables", async () => {
@@ -87,7 +158,7 @@ test("forced preset dry runs forward the opt-in and return captured variables", 
 });
 
 test("dry run still requires generation permission and enforces user scope", async () => {
-  const request = { type: "generate_dry_run", input: { chatId: "chat" } };
+  const request = { type: "generate_dry_run", input: { chatId: "chat", includeRequestMessages: true } };
   expect((await fixture("user", false)(request)).error).toContain("generation");
   expect((await fixture("operator")(request)).error).toContain("userId is required");
   expect(dryRun).not.toHaveBeenCalled();
@@ -143,11 +214,14 @@ test("absent or unreadable snapshots return null; invalid message IDs reject", a
 
 test("extension runtime round-trips preview fields, saved snapshots, nulls and errors through the host", async () => {
   storeBreakdown("bob", "message", "chat", saved);
-  dryRun.mockResolvedValue({ ...baseResult, chatHistoryTokens: 42 });
+  const requestMessages: NonNullable<generateSvc.DryRunResult["request_messages"]> = [{
+    role: "user", content: [{ type: "image", data: "aW1hZ2U=", mime_type: "image/png" }],
+  }, { role: "assistant", content: "Prefix", partial: true }];
+  dryRun.mockResolvedValue({ ...baseResult, chatHistoryTokens: 42, request_messages: requestMessages, assistantPrefill: "Prefix" });
   const directory = await mkdtemp(join(tmpdir(), "spindle-generation-test-"));
   const entry = join(directory, "backend.mjs");
   await Bun.write(entry, `
-    const preview = await spindle.generate.dryRun({ chatId: "chat" }, "bob");
+    const preview = await spindle.generate.dryRun({ chatId: "chat", includeRequestMessages: true }, "bob");
     const saved = await spindle.generate.getBreakdown("message", "bob");
     const missing = await spindle.generate.getBreakdown("missing", "bob");
     let error;
@@ -176,10 +250,13 @@ test("extension runtime round-trips preview fields, saved snapshots, nulls and e
     worker.send({ type: "init", manifest: { identifier: "generation-test", entry_backend: pathToFileURL(entry).href }, storagePath: directory });
     const response = await result;
     expect(response.preview.chatHistoryTokens).toBe(42);
+    expect(response.preview.request_messages).toEqual(requestMessages);
+    expect(response.preview.assistantPrefill).toBe("Prefix");
     expect(response.saved).toEqual(saved);
     expect(response.missing).toBeNull();
     expect(response.error).toBe("messageId is required");
     expect(dryRun.mock.calls[0]?.[0].userId).toBe("bob");
+    expect(dryRun.mock.calls[0]?.[0].include_request_messages).toBe(true);
   } finally {
     clearTimeout(timer);
     worker.kill();

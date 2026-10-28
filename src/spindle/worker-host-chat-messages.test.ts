@@ -41,7 +41,7 @@ beforeEach(async () => {
 });
 afterEach(closeDatabase);
 
-function createHost(identifier: string) {
+function createHost(identifier: string, permitted = true) {
   const host = new WorkerHost(identifier, { identifier, name: identifier } as SpindleManifest, {
     id: identifier, identifier, name: identifier,
     version: "0.0.0", author: "", description: "", github: "", homepage: "",
@@ -54,7 +54,7 @@ function createHost(identifier: string) {
     handleMessage(message: unknown): void;
     runtime: { mode: string; pid: null; postMessage(message: unknown): void; terminate(): void };
   };
-  internal.hasPermission = (permission) => permission === "chat_mutation";
+  internal.hasPermission = (permission) => permitted && permission === "chat_mutation";
   const call = (message: Record<string, unknown>) => {
     const { promise, resolve } = Promise.withResolvers<{ result?: unknown; error?: string }>();
     internal.runtime = { mode: "worker", pid: null, postMessage: (response) => resolve(response as { result?: unknown; error?: string }), terminate() {} };
@@ -62,6 +62,7 @@ function createHost(identifier: string) {
     return promise;
   };
   return {
+    call,
     read: async (options?: unknown): Promise<ReadMessage[]> => {
       const response = await call({ type: "chat_get_messages", options });
       if (response.error) throw new Error(response.error);
@@ -166,4 +167,41 @@ test("lean options combine", async () => {
   expect(messages.map((m) => m.index_in_chat)).toEqual([1, 2, 3, 4]);
   expect(messages[0]).toMatchObject({ swipes: [null, "swipe b", null], hidden: true, metadata: { ext_beta: { n: 2 } } });
   expect(messages[0]).not.toHaveProperty("extra");
+});
+
+test("scoped writes compose with metadata patches and preserve host swipe contexts", async () => {
+  const contexts = [{ source: "preset-a" }, { source: "preset-b" }, null];
+  const host = createHost("ext_alpha");
+  await host.update(ids[1], { metadata_patch: { preset_contexts: contexts, shared: "latest" } });
+  await host.update(ids[1], {
+    metadata_patch: { ext_beta: { updated: true } },
+    ownMetadata: { own: true },
+    swipe_id: 2,
+    skipChunkRebuild: true,
+  });
+  expect(storedMetadata(ids[1])).toEqual({
+    ext_alpha: { own: true }, ext_beta: { updated: true }, preset_contexts: contexts, shared: "latest",
+  });
+  await host.update(ids[1], { ownMetadata: null });
+  expect(storedMetadata(ids[1])).toEqual({ ext_beta: { updated: true }, preset_contexts: contexts, shared: "latest" });
+  await host.update(ids[1], { metadata: { replacement: true }, ownMetadata: ["own"] });
+  expect(storedMetadata(ids[1])).toEqual({ replacement: true, ext_alpha: ["own"] });
+});
+
+test("lean reads and scoped writes retain permission, account and message boundaries", async () => {
+  const denied = createHost("ext_alpha", false);
+  expect(await denied.readError({ light: true })).toContain("chat_mutation");
+  expect(await denied.updateError(ids[1], { ownMetadata: "denied" })).toContain("chat_mutation");
+  const otherChat = chats.createChat("other-user", {}).id;
+  const otherMessage = chats.createMessage(otherChat, { is_user: true, name: "Other", content: "private" }, "other-user").id;
+  const host = createHost("ext_alpha");
+  expect((await host.call({ type: "chat_get_messages", chatId: otherChat, options: { light: true } })).error).toContain("user-scoped");
+  expect((await host.call({ type: "chat_update_message", chatId: otherChat, messageId: otherMessage, patch: { ownMetadata: "denied" } })).error).toContain("user-scoped");
+  expect(await host.updateError(otherMessage, { ownMetadata: "denied" })).toBe("Message not found");
+  expect(await host.readError({ tail: 1, offset: 0 })).toContain("cannot be combined");
+  for (const options of [{ limit: NaN }, { tail: Infinity }, { limit: 1, offset: Number.MAX_SAFE_INTEGER + 1 }, { includeExtra: 0 }, { ownMetadataOnly: "yes" }]) {
+    expect(await host.readError(options)).toBeString();
+  }
+  expect(chats.getMessage("other-user", otherMessage)!.extra.spindle_metadata).toBeUndefined();
+  expect(storedMetadata(ids[1])).toEqual({ ext_alpha: { n: 1 }, ext_beta: { n: 2 } });
 });

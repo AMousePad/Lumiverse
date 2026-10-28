@@ -54,8 +54,8 @@ import type {
   ImageListOptionsDTO,
   ImageUploadDTO,
   ImageUploadFromDataUrlOptionsDTO,
-  ChatMessageDTO,
-  SpindleMessageMetadataDTO,
+  ChatGetMessagesOptionsDTO,
+  ChatGetMessagesResultDTO,
   ChatChunkDTO,
   ChatLinkAttachDTO,
   ChatLinkDTO,
@@ -317,11 +317,15 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | { type: "message_generation_begin"; requestId: string; input: import("./message-generation").BeginMessageGenerationInput }
+  | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | CharacterGalleryWorkerMessage
   | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
+  | { type: "chat_set_swipe_variables"; requestId: string; chatId: string; messageId: string; input: import("../db/swipe-variable-state").SetSwipeVariablesInput }
+  | { type: "chats_compare_metadata"; requestId: string; chatId: string; input: import("../types/chat").ConditionalChatMetadataInput; userId?: string }
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -344,7 +348,6 @@ type RuntimeWorkerToHost =
       userId?: string;
     }
   | { type: "register_context_handler"; priority?: number; timeoutMs?: number; required?: boolean }
-  | { type: "chat_get_messages"; requestId: string; chatId: string; options?: RuntimeChatGetMessagesOptions }
   | {
       type: "chat_append_message";
       requestId: string;
@@ -736,40 +739,6 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
   };
 };
 
-/** Options for `spindle.chat.getMessages()`; mirrors `ChatGetMessagesOptionsDTO` in lumiverse-spindle-types. */
-type RuntimeChatGetMessagesOptions = {
-  limit?: number;
-  offset?: number;
-  tail?: number;
-  light?: boolean;
-  includeExtra?: boolean;
-  ownMetadataOnly?: boolean;
-};
-type RuntimeChatMessage = ChatMessageDTO & {
-  role: "system" | "user" | "assistant";
-  /** Mirrors `extra.hidden`; present even when `extra` is omitted. */
-  hidden: boolean;
-  metadata?: SpindleMessageMetadataDTO;
-};
-/** `includeExtra: false` drops `extra`; `light: true` nulls non-active `swipes` slots. */
-type RuntimeChatGetMessagesResult<O extends RuntimeChatGetMessagesOptions> =
-  Omit<RuntimeChatMessage, (O extends { includeExtra: false } ? "extra" : never) | (O extends { light: true } ? "swipes" : never)>
-  & (O extends { light: true } ? { swipes: Array<string | null> } : unknown);
-type RuntimeChatAPI = Omit<SpindleAPI["chat"], "getMessages" | "updateMessage"> & {
-  getMessages<O extends RuntimeChatGetMessagesOptions = Record<never, never>>(
-    chatId: string,
-    options?: O,
-  ): Promise<Array<RuntimeChatGetMessagesResult<O>>>;
-  updateMessage(
-    chatId: string,
-    messageId: string,
-    patch: Parameters<SpindleAPI["chat"]["updateMessage"]>[2] & {
-      /** Set (or with `null`, remove) only this extension's `spindle_metadata` entry. */
-      ownMetadata?: unknown;
-    },
-  ): Promise<void>;
-};
-
 // `presets` is replaced wholesale (not intersected) because the local
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
@@ -782,8 +751,13 @@ interface RuntimeLumiverseVersionInfo {
   branch: string | null;
 }
 
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version" | "chat"> & {
-  chat: RuntimeChatAPI;
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version"> & {
+  chat: SpindleAPI["chat"] & {
+    setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean>;
+  };
+  chats: SpindleAPI["chats"] & {
+    compareAndSetMetadata(chatId: string, input: import("../types/chat").ConditionalChatMetadataInput, userId?: string): Promise<ChatDTO | null>;
+  };
   version: SpindleAPI["version"] & {
     getCommit(): Promise<string | null>;
     getBranch(): Promise<string | null>;
@@ -802,6 +776,9 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
     getModels(connectionId: string, userId?: string): Promise<ConnectionModelDTO[]>;
   };
   generate: Omit<SpindleAPI["generate"], "dryRun"> & {
+    beginMessage(input: import("./message-generation").BeginMessageGenerationInput): Promise<{ id: string }>;
+    finishMessage(sessionId: string): Promise<import("./message-generation").MessageGenerationResult>;
+    abortMessage(sessionId: string): Promise<void>;
     dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
     getBreakdown(messageId: string, userId?: string): Promise<SavedBreakdownDTO | null>;
   };
@@ -1614,6 +1591,20 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
 
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
+function getChatMessages<O extends ChatGetMessagesOptionsDTO | undefined>(
+  chatId: string,
+  options: O,
+): Promise<Array<ChatGetMessagesResultDTO<O>>>;
+function getChatMessages(chatId: string, options?: undefined): Promise<Array<ChatGetMessagesResultDTO<undefined>>>;
+async function getChatMessages(
+  chatId: string,
+  options?: ChatGetMessagesOptionsDTO,
+): Promise<Array<ChatGetMessagesResultDTO<ChatGetMessagesOptionsDTO | undefined>>> {
+  const requestId = crypto.randomUUID();
+  const result = await request({ type: "chat_get_messages", requestId, chatId, options });
+  return result as Array<ChatGetMessagesResultDTO<ChatGetMessagesOptionsDTO | undefined>>;
+}
+
 const spindleApi: RuntimeSpindleAPI = {
   decisions: {
     async listProviders(options) {
@@ -1898,6 +1889,18 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     quietTracked(input: QuietTrackedRequestDTO): Promise<QuietTrackedResultDTO> {
       return requestBoundGeneration<QuietTrackedResultDTO>("generate_quiet_tracked", input);
+    },
+    async beginMessage(input) {
+      assertMutationAllowed("generate.beginMessage");
+      return await request({ type: "message_generation_begin", requestId: crypto.randomUUID(), input }) as { id: string };
+    },
+    async finishMessage(sessionId) {
+      assertMutationAllowed("generate.finishMessage");
+      return await request({ type: "message_generation_finish", requestId: crypto.randomUUID(), sessionId }) as import("./message-generation").MessageGenerationResult;
+    },
+    async abortMessage(sessionId) {
+      assertMutationAllowed("generate.abortMessage");
+      await request({ type: "message_generation_abort", requestId: crypto.randomUUID(), sessionId });
     },
     async raw(input) {
       return requestGeneration({ ...input, type: "raw" });
@@ -2378,11 +2381,11 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   chat: {
-    async getMessages<O extends RuntimeChatGetMessagesOptions = Record<never, never>>(chatId: string, options?: O) {
-      const requestId = crypto.randomUUID();
-      const result = await request({ type: "chat_get_messages", requestId, chatId, options });
-      return result as Array<RuntimeChatGetMessagesResult<O>>;
+    async setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean> {
+      assertMutationAllowed("spindle.chat.setSwipeVariables()");
+      return await request({ type: "chat_set_swipe_variables", requestId: crypto.randomUUID(), chatId, messageId, input }) as boolean;
     },
+    getMessages: getChatMessages,
     async appendMessage(chatId: string, message, options?: ChatAppendMessageOptions) {
       assertMutationAllowed("spindle.chat.appendMessage()");
       const requestId = crypto.randomUUID();
@@ -3116,6 +3119,11 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "chats_update", requestId, chatId, input, userId });
       return result as ChatDTO;
+    },
+    async compareAndSetMetadata(chatId: string, input: import("../types/chat").ConditionalChatMetadataInput, userId?: string): Promise<ChatDTO | null> {
+      assertMutationAllowed("spindle.chats.compareAndSetMetadata()");
+      const requestId = crypto.randomUUID();
+      return await request({ type: "chats_compare_metadata", requestId, chatId, input, userId }) as ChatDTO | null;
     },
     async delete(chatId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.chats.delete()");

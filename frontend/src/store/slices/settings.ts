@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, EnterToSendSettings, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource, ToastPosition } from '@/types/store'
 import { settingsApi } from '@/api/settings'
+import { DEFAULT_UI_LANGUAGE, isUiLanguage } from '@/i18n/languages'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
 import { activeTab } from '@/lib/active-tab'
@@ -11,6 +12,7 @@ import { setDeviceThemeControlsScope } from '@/lib/deviceThemeControls'
 import { PRODUCTIVITY_DEFAULTS, migrateProductivitySetting } from '@/lib/uiProductivityDefaults'
 import { isMobileViewportOrDevice } from '@/lib/mobile'
 import { DEFAULT_IMPERSONATION_MODE, resolveImpersonationMode } from '@/lib/impersonationPreset'
+import { isChatImageSize, isChatImageAlignment, isChatImageTargets, DEFAULT_CHAT_IMAGE_TARGETS } from '@/lib/chatImagePresentation'
 import { whistleLanguage } from '@/lib/whistle/config'
 import { createSettingsLoadGenerationGuard } from './settings-load-generation'
 import {
@@ -32,6 +34,7 @@ export const REASONING_DEFAULTS: ReasoningSettings = {
 
 /** Keys that represent persisted data (not functions) */
 export const DATA_KEYS: ReadonlySet<string> = new Set([
+  'uiLanguage',
   'landingPageChatsDisplayed',
   'landingPageLayoutMode',
   'landingPageGalleryWidth',
@@ -42,6 +45,9 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'chatDisplayMode',
   'showGreetingImage',
   'greetingImagePosition',
+  'chatImageSize',
+  'chatImageAlignment',
+  'chatImageTargets',
   'longMessageCollapseEnabled',
   'longMessageCollapsePreset',
   'longMessageCollapseCustomHeight',
@@ -170,7 +176,11 @@ function isToastPosition(value: unknown): value is ToastPosition {
   return typeof value === 'string' && TOAST_POSITIONS.has(value)
 }
 
-function isValidGreetingImageSetting(key: string, value: unknown): boolean {
+function isValidSettingValue(key: string, value: unknown): boolean {
+  if (key === 'uiLanguage') return isUiLanguage(value)
+  if (key === 'chatImageSize') return isChatImageSize(value)
+  if (key === 'chatImageAlignment') return isChatImageAlignment(value)
+  if (key === 'chatImageTargets') return isChatImageTargets(value)
   if (key === 'showGreetingImage') return typeof value === 'boolean'
   if (key === 'greetingImagePosition') return value === 'top' || value === 'bottom'
   return true
@@ -693,6 +703,7 @@ if (typeof window !== 'undefined') {
 }
 
 export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> = (set, get) => ({
+  uiLanguage: null,
   settingsLoaded: false,
   fullSettingsLoaded: false,
   landingPageChatsDisplayed: 12,
@@ -705,6 +716,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   chatDisplayMode: 'minimal',
   showGreetingImage: false,
   greetingImagePosition: 'top',
+  chatImageSize: 'default',
+  chatImageAlignment: 'left',
+  chatImageTargets: { ...DEFAULT_CHAT_IMAGE_TARGETS },
   longMessageCollapseEnabled: false,
   longMessageCollapsePreset: 'comfortable',
   longMessageCollapseCustomHeight: 500,
@@ -933,6 +947,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }),
 
   setSetting: (key, value, source: SettingsWriteSource = 'user') => {
+    if (key === 'uiLanguage' && !isUiLanguage(value)) return
     if (key === 'inputBarEnterToSend') {
       get().setInputBarEnterToSend(value as EnterToSendSettings)
       return
@@ -988,6 +1003,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       if (!automatic || get().fullSettingsLoaded) {
         persistKey(key as string, value, source)
         if (unboundReasoningSettings) persistKey('unboundReasoningSettings', unboundReasoningSettings, source)
+        // Persist a language selection before the app can be closed or opened
+        // on another device; the pending-settings bridge still covers failures.
+        if (key === 'uiLanguage' && source === 'user') {
+          void flushSettingsNow().catch(() => {})
+        }
       } else {
         traceSettings('setSetting:pre-hydration-skip', {
           key: key as string,
@@ -1332,7 +1352,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           // Drop values outside the ToastPosition union; the startup payload
           // validates identically so the two hydration paths cannot disagree.
           || (canonicalKey === 'toastPosition' && !isToastPosition(row.value))
-          || !isValidGreetingImageSetting(canonicalKey, row.value)
+          || !isValidSettingValue(canonicalKey, row.value)
         ) continue
         const storedValue = migrateStoredSettingValue(canonicalKey, row.value)
         if (canonicalKey === 'quickToolbarSettings' && !pendingValuesMatch(storedValue, row.value)) {
@@ -1371,7 +1391,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           if (
             !DATA_KEYS.has(k)
             || hasNewerLocalSetting(k, localRevisionAtLoadStart)
-            || !isValidGreetingImageSetting(k, v)
+            || !isValidSettingValue(k, v)
           ) continue
           const pendingValue = migrateStoredSettingValue(k, v)
           if (k === 'quickToolbarSettings' && !pendingValuesMatch(pendingValue, v)) {
@@ -1379,6 +1399,16 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           }
           patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], pendingValue)
         }
+      }
+
+      // Accounts created before language persistence may have no language row.
+      // Give them one stable app default instead of promoting a device-detected
+      // cache. Preserve a Settings edit made while this GET was in flight.
+      const initializeUiLanguage = !hasNewerLocalSetting('uiLanguage', localRevisionAtLoadStart)
+        && !rows.some(row => row.key === 'uiLanguage' && isUiLanguage(row.value))
+        && !isUiLanguage(pendingKeys?.uiLanguage)
+      if (initializeUiLanguage) {
+        patch.uiLanguage = defaults.uiLanguage ?? DEFAULT_UI_LANGUAGE
       }
 
       if (!isCurrentLoad()) return
@@ -1533,6 +1563,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // image-generation row still waits for profile reconciliation when needed.
       if (!isCurrentLoad()) return
       set({ fullSettingsLoaded: true })
+      if (initializeUiLanguage) persistKey('uiLanguage', get().uiLanguage, 'compatibility')
       traceSettings('loadSettings:hydrated', {
         loadGeneration,
         pendingKeys: pendingKeys ? Object.keys(pendingKeys) : [],
@@ -1558,7 +1589,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       }
       if (pendingKeys) {
         for (const [key, value] of Object.entries(pendingKeys)) {
-          if (!DATA_KEYS.has(key) || key === 'imageGeneration' || !isValidGreetingImageSetting(key, value)) continue
+          if (!DATA_KEYS.has(key) || key === 'imageGeneration' || !isValidSettingValue(key, value)) continue
           if (!isCurrentLoad()) return
           persistKey(key, patch[key] ?? value)
         }

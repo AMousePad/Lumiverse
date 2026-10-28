@@ -1,5 +1,6 @@
 import type {
   SpindleManifest,
+  ChatGetMessagesOptionsDTO,
   WorkerToHost,
   ImageGenNativeControlWorkerMessage,
   HostToWorker,
@@ -37,6 +38,7 @@ import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
 import { eventBus } from "../ws/bus";
 import { sendToFrontendSession } from './frontend-session';
+import { MessageGenerations, type BeginMessageGenerationInput } from "./message-generation";
 import { EventType } from "../ws/events";
 import { registry as macroRegistry } from "../macros";
 import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
@@ -156,19 +158,10 @@ type ChatAppendMessageOptions =
       generation?: ChatAppendGenerationOptions;
     };
 
-type ChatGetMessagesOptions = {
-  limit?: number;
-  offset?: number;
-  tail?: number;
-  light?: boolean;
-  includeExtra?: boolean;
-  ownMetadataOnly?: boolean;
-};
-
 /** Host-owned `extra.spindle_metadata` keys; an extension whose identifier matches one has no own entry. */
 const HOST_OWNED_SPINDLE_METADATA_KEYS = new Set(["preset_contexts"]);
 
-function parseChatGetMessagesOptions(raw: unknown): ChatGetMessagesOptions {
+function parseChatGetMessagesOptions(raw: unknown): ChatGetMessagesOptionsDTO {
   if (raw === undefined || raw === null) return {};
   if (typeof raw !== "object" || Array.isArray(raw)) throw new Error("options must be an object");
   const input = raw as Record<string, unknown>;
@@ -186,7 +179,7 @@ function parseChatGetMessagesOptions(raw: unknown): ChatGetMessagesOptions {
     if (typeof value !== "boolean") throw new Error(`options.${key} must be a boolean`);
     return value;
   };
-  const options: ChatGetMessagesOptions = {
+  const options: ChatGetMessagesOptionsDTO = {
     limit: integer("limit", 1, MAX_LIMIT),
     offset: integer("offset", 0, Number.MAX_SAFE_INTEGER),
     tail: integer("tail", 1, MAX_LIMIT),
@@ -353,11 +346,15 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | { type: "message_generation_begin"; requestId: string; input: BeginMessageGenerationInput }
+  | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | CharacterGalleryWorkerMessage
   | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
+  | { type: "chat_set_swipe_variables"; requestId: string; chatId: string; messageId: string; input: import("../db/swipe-variable-state").SetSwipeVariablesInput }
+  | { type: "chats_compare_metadata"; requestId: string; chatId: string; input: import("../types/chat").ConditionalChatMetadataInput; userId?: string }
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -1005,6 +1002,7 @@ export class WorkerHost {
    * `controller.abort()` to tear down the upstream LLM request.
    */
   private generationAbortControllers = new Map<string, AbortController>();
+  private messageGenerations: MessageGenerations;
   private captureGenerationRequests = new Set<string>();
   private interceptorUnregister: (() => void) | null = null;
   private interceptorRegistrationId: string | null = null;
@@ -1045,6 +1043,7 @@ export class WorkerHost {
     public readonly manifest: SpindleManifest,
     extensionInfo: ExtensionInfo
   ) {
+    this.messageGenerations = new MessageGenerations(extensionId);
     const metadata = (extensionInfo.metadata || {}) as Record<string, unknown>;
     this.installScope = metadata.install_scope === "user" ? "user" : "operator";
     this.installedByUserId =
@@ -1370,6 +1369,12 @@ export class WorkerHost {
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
           "message-preset-context-v1": 1,
+          "chat-swipe-variables-v1": 1,
+          "generation-message-sessions-v1": 1,
+          "chat-conditional-metadata-v1": 1,
+          "generation-request-messages-v1": 1,
+          "chat-metadata-patch-v1": 1,
+          "chat-swipe-reasoning-v1": 1,
           "frontend-runtime-capabilities-v1": 1,
           "frontend-session-origin-v1": 1,
           "frontend-session-routing-v1": 1,
@@ -1381,7 +1386,6 @@ export class WorkerHost {
           "decision-images-v1": 1,
           "embeddings-v1": 1,
           "desktop-capture-worker-v1": 1,
-          "chat-lean-messages-v1": 1,
         }),
         extensionInstallationId: this.extensionId,
       },
@@ -1554,6 +1558,7 @@ export class WorkerHost {
       controller.abort();
     }
     this.generationAbortControllers.clear();
+    this.messageGenerations.dispose();
     this.captureGenerationRequests.clear();
 
     this.runtime = null;
@@ -1925,6 +1930,11 @@ export class WorkerHost {
       case "request_generation_stream":
         this.handleGenerationStream(msg.requestId, msg.input);
         break;
+      case "message_generation_begin":
+      case "message_generation_finish":
+      case "message_generation_abort":
+        void this.handleMessageGeneration(msg);
+        break;
       case "cancel_generation":
         this.handleCancelGeneration(msg.requestId);
         break;
@@ -1997,7 +2007,10 @@ export class WorkerHost {
         this.handleConnectionsResolveDispatch(msg.requestId, msg.connectionId);
         break;
       case "chat_get_messages":
-        this.handleChatGetMessages(msg.requestId, msg.chatId, "options" in msg ? msg.options : undefined);
+        this.handleChatGetMessages(msg.requestId, msg.chatId, msg.options);
+        break;
+      case "chat_set_swipe_variables":
+        this.handleChatSetSwipeVariables(msg.requestId, msg.chatId, msg.messageId, msg.input);
         break;
       case "chat_append_message":
         void this.handleChatAppendMessage(
@@ -2159,6 +2172,9 @@ export class WorkerHost {
         break;
       case "chats_update":
         this.contentApi.handleChatsUpdate(msg.requestId, msg.chatId, msg.input, msg.userId);
+        break;
+      case "chats_compare_metadata":
+        this.contentApi.handleChatsCompareAndSetMetadata(msg.requestId, msg.chatId, msg.input, msg.userId);
         break;
       case "chats_delete":
         this.contentApi.handleChatsDelete(msg.requestId, msg.chatId, msg.userId);
@@ -3409,6 +3425,22 @@ export class WorkerHost {
     // finally block once the awaited service call rejects.
   }
 
+  private async handleMessageGeneration(msg: Extract<RuntimeWorkerToHost, { type: "message_generation_begin" | "message_generation_finish" | "message_generation_abort" }>): Promise<void> {
+    try {
+      if (!this.hasPermission("generation") || !this.hasPermission("chat_mutation") || !this.hasPermission("chats"))
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation, chat_mutation and chats permissions are required`);
+      let result: unknown;
+      if (msg.type === "message_generation_begin") {
+        const userId = this.resolveEffectiveUserId(msg.input?.userId);
+        if (!userId) throw new Error("userId is required");
+        this.enforceScopedUser(userId);
+        result = this.messageGenerations.begin(userId, msg.input);
+      } else if (msg.type === "message_generation_finish") result = await this.messageGenerations.finish(msg.sessionId);
+      else { this.messageGenerations.abort(msg.sessionId); result = true; }
+      this.postToWorker({ type: "response", requestId: msg.requestId, result });
+    } catch (error: any) { this.postToWorker({ type: "response", requestId: msg.requestId, error: error.message }); }
+  }
+
   /**
    * Streaming counterpart to {@link handleGeneration}. Forwards each chunk
    * from the upstream provider to the worker as a `generation_stream_chunk`
@@ -3454,7 +3486,18 @@ export class WorkerHost {
     const abortController = new AbortController();
     this.generationAbortControllers.set(requestId, abortController);
 
+    let bound: ReturnType<MessageGenerations["bind"]> | undefined;
+    let detach = () => {};
+    let success = false;
     try {
+      if (input.sessionId !== undefined) {
+        if (input.type !== "raw" || !this.hasPermission("chat_mutation") || !this.hasPermission("chats")) throw new Error("Message generation streams require raw generation and chat mutation permissions");
+        bound = this.messageGenerations.bind(resolvedUserId, input.sessionId, input.swipeIndex);
+        const stop = () => abortController.abort();
+        bound.signal.addEventListener("abort", stop, { once: true });
+        detach = () => bound!.signal.removeEventListener("abort", stop);
+        if (bound.signal.aborted) stop();
+      }
       let stream: AsyncGenerator<import("../llm/types").StreamChunk, void, unknown>;
       const prepared = this.desktopCaptureApi.prepareGeneration(input, resolvedUserId);
       if (prepared.sensitiveMedia) this.captureGenerationRequests.add(requestId);
@@ -3469,6 +3512,7 @@ export class WorkerHost {
             tools: input.tools,
             reasoning: input.reasoning,
             signal: abortController.signal,
+            ...(bound ? { onProviderChunk: bound.native, onInferenceWait: bound.waiting } : {}),
           }, this.generationRequestOptions(requestId, `${input.type} stream`, undefined, prepared.sensitiveMedia));
           break;
         case "quiet":
@@ -3485,14 +3529,20 @@ export class WorkerHost {
           throw new Error(`Streaming is not supported for generation type: ${input.type}`);
       }
 
+      abortController.signal.throwIfAborted();
       let content = "";
-      let reasoning = "";
+      let reasoning = bound?.reasoningPrefill ?? "";
+      if (reasoning) {
+        bound?.observe({ token: "", reasoning });
+        this.postToWorker({ type: "generation_stream_chunk", requestId, chunk: { type: "reasoning", token: reasoning } });
+      }
       let finishReason = "stop";
       let toolCalls: import("../llm/types").ToolCallResult[] | undefined;
       let usage: import("../llm/types").GenerationResponse["usage"];
 
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break;
+        bound?.observe(chunk);
         if (chunk.token) {
           content += chunk.token;
           this.postToWorker({
@@ -3523,6 +3573,7 @@ export class WorkerHost {
         return;
       }
 
+      success = true;
       this.postToWorker({
         type: "generation_stream_chunk",
         requestId,
@@ -3543,6 +3594,7 @@ export class WorkerHost {
         error: aborted ? "AbortError: Generation aborted" : err?.message ?? String(err),
       });
     } finally {
+      bound?.end(success); detach();
       this.generationAbortControllers.delete(requestId);
       this.captureGenerationRequests.delete(requestId);
     }
@@ -3923,6 +3975,22 @@ export class WorkerHost {
     return "assistant";
   }
 
+  private handleChatSetSwipeVariables(requestId: string, chatId: string, messageId: string, input: any): void {
+    try {
+      if (!this.hasPermission("chat_mutation") || !this.hasPermission("chats")) throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation and chats permissions are required`);
+      const userId = this.getChatOwnerId(chatId);
+      if (!userId) throw new Error("Chat not found");
+      this.enforceScopedUser(userId);
+      const map = (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(entry => typeof entry === "string");
+      const variables = (value: any) => !!value && map(value.global) && map(value.chat);
+      if (!input || !variables(input.expected_variables) || !Array.isArray(input.variables) || !input.variables.length || !input.variables.every(variables) ||
+          !Array.isArray(input.expected_swipes) || !input.expected_swipes.length || !input.expected_swipes.every((value: unknown) => typeof value === "string") ||
+          (input.expected_revision !== null && (typeof input.expected_revision !== "string" || !input.expected_revision))) throw new Error("Invalid swipe variable states");
+      const result = chatsSvc.setSwipeVariables(userId, chatId, messageId, input);
+      this.postToWorker({ type: "response", requestId, result });
+    } catch (error: any) { this.postToWorker({ type: "response", requestId, error: error.message }); }
+  }
+
   /** This extension's own entry in `extra.spindle_metadata`, keyed like its preset metadata namespace. */
   private getOwnSpindleMetadataKey(): string | null {
     const identifier = this.manifest.identifier;
@@ -4090,10 +4158,12 @@ export class WorkerHost {
       content?: string;
       metadata?: Record<string, unknown>;
       ownMetadata?: unknown;
+      metadata_patch?: Record<string, unknown>;
       swipes?: string[];
       swipe_id?: number;
       swipe_dates?: number[];
       reasoning?: { text?: string | null; duration?: number | null };
+      swipe_reasoning?: ({ text: string | null; duration?: number | null } | null)[];
       skipChunkRebuild?: boolean;
     }
   ): void {
@@ -4114,8 +4184,28 @@ export class WorkerHost {
       const extra = { ...(current.extra || {}) } as Record<string, unknown>;
       let extraDirty = false;
 
+      if (patch.swipe_id !== undefined && patch.swipe_id !== current.swipe_id) {
+        // Projected fields belong to the old selection. Preserve their canonical
+        // per-swipe arrays before applying explicit writes to the new selection.
+        for (const key of chatsSvc.SWIPE_SCOPED_EXTRA_KEYS) delete extra[key];
+        delete extra.reasoning_duration;
+      }
+
       if (patch.metadata !== undefined) {
         extra.spindle_metadata = patch.metadata;
+        extraDirty = true;
+      }
+
+      if (patch.metadata_patch !== undefined) {
+        if (patch.metadata !== undefined) throw new Error("Supply metadata or metadata_patch, not both");
+        if (!patch.metadata_patch || typeof patch.metadata_patch !== "object" || Array.isArray(patch.metadata_patch)) {
+          throw new Error("metadata_patch must be an object");
+        }
+        const currentMetadata = current.extra?.spindle_metadata;
+        extra.spindle_metadata = {
+          ...(currentMetadata && typeof currentMetadata === "object" && !Array.isArray(currentMetadata) ? currentMetadata : {}),
+          ...patch.metadata_patch,
+        };
         extraDirty = true;
       }
 
@@ -4134,6 +4224,29 @@ export class WorkerHost {
         else bag[key] = patch.ownMetadata;
         if (Object.keys(bag).length > 0) extra.spindle_metadata = bag;
         else delete extra.spindle_metadata;
+        extraDirty = true;
+      }
+
+      if (patch.swipe_reasoning !== undefined) {
+        const entries = patch.swipe_reasoning;
+        if (patch.reasoning !== undefined) {
+          throw new Error("Supply reasoning or swipe_reasoning, not both");
+        }
+        if (!Array.isArray(entries) || entries.length !== (patch.swipes ?? current.swipes).length) {
+          throw new Error("swipe_reasoning must have one entry per swipe");
+        }
+        for (const entry of entries) {
+          if (entry === null) continue;
+          if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+              (entry.text !== null && typeof entry.text !== "string") ||
+              (entry.duration != null && (typeof entry.duration !== "number" || !Number.isFinite(entry.duration) || entry.duration < 0))) {
+            throw new Error("Each swipe_reasoning entry must be null or contain text and an optional non-negative duration in milliseconds");
+          }
+        }
+        for (const key of chatsSvc.SWIPE_SCOPED_EXTRA_KEYS) delete extra[key];
+        delete extra.reasoning_duration;
+        extra.reasoningBySwipe = entries.map(entry => entry?.text ?? null);
+        extra.reasoningDurationBySwipe = entries.map(entry => entry?.duration ?? null);
         extraDirty = true;
       }
 
@@ -4825,6 +4938,7 @@ export class WorkerHost {
 
       if (!input?.chatId) throw new Error("chatId is required");
 
+      let responseContextId: string | undefined;
       const dryRunResult = await generateSvc.dryRunGeneration({
         userId: resolvedUserId,
         chat_id: input.chatId,
@@ -4832,9 +4946,14 @@ export class WorkerHost {
         persona_id: input.personaId,
         preset_id: input.presetId,
         ...(input.forcePresetId === true ? { force_preset_id: true } : {}),
+        ...(input.includeRequestMessages !== undefined
+          ? { include_request_messages: input.includeRequestMessages }
+          : {}),
         generation_type: input.generationType,
         parameters: input.parameters,
-      });
+      }, input.retainResponseContext === true ? context => {
+        responseContextId = this.messageGenerations.remember(resolvedUserId, input.chatId, context);
+      } : undefined);
 
       const messagesDTO: LlmMessageDTO[] = dryRunResult.messages.map((m) => ({
         role: m.role,
@@ -4842,7 +4961,8 @@ export class WorkerHost {
         name: m.name,
       }));
 
-      const result: DryRunResultDTO & { variable_state?: import("../types/preset-context").MacroVariableSnapshot } = {
+      const result: DryRunResultDTO & { variable_state?: import("../types/preset-context").MacroVariableSnapshot; responseContextId?: string; assistantPrefill?: string } = {
+        ...(responseContextId ? { responseContextId, assistantPrefill: dryRunResult.assistantPrefill } : {}),
         messages: messagesDTO,
         breakdown: (dryRunResult.breakdown || []).map((b) => ({
           type: b.type,
@@ -4859,6 +4979,12 @@ export class WorkerHost {
           extensionName: b.extensionName,
         })),
         parameters: dryRunResult.parameters,
+        ...(dryRunResult.request_messages
+          ? {
+              request_messages: dryRunResult.request_messages,
+              assistantPrefill: dryRunResult.assistantPrefill,
+            }
+          : {}),
         ...(dryRunResult.variable_state ? { variable_state: dryRunResult.variable_state } : {}),
         model: dryRunResult.model,
         provider: dryRunResult.provider,

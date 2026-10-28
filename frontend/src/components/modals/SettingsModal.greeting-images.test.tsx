@@ -36,6 +36,8 @@ mock.module('@/i18n', () => ({
   default: i18n,
   UI_LANGUAGE_STORAGE_KEY: 'lumiverse-ui-language',
   ensureLanguageLoaded: async () => {},
+  applyLoginLanguage: async () => {},
+  changeLoginLanguage: (language: string) => i18n.changeLanguage(language),
   changeUiLanguage: (language: string) => i18n.changeLanguage(language),
 }))
 mock.module('@/lib/cssModuleRegistry', () => ({ CSS_MODULE_REGISTRY: [], generateSelector: () => '' }))

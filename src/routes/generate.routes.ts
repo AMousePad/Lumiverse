@@ -136,6 +136,7 @@ app.get("/status/:chatId", (c) => {
     reasoningOffset,
     tokenSeq: entry.tokenSeq,
     generationType: entry.generationType,
+    renderMode: entry.renderMode,
     targetMessageId: entry.targetMessageId,
     targetSwipeId: entry.targetSwipeId,
     backgroundSwipe: entry.backgroundSwipe,

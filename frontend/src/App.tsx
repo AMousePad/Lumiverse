@@ -11,6 +11,7 @@ import { installDesktopViewportZoom } from '@/lib/desktopViewportZoom'
 import { useCharacterTheme } from '@/hooks/useCharacterTheme'
 import { useCustomCSSApplicator } from '@/hooks/useCustomCSSApplicator'
 import { useAppInit } from '@/hooks/useAppInit'
+import { useUiLanguage } from '@/hooks/useUiLanguage'
 import { useIOSPushSync } from '@/hooks/useIOSPushSync'
 import { useIOSLiveActivities } from '@/hooks/useIOSLiveActivities'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
@@ -88,6 +89,7 @@ function Application() {
   useCharacterTheme()
   useCustomCSSApplicator()
   useAppInit()
+  useUiLanguage()
   useIOSPushSync(useStore(s => s.isAuthenticated ? s.user?.id ?? null : null))
   useIOSLiveActivities(useStore(s => s.isAuthenticated ? s.user?.id ?? null : s.isAuthLoading ? undefined : null))
   useDocumentTitle()
