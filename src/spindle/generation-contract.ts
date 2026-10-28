@@ -3,6 +3,8 @@ import type { ContextClipStats } from "../llm/types";
 
 /** Host additions pending publication in lumiverse-spindle-types. */
 export interface DryRunResultDTO extends PublicDryRunResultDTO {
+  request_messages?: import("lumiverse-spindle-types").LlmMessageDTO[];
+  assistantPrefill?: string;
   chatHistoryTokens?: number;
   contextClipStats?: ContextClipStats;
 }
