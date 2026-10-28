@@ -1140,6 +1140,30 @@ export class WorkerHostContentApi {
     }
   }
 
+  handleChatsCompareAndSetMetadata(requestId: string, chatId: string, input: any, userId?: string): void {
+    try {
+      if (!this.hasPermission("chats")) throw new Error(`${PERMISSION_DENIED_PREFIX} chats - Chats permission not granted`);
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const object = (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value);
+      if (!object(input?.expected_metadata) || !object(input?.metadata)) throw new Error("expected_metadata and metadata must be objects");
+      if (input.expected_last_message_id !== undefined && input.expected_last_message_id !== null &&
+          (typeof input.expected_last_message_id !== "string" || !input.expected_last_message_id)) throw new Error("Invalid expected_last_message_id");
+      const message = input.expected_message;
+      if (message !== undefined && (!object(message) || typeof message.id !== "string" || !message.id ||
+          !Number.isSafeInteger(message.swipe_id) || message.swipe_id < 0 || !Array.isArray(message.swipes) ||
+          !message.swipes.every((value: unknown) => typeof value === "string") || !object(message.metadata))) throw new Error("Invalid expected_message");
+      let chat = chatsSvc.compareAndSetChatMetadata(resolvedUserId, chatId, input);
+      if (chat && JSON.stringify(input.expected_metadata.chat_world_book_ids ?? []) !== JSON.stringify(chat.metadata.chat_world_book_ids ?? [])) {
+        chat = pruneOrphanedWiState(resolvedUserId, chat);
+      }
+      this.postToWorker({ type: "response", requestId, result: chat ? this.toChatDTO(chat) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
   handleChatsDelete(requestId: string, chatId: string, userId?: string): void {
     try {
       if (!this.hasPermission("chats")) {

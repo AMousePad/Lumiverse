@@ -16,6 +16,7 @@ import {
   branchChat,
   convertSoloChatToGroup,
   createChat,
+  compareAndSetChatMetadata,
   deleteChat,
   deleteChats,
   deleteMessage,
@@ -226,6 +227,19 @@ beforeEach(() => {
 
 afterEach(() => {
   closeDatabase();
+});
+
+test("conditional metadata guards accept the same normalized message returned to extensions", () => {
+  for (const contexts of [[{ preset_id: "p" }], [{ preset_id: "p" }, null, { preset_id: "extra" }]]) {
+    const id = `chat-${contexts.length}`;
+    seedChat(id, "c1", "Chat", "{}", 1);
+    seedMessage(id, id, "A", { spindle_metadata: { preset_contexts: contexts } });
+    getDb().query("UPDATE messages SET swipes = ? WHERE id = ?").run(JSON.stringify(["A", "B"]), id);
+    const message = getMessages("u1", id)[0]!;
+    expect(compareAndSetChatMetadata("u1", id, { expected_metadata: {}, metadata: { saved: true }, expected_last_message_id: id,
+      expected_message: { id, swipe_id: message.swipe_id, swipes: message.swipes, metadata: message.extra.spindle_metadata as Record<string, unknown> },
+    })?.metadata).toEqual({ saved: true });
+  }
 });
 
 describe("previous same-role content", () => {

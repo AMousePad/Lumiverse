@@ -9,7 +9,7 @@ import { EventType } from "../ws/events";
 import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspectiveLayers, getCharacterAsync } from "./characters.service";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Character } from "../types/character";
-import type { Chat, ChatAppearanceAction, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
+import type { Chat, ChatAppearanceAction, ConditionalChatMetadataInput, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
 import type {
   Message,
@@ -22,6 +22,7 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import type { EditAndSendContext } from "../llm/types";
 import { EditAndSendContextError } from "../llm/types";
 import { readMessageRevision } from "../utils/message-revision";
+import { normalizeSpindleMessageMetadata } from "../utils/message-metadata";
 import { paginatedQuery } from "./pagination";
 import * as embeddingsSvc from "./embeddings.service";
 import * as audioSvc from "./audio.service";
@@ -266,12 +267,7 @@ function normalizeStoredMessageExtra(
       ? legacySwipeId
       : 0;
   const normalized: Record<string, unknown> = { ...(extra || {}) };
-  const spindleMetadata = normalized.spindle_metadata as Record<string, unknown> | undefined;
-  if (Array.isArray(spindleMetadata?.preset_contexts)) {
-    const contexts = spindleMetadata.preset_contexts;
-    normalized.spindle_metadata = { ...spindleMetadata,
-      preset_contexts: Array.from({ length: safeSwipeCount }, (_, i) => contexts[i] ?? null) };
-  }
+  if (normalized.spindle_metadata !== undefined) normalized.spindle_metadata = normalizeSpindleMessageMetadata(normalized.spindle_metadata, safeSwipeCount);
   const reasoningBySwipe = normalizeReasoningEntries(
     normalized.reasoningBySwipe,
     safeSwipeCount,
@@ -1490,6 +1486,10 @@ function diffLeafBagInto(out: string[], prev: unknown, next: unknown, prefix: st
     }
     out.push(`${prefix}.${k}`);
   }
+}
+
+export function compareAndSetChatMetadata(userId: string, id: string, input: ConditionalChatMetadataInput): Chat | null {
+  return finishChatUpdate(userId, id, mutateChatWithDb(getDb(), { action: "compare-metadata", userId, id, input }));
 }
 
 export function updateChat(

@@ -321,6 +321,7 @@ type RuntimeWorkerToHost =
   | CharacterGalleryWorkerMessage
   | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
+  | { type: "chats_compare_metadata"; requestId: string; chatId: string; input: import("../types/chat").ConditionalChatMetadataInput; userId?: string }
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -747,6 +748,9 @@ interface RuntimeLumiverseVersionInfo {
 }
 
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version"> & {
+  chats: SpindleAPI["chats"] & {
+    compareAndSetMetadata(chatId: string, input: import("../types/chat").ConditionalChatMetadataInput, userId?: string): Promise<ChatDTO | null>;
+  };
   version: SpindleAPI["version"] & {
     getCommit(): Promise<string | null>;
     getBranch(): Promise<string | null>;
@@ -3082,6 +3086,11 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "chats_update", requestId, chatId, input, userId });
       return result as ChatDTO;
+    },
+    async compareAndSetMetadata(chatId: string, input: import("../types/chat").ConditionalChatMetadataInput, userId?: string): Promise<ChatDTO | null> {
+      assertMutationAllowed("spindle.chats.compareAndSetMetadata()");
+      const requestId = crypto.randomUUID();
+      return await request({ type: "chats_compare_metadata", requestId, chatId, input, userId }) as ChatDTO | null;
     },
     async delete(chatId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.chats.delete()");
