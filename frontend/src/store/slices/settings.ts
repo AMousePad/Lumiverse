@@ -11,6 +11,7 @@ import { setDeviceThemeControlsScope } from '@/lib/deviceThemeControls'
 import { PRODUCTIVITY_DEFAULTS, migrateProductivitySetting } from '@/lib/uiProductivityDefaults'
 import { isMobileViewportOrDevice } from '@/lib/mobile'
 import { DEFAULT_IMPERSONATION_MODE, resolveImpersonationMode } from '@/lib/impersonationPreset'
+import { isChatImageSize, isChatImageAlignment, isChatImageTargets, DEFAULT_CHAT_IMAGE_TARGETS } from '@/lib/chatImagePresentation'
 import { whistleLanguage } from '@/lib/whistle/config'
 import { createSettingsLoadGenerationGuard } from './settings-load-generation'
 import {
@@ -42,6 +43,9 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'chatDisplayMode',
   'showGreetingImage',
   'greetingImagePosition',
+  'chatImageSize',
+  'chatImageAlignment',
+  'chatImageTargets',
   'longMessageCollapseEnabled',
   'longMessageCollapsePreset',
   'longMessageCollapseCustomHeight',
@@ -170,7 +174,10 @@ function isToastPosition(value: unknown): value is ToastPosition {
   return typeof value === 'string' && TOAST_POSITIONS.has(value)
 }
 
-function isValidGreetingImageSetting(key: string, value: unknown): boolean {
+function isValidChatImageSetting(key: string, value: unknown): boolean {
+  if (key === 'chatImageSize') return isChatImageSize(value)
+  if (key === 'chatImageAlignment') return isChatImageAlignment(value)
+  if (key === 'chatImageTargets') return isChatImageTargets(value)
   if (key === 'showGreetingImage') return typeof value === 'boolean'
   if (key === 'greetingImagePosition') return value === 'top' || value === 'bottom'
   return true
@@ -705,6 +712,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   chatDisplayMode: 'minimal',
   showGreetingImage: false,
   greetingImagePosition: 'top',
+  chatImageSize: 'default',
+  chatImageAlignment: 'left',
+  chatImageTargets: { ...DEFAULT_CHAT_IMAGE_TARGETS },
   longMessageCollapseEnabled: false,
   longMessageCollapsePreset: 'comfortable',
   longMessageCollapseCustomHeight: 500,
@@ -1332,7 +1342,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           // Drop values outside the ToastPosition union; the startup payload
           // validates identically so the two hydration paths cannot disagree.
           || (canonicalKey === 'toastPosition' && !isToastPosition(row.value))
-          || !isValidGreetingImageSetting(canonicalKey, row.value)
+          || !isValidChatImageSetting(canonicalKey, row.value)
         ) continue
         const storedValue = migrateStoredSettingValue(canonicalKey, row.value)
         if (canonicalKey === 'quickToolbarSettings' && !pendingValuesMatch(storedValue, row.value)) {
@@ -1371,7 +1381,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           if (
             !DATA_KEYS.has(k)
             || hasNewerLocalSetting(k, localRevisionAtLoadStart)
-            || !isValidGreetingImageSetting(k, v)
+            || !isValidChatImageSetting(k, v)
           ) continue
           const pendingValue = migrateStoredSettingValue(k, v)
           if (k === 'quickToolbarSettings' && !pendingValuesMatch(pendingValue, v)) {
@@ -1558,7 +1568,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       }
       if (pendingKeys) {
         for (const [key, value] of Object.entries(pendingKeys)) {
-          if (!DATA_KEYS.has(key) || key === 'imageGeneration' || !isValidGreetingImageSetting(key, value)) continue
+          if (!DATA_KEYS.has(key) || key === 'imageGeneration' || !isValidChatImageSetting(key, value)) continue
           if (!isCurrentLoad()) return
           persistKey(key, patch[key] ?? value)
         }

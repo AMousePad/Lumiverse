@@ -31,6 +31,7 @@ import {
   dispatchMessageContentLayout,
   MESSAGE_CONTENT_LAYOUT_EVENT,
 } from '@/lib/message-content-layout'
+import { chatImagePresentationStyle, DEFAULT_CHAT_IMAGE_TARGETS } from '@/lib/chatImagePresentation'
 import { useStore } from '@/store'
 import i18n from '@/i18n'
 import { useDisplayRegexState } from '@/hooks/useDisplayRegex'
@@ -1324,7 +1325,50 @@ function notifyMessageContentLayout(el: HTMLElement): void {
   dispatchMessageContentLayout(el)
 }
 
-export function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming: boolean }) {
+const ISLAND_IMAGE_PRESENTATION_CSS = `
+:host([data-chat-image-presentation][data-chat-image-targets~="markdown"]) p:has(img.${styles.proseImage}),
+:host([data-chat-image-presentation][data-chat-image-targets~="html"]) p:has(img:not(.${styles.proseImage})) {
+  width: 100%;
+  max-width: 100%;
+  clear: both;
+}
+
+:host([data-chat-image-presentation][data-chat-image-targets~="markdown"]) span:has(> img.${styles.proseImage}),
+:host([data-chat-image-presentation][data-chat-image-targets~="markdown"]) a:has(img.${styles.proseImage}),
+:host([data-chat-image-presentation][data-chat-image-targets~="html"]) span:has(> img:not(.${styles.proseImage})),
+:host([data-chat-image-presentation][data-chat-image-targets~="html"]) a:has(img:not(.${styles.proseImage})) {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+:host([data-chat-image-presentation][data-chat-image-targets~="markdown"]) img.${styles.proseImage},
+:host([data-chat-image-presentation][data-chat-image-targets~="html"]) img:not(.${styles.proseImage}) {
+  display: block !important;
+  float: none !important;
+  margin-left: var(--chat-image-margin-left, 0) !important;
+  margin-right: var(--chat-image-margin-right, auto) !important;
+  object-position: var(--chat-image-object-position, left) !important;
+}
+
+:host([data-chat-image-presentation][data-chat-image-targets~="markdown"]) .${styles.proseImage} {
+  max-width: min(100%, var(--prose-image-max-width, 240px));
+}
+
+:host([data-chat-image-presentation][data-chat-image-targets~="markdown"][data-chat-image-size]) img.${styles.proseImage},
+:host([data-chat-image-presentation][data-chat-image-targets~="html"][data-chat-image-size]) img:not(.${styles.proseImage}) {
+  width: var(--chat-image-width) !important;
+  max-width: 100% !important;
+  height: auto !important;
+  max-height: var(--chat-image-max-height) !important;
+  object-fit: contain !important;
+}
+`
+
+export function IsolatedHtml({ html, isStreaming, imagePresentation, imageSize, imageTargets }: { html: string; isStreaming: boolean; imagePresentation?: boolean; imageSize?: string; imageTargets?: string }) {
   const ref = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
@@ -1332,7 +1376,7 @@ export function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming:
     if (!el) return
     const shadow = el.shadowRoot ?? el.attachShadow({ mode: 'open' })
     clearChatFindHighlights(shadow)
-    const next = createMessageHtmlTree(`<style data-lumi-island-base>${ISLAND_BASE_CSS}</style>${html}`)
+    const next = createMessageHtmlTree(`<style data-lumi-island-base>${ISLAND_BASE_CSS}</style>${html}<style data-lumi-image-presentation>${ISLAND_IMAGE_PRESENTATION_CSS}</style>`)
     for (const actionEl of next.querySelectorAll<HTMLElement>('[data-lumiverse-regex-action]')) {
       actionEl.style.cursor = 'pointer'
     }
@@ -1385,7 +1429,7 @@ export function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming:
     }
   }, [isStreaming])
 
-  return <div ref={ref} className={styles.htmlIsland} data-lumiverse-html-island />
+  return <div ref={ref} className={styles.htmlIsland} data-lumiverse-html-island data-chat-image-targets={imageTargets} data-chat-image-presentation={imagePresentation || undefined} data-chat-image-size={imageSize} />
 }
 
 const CHAT_FIND_HIGHLIGHT_ATTR = 'data-chat-find-highlight'
@@ -1696,6 +1740,12 @@ export default function MessageContent({
   const skipFormattingHealing = useSyncExternalStore(subscribeDisplayFormatting, getFormattingSnapshot, getFormattingSnapshot)
   const getWrappingSnapshot = useCallback(() => shouldSkipInlineCardWrapping(chatId), [chatId])
   const skipInlineCardWrapping = useSyncExternalStore(subscribeDisplayFormatting, getWrappingSnapshot, getWrappingSnapshot)
+  const chatImageSize = useStore((s) => s.chatImageSize ?? 'default')
+  const chatImageAlignment = useStore((s) => s.chatImageAlignment ?? 'left')
+  const targets = useStore(s => s.chatImageTargets ?? DEFAULT_CHAT_IMAGE_TARGETS)
+  const imageTargets = [targets.markdown && 'markdown', targets.html && 'html'].filter(Boolean).join(' ')
+  const imagePresentation = !!imageTargets && !!chatId && !!messageId && (chatImageSize !== 'default' || chatImageAlignment !== 'left')
+  const imageSize = imagePresentation && chatImageSize !== 'default' ? chatImageSize : undefined
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const configuredRegexScripts = useStore((s) => s.regexScripts)
   const actionUsage = useStore((s) => {
@@ -2273,7 +2323,7 @@ export default function MessageContent({
             const piece = pieces[p]
             elements.push(
               piece.type === 'island'
-                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} isStreaming={isStreaming} />
+                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} isStreaming={isStreaming} imagePresentation={imagePresentation} imageSize={imageSize} imageTargets={imageTargets} />
                 : piece.type === 'youtubeEmbed'
                   ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
                 : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} skipInlineCardWrapping={skipInlineCardWrapping} />
@@ -2296,7 +2346,7 @@ export default function MessageContent({
             const piece = pieces[p]
             elements.push(
               piece.type === 'island'
-                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} isStreaming={isStreaming} />
+                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} isStreaming={isStreaming} imagePresentation={imagePresentation} imageSize={imageSize} imageTargets={imageTargets} />
                 : piece.type === 'youtubeEmbed'
                   ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
                 : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} skipInlineCardWrapping={skipInlineCardWrapping} />
@@ -2307,7 +2357,7 @@ export default function MessageContent({
     }
 
     return elements
-  }, [blocks, oocEnabled, lumiaOOCStyle, isStreaming, skipFormattingHealing, skipInlineCardWrapping])
+  }, [blocks, oocEnabled, lumiaOOCStyle, isStreaming, skipFormattingHealing, skipInlineCardWrapping, imagePresentation, imageSize, imageTargets])
 
   useLayoutEffect(() => {
     measureLongMessageOverflow()
@@ -2352,6 +2402,10 @@ export default function MessageContent({
     <>
       <div
         data-component="MessageContent"
+        data-chat-image-presentation={imagePresentation || undefined}
+        data-chat-image-size={imageSize}
+        data-chat-image-targets={imageTargets}
+        style={imagePresentation ? chatImagePresentationStyle(chatImageSize, chatImageAlignment) : undefined}
         data-display-pending={!isStreaming && displayPending || undefined}
         ref={containerRef}
         className={clsx(styles.content, isUser ? styles.contentUser : styles.contentChar)}

@@ -1,5 +1,6 @@
 import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, GroupedRecentChat, PaginatedResult, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
 import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, WeaverNarrationMode, WeaverPersonaRegister, WeaverPersonaPlan, PersonaDraft, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
+import type { ChatImageSize, ChatImageAlignment, ChatImageTargets } from '@/lib/chatImagePresentation'
 import type { ImpersonationPreference } from '@/lib/impersonationPreset'
 
 // ---- Chat Slice ----
@@ -767,6 +768,9 @@ export interface SettingsSlice {
   /** Show the selected greeting's artwork with the starting message. Opt-in. */
   showGreetingImage: boolean
   greetingImagePosition: 'top' | 'bottom'
+  chatImageSize: ChatImageSize
+  chatImageAlignment: ChatImageAlignment
+  chatImageTargets: ChatImageTargets
   longMessageCollapseEnabled: boolean
   longMessageCollapsePreset: LongMessageCollapsePreset
   longMessageCollapseCustomHeight: number
