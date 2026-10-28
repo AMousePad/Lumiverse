@@ -1,3 +1,5 @@
+import { processResponseText, type PreparedResponseContext } from "./generation/response-processing";
+import { readVariableValues } from "../utils/variable-checkpoint";
 import { getActiveFrontendSession } from "../spindle/frontend-session";
 import { describeGenerationStop } from "../llm/generation-stop";
 import type { LlmProvider } from "../llm/provider";
@@ -42,7 +44,6 @@ import {
 } from "../llm/types";
 import { trimIncompleteTrailingWord } from "../utils/trim-incomplete-word";
 import { readMessageRevision } from "../utils/message-revision";
-import { healFormattingArtifacts } from "../utils/format-healing";
 import {
   buildInlineToolContinuation,
   type InlineCouncilToolResult,
@@ -3064,6 +3065,7 @@ export async function startGeneration(
  */
 export async function dryRunGeneration(
   input: GenerateInput,
+  onPrepared?: (context: PreparedResponseContext) => void,
 ): Promise<DryRunResult> {
   input = { ...input, frontendSessionId: getActiveFrontendSession(input.userId) };
   const genType = input.generation_type || "normal";
@@ -3202,6 +3204,16 @@ export async function dryRunGeneration(
       provider.capabilities.parameters.max_tokens?.default ?? 4096;
   }
 
+  onPrepared?.({
+    env: pipeline.macroEnv ? cloneEnv(pipeline.macroEnv) : undefined,
+    presetId: pipeline.resolvedPreset?.id,
+    characterId: dryRunTargetCharacterId ?? dryRunChat?.character_id ?? undefined,
+    before: readVariableValues(dryRunChat?.metadata ?? {}),
+    revision: dryRunChat?.metadata?._swipe_variable_state?.revision ?? null,
+    prefill: pipeline.assistantPrefill ?? "",
+    reasoningPrefill: pipeline.assistantReasoningPrefill ?? "",
+    trimIncompleteWords: pipeline.trimIncompleteWords === true,
+  });
   return {
     // The dry-run viewer is display-only and assumes string content. Flatten
     // multimodal parts (image/audio/tool) to placeholder-annotated strings so
@@ -3543,29 +3555,9 @@ async function runGeneration(
       chatId,
       target: "response",
     });
-    if (responseScripts.length > 0) {
-      closedContent = await regexScriptsSvc.applyRegexScripts(
-        closedContent,
-        responseScripts,
-        "ai_output",
-        0,
-        macroEnv,
-        undefined,
-        responseOptionsFor(responseScripts),
-      );
-      if (fullReasoning) {
-        fullReasoning = await regexScriptsSvc.applyRegexScripts(
-          fullReasoning,
-          responseScripts,
-          "reasoning",
-          0,
-          macroEnv,
-          undefined,
-          responseOptionsFor(responseScripts),
-        );
-      }
-    }
-    closedContent = healFormattingArtifacts(closedContent);
+    ({ content: closedContent, reasoning: fullReasoning } = await processResponseText(
+      closedContent, fullReasoning, responseScripts, macroEnv, responseOptionsFor(responseScripts),
+    ));
     refreshVariableTarget();
     const carrier = storedReasoningCarrier();
 
@@ -4095,30 +4087,10 @@ async function runGeneration(
           chatId,
           target: "response",
         });
-        if (responseScripts.length > 0) {
-          fullContent = await regexScriptsSvc.applyRegexScripts(
-            fullContent,
-            responseScripts,
-            "ai_output",
-            0,
-            macroEnv,
-            undefined,
-            responseOptionsFor(responseScripts),
-          );
-          if (fullReasoning) {
-            fullReasoning = await regexScriptsSvc.applyRegexScripts(
-              fullReasoning,
-              responseScripts,
-              "reasoning",
-              0,
-              macroEnv,
-              undefined,
-              responseOptionsFor(responseScripts),
-            );
-          }
-        }
+        ({ content: fullContent, reasoning: fullReasoning } = await processResponseText(
+          fullContent, fullReasoning, responseScripts, macroEnv, responseOptionsFor(responseScripts),
+        ));
       }
-      fullContent = healFormattingArtifacts(fullContent);
 
       refreshVariableTarget();
       let messageId: string | undefined;

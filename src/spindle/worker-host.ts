@@ -37,6 +37,7 @@ import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
 import { eventBus } from "../ws/bus";
 import { sendToFrontendSession } from './frontend-session';
+import { MessageGenerations, type BeginMessageGenerationInput } from "./message-generation";
 import { EventType } from "../ws/events";
 import { registry as macroRegistry } from "../macros";
 import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
@@ -305,6 +306,8 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | { type: "message_generation_begin"; requestId: string; input: BeginMessageGenerationInput }
+  | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | CharacterGalleryWorkerMessage
@@ -958,6 +961,7 @@ export class WorkerHost {
    * `controller.abort()` to tear down the upstream LLM request.
    */
   private generationAbortControllers = new Map<string, AbortController>();
+  private messageGenerations: MessageGenerations;
   private captureGenerationRequests = new Set<string>();
   private interceptorUnregister: (() => void) | null = null;
   private interceptorRegistrationId: string | null = null;
@@ -998,6 +1002,7 @@ export class WorkerHost {
     public readonly manifest: SpindleManifest,
     extensionInfo: ExtensionInfo
   ) {
+    this.messageGenerations = new MessageGenerations(extensionId);
     const metadata = (extensionInfo.metadata || {}) as Record<string, unknown>;
     this.installScope = metadata.install_scope === "user" ? "user" : "operator";
     this.installedByUserId =
@@ -1323,8 +1328,9 @@ export class WorkerHost {
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
           "message-preset-context-v1": 1,
-          "chat-swipe-reasoning-v1": 1,
           "chat-swipe-variables-v1": 1,
+          "generation-message-sessions-v1": 1,
+          "chat-swipe-reasoning-v1": 1,
           "frontend-runtime-capabilities-v1": 1,
           "frontend-session-origin-v1": 1,
           "frontend-session-routing-v1": 1,
@@ -1508,6 +1514,7 @@ export class WorkerHost {
       controller.abort();
     }
     this.generationAbortControllers.clear();
+    this.messageGenerations.dispose();
     this.captureGenerationRequests.clear();
 
     this.runtime = null;
@@ -1878,6 +1885,11 @@ export class WorkerHost {
         break;
       case "request_generation_stream":
         this.handleGenerationStream(msg.requestId, msg.input);
+        break;
+      case "message_generation_begin":
+      case "message_generation_finish":
+      case "message_generation_abort":
+        void this.handleMessageGeneration(msg);
         break;
       case "cancel_generation":
         this.handleCancelGeneration(msg.requestId);
@@ -3366,6 +3378,22 @@ export class WorkerHost {
     // finally block once the awaited service call rejects.
   }
 
+  private async handleMessageGeneration(msg: Extract<RuntimeWorkerToHost, { type: "message_generation_begin" | "message_generation_finish" | "message_generation_abort" }>): Promise<void> {
+    try {
+      if (!this.hasPermission("generation") || !this.hasPermission("chat_mutation") || !this.hasPermission("chats"))
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation, chat_mutation and chats permissions are required`);
+      let result: unknown;
+      if (msg.type === "message_generation_begin") {
+        const userId = this.resolveEffectiveUserId(msg.input?.userId);
+        if (!userId) throw new Error("userId is required");
+        this.enforceScopedUser(userId);
+        result = this.messageGenerations.begin(userId, msg.input);
+      } else if (msg.type === "message_generation_finish") result = await this.messageGenerations.finish(msg.sessionId);
+      else { this.messageGenerations.abort(msg.sessionId); result = true; }
+      this.postToWorker({ type: "response", requestId: msg.requestId, result });
+    } catch (error: any) { this.postToWorker({ type: "response", requestId: msg.requestId, error: error.message }); }
+  }
+
   /**
    * Streaming counterpart to {@link handleGeneration}. Forwards each chunk
    * from the upstream provider to the worker as a `generation_stream_chunk`
@@ -3411,7 +3439,18 @@ export class WorkerHost {
     const abortController = new AbortController();
     this.generationAbortControllers.set(requestId, abortController);
 
+    let bound: ReturnType<MessageGenerations["bind"]> | undefined;
+    let detach = () => {};
+    let success = false;
     try {
+      if (input.sessionId !== undefined) {
+        if (input.type !== "raw" || !this.hasPermission("chat_mutation") || !this.hasPermission("chats")) throw new Error("Message generation streams require raw generation and chat mutation permissions");
+        bound = this.messageGenerations.bind(resolvedUserId, input.sessionId, input.swipeIndex);
+        const stop = () => abortController.abort();
+        bound.signal.addEventListener("abort", stop, { once: true });
+        detach = () => bound!.signal.removeEventListener("abort", stop);
+        if (bound.signal.aborted) stop();
+      }
       let stream: AsyncGenerator<import("../llm/types").StreamChunk, void, unknown>;
       const prepared = this.desktopCaptureApi.prepareGeneration(input, resolvedUserId);
       if (prepared.sensitiveMedia) this.captureGenerationRequests.add(requestId);
@@ -3426,6 +3465,7 @@ export class WorkerHost {
             tools: input.tools,
             reasoning: input.reasoning,
             signal: abortController.signal,
+            ...(bound ? { onProviderChunk: bound.native, onInferenceWait: bound.waiting } : {}),
           }, this.generationRequestOptions(requestId, `${input.type} stream`, undefined, prepared.sensitiveMedia));
           break;
         case "quiet":
@@ -3442,14 +3482,20 @@ export class WorkerHost {
           throw new Error(`Streaming is not supported for generation type: ${input.type}`);
       }
 
+      abortController.signal.throwIfAborted();
       let content = "";
-      let reasoning = "";
+      let reasoning = bound?.reasoningPrefill ?? "";
+      if (reasoning) {
+        bound?.observe({ token: "", reasoning });
+        this.postToWorker({ type: "generation_stream_chunk", requestId, chunk: { type: "reasoning", token: reasoning } });
+      }
       let finishReason = "stop";
       let toolCalls: import("../llm/types").ToolCallResult[] | undefined;
       let usage: import("../llm/types").GenerationResponse["usage"];
 
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break;
+        bound?.observe(chunk);
         if (chunk.token) {
           content += chunk.token;
           this.postToWorker({
@@ -3480,6 +3526,7 @@ export class WorkerHost {
         return;
       }
 
+      success = true;
       this.postToWorker({
         type: "generation_stream_chunk",
         requestId,
@@ -3500,6 +3547,7 @@ export class WorkerHost {
         error: aborted ? "AbortError: Generation aborted" : err?.message ?? String(err),
       });
     } finally {
+      bound?.end(success); detach();
       this.generationAbortControllers.delete(requestId);
       this.captureGenerationRequests.delete(requestId);
     }
@@ -4779,6 +4827,7 @@ export class WorkerHost {
 
       if (!input?.chatId) throw new Error("chatId is required");
 
+      let responseContextId: string | undefined;
       const dryRunResult = await generateSvc.dryRunGeneration({
         userId: resolvedUserId,
         chat_id: input.chatId,
@@ -4788,7 +4837,9 @@ export class WorkerHost {
         ...(input.forcePresetId === true ? { force_preset_id: true } : {}),
         generation_type: input.generationType,
         parameters: input.parameters,
-      });
+      }, input.retainResponseContext === true ? context => {
+        responseContextId = this.messageGenerations.remember(resolvedUserId, input.chatId, context);
+      } : undefined);
 
       const messagesDTO: LlmMessageDTO[] = dryRunResult.messages.map((m) => ({
         role: m.role,
@@ -4796,7 +4847,8 @@ export class WorkerHost {
         name: m.name,
       }));
 
-      const result: DryRunResultDTO & { variable_state?: import("../types/preset-context").MacroVariableSnapshot } = {
+      const result: DryRunResultDTO & { variable_state?: import("../types/preset-context").MacroVariableSnapshot; responseContextId?: string; assistantPrefill?: string } = {
+        ...(responseContextId ? { responseContextId, assistantPrefill: dryRunResult.assistantPrefill } : {}),
         messages: messagesDTO,
         breakdown: (dryRunResult.breakdown || []).map((b) => ({
           type: b.type,

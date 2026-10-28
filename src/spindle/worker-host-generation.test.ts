@@ -43,15 +43,64 @@ function fixture(scope: "user" | "operator" = "user", permitted = true) {
     runtime: { mode: string; pid: null; postMessage(message: unknown): void; terminate(): void };
   };
   internal.hasPermission = permission => permitted && permission === "generation";
-  return (message: Record<string, unknown>) => new Promise<any>(resolve => {
+  const dispatch = (message: Record<string, unknown>) => new Promise<any>(resolve => {
     internal.runtime = { mode: "worker", pid: null, postMessage: resolve, terminate() {} };
     internal.handleMessage({ requestId: "request", ...message });
   });
+  return Object.assign(dispatch, { internal });
 }
 
 const baseResult: generateSvc.DryRunResult = {
   messages: [], breakdown: [], parameters: {}, model: "test", provider: "test",
 };
+
+test("message sessions require chat read and mutation permissions in addition to generation", async () => {
+  for (const type of ["message_generation_begin", "message_generation_finish", "message_generation_abort"]) {
+    const response = await fixture()({ type, input: { chatId: "chat" }, sessionId: "session" });
+    expect(response.error).toContain("generation, chat_mutation and chats");
+  }
+});
+
+test("stopping during provider setup cannot emit a late reasoning prefill", async () => {
+  const { internal } = fixture();
+  internal.hasPermission = () => true;
+  const messages: any[] = [];
+  internal.runtime = { mode: "worker", pid: null, postMessage: message => { messages.push(message); }, terminate() {} };
+  const host = internal as any;
+  const controller = new AbortController();
+  let observed = 0, success: boolean | undefined, ready!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { ready = resolve; });
+  const setup = new Promise<void>(resolve => { release = resolve; });
+  const bind = spyOn(host.messageGenerations, "bind").mockReturnValue({ signal: controller.signal, reasoningPrefill: "prefill",
+    observe() { observed++; }, native() {}, waiting() {}, end(value: boolean) { success = value; } });
+  const raw = spyOn(generateSvc, "rawGenerateStream").mockImplementation(async () => {
+    ready(); await setup; return (async function* () { yield { token: "late" }; })();
+  });
+  try {
+    const work = host.handleGenerationStream("stream", { type: "raw", messages: [], sessionId: "session", swipeIndex: 0 });
+    await waiting; controller.abort(); release(); await work;
+    expect(observed).toBe(0); expect(success).toBe(false);
+    expect(messages.some(message => message.type === "generation_stream_chunk")).toBe(false);
+    expect(messages.at(-1).type).toBe("generation_stream_error");
+    expect(host.generationAbortControllers.size).toBe(0);
+  } finally { raw.mockRestore(); bind.mockRestore(); host.messageGenerations.dispose(); }
+});
+
+test("retained response contexts return their prefill without requiring structured request output", async () => {
+  const dispatch = fixture();
+  const host = dispatch.internal as any;
+  const remember = spyOn(host.messageGenerations, "remember").mockReturnValue("context");
+  dryRun.mockImplementation(async (_input, prepared) => {
+    prepared?.({ prefill: "Prefix" } as any);
+    return { ...baseResult, assistantPrefill: "Prefix" };
+  });
+  try {
+    const response = await dispatch({ type: "generate_dry_run", input: { chatId: "chat", retainResponseContext: true } });
+    expect(response.result).toMatchObject({ responseContextId: "context", assistantPrefill: "Prefix" });
+    expect(response.result.request_messages).toBeUndefined();
+    expect(remember.mock.calls[0]).toEqual(["alice", "chat", { prefill: "Prefix" }]);
+  } finally { remember.mockRestore(); host.messageGenerations.dispose(); }
+});
 
 test("dry run preserves context clipping statistics and a zero history-token count", async () => {
   const contextClipStats = {

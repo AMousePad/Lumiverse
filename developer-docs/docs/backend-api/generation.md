@@ -447,6 +447,7 @@ const result = await spindle.generate.dryRun({
 | `personaId` | `string` | Optional. Use a specific persona. |
 | `presetId` | `string` | Optional. Use a specific preset. |
 | `forcePresetId` | `boolean` | Default `false`. Set `true` to use `presetId` over the chat's preset and return `variable_state`. Requires host capability `message-preset-context-v1: 1`. |
+| `retainResponseContext` | `boolean` | Default `false`. Return a `responseContextId` and `assistantPrefill` for message generation. The handle belongs to this worker and user, expires after two minutes, and can be used once. |
 | `generationType` | `string` | Optional. One of `"normal"`, `"continue"`, `"regenerate"`, `"swipe"`, `"impersonate"`. |
 | `parameters` | `Record<string, unknown>` | Optional. Override sampler parameters. |
 
@@ -471,6 +472,22 @@ const result = await spindle.generate.dryRun({
 | `contextClipStats` | `ContextClipStats` | Optional. Context-budget and clipping statistics, including `maxContext`, `inputBudget`, `chatHistoryTokensBefore`, `chatHistoryTokensAfter`, `messagesDropped`, and `tokensDropped`. Use `maxContext` here for the configured context limit; it is stripped from provider parameters. |
 | `worldInfoStats` | `ActivationStatsDTO` | Optional. World info activation statistics. |
 | `memoryStats` | `MemoryStatsDTO` | Optional. Long-term memory retrieval statistics. |
+
+### Generate into a saved message
+
+Requires `generation-message-sessions-v1` and the `generation`, `chats`, and `chat_mutation` permissions.
+
+1. Prepare each swipe with `dryRun({ chatId, presetId, forcePresetId: true, retainResponseContext: true })`.
+2. Create an assistant message at the end of the chat with one empty swipe per prompt. Save `{ preset_id: presetId, variables: result.variable_state }` in each `preset_contexts` entry, using that prompt's requested preset.
+3. Call `beginMessage({ chatId, messageId, responseContextIds })`. It returns `{ id }`, starts the normal busy state and Stop button, and saves the prompt variables.
+4. Run your request for each swipe through `rawStream` with `sessionId: id` and its zero-based `swipeIndex`. Save text and reasoning to that swipe, including `assistantPrefill` in the text.
+5. After all streams and saves finish, call `finishMessage(id)`. It applies each preset's response regexes and macros, saves reasoning and variables, and returns `{ messageId, completed }`. Repeated calls return the same result.
+
+The host displays saved swipes during streaming. Stop, worker shutdown, and message deletion cancel the requests. Call `abortMessage(id)` to stop them yourself, then save partial output and call `finishMessage(id)`.
+
+`GENERATION_ENDED` fires once after processing a successful selected reply, even when another swipe failed. A failed or cancelled selected reply emits `GENERATION_STOPPED`. Conflicting edits are preserved and stop completion.
+
+An existing native generation must finish or stop first. Replacing it produces separate start/stop events. Ordinary raw requests emit no chat completion events.
 
 ### AssemblyBreakdownEntryDTO
 

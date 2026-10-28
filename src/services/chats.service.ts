@@ -2,7 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import { mutateChatWithDb, rowToChat, parseMetadataObject, type ChatUpdateResult, type ChatMetadataMergeOptions } from "../db/chat-operations";
 import { executeDatabaseOperation } from "../db/execution";
 import { createHash } from "node:crypto";
-import { shieldMessageLiterals } from "../macros/message-literals";
+import { shieldMessageLiterals, withMessageLiteralExtra, type MessageLiteralContent } from "../macros/message-literals";
+import type { VariableValues } from "../utils/variable-checkpoint";
 import { getDatabasePath, getDb } from "../db/connection";
 import { healCorruptDatabase } from "../db/maintenance";
 import { eventBus } from "../ws/bus";
@@ -1528,6 +1529,54 @@ export function reconcileSwipeVariables(userId: string, chatId: string, options?
   if (!chat) return;
   const change = reconcileSwipeVariablesWithDb(getDb(), userId, chatId, options);
   if (change) finishChatUpdate(userId, chatId, { before: { ...chat, metadata: change.before }, after: { ...chat, metadata: change.after }, changed: true });
+}
+
+export interface GeneratedSwipeCommit {
+  stateId: string;
+  expectedContent: string;
+  expectedReasoning: string;
+  expectedContext: unknown;
+  rendered: MessageLiteralContent;
+  fields: Record<string, unknown>;
+  variables?: VariableValues;
+  presetContext?: unknown;
+}
+
+/** Final text, response variables and provenance commit together after asynchronous processing. */
+export function commitGeneratedSwipe(userId: string, chatId: string, messageId: string, input: GeneratedSwipeCommit): boolean {
+  let metadataChange: ChatUpdateResult | null | undefined;
+  let selectedContentChanged = false;
+  const committed = getDb().transaction(() => {
+    let message = getMessage(userId, messageId);
+    if (message?.chat_id !== chatId) return false;
+    const index = message.extra.variableStateBySwipe?.findIndex((state: any) => state?.id === input.stateId) ?? -1;
+    if (index < 0 || index >= message.swipes.length || message.swipes[index] !== input.expectedContent ||
+        (message.extra.reasoningBySwipe?.[index] ?? "") !== input.expectedReasoning ||
+        !isDeepStrictEqual(message.extra.spindle_metadata?.preset_contexts?.[index], input.expectedContext)) return false;
+    if (input.variables) {
+      metadataChange = mutateChatWithDb(getDb(), { action: "merge", userId, id: chatId, partial: {},
+        variableSource: { messageId, stateId: input.stateId, values: input.variables, replaceScopes: ["global", "chat"] } });
+      message = getMessage(userId, messageId)!;
+    }
+    const swipes = [...message.swipes]; swipes[index] = input.rendered.content;
+    let extra = withMessageLiteralExtra(message.extra, input.rendered);
+    if (input.presetContext !== undefined) {
+      const contexts = [...(extra.spindle_metadata?.preset_contexts ?? [])]; contexts[index] = input.presetContext;
+      extra = { ...extra, spindle_metadata: { ...extra.spindle_metadata, preset_contexts: contexts } };
+    }
+    const scoped = { ...extra };
+    for (const key of SWIPE_SCOPED_EXTRA_KEYS) delete scoped[key];
+    const normalized = normalizeStoredMessageExtra({ ...scoped, ...input.fields }, swipes.length, index);
+    selectedContentChanged = message.content !== swipes[message.swipe_id];
+    getDb().query(`UPDATE messages SET swipes = ?, content = ?, extra = ?${messagesHaveRevisionColumn() ? ", revision = revision + 1" : ""} WHERE id = ? AND chat_id = ?`)
+      .run(JSON.stringify(swipes), swipes[message.swipe_id]!, JSON.stringify(normalized), messageId, chatId);
+    return true;
+  }).immediate();
+  if (!committed) return false;
+  if (metadataChange) finishChatUpdate(userId, chatId, metadataChange);
+  eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message: getMessage(userId, messageId)! }, userId);
+  if (selectedContentChanged) scheduleMemoryRebuildForActiveMessageChange(userId, chatId, messageId, "generation completion");
+  return true;
 }
 
 export function updateChat(

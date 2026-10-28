@@ -316,6 +316,8 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | { type: "message_generation_begin"; requestId: string; input: import("./message-generation").BeginMessageGenerationInput }
+  | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | CharacterGalleryWorkerMessage
@@ -769,6 +771,9 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
     getModels(connectionId: string, userId?: string): Promise<ConnectionModelDTO[]>;
   };
   generate: Omit<SpindleAPI["generate"], "dryRun"> & {
+    beginMessage(input: import("./message-generation").BeginMessageGenerationInput): Promise<{ id: string }>;
+    finishMessage(sessionId: string): Promise<import("./message-generation").MessageGenerationResult>;
+    abortMessage(sessionId: string): Promise<void>;
     dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
     getBreakdown(messageId: string, userId?: string): Promise<SavedBreakdownDTO | null>;
   };
@@ -1865,6 +1870,18 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     quietTracked(input: QuietTrackedRequestDTO): Promise<QuietTrackedResultDTO> {
       return requestBoundGeneration<QuietTrackedResultDTO>("generate_quiet_tracked", input);
+    },
+    async beginMessage(input) {
+      assertMutationAllowed("generate.beginMessage");
+      return await request({ type: "message_generation_begin", requestId: crypto.randomUUID(), input }) as { id: string };
+    },
+    async finishMessage(sessionId) {
+      assertMutationAllowed("generate.finishMessage");
+      return await request({ type: "message_generation_finish", requestId: crypto.randomUUID(), sessionId }) as import("./message-generation").MessageGenerationResult;
+    },
+    async abortMessage(sessionId) {
+      assertMutationAllowed("generate.abortMessage");
+      await request({ type: "message_generation_abort", requestId: crypto.randomUUID(), sessionId });
     },
     async raw(input) {
       return requestGeneration({ ...input, type: "raw" });

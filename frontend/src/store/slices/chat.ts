@@ -151,7 +151,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     streamingError: null,
     activeGenerationId: null,
     regeneratingMessageId: null,
-    streamingSwipeId: null, streamingPreserveSwipe: false,
+    streamingSwipeId: null, streamingPreserveSwipe: false, streamingRenderMode: null,
     streamingGenerationType: null,
     lastCompletedGenerationType: null,
     unseenSwipes: {},
@@ -201,7 +201,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         streamingError: null,
         activeGenerationId: null,
         regeneratingMessageId: null,
-        streamingSwipeId: null, streamingPreserveSwipe: false,
+        streamingSwipeId: null, streamingPreserveSwipe: false, streamingRenderMode: null,
         streamingGenerationType: null,
         unseenSwipes: {},
         totalChatLength: hydration?.total ?? 0,
@@ -347,7 +347,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         streamingError: null,
         activeGenerationId: null,
         regeneratingMessageId: nextRegeneratingMessageId,
-        streamingSwipeId: backgroundSwipeId ?? null, streamingPreserveSwipe: backgroundSwipeId != null,
+        streamingRenderMode: null, streamingSwipeId: backgroundSwipeId ?? null, streamingPreserveSwipe: backgroundSwipeId != null,
         streamingGenerationType: generationType ?? null,
       })
     },
@@ -356,7 +356,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       set({ regeneratingMessageId: messageId })
     },
 
-    startStreaming: (generationId, regeneratingMessageId, generationType) => {
+    startStreaming: (generationId, regeneratingMessageId, generationType, renderMode) => {
       // Guard: don't restart a generation that already completed (race condition
       // in sidecar-council mode where GENERATION_ENDED arrives before the HTTP
       // response that triggers this call from InputArea).
@@ -377,6 +377,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       if (current.isStreaming && !current.activeGenerationId) {
         set({
           activeGenerationId: generationId,
+          streamingRenderMode: renderMode ?? null,
           regeneratingMessageId: resolvedRegeneratingMessageId,
           streamingGenerationType: resolvedGenerationType ?? null,
         })
@@ -414,7 +415,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         streamingError: null,
         activeGenerationId: generationId,
         regeneratingMessageId: nextRegeneratingMessageId,
-        streamingSwipeId: null, streamingPreserveSwipe: false,
+        streamingSwipeId: null, streamingPreserveSwipe: false, streamingRenderMode: renderMode ?? null,
         streamingGenerationType: resolvedGenerationType ?? null,
       })
     },
@@ -551,7 +552,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       set((state) => ({
         ...(message ? { messages: state.messages.map((current) => current.id === message.id
           ? preserveNewerMessageRevisions([current], [message])[0] : current) } : {}),
-        isStreaming: false, streamingNavigationPaused: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingSwipeId: null, streamingPreserveSwipe: false,
+        isStreaming: false, streamingNavigationPaused: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingSwipeId: null, streamingPreserveSwipe: false, streamingRenderMode: null,
         lastCompletedGenerationType: !state.isStreaming || (id && endedGenerationIds.get(id) === false)
           ? state.lastCompletedGenerationType : state.streamingGenerationType,
         streamingGenerationType: null,
@@ -583,7 +584,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
           streamingError: null,
           activeGenerationId: null,
           regeneratingMessageId: null,
-          streamingSwipeId: null, streamingPreserveSwipe: false,
+          streamingSwipeId: null, streamingPreserveSwipe: false, streamingRenderMode: null,
           streamingGenerationType: null,
         }
       })
@@ -614,7 +615,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
           streamingReasoningStartedAt: null,
           activeGenerationId: null,
           regeneratingMessageId: null,
-          streamingSwipeId: null, streamingPreserveSwipe: false,
+          streamingSwipeId: null, streamingPreserveSwipe: false, streamingRenderMode: null,
           streamingGenerationType: null,
         }
       })
