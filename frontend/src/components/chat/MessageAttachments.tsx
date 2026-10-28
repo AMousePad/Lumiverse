@@ -165,8 +165,8 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
         className={clsx(styles.attachments, isUser && styles.attachmentsUser, customPresentation && styles.customPresentation, customSize && styles.customSize)}
         style={customPresentation ? chatImagePresentationStyle(size, alignment) : undefined}
       >
-        {visualMedia.map((att) =>
-          att.type === 'video' ? (
+        {visualMedia.map((att) => {
+          if (att.type === 'video') return (
             <video
               key={att.image_id}
               src={getLocalImageUrl(att)}
@@ -181,7 +181,8 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               onTouchMove={canActOnImage ? longPress.onTouchMove : undefined}
               onTouchEnd={canActOnImage ? longPress.onTouchEnd : undefined}
             />
-          ) : isUser ? (
+          )
+          const image = isUser ? (
             <button
               key={att.image_id}
               type="button"
@@ -255,7 +256,10 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               />
             </button>
           )
-        )}
+          return customPresentation
+            ? <div key={att.image_id} className={styles.imageRow}>{image}</div>
+            : image
+        })}
       </div>
 
       <ImageLightbox

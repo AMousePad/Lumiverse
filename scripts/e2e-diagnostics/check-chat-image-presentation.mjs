@@ -37,6 +37,7 @@ const server = createServer((req, res) => {
       res.end(JSON.stringify({ items: JSON.parse(body).items.map(item => ({ content: item.rawContent, incrementalRawAppendSafe: true })) }))
     })
   } else if (req.url === '/fixture.js') { res.setHeader('content-type', 'text/javascript'); res.end(js) }
+  else if (req.url.includes('/images/fixture-video-')) { res.writeHead(204); res.end() }
   else if (req.url.includes('.svg') || req.url.includes('/images/')) {
     res.setHeader('content-type', 'image/svg+xml')
     const tall = req.url.includes('tall') || req.url.includes('asset')
@@ -135,6 +136,11 @@ try {
         }
         const baseline = new Map()
         for (const [alt] of samples) baseline.set(alt, await sampleState(alt))
+        const videoState = () => page.locator('#videos video').evaluateAll(videos => videos.map(video => {
+          const rect = video.getBoundingClientRect(), parent = video.parentElement.getBoundingClientRect()
+          return { x: rect.x - parent.x, y: rect.y - parent.y, width: rect.width, height: rect.height }
+        }))
+        const originalVideos = await videoState()
         for (let mask = 0; mask < 8; mask++) {
           await reopen.click()
           await sizes.getByRole('button', { name: '75% × 75%', exact: true }).click()
@@ -152,6 +158,12 @@ try {
             assert.ok(box.x >= 0 && box.x + box.width <= width + 1 && box.y >= (width === 390 ? 47 : 0) - 1, 'checkbox respects viewport and safe top')
           }
           await close.click()
+          assert.deepEqual(await videoState(), originalVideos, 'image preferences preserve video layout')
+          if (mask & 4) {
+            const gap = await page.locator('#multiple-images button').evaluateAll(buttons =>
+              buttons[1].getBoundingClientRect().top - buttons[0].getBoundingClientRect().bottom)
+            assert.ok(gap >= 5, 'custom attachment rows retain spacing between images')
+          }
           for (const [alt, category] of samples) {
             const actual = await sampleState(alt)
             if (mask & (1 << category)) {

@@ -64,6 +64,14 @@ function Fixture() {
       <MessageAttachments isUser chatId="fixture-chat" messageId="fixture-message" attachments={[{ type: 'image', image_id: 'fixture-user', original_filename: 'User attachment' }]} />
     </div>}
     <div id="profile"><MessageContent content="![Profile preview](/fixture-wide.svg)" isUser={false} userName="Reader" disableInterceptors /></div>
+    <div id="videos"><MessageAttachments isUser chatId="fixture-chat" messageId="fixture-videos" attachments={[
+      { type: 'video', image_id: 'fixture-video-1', original_filename: 'First video' },
+      { type: 'video', image_id: 'fixture-video-2', original_filename: 'Second video' },
+    ]} /></div>
+    <div id="multiple-images"><MessageAttachments chatId="fixture-chat" messageId="fixture-images" attachments={[
+      { type: 'image', image_id: 'fixture-first', original_filename: 'First attachment', width: 1200, height: 600 },
+      { type: 'image', image_id: 'fixture-second', original_filename: 'Second attachment', width: 1200, height: 600 },
+    ]} /></div>
   </>
 }
 createRoot(document.getElementById('root')!).render(<Fixture />)

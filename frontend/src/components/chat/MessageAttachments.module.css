@@ -118,8 +118,9 @@
 }
 
 /* Explicit presentation preferences override thumbnail frames, including LazyImage's inline sizing. */
-.customPresentation {
-  display: block;
+.imageRow {
+  width: 100%;
+  min-width: 0;
 }
 
 .customPresentation .imageThumbUser,
