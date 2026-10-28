@@ -154,8 +154,9 @@ export async function persistMacroVariableStateAsync(
   userId: string,
   chatId: string,
   env: MacroEnv,
+  source?: { messageId: string; stateId: string },
 ): Promise<void> {
-  await mergeMacroVariables(userId, chatId, Object.fromEntries(env.variables.global), Object.fromEntries(env.variables.chat));
+  await mergeMacroVariables(userId, chatId, Object.fromEntries(env.variables.global), Object.fromEntries(env.variables.chat), source);
 }
 
 async function mergeMacroVariables(
@@ -163,12 +164,15 @@ async function mergeMacroVariables(
   chatId: string,
   globalVariables: Record<string, string>,
   chatVariables: Record<string, string>,
+  source?: { messageId: string; stateId: string },
 ): Promise<void> {
   // Read and merge in the child transaction so concurrent extension keys survive.
   await chatsSvc.mergeChatMetadataAsync(userId, chatId, {
     macro_variables: { global: globalVariables },
     chat_variables: chatVariables,
-  }, { mergeObjectPaths: [["macro_variables", "global"], ["chat_variables"]] });
+  }, { mergeObjectPaths: [["macro_variables", "global"], ["chat_variables"]],
+    ...(source ? { variableSource: { ...source, values: { global: globalVariables, chat: chatVariables }, replaceScopes: ["global", "chat"] } } : {}),
+  });
 }
 
 export async function reconcileChatMessageMacros(

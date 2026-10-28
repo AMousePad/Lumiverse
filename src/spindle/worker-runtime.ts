@@ -316,11 +316,15 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | { type: "message_generation_begin"; requestId: string; input: import("./message-generation").BeginMessageGenerationInput }
+  | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | CharacterGalleryWorkerMessage
   | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
+  | { type: "chat_set_swipe_variables"; requestId: string; chatId: string; messageId: string; input: import("../db/swipe-variable-state").SetSwipeVariablesInput }
+  | { type: "chats_compare_metadata"; requestId: string; chatId: string; input: import("../types/chat").ConditionalChatMetadataInput; userId?: string }
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -747,6 +751,12 @@ interface RuntimeLumiverseVersionInfo {
 }
 
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version"> & {
+  chat: SpindleAPI["chat"] & {
+    setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean>;
+  };
+  chats: SpindleAPI["chats"] & {
+    compareAndSetMetadata(chatId: string, input: import("../types/chat").ConditionalChatMetadataInput, userId?: string): Promise<ChatDTO | null>;
+  };
   version: SpindleAPI["version"] & {
     getCommit(): Promise<string | null>;
     getBranch(): Promise<string | null>;
@@ -765,6 +775,9 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
     getModels(connectionId: string, userId?: string): Promise<ConnectionModelDTO[]>;
   };
   generate: Omit<SpindleAPI["generate"], "dryRun"> & {
+    beginMessage(input: import("./message-generation").BeginMessageGenerationInput): Promise<{ id: string }>;
+    finishMessage(sessionId: string): Promise<import("./message-generation").MessageGenerationResult>;
+    abortMessage(sessionId: string): Promise<void>;
     dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
     getBreakdown(messageId: string, userId?: string): Promise<SavedBreakdownDTO | null>;
   };
@@ -1862,6 +1875,18 @@ const spindleApi: RuntimeSpindleAPI = {
     quietTracked(input: QuietTrackedRequestDTO): Promise<QuietTrackedResultDTO> {
       return requestBoundGeneration<QuietTrackedResultDTO>("generate_quiet_tracked", input);
     },
+    async beginMessage(input) {
+      assertMutationAllowed("generate.beginMessage");
+      return await request({ type: "message_generation_begin", requestId: crypto.randomUUID(), input }) as { id: string };
+    },
+    async finishMessage(sessionId) {
+      assertMutationAllowed("generate.finishMessage");
+      return await request({ type: "message_generation_finish", requestId: crypto.randomUUID(), sessionId }) as import("./message-generation").MessageGenerationResult;
+    },
+    async abortMessage(sessionId) {
+      assertMutationAllowed("generate.abortMessage");
+      await request({ type: "message_generation_abort", requestId: crypto.randomUUID(), sessionId });
+    },
     async raw(input) {
       return requestGeneration({ ...input, type: "raw" });
     },
@@ -2341,6 +2366,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   chat: {
+    async setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean> {
+      assertMutationAllowed("spindle.chat.setSwipeVariables()");
+      return await request({ type: "chat_set_swipe_variables", requestId: crypto.randomUUID(), chatId, messageId, input }) as boolean;
+    },
     async getMessages(chatId: string) {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "chat_get_messages", requestId, chatId });
@@ -3082,6 +3111,11 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "chats_update", requestId, chatId, input, userId });
       return result as ChatDTO;
+    },
+    async compareAndSetMetadata(chatId: string, input: import("../types/chat").ConditionalChatMetadataInput, userId?: string): Promise<ChatDTO | null> {
+      assertMutationAllowed("spindle.chats.compareAndSetMetadata()");
+      const requestId = crypto.randomUUID();
+      return await request({ type: "chats_compare_metadata", requestId, chatId, input, userId }) as ChatDTO | null;
     },
     async delete(chatId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.chats.delete()");

@@ -692,7 +692,7 @@ export function useWebSocket() {
           // Suppress completed assistant messages while streaming — the streaming
           // card already displays the content. GENERATION_ENDED will reconcile
           // the full message list, preventing a duplicate bubble flash.
-          if (state.isStreaming && !payload.message.is_user && payload.message.content) return
+          if (state.isStreaming && state.streamingRenderMode !== "persisted-message" && !payload.message.is_user && payload.message.content) return
 
           // If streaming with a placeholder (regeneration), replace it with the
           // real staged message from the backend instead of adding a duplicate.
@@ -817,7 +817,7 @@ export function useWebSocket() {
             state.setRespondingCharacterId(payload.characterId)
           }
           if (state.activeGenerationId !== payload.generationId) {
-            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType)
+            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType, payload.renderMode)
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             // Generation already wired via HTTP response — just set the target message.
             // This happens when council sidecar stages a message after startStreaming was
@@ -851,7 +851,7 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           if (state.activeGenerationId !== payload.generationId) {
-            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType)
+            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType, payload.renderMode)
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
@@ -2100,7 +2100,7 @@ export function useWebSocket() {
             const gen = payload.generation
             if (gen?.active && gen.generationId) {
               const st = store.getState()
-              st.startStreaming(gen.generationId, gen.targetMessageId, gen.generationType)
+              st.startStreaming(gen.generationId, gen.targetMessageId, gen.generationType, gen.renderMode)
               st.setStreamingSwipeId(gen.targetSwipeId ?? null, gen.backgroundSwipe === true)
               if (gen.content) st.reconcileStreamContent(gen.content, gen.contentOffset ?? 0)
               if (gen.reasoning) st.reconcileStreamReasoning(gen.reasoning, gen.reasoningOffset ?? 0)

@@ -1,7 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import { mutateChatWithDb, rowToChat, parseMetadataObject, type ChatUpdateResult, type ChatMetadataMergeOptions } from "../db/chat-operations";
 import { executeDatabaseOperation } from "../db/execution";
 import { createHash } from "node:crypto";
-import { shieldMessageLiterals } from "../macros/message-literals";
+import { shieldMessageLiterals, withMessageLiteralExtra, type MessageLiteralContent } from "../macros/message-literals";
+import type { VariableValues } from "../utils/variable-checkpoint";
 import { getDatabasePath, getDb } from "../db/connection";
 import { healCorruptDatabase } from "../db/maintenance";
 import { eventBus } from "../ws/bus";
@@ -9,7 +11,7 @@ import { EventType } from "../ws/events";
 import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspectiveLayers, getCharacterAsync } from "./characters.service";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Character } from "../types/character";
-import type { Chat, ChatAppearanceAction, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
+import type { Chat, ChatAppearanceAction, ConditionalChatMetadataInput, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
 import type {
   Message,
@@ -22,6 +24,8 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import type { EditAndSendContext } from "../llm/types";
 import { EditAndSendContextError } from "../llm/types";
 import { readMessageRevision } from "../utils/message-revision";
+import { prepareNativeSwipeVariablesWithDb, preserveSwipeVariablesSql, readVariableBoundary, remapSwipeVariableOwnerWithDb, reconcileSwipeVariablesWithDb, setSwipeVariablesWithDb, trackVariableWrite, type ReconcileVariableOptions, type VariableBoundary, type SetSwipeVariablesInput } from "../db/swipe-variable-state";
+import { normalizeSpindleMessageMetadata } from "../utils/message-metadata";
 import { paginatedQuery } from "./pagination";
 import * as embeddingsSvc from "./embeddings.service";
 import * as audioSvc from "./audio.service";
@@ -203,7 +207,7 @@ function normalizeReasoningDurationEntries(
 ): (number | null)[] {
   const normalized = Array.isArray(value)
     ? value.slice(0, swipeCount).map((entry) =>
-        typeof entry === "number" && Number.isFinite(entry) && entry > 0
+        typeof entry === "number" && Number.isFinite(entry) && entry >= 0
           ? entry
           : null,
       )
@@ -266,12 +270,8 @@ function normalizeStoredMessageExtra(
       ? legacySwipeId
       : 0;
   const normalized: Record<string, unknown> = { ...(extra || {}) };
-  const spindleMetadata = normalized.spindle_metadata as Record<string, unknown> | undefined;
-  if (Array.isArray(spindleMetadata?.preset_contexts)) {
-    const contexts = spindleMetadata.preset_contexts;
-    normalized.spindle_metadata = { ...spindleMetadata,
-      preset_contexts: Array.from({ length: safeSwipeCount }, (_, i) => contexts[i] ?? null) };
-  }
+  if (Array.isArray(normalized.variableStateBySwipe)) normalized.variableStateBySwipe = normalizeObjectEntries(normalized.variableStateBySwipe, safeSwipeCount);
+  if (normalized.spindle_metadata !== undefined) normalized.spindle_metadata = normalizeSpindleMessageMetadata(normalized.spindle_metadata, safeSwipeCount);
   const reasoningBySwipe = normalizeReasoningEntries(
     normalized.reasoningBySwipe,
     safeSwipeCount,
@@ -321,7 +321,7 @@ function normalizeStoredMessageExtra(
   } else if (
     typeof normalized.reasoningDuration === "number" &&
     Number.isFinite(normalized.reasoningDuration) &&
-    normalized.reasoningDuration > 0
+    normalized.reasoningDuration >= 0
   ) {
     reasoningDurationBySwipe[safeLegacySwipeId] = normalized.reasoningDuration;
   }
@@ -439,7 +439,7 @@ function projectActiveSwipeExtra(
   if (
     typeof activeReasoningDuration === "number" &&
     Number.isFinite(activeReasoningDuration) &&
-    activeReasoningDuration > 0
+    activeReasoningDuration >= 0
   ) {
     projected.reasoningDuration = activeReasoningDuration;
   } else {
@@ -484,6 +484,10 @@ function removeSwipeScopedExtraEntry(
   removedSwipeId: number,
 ): Record<string, unknown> {
   const normalized = normalizeStoredMessageExtra(extra, swipeCount, legacySwipeId);
+  if (Array.isArray(normalized.variableStateBySwipe)) {
+    const records = [...normalized.variableStateBySwipe]; records.splice(removedSwipeId, 1);
+    normalized.variableStateBySwipe = records;
+  }
   const spindleMetadata = normalized.spindle_metadata as Record<string, unknown> | undefined;
   if (Array.isArray(spindleMetadata?.preset_contexts)) {
     const contexts = [...spindleMetadata.preset_contexts]; contexts.splice(removedSwipeId, 1);
@@ -606,6 +610,7 @@ const SWIPE_SCOPED_EXTRA_ARRAY_KEYS = [
   "generationOutcomeBySwipe",
   "usageBySwipe",
   "reasoningCarrierBySwipe",
+  "variableStateBySwipe",
 ] as const;
 
 /**
@@ -634,6 +639,9 @@ function preserveSwipeScopedExtraArrays(
 ): Record<string, unknown> {
   if (!stored) return incoming;
   const merged = { ...incoming };
+  // Variable checkpoints are host-owned; echoed message extras cannot replace them.
+  if (stored.variableStateBySwipe !== undefined) merged.variableStateBySwipe = stored.variableStateBySwipe;
+  else delete merged.variableStateBySwipe;
   for (const key of SWIPE_SCOPED_EXTRA_ARRAY_KEYS) {
     if (merged[key] === undefined && stored[key] !== undefined) {
       merged[key] = stored[key];
@@ -1492,6 +1500,85 @@ function diffLeafBagInto(out: string[], prev: unknown, next: unknown, prefix: st
   }
 }
 
+export function prepareNativeSwipeVariables(userId: string, chatId: string, messageId: string, swipeId: number,
+  seed?: import("../utils/variable-checkpoint").VariableStateSeed, stateId?: string, preserveBefore = false): string | undefined {
+  const before = getChat(userId, chatId);
+  if (!before) return;
+  const id = prepareNativeSwipeVariablesWithDb(getDb(), userId, chatId, messageId, swipeId, seed, stateId, preserveBefore);
+  const after = getChat(userId, chatId)!;
+  if (!isDeepStrictEqual(before.metadata, after.metadata)) finishChatUpdate(userId, chatId, { before, after, changed: true });
+  return id;
+}
+
+export function setSwipeVariables(userId: string, chatId: string, messageId: string, input: SetSwipeVariablesInput): boolean {
+  const before = getChat(userId, chatId);
+  if (!before) throw new Error("Chat not found");
+  if (!setSwipeVariablesWithDb(getDb(), userId, chatId, messageId, input)) return false;
+  const after = getChat(userId, chatId)!;
+  finishChatUpdate(userId, chatId, { before, after, changed: true });
+  eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message: getMessage(userId, messageId)! }, userId);
+  return true;
+}
+
+export function reconcileSwipeVariables(userId: string, chatId: string, options?: ReconcileVariableOptions): void {
+  const chat = getChat(userId, chatId);
+  if (!chat) return;
+  const change = reconcileSwipeVariablesWithDb(getDb(), userId, chatId, options);
+  if (change) finishChatUpdate(userId, chatId, { before: { ...chat, metadata: change.before }, after: { ...chat, metadata: change.after }, changed: true });
+}
+
+export interface GeneratedSwipeCommit {
+  stateId: string;
+  expectedContent: string;
+  expectedReasoning: string;
+  expectedContext: unknown;
+  rendered: MessageLiteralContent;
+  fields: Record<string, unknown>;
+  variables?: VariableValues;
+  presetContext?: unknown;
+}
+
+/** Final text, response variables and provenance commit together after asynchronous processing. */
+export function commitGeneratedSwipe(userId: string, chatId: string, messageId: string, input: GeneratedSwipeCommit): boolean {
+  let metadataChange: ChatUpdateResult | null | undefined;
+  let selectedContentChanged = false;
+  const committed = getDb().transaction(() => {
+    let message = getMessage(userId, messageId);
+    if (message?.chat_id !== chatId) return false;
+    const index = message.extra.variableStateBySwipe?.findIndex((state: any) => state?.id === input.stateId) ?? -1;
+    if (index < 0 || index >= message.swipes.length || message.swipes[index] !== input.expectedContent ||
+        (message.extra.reasoningBySwipe?.[index] ?? "") !== input.expectedReasoning ||
+        !isDeepStrictEqual(message.extra.spindle_metadata?.preset_contexts?.[index], input.expectedContext)) return false;
+    if (input.variables) {
+      metadataChange = mutateChatWithDb(getDb(), { action: "merge", userId, id: chatId, partial: {},
+        variableSource: { messageId, stateId: input.stateId, values: input.variables, replaceScopes: ["global", "chat"] } });
+      message = getMessage(userId, messageId)!;
+    }
+    const swipes = [...message.swipes]; swipes[index] = input.rendered.content;
+    let extra = withMessageLiteralExtra(message.extra, input.rendered);
+    if (input.presetContext !== undefined) {
+      const contexts = [...(extra.spindle_metadata?.preset_contexts ?? [])]; contexts[index] = input.presetContext;
+      extra = { ...extra, spindle_metadata: { ...extra.spindle_metadata, preset_contexts: contexts } };
+    }
+    const scoped = { ...extra };
+    for (const key of SWIPE_SCOPED_EXTRA_KEYS) delete scoped[key];
+    const normalized = normalizeStoredMessageExtra({ ...scoped, ...input.fields }, swipes.length, index);
+    selectedContentChanged = message.content !== swipes[message.swipe_id];
+    getDb().query(`UPDATE messages SET swipes = ?, content = ?, extra = ?${messagesHaveRevisionColumn() ? ", revision = revision + 1" : ""} WHERE id = ? AND chat_id = ?`)
+      .run(JSON.stringify(swipes), swipes[message.swipe_id]!, JSON.stringify(normalized), messageId, chatId);
+    return true;
+  }).immediate();
+  if (!committed) return false;
+  if (metadataChange) finishChatUpdate(userId, chatId, metadataChange);
+  eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message: getMessage(userId, messageId)! }, userId);
+  if (selectedContentChanged) scheduleMemoryRebuildForActiveMessageChange(userId, chatId, messageId, "generation completion");
+  return true;
+}
+
+export function compareAndSetChatMetadata(userId: string, id: string, input: ConditionalChatMetadataInput): Chat | null {
+  return finishChatUpdate(userId, id, mutateChatWithDb(getDb(), { action: "compare-metadata", userId, id, input }));
+}
+
 export function updateChat(
   userId: string,
   id: string,
@@ -2310,7 +2397,7 @@ export function claimAssociativeRegexActions(
         .run(JSON.stringify(nextExtra), messageId, chatId);
     }
     if (chatStateChanged) {
-      const metadata = { ...(chatBefore.metadata || {}), chat_variables: chatVariables };
+      const metadata = trackVariableWrite(db, chatId, chatBefore.metadata, { ...(chatBefore.metadata || {}), chat_variables: chatVariables });
       db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
         .run(JSON.stringify(metadata), now, chatId, userId);
     }
@@ -2402,7 +2489,7 @@ export function claimAssociativeRegexAction(
       chatStateChanged = true;
     }
     const metadata = chatStateChanged
-      ? { ...(chatBefore.metadata || {}), chat_variables: chatVariables }
+      ? trackVariableWrite(db, chatId, chatBefore.metadata, { ...(chatBefore.metadata || {}), chat_variables: chatVariables })
       : chatBefore.metadata;
     if (chatStateChanged) {
       db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
@@ -2510,7 +2597,7 @@ export function appendMessageAttachment(
   const normalizedExtra = normalizeStoredMessageExtra(nextExtra, existing.swipes.length, existing.swipe_id);
 
   getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .query(`UPDATE messages SET extra = ${preserveSwipeVariablesSql(existing.extra, existing.swipes.length)} WHERE id = ? AND chat_id = ?`)
     .run(JSON.stringify(normalizedExtra), messageId, existing.chat_id);
 
   const updated: Message = { ...existing, extra: projectActiveSwipeExtra(normalizedExtra, existing.swipe_id) };
@@ -2629,7 +2716,7 @@ export function removeMessageAttachment(
   const normalizedExtra = normalizeStoredMessageExtra(nextExtra, existing.swipes.length, existing.swipe_id);
 
   getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .query(`UPDATE messages SET extra = ${preserveSwipeVariablesSql(existing.extra, existing.swipes.length)} WHERE id = ? AND chat_id = ?`)
     .run(JSON.stringify(normalizedExtra), messageId, existing.chat_id);
 
   // Safe to call after the UPDATE: image cleanup can now determine whether a
@@ -2655,12 +2742,12 @@ export function patchMessageExtra(userId: string, id: string, extra: Record<stri
     existing.swipe_id,
   );
   getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .query(`UPDATE messages SET extra = ${preserveSwipeVariablesSql(existing.extra, existing.swipes.length)} WHERE id = ? AND chat_id = ?`)
     .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
 }
 
 /** Top-level extra keys that are persisted per-swipe (folded into `*BySwipe[]`). */
-const SWIPE_SCOPED_EXTRA_KEYS = [
+export const SWIPE_SCOPED_EXTRA_KEYS = [
   "promptActivation",
   "reasoning",
   "reasoningDuration",
@@ -2712,7 +2799,7 @@ export function setSwipeScopedExtra(
     targetSwipeId,
   );
   getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .query(`UPDATE messages SET extra = ${preserveSwipeVariablesSql(existing.extra, existing.swipes.length)} WHERE id = ? AND chat_id = ?`)
     .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
 }
 
@@ -2806,7 +2893,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     values.push(newSwipeId);
   }
   if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
-  if (normalizedExtra !== undefined) { fields.push("extra = ?"); values.push(JSON.stringify(normalizedExtra)); }
+  if (normalizedExtra !== undefined) { fields.push(`extra = ${preserveSwipeVariablesSql(existing.extra, newSwipes.length)}`); values.push(JSON.stringify(normalizedExtra)); }
 
   if (fields.length === 0) return existing;
   if (messagesHaveRevisionColumn()) fields.push("revision = revision + 1");
@@ -2814,6 +2901,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   values.push(existing.chat_id);
 
   getDb().query(`UPDATE messages SET ${fields.join(", ")} WHERE id = ? AND chat_id = ?`).run(...values);
+  if ((patchedSwipeId || newSwipes.length !== existing.swipes.length) && existing.extra.variableStateBySwipe) reconcileSwipeVariables(userId, existing.chat_id, { selectedMessageId: id });
   const updated = getMessage(userId, id)!;
   eventBus.emit(EventType.MESSAGE_EDITED, { chatId: updated.chat_id, message: updated }, userId);
   if (swipeShapeTouched) {
@@ -2945,11 +3033,12 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
   if (messageIds.length > 500) throw new Error("Maximum 500 messages per batch");
 
   const db = getDb();
-  const getStmt = db.query("SELECT id, extra, index_in_chat FROM messages WHERE id = ? AND chat_id = ?");
+  const getStmt = db.query("SELECT id, extra, swipe_id, index_in_chat FROM messages WHERE id = ? AND chat_id = ?");
   const deleteStmt = db.query("DELETE FROM messages WHERE id = ? AND chat_id = ?");
 
   let deleted = 0;
   const deletedIds: string[] = [];
+  const discarded: VariableBoundary[] = [];
   const attachmentsToCleanup: any[] = [];
   let earliestDeletedIndex: number | null = null;
 
@@ -2961,6 +3050,8 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
       attachmentsToCleanup.push(...collectMessageAttachments(row));
       const result = deleteStmt.run(msgId, chatId);
       if (result.changes > 0) {
+        const boundary = readVariableBoundary(parseMetadataObject(row.extra), row.swipe_id, row.index_in_chat);
+        if (boundary) discarded.push(boundary);
         breakdownSvc.deleteBreakdownForMessage(userId, msgId);
         earliestDeletedIndex = earliestDeletedIndex == null
           ? row.index_in_chat
@@ -2986,6 +3077,8 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
   }
 
   cleanupMessageAttachments(userId, attachmentsToCleanup);
+
+  if (deleted > 0 && chat.metadata._swipe_variable_state) reconcileSwipeVariables(userId, chatId, { discarded });
 
   for (const msgId of deletedIds) {
     eventBus.emit(EventType.MESSAGE_DELETED, { chatId, messageId: msgId }, userId);
@@ -3028,6 +3121,10 @@ export function deleteMessage(userId: string, id: string): boolean {
   })();
   if (result.changes > 0) {
     const chat = getChat(userId, msg.chat_id);
+    if (chat?.metadata._swipe_variable_state) {
+      const boundary = readVariableBoundary(msg.extra, msg.swipe_id, msg.index_in_chat);
+      reconcileSwipeVariables(userId, msg.chat_id, { discarded: boundary ? [boundary] : [] });
+    }
     if (chat?.metadata?.context_history_anchor_message_id === id) {
       mergeChatMetadata(userId, msg.chat_id, {
         context_history_anchor_message_id: undefined,
@@ -3097,7 +3194,7 @@ export function addSwipe(userId: string, messageId: string, content: string, opt
   );
 
   getDb()
-    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ?${userContentRevisionSql(msg, selectedContent)} WHERE id = ? AND chat_id = ?`)
+    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ${preserveSwipeVariablesSql(msg.extra, swipes.length)}${userContentRevisionSql(msg, selectedContent)} WHERE id = ? AND chat_id = ?`)
     .run(
       JSON.stringify(swipes),
       JSON.stringify(swipeDates),
@@ -3138,8 +3235,8 @@ export function updateSwipe(userId: string, messageId: string, swipeIdx: number,
   );
 
   const updates = swipeIdx === msg.swipe_id
-    ? "swipes = ?, content = ?, extra = ?"
-    : "swipes = ?, extra = ?";
+    ? `swipes = ?, content = ?, extra = ${preserveSwipeVariablesSql(msg.extra, swipes.length)}`
+    : `swipes = ?, extra = ${preserveSwipeVariablesSql(msg.extra, swipes.length)}`;
   const values = swipeIdx === msg.swipe_id
     ? [JSON.stringify(swipes), content, JSON.stringify(normalizedExtra), messageId, msg.chat_id]
     : [JSON.stringify(swipes), JSON.stringify(normalizedExtra), messageId, msg.chat_id];
@@ -3204,7 +3301,7 @@ export function deleteSwipe(
   );
 
   getDb()
-    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ?${userContentRevisionSql(msg, newContent)} WHERE id = ? AND chat_id = ?`)
+    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ${preserveSwipeVariablesSql(msg.extra, swipes.length, swipeIdx)}${userContentRevisionSql(msg, newContent)} WHERE id = ? AND chat_id = ?`)
     .run(
       JSON.stringify(swipes),
       JSON.stringify(swipeDates),
@@ -3215,6 +3312,7 @@ export function deleteSwipe(
       msg.chat_id,
     );
 
+  if (msg.extra.variableStateBySwipe) reconcileSwipeVariables(userId, msg.chat_id, { selectedMessageId: messageId });
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
     EventType.MESSAGE_SWIPED,
@@ -3249,8 +3347,10 @@ export function cycleSwipe(userId: string, messageId: string, direction: "left" 
   );
 
   getDb()
-    .query(`UPDATE messages SET swipe_id = ?, content = ?, extra = ?${userContentRevisionSql(msg, nextContent)} WHERE id = ? AND chat_id = ?`)
+    .query(`UPDATE messages SET swipe_id = ?, content = ?, extra = ${preserveSwipeVariablesSql(msg.extra, msg.swipes.length)}${userContentRevisionSql(msg, nextContent)} WHERE id = ? AND chat_id = ?`)
     .run(nextIdx, nextContent, JSON.stringify(normalizedExtra), messageId, msg.chat_id);
+
+  if (msg.extra.variableStateBySwipe) reconcileSwipeVariables(userId, msg.chat_id, { selectedMessageId: messageId });
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
@@ -3359,6 +3459,13 @@ function createChatBranchRows(userId: string, chat: Chat, msg: Message, requeste
       .run(JSON.stringify(metadata), newChatId, userId);
   }
 
+  if (metadata._swipe_variable_state) {
+    const next = db.query("SELECT extra, swipe_id, index_in_chat FROM messages WHERE chat_id = ? AND index_in_chat > ? AND EXISTS (SELECT 1 FROM json_each(messages.extra, '$.variableStateBySwipe') WHERE json_type(value, '$.before') = 'object') ORDER BY index_in_chat LIMIT 1")
+      .get(chat.id, msg.index_in_chat) as { extra: string; swipe_id: number; index_in_chat: number } | null;
+    const boundary = next && readVariableBoundary(parseMetadataObject(next.extra), next.swipe_id, next.index_in_chat);
+    remapSwipeVariableOwnerWithDb(db, userId, newChatId);
+    reconcileSwipeVariablesWithDb(db, userId, newChatId, { discarded: boundary ? [boundary] : [] });
+  }
   return {
     sourceChatId: chat.id,
     newChatId,
@@ -4474,8 +4581,7 @@ async function stampChatMemoryHash(userId: string, chatId: string): Promise<void
 
     const chat = getChat(userId, chatId);
     if (!chat) return;
-    const metadata = { ...chat.metadata, ltcm_config_hash: hash };
-    getDb().query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(JSON.stringify(metadata), chatId, userId);
+    getDb().query("UPDATE chats SET metadata = json_set(metadata, '$.ltcm_config_hash', ?) WHERE id = ? AND user_id = ?").run(hash, chatId, userId);
   } catch { /* non-fatal */ }
 }
 
