@@ -310,6 +310,7 @@ type RuntimeWorkerToHost =
   | CharacterGalleryWorkerMessage
   | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
+  | { type: "chats_compare_metadata"; requestId: string; chatId: string; input: import("../types/chat").ConditionalChatMetadataInput; userId?: string }
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -1322,6 +1323,7 @@ export class WorkerHost {
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
           "message-preset-context-v1": 1,
+          "chat-conditional-metadata-v1": 1,
           "generation-request-messages-v1": 1,
           "chat-metadata-patch-v1": 1,
           "chat-swipe-reasoning-v1": 1,
@@ -2113,6 +2115,9 @@ export class WorkerHost {
         break;
       case "chats_update":
         this.contentApi.handleChatsUpdate(msg.requestId, msg.chatId, msg.input, msg.userId);
+        break;
+      case "chats_compare_metadata":
+        this.contentApi.handleChatsCompareAndSetMetadata(msg.requestId, msg.chatId, msg.input, msg.userId);
         break;
       case "chats_delete":
         this.contentApi.handleChatsDelete(msg.requestId, msg.chatId, msg.userId);
