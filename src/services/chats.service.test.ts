@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { ExtensionInfo, HostToWorker, SpindleManifest } from "lumiverse-spindle-types";
+import { WorkerHost } from "../spindle/worker-host";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -697,6 +699,63 @@ describe("recent chats", () => {
     expect(restoredSecondSwipe.swipe_id).toBe(1);
     expect(restoredSecondSwipe.extra.reasoning).toBe("second swipe reasoning");
     expect(restoredSecondSwipe.extra.reasoningDuration).toBe(456);
+  });
+
+  test("Spindle reasoning snapshots survive storage, navigation, and forks without changing generation metadata", async () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "first swipe", {
+      reasoning: "old first reasoning", reasoningDuration: 10, tokenCount: 11,
+      usage: { total_tokens: 11 }, generationMetrics: { model: "first" },
+      generationOutcome: { status: "completed" }, reasoningCarrier: { type: "reasoning_content", content: "native" },
+      spindle_metadata: { custom: "retained" },
+    });
+    addSwipe("u1", "msg-1", "second swipe");
+    setSwipeScopedExtra("u1", "msg-1", 1, {
+      reasoning: "old second reasoning", reasoningDuration: 20, tokenCount: 22,
+      usage: { total_tokens: 22 }, generationMetrics: { model: "second" },
+    });
+    const before = getMessage("u1", "msg-1")!;
+    const host = new WorkerHost("reasoning-test", {
+      identifier: "reasoning-test", name: "Reasoning test",
+    } as SpindleManifest, {
+      id: "reasoning-test", identifier: "reasoning-test", name: "Reasoning test", version: "0.0.0", author: "",
+      description: "", github: "", homepage: "", permissions: [], granted_permissions: [], enabled: true,
+      installed_at: 0, updated_at: 0, has_frontend: false, has_backend: false, status: "stopped",
+      metadata: { install_scope: "user", installed_by_user_id: "u1" },
+    } satisfies ExtensionInfo);
+    const internal = host as any;
+    internal.hasPermission = (permission: string) => permission === "chat_mutation";
+    const send = (patch: unknown) => new Promise<Extract<HostToWorker, { type: "response" }>>(resolve => {
+      internal.runtime = { mode: "worker", pid: null, postMessage: resolve, terminate() {} };
+      internal.handleMessage({ type: "chat_update_message", requestId: "request", chatId: "chat-1", messageId: "msg-1", patch });
+    });
+
+    expect(await send({ swipe_reasoning: [{ text: "first reasoning", duration: 0 }, { text: "second reasoning", duration: 25 }] }))
+      .toEqual({ type: "response", requestId: "request", result: true });
+    const saved = getMessage("u1", "msg-1")!;
+    expect(saved).toMatchObject({ swipe_id: 1, content: "second swipe", extra: {
+      reasoning: "second reasoning", reasoningDuration: 25,
+      reasoningBySwipe: ["first reasoning", "second reasoning"], reasoningDurationBySwipe: [0, 25],
+    } });
+    for (const key of ["tokenCountBySwipe", "usageBySwipe", "generationMetricsBySwipe", "generationOutcomeBySwipe", "reasoningCarrierBySwipe", "spindle_metadata"]) {
+      expect(saved.extra[key]).toEqual(before.extra[key]);
+    }
+    const fork = branchChat("u1", "chat-1", "msg-1")!;
+    const forkedMessage = getMessages("u1", fork.id)[0]!;
+    expect(cycleSwipe("u1", forkedMessage.id, "left")!.extra).toMatchObject({ reasoning: "first reasoning", reasoningDuration: 0, tokenCount: 11 });
+    expect(cycleSwipe("u1", "msg-1", "left")!.extra).toMatchObject({ reasoning: "first reasoning", reasoningDuration: 0, tokenCount: 11 });
+
+    expect((await send({ swipe_reasoning: [null, { text: "replacement" }] })).result).toBe(true);
+    const cleared = getMessage("u1", "msg-1")!;
+    expect(cleared.extra.reasoning).toBeUndefined();
+    expect(cleared.extra.reasoningDuration).toBeUndefined();
+    expect(cycleSwipe("u1", "msg-1", "right")!.extra).toMatchObject({ reasoning: "replacement", tokenCount: 22 });
+    expect(getMessage("u1", "msg-1")!.extra.reasoningDuration).toBeUndefined();
+    expect((await send({ reasoning: { duration: 0 } })).result).toBe(true);
+    expect(getMessage("u1", "msg-1")!.extra.reasoningDuration).toBe(0);
+    expect((await send({ swipe_reasoning: [null], content: "must not save" })).error).toContain("swipe_reasoning");
+    expect(getMessage("u1", "msg-1")!.content).toBe("second swipe");
+    expect(cycleSwipe("u1", forkedMessage.id, "right")!.extra).toMatchObject({ reasoning: "second reasoning", reasoningDuration: 25 });
   });
 
   test("clears active swipe reasoning with explicit null without clearing other swipes", () => {
