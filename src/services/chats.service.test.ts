@@ -758,6 +758,64 @@ describe("recent chats", () => {
     expect(cycleSwipe("u1", forkedMessage.id, "right")!.extra).toMatchObject({ reasoning: "second reasoning", reasoningDuration: 25 });
   });
 
+  test("Spindle metadata patches preserve stored fields and per-swipe data when navigating", async () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "first swipe", {
+      reasoning: "first reasoning", reasoningDuration: 10, tokenCount: 11,
+      usage: { total_tokens: 11 }, generationMetrics: { model: "first" },
+      generationOutcome: { status: "completed" },
+      reasoningCarrier: { type: "reasoning_content", content: "first native" },
+      promptActivation: makePromptActivationSource("first swipe", "preset", true, "first activation"),
+      spindle_metadata: { custom: "retained", nested: { old: true } },
+      attachments: [{ id: "attachment" }],
+    });
+    addSwipe("u1", "msg-1", "second swipe");
+    setSwipeScopedExtra("u1", "msg-1", 1, {
+      reasoning: "second reasoning", reasoningDuration: 20, tokenCount: 22,
+      usage: { total_tokens: 22 }, generationMetrics: { model: "second" },
+      generationOutcome: { status: "stopped" },
+      reasoningCarrier: { type: "reasoning_content", content: "second native" },
+      promptActivation: makePromptActivationSource("second swipe", "preset", true, "second activation"),
+    });
+    const before = getMessage("u1", "msg-1")!;
+    const host = new WorkerHost("metadata-test", {
+      identifier: "metadata-test", name: "Metadata test",
+    } as SpindleManifest, {
+      id: "metadata-test", identifier: "metadata-test", name: "Metadata test", version: "0.0.0", author: "",
+      description: "", github: "", homepage: "", permissions: [], granted_permissions: [], enabled: true,
+      installed_at: 0, updated_at: 0, has_frontend: false, has_backend: false, status: "stopped",
+      metadata: { install_scope: "user", installed_by_user_id: "u1" },
+    } satisfies ExtensionInfo);
+    const internal = host as any;
+    internal.hasPermission = (permission: string) => permission === "chat_mutation";
+    const send = (patch: unknown) => new Promise<Extract<HostToWorker, { type: "response" }>>(resolve => {
+      internal.runtime = { mode: "worker", pid: null, postMessage: resolve, terminate() {} };
+      internal.handleMessage({ type: "chat_update_message", requestId: "request", chatId: "chat-1", messageId: "msg-1", patch });
+    });
+
+    expect((await send({ metadata_patch: { other: "latest" } })).result).toBe(true);
+    expect((await send({ metadata_patch: { run: null, nested: { replacement: true } }, swipe_id: 0, skipChunkRebuild: true })).result).toBe(true);
+    const saved = getMessage("u1", "msg-1")!;
+    expect(saved).toMatchObject({ swipe_id: 0, content: "first swipe", extra: {
+      spindle_metadata: { custom: "retained", other: "latest", run: null, nested: { replacement: true } },
+      reasoning: "first reasoning", reasoningDuration: 10, tokenCount: 11,
+      attachments: [{ id: "attachment" }],
+    } });
+    expect(saved.extra.spindle_metadata).toEqual({ custom: "retained", other: "latest", run: null, nested: { replacement: true } });
+    for (const key of ["reasoningBySwipe", "reasoningDurationBySwipe", "tokenCountBySwipe", "usageBySwipe",
+      "generationMetricsBySwipe", "generationOutcomeBySwipe", "reasoningCarrierBySwipe", "promptActivationBySwipe"]) {
+      expect(saved.extra[key]).toEqual(before.extra[key]);
+    }
+    const fork = branchChat("u1", "chat-1", "msg-1")!;
+    expect(getMessages("u1", fork.id)[0]!.extra.spindle_metadata).toEqual(saved.extra.spindle_metadata);
+    expect(cycleSwipe("u1", "msg-1", "right")!.extra).toMatchObject({ reasoning: "second reasoning", tokenCount: 22 });
+
+    expect((await send({ metadata_patch: { progress: 1 }, swipe_id: 0, reasoning: { text: "explicit", duration: 0 }, skipChunkRebuild: true })).result).toBe(true);
+    expect(getMessage("u1", "msg-1")!.extra).toMatchObject({ reasoning: "explicit", reasoningDuration: 0, tokenCount: 11 });
+    expect((await send({ metadata: { replacement: true } })).result).toBe(true);
+    expect(getMessage("u1", "msg-1")!.extra.spindle_metadata).toEqual({ replacement: true });
+  });
+
   test("clears active swipe reasoning with explicit null without clearing other swipes", () => {
     seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
     seedMessage("msg-1", "chat-1", "first swipe", {

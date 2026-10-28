@@ -1322,6 +1322,7 @@ export class WorkerHost {
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
           "message-preset-context-v1": 1,
+          "chat-metadata-patch-v1": 1,
           "chat-swipe-reasoning-v1": 1,
           "frontend-runtime-capabilities-v1": 1,
           "frontend-session-origin-v1": 1,
@@ -4017,6 +4018,7 @@ export class WorkerHost {
     patch: {
       content?: string;
       metadata?: Record<string, unknown>;
+      metadata_patch?: Record<string, unknown>;
       swipes?: string[];
       swipe_id?: number;
       swipe_dates?: number[];
@@ -4042,8 +4044,28 @@ export class WorkerHost {
       const extra = { ...(current.extra || {}) } as Record<string, unknown>;
       let extraDirty = false;
 
+      if (patch.swipe_id !== undefined && patch.swipe_id !== current.swipe_id) {
+        // Projected fields belong to the old selection. Preserve their canonical
+        // per-swipe arrays before applying explicit writes to the new selection.
+        for (const key of chatsSvc.SWIPE_SCOPED_EXTRA_KEYS) delete extra[key];
+        delete extra.reasoning_duration;
+      }
+
       if (patch.metadata !== undefined) {
         extra.spindle_metadata = patch.metadata;
+        extraDirty = true;
+      }
+
+      if (patch.metadata_patch !== undefined) {
+        if (patch.metadata !== undefined) throw new Error("Supply metadata or metadata_patch, not both");
+        if (!patch.metadata_patch || typeof patch.metadata_patch !== "object" || Array.isArray(patch.metadata_patch)) {
+          throw new Error("metadata_patch must be an object");
+        }
+        const currentMetadata = current.extra?.spindle_metadata;
+        extra.spindle_metadata = {
+          ...(currentMetadata && typeof currentMetadata === "object" && !Array.isArray(currentMetadata) ? currentMetadata : {}),
+          ...patch.metadata_patch,
+        };
         extraDirty = true;
       }
 
