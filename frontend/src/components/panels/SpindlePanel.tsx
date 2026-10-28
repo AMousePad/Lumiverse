@@ -51,7 +51,7 @@ import {
   getExtensionMountPointsVersion,
   hasExtensionMountPoint,
   subscribeExtensionMountPoints,
-} from '@/lib/spindle/loader'
+} from '@/lib/spindle/extension-mount-points'
 import { toast } from '@/lib/toast'
 import styles from './SpindlePanel.module.css'
 import clsx from 'clsx'

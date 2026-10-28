@@ -4,8 +4,21 @@ import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 import pkg from './package.json' with { type: 'json' }
 
+const chunkImportMap = process.env.LUMIVERSE_CHUNK_IMPORT_MAP !== '0'
+
 export default defineConfig({
+  experimental: { bundledDev: process.env.LUMIVERSE_BUNDLED_DEV !== '0' },
   plugins: [
+    {
+      name: 'lumiverse-bundled-refresh-order',
+      config(config, { command }) {
+        if (command !== 'serve' || !config.experimental?.bundledDev) return
+        // The app and widget share React chunks. Preserve initialization order
+        // so their refresh wrappers run after the preamble in bundled dev.
+        // https://github.com/vitejs/vite-plugin-react/issues/1191
+        return { build: { rolldownOptions: { output: { strictExecutionOrder: true } } } }
+      },
+    },
     ...createReactCompilerPlugins(),
     VitePWA({
       strategies: 'injectManifest',
@@ -18,7 +31,11 @@ export default defineConfig({
       manifest: false,
       includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
       injectManifest: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
+        globPatterns: [
+          '**/*.{js,css,html,ico,png,svg,webp,woff,woff2}',
+          // Keep the emitted map with the matching precached HTML/assets.
+          ...(chunkImportMap ? ['importmap.json'] : []),
+        ],
         // Main app chunk is ~5MB; locale JSON are separate lazy chunks (see src/i18n/resources.ts).
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
       },
@@ -26,6 +43,9 @@ export default defineConfig({
         configureCustomSWViteBuild(config) {
           const build = config.build
           if (!build) return
+          // Workers cannot use document import maps. Only application HTML
+          // gets a map; the custom worker stays a single self-contained file.
+          build.chunkImportMap = false
           // vite-plugin-pwa still generates the deprecated option name.
           const options = build.rolldownOptions ?? build.rollupOptions
           if (!options) return
@@ -64,6 +84,9 @@ export default defineConfig({
     },
   },
   build: {
+    // Standard builds use stable chunk references. Set the environment
+    // variable to 0 only when diagnosing an older browser/runtime.
+    chunkImportMap,
     // Vite 8 defaults build.cssMinify to 'lightningcss', which requires the
     // lightningcss-<platform>-<arch> native binding to load at build time.
     // On Termux/Android arm64 the binding install is unreliable, and when it

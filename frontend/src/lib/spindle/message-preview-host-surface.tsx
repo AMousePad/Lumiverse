@@ -54,4 +54,5 @@ export function MessagePreview({ chatId, messageId, swipeIndex, start = 0, end }
   )
 }
 
-registerHostSurfaceRenderer('message_preview', (props) => <MessagePreview {...props as unknown as MessagePreviewProps} />)
+const unregisterRenderer = registerHostSurfaceRenderer('message_preview', (props) => <MessagePreview {...props as unknown as MessagePreviewProps} />)
+if (import.meta.hot) import.meta.hot.dispose(unregisterRenderer)

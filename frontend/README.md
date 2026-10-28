@@ -4,75 +4,99 @@ Run commands from `frontend/` with Bun. `bun run build:checked` generates the
 component metadata, checks TypeScript, builds the application and PWA, and
 atomically promotes the validated bundle to `dist/`.
 
-## React Compiler trial
+## Standard tooling
 
-The default build uses the Babel React Compiler. To try Vite's experimental
-native compiler:
+`bun run dev` uses bundled Vite development and the native React Compiler.
+`bun run build` and `bun run build:checked` use the native Compiler and chunk
+import maps, build the custom PWA worker, validate the staged output, and promote
+it to `dist/`. The checked command also runs TypeScript. The map is embedded in
+both application HTML entries and its JSON copy is precached with their assets.
+The worker remains one self-contained file without an import map.
 
-```sh
-LUMIVERSE_REACT_COMPILER=native bun run build:checked
-LUMIVERSE_REACT_COMPILER=native bun run dev
-```
-
-Use `LUMIVERSE_REACT_COMPILER=babel` or leave the variable unset to return to the
-default. Both paths target React 19 and compile only functions annotated with
-`'use memo'`. Native compiler diagnostics remain visible. `MessageList` explicitly
-uses `'use no memo'` because TanStack Virtual's mutable instance is incompatible
-with compiler memoization.
-
-The native binding is pinned in the lockfile. The trial has been built on macOS
-arm64; Android/Termux, Windows, and Linux builds still need platform validation
-before making it the default.
-
-Run the production compiler regression tests with:
+`dev:bundled` and `build:import-map` are compatibility aliases for the standard
+commands; the latter now uses the normal checked build and `dist/` destination.
+Use these explicit fallbacks while diagnosing a compiler, browser or plugin issue:
 
 ```sh
-bun test --isolate scripts/react-compiler.test.tsx scripts/vite-chunks.test.ts
+bun run dev:unbundled
+LUMIVERSE_REACT_COMPILER=babel bun run dev
+LUMIVERSE_REACT_COMPILER=babel bun run build:checked
+LUMIVERSE_CHUNK_IMPORT_MAP=0 bun run build:checked
+bun run build:legacy
 ```
 
-They build a fixture through each real Vite compiler path and exercise its
-compiled output with React, including fresh Effect Event callbacks, Activity
-effect cleanup/restart, and retained state and DOM drafts.
+`build:legacy` combines Babel compilation and builds without chunk import maps.
+These are repository defaults; upstream still labels bundled development,
+chunk import maps and the native Compiler experimental. Import maps require
+`import.meta.resolve` in the browser. The standalone native-cache probe retains
+its single-document build without maps.
 
-For a reproducible local build comparison, run from the same checkout with
-dependencies installed:
+Both Compiler implementations target React 19 and compile only functions
+annotated with `'use memo'`. `App`, native character cards and pack cards opt in.
+`MessageList` explicitly uses `'use no memo'` because TanStack Virtual's mutable
+instance is incompatible with compiler memoization. Native diagnostics remain
+visible. Its version-matched Android arm64 binding is explicitly pinned and
+included in the existing Termux postinstall repair; builds continue to select
+Android-aware Node in Termux-like environments.
+
+Run the tooling regressions with:
 
 ```sh
-bun run generate
-bun run scripts/benchmark-react-compiler.ts
+bun test --isolate scripts/toolchain-defaults.test.ts scripts/react-compiler.test.tsx scripts/vite-chunks.test.ts scripts/build-frontend.test.ts scripts/module-boundaries.test.ts
 ```
 
-The script runs a warm-up per compiler, then three fresh-process builds per
-compiler in alternating order. It uses the production runtime selection and a
-fixed build ID, writes logs and `results.json` under `.tmp/compiler-benchmark/`,
-and leaves `dist/` untouched. Timings include the production app and service
-worker, excluding generation and type checking. JavaScript totals include all
-emitted `.js` files, with each file gzipped separately.
+The tests resolve actual Vite defaults and fallbacks, exercise production output
+from both Compiler implementations, and check Effect Event callbacks, Activity
+cleanup/state retention, card subtree reuse, locale chunk paths, import
+boundaries and validated build promotion. A mapped build is rejected before
+promotion when its map, inline maps or referenced assets are incomplete. The
+Windows locked-directory fallback installs assets, map, HTML entries and worker
+in that order.
 
-Local comparison on 2026-10-18 (macOS arm64, Bun 1.4.2, Vite 8.3.4):
+From `scripts/e2e-diagnostics/`, install the matching browsers as described in
+its README and run:
 
-| Compiler | Build seconds (three samples) | Median | JavaScript gzip bytes |
-| --- | --- | --- | --- |
-| Babel | 2.140, 2.138, 2.143 | 2.140 s | 2,762,231 |
-| Native | 2.073, 2.028, 2.030 | 2.030 s | 2,763,753 |
+```sh
+bun run check:vite-hmr
+bun run check:pwa-build
+bun run check:pwa-upgrade
+bun run check:profile-transitions
+bun run bench:compiler
+```
 
-Native saved 0.110 s (5.1%) and added 1,522 gzip bytes. Keep Babel as the default:
-the absolute gain is small, the [native compiler remains experimental](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler),
-and other supported platforms still need validation. Only `App` currently opts
-into compilation; these measurements do not establish a runtime performance
-improvement or predict results with broader annotation coverage.
+The HMR check inherits the ordinary configuration for its standard case and
+also exercises the unbundled fallback. The production smoke check includes the
+authenticated application shell and its bootstrap/settings hydration. The
+upgrade check builds isolated legacy,
+standard and changed-locale generations, then verifies existing installations
+through two worker updates and offline lazy locale loading. These checks use
+fresh browser profiles and mock APIs; physical native WebViews still require
+device testing.
+
+For a full production build-time/size comparison, run
+`bun run scripts/benchmark-react-compiler.ts`. For controlled runtime card
+profiling, use `bench:compiler` in the diagnostics package. Both preserve `dist/`
+and write raw samples under `.tmp/`. The runtime trial on October 28 measured
+30 updates to 60 cards of each kind over seven alternating samples: Babel/native
+medians were 5.7/5.6 ms with stable actions and 23.9/23.7 ms with replaced actions,
+compared with 23.4/46.6 ms without compilation. These controlled card timings do
+not measure whole-app interaction latency or native WebView performance.
 
 The locale code-splitting group has `debugName: 'i18n-locales'` so Rolldown can
-identify its functional name callback in timing reports. This label preserves
-the existing per-language chunk names and `assets/i18n/` paths; both compiler
-paths build without the missing-label warning.
+identify its functional name callback in timing reports. Both Compiler paths
+preserve per-language chunk names and `assets/i18n/` paths.
 
-## Retained settings panels
+## Retained panels and profile transitions
 
-Display and Chat settings mount on first visit. React's `Activity` then preserves
-their state and DOM while pausing effects when the category is hidden. Closing
-the settings modal unmounts both. Other categories retain their existing
-mount/unmount behavior.
+Display, Chat and Quick Replies settings mount on first visit. React's Activity
+preserves their state and DOM while pausing hidden effects. Closing the settings
+modal discards the retained UI. Profile disclosures also retain their expanded
+state across Profile/Creator Notes tab changes, ending when the character changes.
+Rich creator notes unmount on exit so hidden media cannot continue playing.
+
+The profile tab body uses a scoped 160ms React ViewTransition. Reduced-motion
+and efficiency preferences skip snapshots; browsers without the API render the
+selected tab normally. Tabs retain keyboard focus and expose panel relationships.
 
 ## Landing gallery measurement snapshots
 

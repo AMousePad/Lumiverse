@@ -15,8 +15,8 @@ const include = [
 ]
 const exclude = [/node_modules/, /src\/lib\/generated(?:ComponentCss|ComponentProps|CssVariables)\.ts$/]
 
-/** Keep the native compiler trial on the same opt-in policy as the Babel build. */
-export function createReactCompilerPlugins(mode = process.env.LUMIVERSE_REACT_COMPILER ?? 'babel') {
+/** Both implementations retain explicit per-function compilation annotations. */
+export function createReactCompilerPlugins(mode = process.env.LUMIVERSE_REACT_COMPILER ?? 'native') {
   if (mode === 'native') {
     return react({
       compiler: { target: '19', compilationMode: 'annotation', logDiagnostics: true },

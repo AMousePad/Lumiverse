@@ -3,7 +3,7 @@ import type { AppStore, SpindleSlice, PendingPermissionRequest, PendingTextEdito
 import type { ExtensionInfo } from 'lumiverse-spindle-types'
 import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
-import { loadFrontendExtension, unloadFrontendExtension } from '@/lib/spindle/loader'
+import { loadFrontendExtension, unloadFrontendExtension } from '@/lib/spindle/lazy-loader'
 import { scheduleLowPriorityTask } from '@/lib/low-priority-task'
 import { yieldToBrowser } from '@/lib/spindle/browser-scheduler'
 import { compareFrontendHydrationPriority } from '@/lib/spindle/frontend-startup-priority'

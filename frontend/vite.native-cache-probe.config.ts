@@ -18,6 +18,8 @@ export default defineConfig({
   ],
   build: {
     ...production.build,
+    // The native probe is inlined into one self-contained HTML document.
+    chunkImportMap: false,
     rolldownOptions: {
       input: path.resolve(import.meta.dirname, 'index.html'),
       output: { codeSplitting: false },

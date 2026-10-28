@@ -103,3 +103,27 @@ test('Chat settings opt in to greeting art and retain the selected placement whe
   expect(placementButton('Bottom of message').getAttribute('aria-pressed')).toBe('true')
   expect(useStore.getState().greetingImagePosition).toBe('bottom')
 })
+
+test('Quick Replies retains the open editor across category changes and resets when settings close', async () => {
+  await act(async () => root.render(null))
+  useStore.setState({
+    settingsActiveView: 'quickReplies',
+    quickReplySets: [{ id: 'set', name: 'Fixture set', enabled: true, color: null,
+      replies: [{ id: 'reply', label: 'Reply', message: 'Saved message' }] }],
+  })
+  await act(async () => root.render(<SettingsModal onClose={() => {}} />))
+  const edit = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Edit')!
+  await act(async () => edit.click())
+  const editor = document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message"]')!
+  expect(editor).not.toBeNull()
+  editor.scrollTop = 42
+  await act(async () => useStore.setState({ settingsActiveView: 'chat' }))
+  expect(editor.closest<HTMLElement>('[style*="display: none"]')).not.toBeNull()
+  await act(async () => useStore.setState({ settingsActiveView: 'quickReplies' }))
+  expect(document.querySelector('textarea[placeholder="Message"]')).toBe(editor)
+  expect(editor.scrollTop).toBe(42)
+  expect(editor.value).toBe('Saved message')
+  await act(async () => root.render(null))
+  await act(async () => root.render(<SettingsModal onClose={() => {}} />))
+  expect(document.querySelector('textarea[placeholder="Message"]')).toBeNull()
+})

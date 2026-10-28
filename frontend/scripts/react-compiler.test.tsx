@@ -108,4 +108,91 @@ for (const mode of ['babel', 'native']) {
     signal()
     expect(events.at(-1)).toBe('stop')
   }, 30_000)
+
+  test(`${mode} library cards reuse image subtrees and keep updated actions and extension overrides`, async () => {
+    const cardEntry = join(fixture, `cards-${mode}.tsx`)
+    writeFileSync(cardEntry, `
+      export { default as CharacterCard } from '../../src/components/panels/character-browser/CharacterCard'
+      export { default as PackCard } from '../../src/components/panels/pack-browser/PackCard'
+      export { registerComponentOverride } from '../../src/lib/spindle/component-override-registry'
+      export { imageRenders } from '../../src/components/shared/LazyImage'
+    `)
+    const result = await build({
+      configFile: false,
+      resolve: { alias: { '@': resolve(import.meta.dirname, '../src') } },
+      plugins: [
+        ...createReactCompilerPlugins(mode),
+        {
+          name: 'card-render-observer',
+          enforce: 'pre',
+          resolveId(id) { if (id === 'react-i18next') return '\0card-translations' },
+          load(id) {
+            if (id === '\0card-translations') return `
+              const t = key => key;
+              export const useTranslation = () => ({ t });
+            `
+            if (id.endsWith('/src/components/shared/LazyImage.tsx')) return `
+              import { createElement } from 'react';
+              export const imageRenders = [];
+              export default function LazyImage({ src, alt }) {
+                imageRenders.push(src);
+                return createElement('img', { src, alt });
+              }
+            `
+            if (id.endsWith('/src/lib/avatarUrls.ts')) return `
+              export const getCharacterAvatarThumbUrl = c => '/thumb/' + c.id;
+              export const getCharacterAvatarLargeUrl = c => '/large/' + c.id;
+            `
+          },
+        },
+      ],
+      logLevel: 'silent',
+      build: {
+        write: false, minify: false,
+        lib: { entry: cardEntry, formats: ['es'] },
+        rolldownOptions: {
+          external: id => id === 'react' || id.startsWith('react/'),
+          output: { codeSplitting: false },
+        },
+      },
+    })
+    const builds = Array.isArray(result) ? result : [result]
+    const chunk = builds.flatMap(item => 'output' in item ? item.output : []).find(item => item.type === 'chunk')
+    if (!chunk || chunk.type !== 'chunk') throw new Error('Missing compiled cards')
+    expect(chunk.code).toContain('react/compiler-runtime')
+    const output = join(fixture, `cards-${mode}.mjs`)
+    writeFileSync(output, chunk.code)
+    const { CharacterCard, PackCard, imageRenders, registerComponentOverride } = await import(pathToFileURL(output).href)
+    host = document.createElement('div')
+    document.body.append(host)
+    root = (await import('react-dom/client')).createRoot(host)
+    const character = { id: 'character', name: 'Character', tags: ['first', 'second'] }
+    const actions: string[] = []
+    const props = { character, onOpen: () => actions.push('open'), onToggleFavorite: () => actions.push('favorite') }
+    await act(async () => root!.render(createElement(CharacterCard, { ...props, isFavorite: false })))
+    await act(async () => root!.render(createElement(CharacterCard, { ...props, isFavorite: true })))
+    expect(imageRenders).toEqual(['/thumb/character'])
+    expect(host.querySelector('button[title="characterBrowser.removeFromFavorites"]')).not.toBeNull()
+    act(() => host!.querySelector<HTMLButtonElement>('button')!.click())
+    expect(actions).toEqual(['favorite'])
+    let override: { destroy(): void }
+    await act(async () => {
+      override = registerComponentOverride({ host: 'CharacterCard', owner: 'compiler-test', generation: 1,
+        mode: 'replace', component: () => createElement('span', null, 'Extension card') })
+    })
+    expect(host.textContent).toBe('Extension card')
+    await act(async () => override!.destroy())
+    expect(host.querySelector('img')?.alt).toBe('Character')
+
+    const pack = { id: 'pack', name: 'Pack', cover_url: '/pack.png', version: '1.0', is_custom: true }
+    imageRenders.length = 0
+    await act(async () => root!.render(createElement(PackCard, { pack, onClick: () => actions.push('old') })))
+    await act(async () => root!.render(createElement(PackCard, { pack, onClick: () => actions.push('latest') })))
+    expect(imageRenders).toEqual(['/pack.png'])
+    act(() => host!.firstElementChild!.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    expect(actions.at(-1)).toBe('latest')
+    await act(async () => root!.render(createElement(PackCard, { pack: { ...pack, name: 'Renamed pack' }, onClick: () => {} })))
+    expect(host.querySelector('img')?.alt).toBe('Renamed pack')
+    expect(host.textContent).toContain('Renamed pack')
+  }, 30_000)
 }

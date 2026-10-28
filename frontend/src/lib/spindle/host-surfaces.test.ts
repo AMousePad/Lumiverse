@@ -57,7 +57,7 @@ mock.module('@/lib/settings-tab-registry', () => ({
   getVisibleSettingsTabs: () => visibleSettingsTabs,
   settingsRegistryToCommands: () => [],
 }))
-mock.module('@/router', () => ({ router: { navigate: () => {} } }))
+mock.module('@/lib/app-navigation', () => ({ navigateApp: () => {} }))
 mock.module('@/store', () => ({
   useStore: Object.assign(() => testStore, {
     getState: () => testStore,

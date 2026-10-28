@@ -1,4 +1,4 @@
-import { router } from '@/router'
+import { navigateApp } from '@/lib/app-navigation'
 import { resolveCouncilTabId } from '@/lib/council-navigation'
 import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
@@ -331,9 +331,9 @@ function defaultRuntime(
     runCommand: (id) => {
       const command = getCommand(id)
       if (!command) throw new Error(`HOST_ACTION_UNMAPPED:command:${id}`)
-      return command.run(router.navigate)
+      return command.run(navigateApp)
     },
-    navigate: (path) => { void router.navigate(path) },
+    navigate: (path) => { void navigateApp(path) },
     setEditingCharacterId: (id) => useStore.getState().setEditingCharacterId(id),
     openWorldBookEditor: (id, entryId) => {
       const state = useStore.getState()
@@ -381,7 +381,7 @@ function defaultRuntime(
       if (!state.savedThemes.some((theme) => theme.id === themeId)) throw new Error(`${HOST_ACTION_NOT_FOUND}:themeId`)
       state.applySavedTheme(themeId)
     },
-    openCharacterChat: (characterId, mode) => openCharacterChat(characterId, mode, (path) => { void router.navigate(path) }),
+    openCharacterChat: (characterId, mode) => openCharacterChat(characterId, mode, (path) => { void navigateApp(path) }),
   }
 }
 

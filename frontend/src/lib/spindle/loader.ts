@@ -32,6 +32,8 @@ import type { SpindleCharacterEditorUI } from './character-editor-types'
 import type { SpindleConnectionEditorUI } from './connection-editor-types'
 import type { SpindlePresetEditorUI } from './preset-editor-types'
 import { isKnownMountPoint, type WidenedMountPoint } from './mount-points'
+import { clearExtensionMountPoints, recordExtensionMountPoint } from './extension-mount-points'
+export { hasExtensionMountPoint, subscribeExtensionMountPoints, getExtensionMountPointsVersion } from './extension-mount-points'
 import { createDOMHelper } from './dom-helper'
 import { registerTagInterceptor, unregisterTagInterceptorsByExtension } from './message-interceptors'
 import { registerDisplayResolver, unregisterDisplayResolver, revokeInlineCardWrappingOptOut } from './display-resolver-registry'
@@ -430,42 +432,13 @@ const MAX_PENDING_STARTUP_ITEMS = 100
 const FRONTEND_READY_TIMEOUT_MS = 10_000
 const FRONTEND_BUNDLE_TIMEOUT_MS = 15_000
 const FRONTEND_MODULE_IMPORT_TIMEOUT_MS = 10_000
-const extensionMountPoints = new Map<string, Set<WidenedMountPoint>>()
-const extensionMountPointListeners = new Set<() => void>()
-let extensionMountPointsVersion = 0
 const warnedUnknownMountPoints = new Set<WidenedMountPoint>()
-
-function notifyExtensionMountPointListeners(): void {
-  extensionMountPointsVersion += 1
-  for (const listener of extensionMountPointListeners) {
-    try {
-      listener()
-    } catch (err) {
-      console.error('[Spindle] Extension mount-point listener error:', err)
-    }
-  }
-}
-
-function recordExtensionMountPoint(extensionId: string, point: WidenedMountPoint): void {
-  const existing = extensionMountPoints.get(extensionId)
-  if (existing?.has(point)) return
-
-  const next = existing ? new Set(existing) : new Set<WidenedMountPoint>()
-  next.add(point)
-  extensionMountPoints.set(extensionId, next)
-  notifyExtensionMountPointListeners()
-}
 
 function warnUnknownMountPoint(point: WidenedMountPoint): void {
   if (!import.meta.env.DEV || isKnownMountPoint(point) || warnedUnknownMountPoints.has(point)) return
 
   warnedUnknownMountPoints.add(point)
   console.warn(`[Spindle] Mount point "${point}" is not in the host mount-point catalog`)
-}
-
-function clearExtensionMountPoints(extensionId: string): void {
-  if (!extensionMountPoints.delete(extensionId)) return
-  notifyExtensionMountPointListeners()
 }
 
 function deliverBackendMessage(loaded: LoadedExtension, payload: unknown): void {
@@ -2797,21 +2770,6 @@ export function routeFrontendProcessEvent(extensionId: string, payload: Frontend
 
 export function getLoadedExtensions(): Map<string, LoadedExtension> {
   return loadedExtensions
-}
-
-export function hasExtensionMountPoint(extensionId: string, point: SpindleMountPoint): boolean {
-  return extensionMountPoints.get(extensionId)?.has(point) ?? false
-}
-
-export function subscribeExtensionMountPoints(listener: () => void): () => void {
-  extensionMountPointListeners.add(listener)
-  return () => {
-    extensionMountPointListeners.delete(listener)
-  }
-}
-
-export function getExtensionMountPointsVersion(): number {
-  return extensionMountPointsVersion
 }
 
 export async function unloadAllFrontendExtensions(): Promise<void> {

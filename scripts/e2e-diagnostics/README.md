@@ -6,9 +6,12 @@ Uses Playwright to open a live Lumiverse instance, log in, and run targeted diag
 
 ```bash
 cd scripts/e2e-diagnostics
-bun install
-# or: npm install
+bun install --frozen-lockfile
+bun run browsers:install
+bun run browsers:check
 ```
+
+Playwright is pinned to 1.64.1; use this package's install command so browser binaries match the library. `browsers:check` verifies launch, rendering and input in Chromium, Firefox and WebKit. The shared launcher used by the PWA/HMR checks and Vite benchmark gives macOS Firefox fresh test app data as well as its temporary profile, avoiding access to the protected personal Firefox data directory ([Mozilla's profile-startup issue](https://bugzilla.mozilla.org/show_bug.cgi?id=2069536)). The launcher cleans up that test data when the browser closes.
 
 ## Run
 
@@ -23,6 +26,27 @@ bun run diagnose
 ```
 
 ## Scripts
+
+- `bun run check:vite-hmr`
+  Runs the real app and native card in a temporary copy of frontend source, with mock API responses and actual file-watcher edits. Makes two edits each to login, the character card, and character/message-preview/world-book/productivity renderer modules using the standard Vite configuration and the unbundled fallback (72 edits total). Checks retained form/hook state, store identity, registration availability, updated callbacks and detached navigation, with no full reloads or runtime errors. Defaults to Chromium, Firefox and WebKit; `HMR_BROWSERS=firefox` and `HMR_MODES=default` narrow the matrix; `HMR_MODES=bundled` explicitly forces bundling. Install frontend dependencies first. Scratch copies and dependency caches under `frontend/.tmp/vite-hmr/` are removed after each mode. No backend, credentials or personal data.
+
+- `bun run bench:vite`
+  Measures the real app's login startup and full reloads in unbundled and bundled Vite development mode. Uses isolated API responses, a fresh dependency cache/browser per cold sample, and three alternating samples per mode. Install frontend dependencies and run `bun run browsers:install` first. Results and logs go to `frontend/.tmp/vite-dev-benchmark/`. This measures loading; `check:vite-hmr` covers hot edits. Bundled dev is the frontend default; `bun run dev:unbundled` selects the fallback.
+
+- `bun run bench:cache`
+  Builds the real app/PWA four times to compare builds with and without chunk import maps before and after one French translation change. The change is applied in memory; builds and estimated replacement-asset totals go to `frontend/.tmp/chunk-cache-benchmark/`. Install frontend dependencies first. This excludes the worker itself and estimates gzip size, rather than measuring network transfer.
+
+- `bun run bench:compiler`
+  Builds the real character and pack cards in production with the Compiler off, Babel, and the native Compiler. Measures 30 synchronous updates to 60 cards of each kind, with stable actions and with actions replaced by the parent. Each of seven alternating samples gets two warm-up runs; assertions check current callbacks and actual image render counts. The fixture instruments `LazyImage` in memory and uses local image responses. Results go to `frontend/.tmp/react-compiler-benchmark/results.json`; temporary builds are removed. Install frontend dependencies and matching Chromium first. Run without concurrent builds for comparable timings. This measures controlled render/commit work, not whole-app responsiveness, scrolling, network or image decoding.
+
+- `bun run check:profile-transitions`
+  Exercises the real character profile, store, translations and rich content renderer with isolated API data. Checks scoped 160ms React ViewTransition snapshots, keyboard tabs, retained expanded profile sections, rich-media teardown, and reset when switching characters. Covers animated, reduced-motion, efficiency and unsupported-browser cases at desktop/mobile widths in Chromium, Firefox and WebKit. `PROFILE_BROWSERS=chromium` narrows the matrix. Screenshots go to `frontend/.tmp/profile-transitions/`. Install frontend dependencies and matching browsers first. No backend, credentials or personal data; physical native WebViews still need device qualification.
+
+- `bun run check:pwa-build`
+  Checks actual production bundles with mock API responses, fresh browser profiles, worker installation and offline reload, then mounts the authenticated application shell with bootstrap/settings hydration. First run `bun run build:checked` from `frontend/`, then install browsers here with `bun run browsers:install`. The default build directory is `frontend/dist`, which now uses native compilation and import maps. Defaults to Chromium, Firefox and WebKit; `PWA_BUILD_BROWSERS=chromium` selects an engine. Positional arguments can select other build directories. Use `check:pwa-upgrade` for installed-worker updates. Physical native WebViews require device testing. No backend, credentials or personal data.
+
+- `bun run check:pwa-upgrade`
+  Builds legacy Babel/no-map, standard native/import-map and changed-locale native/import-map generations under `frontend/.tmp/pwa-upgrade/`. Deploys them in sequence at one local origin using production cache headers and the actual worker, retaining the installed browser profile. Chromium, Firefox and WebKit check one guarded automatic reload per deployment, retained preferences, cached map alignment, offline reload and lazy French/German locale loading. The second deployment changes a real French login label in memory and checks the updated content. The fixture ages the reload-guard timestamp between deployments to simulate later updates. `PWA_UPGRADE_BROWSERS=chromium` narrows the matrix. No backend, credentials, source edits or personal data.
 
 - `node check-ui-language.mjs`
   Start the frontend Vite server first (`cd frontend && bun run dev`). Exercises real login, password recovery, lazy locale chunks, authentication and account settings with isolated HTTP responses. Checks login-language reload persistence, immediate account saves, a second device, settings refresh, account isolation and the one-time English default at desktop/mobile widths in Chromium, Firefox and WebKit. No live accounts or personal data. `UI_LANGUAGE_URL` selects the Vite origin; positional arguments select browser engines.

@@ -11,7 +11,6 @@ import { bindImportedRegexesToPreset } from '@/lib/loom/preset-regex-import'
 import { flushPresetForGeneration, presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
 import { beginActiveLoomPresetSelection, transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
 import { assertRenderableLoomPreset, InvalidLoomPresetError, marshalImportedPresetForEditor, unmarshalPresetForEditor as unmarshalPreset } from '@/lib/loom/preset-validation'
-import { findLoomPresetFallback } from '@/lib/loom/preset-recovery'
 import { getMacroCatalog } from '@/api/macros'
 import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableDef, PromptVariableValues } from '@/lib/loom/types'
 import {
@@ -185,6 +184,8 @@ export function useLoomBuilder() {
           recoverFromPresetId: activeLoomPresetId,
         })
         try {
+          const { findLoomPresetFallback } = await import('@/lib/loom/preset-recovery')
+          if (!isCurrent()) return
           const fallback = await findLoomPresetFallback(activeLoomPresetId, lastGoodPresetIdRef.current, isCurrent)
           if (!fallback || !isCurrent()) return
           const restored = presetSaveCoordinator.hydrate(fallback)

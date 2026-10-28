@@ -19,6 +19,7 @@ import { installPwaLifecycleDiagnostics } from './lib/pwaLifecycleDiagnostics'
 import { initializeSafeThemeMode } from './lib/safeThemeMode'
 import { installDisplayPerformanceTelemetry, markDisplayInteractive, markDisplayMilestone } from './lib/displayPerformance'
 import { router } from './router'
+import { installAppNavigation } from './lib/app-navigation'
 import { installStreamDeckHandoffReceiver } from './lib/streamDeckHandoff'
 import ErrorBoundary from './components/shared/ErrorBoundary'
 import './theme/variables.css'
@@ -27,6 +28,7 @@ import './theme/global.css'
 import { reportNativeCacheReady } from './lib/nativeCache'
 
 installDisplayPerformanceTelemetry('application')
+installAppNavigation(router.navigate)
 installWindowOpenGuard()
 installPwaLifecycleDiagnostics()
 installStreamDeckHandoffReceiver(path => { void router.navigate(path) })

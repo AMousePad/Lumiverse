@@ -304,7 +304,7 @@ function SettingsView({ view }: { view: string }) {
     case 'guided':
       coreContent = <GuidedGenerationSettings />; break
     case 'quickReplies':
-      coreContent = <QuickRepliesSettings />; break
+      break
     case 'extensionPools':
       coreContent = <ExtensionPoolSettings />; break
     case 'advanced':
@@ -347,7 +347,7 @@ function SettingsView({ view }: { view: string }) {
       break
   }
 
-  const retainedCoreView = view === 'display' || view === 'chat'
+  const retainedCoreView = view === 'display' || view === 'chat' || view === 'quickReplies'
   if (!coreContent && !retainedCoreView && extensionTabs.length === 0) {
     coreContent = hasCoreTab ? <div className={styles.placeholder}>{t('selectCategory')}</div> : null
   }
@@ -356,6 +356,7 @@ function SettingsView({ view }: { view: string }) {
     <>
       <ActivityPanel active={view === 'display'}><DisplaySettings /></ActivityPanel>
       <ActivityPanel active={view === 'chat'}><ChatSettings /></ActivityPanel>
+      <ActivityPanel active={view === 'quickReplies'}><QuickRepliesSettings /></ActivityPanel>
       {coreContent}
       {extensionTabs.length > 0
         ? <SettingsExtensionTabBodies tabs={extensionTabs} />
