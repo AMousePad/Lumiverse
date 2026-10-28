@@ -495,7 +495,7 @@ export default function WorldBookPanel() {
       setChatMetadata({})
       return
     }
-    chatsApi.get(activeChatId).then((chat) => {
+    chatsApi.get(activeChatId, { messages: false }).then((chat) => {
       const meta = (chat as any).metadata || {}
       setChatMetadata(meta)
       setChatWorldBookIds((meta.chat_world_book_ids as string[]) ?? [])
