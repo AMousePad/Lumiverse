@@ -72,7 +72,7 @@ Both fields are optional. Only provided fields are updated.
 
 ## Conditional metadata updates
 
-Use `compareAndSetMetadata` for changes based on an earlier read. Pass `expected_metadata` from `chats.get()` and the new `metadata`. Lumiverse checks and saves them together. A mismatch or deleted chat returns `null`; read again before calculating a new update.
+Use `compareAndSetMetadata` for changes based on an earlier read. Requires both `chats` and `chat_mutation` permissions and the `chat-conditional-metadata-v1` host capability. Pass `expected_metadata` from `chats.get()` and the new `metadata`. Lumiverse checks and saves them together. A mismatch or deleted chat returns `null`; read again before calculating a new update.
 
 Optional checks: `expected_last_message_id` requires the same last message (`null` requires an empty chat). `expected_message` requires matching `{ id, swipe_id, swipes, metadata }` from `chat.getMessages()`; use `{}` for missing metadata. Every supplied check must pass. These compare current values and cannot detect changes that were later undone.
 

@@ -204,7 +204,7 @@ function normalizeReasoningDurationEntries(
 ): (number | null)[] {
   const normalized = Array.isArray(value)
     ? value.slice(0, swipeCount).map((entry) =>
-        typeof entry === "number" && Number.isFinite(entry) && entry > 0
+        typeof entry === "number" && Number.isFinite(entry) && entry >= 0
           ? entry
           : null,
       )
@@ -317,7 +317,7 @@ function normalizeStoredMessageExtra(
   } else if (
     typeof normalized.reasoningDuration === "number" &&
     Number.isFinite(normalized.reasoningDuration) &&
-    normalized.reasoningDuration > 0
+    normalized.reasoningDuration >= 0
   ) {
     reasoningDurationBySwipe[safeLegacySwipeId] = normalized.reasoningDuration;
   }
@@ -435,7 +435,7 @@ function projectActiveSwipeExtra(
   if (
     typeof activeReasoningDuration === "number" &&
     Number.isFinite(activeReasoningDuration) &&
-    activeReasoningDuration > 0
+    activeReasoningDuration >= 0
   ) {
     projected.reasoningDuration = activeReasoningDuration;
   } else {
@@ -2660,7 +2660,7 @@ export function patchMessageExtra(userId: string, id: string, extra: Record<stri
 }
 
 /** Top-level extra keys that are persisted per-swipe (folded into `*BySwipe[]`). */
-const SWIPE_SCOPED_EXTRA_KEYS = [
+export const SWIPE_SCOPED_EXTRA_KEYS = [
   "promptActivation",
   "reasoning",
   "reasoningDuration",

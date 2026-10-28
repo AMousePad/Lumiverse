@@ -5,13 +5,14 @@ import { WorkerHostContentApi } from "./worker-host-content-api";
 
 const spies: ReturnType<typeof spyOn>[] = [];
 afterEach(() => { for (const spy of spies.splice(0)) spy.mockRestore(); });
-function fixture(permitted = true) {
+function fixture(permitted: boolean | readonly string[] = true) {
   const chat = { id: "chat", metadata: { updated: true }, name: "Chat", character_id: "char", created_at: 1, updated_at: 1 };
   const update = spyOn(chats, "compareAndSetChatMetadata").mockReturnValue(chat);
   const prune = spyOn(pruning, "pruneOrphanedWiState").mockImplementation((_user, value) => value);
   spies.push(update, prune);
   let response: any;
-  const api = new WorkerHostContentApi({ manifest: { identifier: "test" }, hasPermission: () => permitted,
+  const api = new WorkerHostContentApi({ manifest: { identifier: "test" },
+    hasPermission: permission => typeof permitted === "boolean" ? permitted : permitted.includes(permission),
     resolveEffectiveUserId: user => user ?? "alice", enforceScopedUser: user => { if (user !== "alice") throw new Error("Wrong user"); },
     postResponse: value => { response = value; },
   });
@@ -19,6 +20,19 @@ function fixture(permitted = true) {
     api.handleChatsCompareAndSetMetadata("request", "chat", input, user); return response;
   } };
 }
+
+test("conditional metadata RPC cannot inspect message state without chat_mutation", () => {
+  const f = fixture(["chats"]);
+  const response = f.send({
+    expected_metadata: {},
+    metadata: {},
+    expected_last_message_id: "reply",
+    expected_message: { id: "reply", swipe_id: 0, swipes: ["private text"], metadata: {} },
+  });
+  expect(response.error).toContain("chat_mutation");
+  expect(f.update).not.toHaveBeenCalled();
+  expect(f.prune).not.toHaveBeenCalled();
+});
 
 test("conditional metadata RPC validates guards before mutating", () => {
   const f = fixture();

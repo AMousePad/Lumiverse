@@ -53,7 +53,7 @@ import { extname, join, resolve } from "path";
 import { tmpdir } from "os";
 
 type ContentPermission = "characters" | "images" | "media" | "chats" | "world_books" | "databanks" | "personas" | "presets" | "regex_scripts";
-type ContentApiPermission = ContentPermission | "regex_scripts_unrestricted";
+type ContentApiPermission = ContentPermission | "regex_scripts_unrestricted" | "chat_mutation";
 export type SpindleEntityExtensionEntity = worldBooksSvc.EntityExtensionEntity;
 
 export function getEntityExtensionPermission(entity: string): ContentPermission {
@@ -176,7 +176,7 @@ export class WorkerHostContentApi {
   constructor(private readonly context: WorkerHostContentApiContext) {}
 
   private get manifest(): { identifier: string } { return this.context.manifest; }
-  private hasPermission(permission: ContentPermission): boolean { return this.context.hasPermission(permission); }
+  private hasPermission(permission: ContentApiPermission): boolean { return this.context.hasPermission(permission); }
   private resolveEffectiveUserId(userId?: string): string | null { return this.context.resolveEffectiveUserId(userId); }
   private enforceScopedUser(userId: string | null | undefined): void { this.context.enforceScopedUser(userId); }
   private postToWorker(message: { type: "response"; requestId: string; result?: unknown; error?: string }): void { this.context.postResponse(message); }
@@ -1142,18 +1142,31 @@ export class WorkerHostContentApi {
 
   handleChatsCompareAndSetMetadata(requestId: string, chatId: string, input: any, userId?: string): void {
     try {
-      if (!this.hasPermission("chats")) throw new Error(`${PERMISSION_DENIED_PREFIX} chats - Chats permission not granted`);
+      if (!this.hasPermission("chats")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
+      }
+      // The comparison result can disclose message text, selection and metadata,
+      // so require the same permission as chat.getMessages().
+      if (!this.hasPermission("chat_mutation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
+      }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
-      const object = (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value);
-      if (!object(input?.expected_metadata) || !object(input?.metadata)) throw new Error("expected_metadata and metadata must be objects");
+      const isPlainObject = (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value);
+      if (!isPlainObject(input?.expected_metadata) || !isPlainObject(input?.metadata)) {
+        throw new Error("expected_metadata and metadata must be objects");
+      }
       if (input.expected_last_message_id !== undefined && input.expected_last_message_id !== null &&
-          (typeof input.expected_last_message_id !== "string" || !input.expected_last_message_id)) throw new Error("Invalid expected_last_message_id");
+          (typeof input.expected_last_message_id !== "string" || !input.expected_last_message_id)) {
+        throw new Error("Invalid expected_last_message_id");
+      }
       const message = input.expected_message;
-      if (message !== undefined && (!object(message) || typeof message.id !== "string" || !message.id ||
+      if (message !== undefined && (!isPlainObject(message) || typeof message.id !== "string" || !message.id ||
           !Number.isSafeInteger(message.swipe_id) || message.swipe_id < 0 || !Array.isArray(message.swipes) ||
-          !message.swipes.every((value: unknown) => typeof value === "string") || !object(message.metadata))) throw new Error("Invalid expected_message");
+          !message.swipes.every((value: unknown) => typeof value === "string") || !isPlainObject(message.metadata))) {
+        throw new Error("Invalid expected_message");
+      }
       let chat = chatsSvc.compareAndSetChatMetadata(resolvedUserId, chatId, input);
       if (chat && JSON.stringify(input.expected_metadata.chat_world_book_ids ?? []) !== JSON.stringify(chat.metadata.chat_world_book_ids ?? [])) {
         chat = pruneOrphanedWiState(resolvedUserId, chat);
