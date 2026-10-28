@@ -55,12 +55,18 @@ await spindle.chat.updateMessage(chatId, messageId, {
 // Navigate to a different swipe without rewriting content
 await spindle.chat.updateMessage(chatId, messageId, { swipe_id: 1 })
 
-// Set or clear reasoning / reasoning_duration independently
+// Set or clear reasoning and its duration independently
 await spindle.chat.updateMessage(chatId, messageId, {
   reasoning: { text: 'Chain-of-thought transcript…', duration: 1842 },
 })
 await spindle.chat.updateMessage(chatId, messageId, {
   reasoning: { text: null, duration: null }, // clear both
+})
+
+// Save reasoning for all swipes without changing the selected swipe.
+// Requires spindle.host.capabilities['chat-swipe-reasoning-v1'].
+await spindle.chat.updateMessage(chatId, messageId, {
+  swipe_reasoning: [{ text: 'First thought', duration: 1842 }, null, { text: 'Third thought' }],
 })
 
 // Advanced: persist a maintenance rewrite without rebuilding chat chunks
@@ -136,6 +142,7 @@ The generated assistant reply is delivered through the normal generation event s
 type UpdateMessagePatch = {
   content?: string
   metadata?: Record<string, unknown>
+  metadata_patch?: Record<string, unknown>
   swipes?: string[]
   swipe_id?: number
   swipe_dates?: number[]
@@ -143,17 +150,20 @@ type UpdateMessagePatch = {
     text?: string | null       // null clears extra.reasoning
     duration?: number | null   // null clears extra.reasoningDuration
   }
+  swipe_reasoning?: ({ text: string | null; duration?: number | null } | null)[]
   skipChunkRebuild?: boolean
 }
 ```
 
 All fields are optional; `undefined` leaves the field untouched. Precedence rules:
 
+- **Metadata.** `metadata` replaces all extension metadata. `metadata_patch` merges only the supplied top-level fields into the latest stored metadata. Nested values are replaced and `null` is stored as a value. Do not combine the two. Patching requires host capability `chat-metadata-patch-v1`.
 - **`content` wins.** If you supply `content`, it overwrites both `message.content` and `swipes[swipe_id]` (the active slot).
 - **Swipes without content.** Supply `swipes` alone and the new active content is derived from `swipes[swipe_id]` (either the supplied `swipe_id` or the existing one if you didn't patch it).
 - **Navigation-only.** Supply `swipe_id` alone to cycle the active slot; content is re-derived from the existing `swipes` array.
 - **`swipe_dates` auto-align.** If you rewrite `swipes` without supplying `swipe_dates`, the host pads new slots with the current timestamp and truncates trailing dates if the array shrank. If you want precise control, supply both.
 - **Reasoning is independent.** `reasoning.text` and `reasoning.duration` are cleared independently with `null` — they are not forced to move together.
+- **Per-swipe reasoning.** `swipe_reasoning` replaces reasoning for every resulting swipe in order. Supply one entry per swipe; `null` clears a slot. Omitted durations clear the saved duration. Durations must be finite, non-negative milliseconds. Do not combine this field with `reasoning`.
 - **Chunk rebuilds are default behavior.** When the active message content changes, the host invalidates chat-memory cache and rebuilds `chat_chunks` so retrieval stays aligned with canonical stored content.
 - **`skipChunkRebuild` is an advanced escape hatch.** Set `skipChunkRebuild: true` only for extension/host maintenance rewrites where you intentionally do not want that content edit to churn chat chunks.
 
@@ -161,9 +171,11 @@ All fields are optional; `undefined` leaves the field untouched. Precedence rule
 
 The host throws a per-request error (surfaced to the caller) if:
 
+- `metadata_patch` is not a non-null, non-array object, or is supplied with `metadata`
 - `swipes` is empty after the patch is applied
 - `swipe_id` is out of range (`< 0` or `>= swipes.length`, or non-finite)
 - `swipes.length !== swipe_dates.length` after the patch and auto-align
+- `swipe_reasoning` has an invalid entry, the wrong length, or is supplied with `reasoning`
 
 These throw rather than silently clamp — partial writes would drift `swipes` / `swipe_dates` / `swipe_id` out of sync, and recovery is easier when the call fails loudly.
 
@@ -178,7 +190,7 @@ These throw rather than silently clamp — partial writes would drift `swipes` /
 
 `reasoning` targets the host-owned `extra.reasoning` (text) and `extra.reasoningDuration` (ms) fields projected for the active swipe. Supplying `reasoning: { text: "..." }` overwrites the active swipe's text without touching the duration; supplying `reasoning: { duration: null }` clears the active swipe's duration without touching the text.
 
-A reasoning patch with no `metadata` patch still persists — the host writes the mutated `extra` bag whenever either `metadata` or `reasoning` touched it.
+Reasoning saves without a `metadata` patch. Both reasoning fields use the native per-swipe storage and survive navigation and forks.
 
 ### Chat-chunk side effects
 

@@ -465,7 +465,8 @@ const result = await spindle.generate.dryRun({
 | `breakdown` | `AssemblyBreakdownEntryDTO[]` | Ordered list of prompt blocks showing how the prompt was built. |
 | `parameters` | `Record<string, unknown>` | Final merged sampler parameters. |
 | `variable_state` | `MacroVariableSnapshotDTO` | Variables from prompt assembly. Returned only with `forcePresetId: true`, without saving changes to variables. Save as `variables` in a [per-swipe preset entry](../frontend-api/display-resolver.md#per-swipe-presets) to reuse them during rendering. |
-| `request_messages` | `LlmMessageDTO[]` | Prepared messages, returned with `includeRequestMessages: true`. Use these for provider requests; `messages` contains display text. `assistantPrefill` contains any prepared assistant prefix. |
+| `request_messages` | `LlmMessageDTO[]` | Prepared structured host messages, returned with `includeRequestMessages: true`. Use these instead of display-only `messages` when issuing a generation request. Preserves media, tool parts, reasoning, thought signatures, and assistant `partial` markers. Direct provider HTTP calls still require the provider's message format. |
+| `assistantPrefill` | `string` | Optional. Returned with `includeRequestMessages: true` when a prefix was prepared. The prefix is already included in `request_messages`; do not append it again. |
 | `model` | `string` | The model that would be used. |
 | `provider` | `string` | The provider that would be used. |
 | `tokenCount` | `DryRunTokenCountDTO` | Optional. Per-block token counts (if a tokenizer is available). |

@@ -1323,6 +1323,8 @@ export class WorkerHost {
           ...SPINDLE_HOST_CAPABILITIES,
           "message-preset-context-v1": 1,
           "generation-request-messages-v1": 1,
+          "chat-metadata-patch-v1": 1,
+          "chat-swipe-reasoning-v1": 1,
           "frontend-runtime-capabilities-v1": 1,
           "frontend-session-origin-v1": 1,
           "frontend-session-routing-v1": 1,
@@ -4017,10 +4019,12 @@ export class WorkerHost {
     patch: {
       content?: string;
       metadata?: Record<string, unknown>;
+      metadata_patch?: Record<string, unknown>;
       swipes?: string[];
       swipe_id?: number;
       swipe_dates?: number[];
       reasoning?: { text?: string | null; duration?: number | null };
+      swipe_reasoning?: ({ text: string | null; duration?: number | null } | null)[];
       skipChunkRebuild?: boolean;
     }
   ): void {
@@ -4041,8 +4045,51 @@ export class WorkerHost {
       const extra = { ...(current.extra || {}) } as Record<string, unknown>;
       let extraDirty = false;
 
+      if (patch.swipe_id !== undefined && patch.swipe_id !== current.swipe_id) {
+        // Projected fields belong to the old selection. Preserve their canonical
+        // per-swipe arrays before applying explicit writes to the new selection.
+        for (const key of chatsSvc.SWIPE_SCOPED_EXTRA_KEYS) delete extra[key];
+        delete extra.reasoning_duration;
+      }
+
       if (patch.metadata !== undefined) {
         extra.spindle_metadata = patch.metadata;
+        extraDirty = true;
+      }
+
+      if (patch.metadata_patch !== undefined) {
+        if (patch.metadata !== undefined) throw new Error("Supply metadata or metadata_patch, not both");
+        if (!patch.metadata_patch || typeof patch.metadata_patch !== "object" || Array.isArray(patch.metadata_patch)) {
+          throw new Error("metadata_patch must be an object");
+        }
+        const currentMetadata = current.extra?.spindle_metadata;
+        extra.spindle_metadata = {
+          ...(currentMetadata && typeof currentMetadata === "object" && !Array.isArray(currentMetadata) ? currentMetadata : {}),
+          ...patch.metadata_patch,
+        };
+        extraDirty = true;
+      }
+
+      if (patch.swipe_reasoning !== undefined) {
+        const entries = patch.swipe_reasoning;
+        if (patch.reasoning !== undefined) {
+          throw new Error("Supply reasoning or swipe_reasoning, not both");
+        }
+        if (!Array.isArray(entries) || entries.length !== (patch.swipes ?? current.swipes).length) {
+          throw new Error("swipe_reasoning must have one entry per swipe");
+        }
+        for (const entry of entries) {
+          if (entry === null) continue;
+          if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+              (entry.text !== null && typeof entry.text !== "string") ||
+              (entry.duration != null && (typeof entry.duration !== "number" || !Number.isFinite(entry.duration) || entry.duration < 0))) {
+            throw new Error("Each swipe_reasoning entry must be null or contain text and an optional non-negative duration in milliseconds");
+          }
+        }
+        for (const key of chatsSvc.SWIPE_SCOPED_EXTRA_KEYS) delete extra[key];
+        delete extra.reasoning_duration;
+        extra.reasoningBySwipe = entries.map(entry => entry?.text ?? null);
+        extra.reasoningDurationBySwipe = entries.map(entry => entry?.duration ?? null);
         extraDirty = true;
       }
 
@@ -4741,7 +4788,9 @@ export class WorkerHost {
         persona_id: input.personaId,
         preset_id: input.presetId,
         ...(input.forcePresetId === true ? { force_preset_id: true } : {}),
-        ...(input.includeRequestMessages !== undefined ? { include_request_messages: input.includeRequestMessages } : {}),
+        ...(input.includeRequestMessages !== undefined
+          ? { include_request_messages: input.includeRequestMessages }
+          : {}),
         generation_type: input.generationType,
         parameters: input.parameters,
       });
@@ -4769,7 +4818,12 @@ export class WorkerHost {
           extensionName: b.extensionName,
         })),
         parameters: dryRunResult.parameters,
-        ...(dryRunResult.request_messages ? { request_messages: dryRunResult.request_messages, assistantPrefill: dryRunResult.assistantPrefill } : {}),
+        ...(dryRunResult.request_messages
+          ? {
+              request_messages: dryRunResult.request_messages,
+              assistantPrefill: dryRunResult.assistantPrefill,
+            }
+          : {}),
         ...(dryRunResult.variable_state ? { variable_state: dryRunResult.variable_state } : {}),
         model: dryRunResult.model,
         provider: dryRunResult.provider,

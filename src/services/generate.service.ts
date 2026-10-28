@@ -3026,7 +3026,10 @@ export async function startGeneration(
 export async function dryRunGeneration(
   input: GenerateInput,
 ): Promise<DryRunResult> {
-  if (input.include_request_messages !== undefined && typeof input.include_request_messages !== "boolean") {
+  if (
+    input.include_request_messages !== undefined &&
+    typeof input.include_request_messages !== "boolean"
+  ) {
     throw new Error("include_request_messages must be a boolean");
   }
   input = { ...input, frontendSessionId: getActiveFrontendSession(input.userId) };
