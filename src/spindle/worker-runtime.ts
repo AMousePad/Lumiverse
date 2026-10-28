@@ -321,6 +321,7 @@ type RuntimeWorkerToHost =
   | CharacterGalleryWorkerMessage
   | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
+  | { type: "chat_set_swipe_variables"; requestId: string; chatId: string; messageId: string; input: import("../db/swipe-variable-state").SetSwipeVariablesInput }
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -747,6 +748,9 @@ interface RuntimeLumiverseVersionInfo {
 }
 
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version"> & {
+  chat: SpindleAPI["chat"] & {
+    setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean>;
+  };
   version: SpindleAPI["version"] & {
     getCommit(): Promise<string | null>;
     getBranch(): Promise<string | null>;
@@ -2341,6 +2345,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   chat: {
+    async setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean> {
+      assertMutationAllowed("spindle.chat.setSwipeVariables()");
+      return await request({ type: "chat_set_swipe_variables", requestId: crypto.randomUUID(), chatId, messageId, input }) as boolean;
+    },
     async getMessages(chatId: string) {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "chat_get_messages", requestId, chatId });

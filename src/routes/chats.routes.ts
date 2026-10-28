@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { getDb } from "../db/connection";
+import { remapSwipeVariableOwnerWithDb } from "../db/swipe-variable-state";
 import * as svc from "../services/chats.service";
 import * as personasSvc from "../services/personas.service";
 import * as charactersSvc from "../services/characters.service";
@@ -529,6 +531,7 @@ app.post("/import", async (c) => {
     }));
 
     const msgCount = svc.bulkInsertMessages(chat.id, bulkMessages, userId);
+    remapSwipeVariableOwnerWithDb(getDb(), userId, chat.id);
 
     return c.json({ chat_id: chat.id, name: chat.name, message_count: msgCount }, 201);
   } catch (err: any) {

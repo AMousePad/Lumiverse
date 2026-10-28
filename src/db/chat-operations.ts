@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite";
 import type { Chat, UpdateChatInput } from "../types/chat";
+import { trackVariableWrite, type VariableWriteSource } from "./swipe-variable-state";
 export interface ChatMetadataMergeOptions {
+  variableSource?: VariableWriteSource;
   touchUpdatedAt?: boolean;
   /** Merge these object paths with their current values inside the transaction. */
   mergeObjectPaths?: string[][];
@@ -14,12 +16,12 @@ function getChatWithDb(db: Database, userId: string, id: string): Chat | null {
   const row = db.query("SELECT * FROM chats WHERE id = ? AND user_id = ?").get(id, userId);
   return row ? rowToChat(row) : null;
 }
-function updateChatWithDb(db: Database, userId: string, id: string, input: UpdateChatInput, opts: { touchUpdatedAt?: boolean } = {}, before?: Chat): ChatUpdateResult | null {
+function updateChatWithDb(db: Database, userId: string, id: string, input: UpdateChatInput, opts: ChatMetadataMergeOptions = {}, before?: Chat): ChatUpdateResult | null {
   const existing = before ?? getChatWithDb(db, userId, id);
   if (!existing) return null;
   const fields: string[] = [], values: any[] = [];
   if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
-  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
+  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(trackVariableWrite(db, id, existing.metadata, input.metadata, opts.variableSource))); }
   if (fields.length === 0) return { before: existing, after: existing, changed: false };
   if (opts.touchUpdatedAt !== false) { fields.push("updated_at = ?"); values.push(Math.floor(Date.now() / 1000)); }
   db.query(`UPDATE chats SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values, id, userId);
@@ -192,10 +194,9 @@ export function clearRemovedChatAvatarReferencesWithDb(db: Database, userId: str
       else delete metadata.group_active_avatar_entry_ids;
     }
     if (!changed) continue;
-    const now = Math.floor(Date.now() / 1000);
-    db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-      .run(JSON.stringify(metadata), now, row.id, userId);
-    updated.push({ ...row, metadata, updated_at: now });
+    const partial = Object.fromEntries(["active_avatar_id", "active_avatar_entry_id", "group_active_avatar_ids", "group_active_avatar_entry_ids"].map(key => [key, metadata[key]]));
+    const result = mutateChatWithDb(db, { action: "merge", userId, id: row.id, partial });
+    if (result) updated.push(result.after);
   }
   return updated;
 }

@@ -310,6 +310,7 @@ type RuntimeWorkerToHost =
   | CharacterGalleryWorkerMessage
   | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
+  | { type: "chat_set_swipe_variables"; requestId: string; chatId: string; messageId: string; input: import("../db/swipe-variable-state").SetSwipeVariablesInput }
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -1323,6 +1324,7 @@ export class WorkerHost {
           ...SPINDLE_HOST_CAPABILITIES,
           "message-preset-context-v1": 1,
           "chat-swipe-reasoning-v1": 1,
+          "chat-swipe-variables-v1": 1,
           "frontend-runtime-capabilities-v1": 1,
           "frontend-session-origin-v1": 1,
           "frontend-session-routing-v1": 1,
@@ -1950,6 +1952,9 @@ export class WorkerHost {
         break;
       case "chat_get_messages":
         this.handleChatGetMessages(msg.requestId, msg.chatId);
+        break;
+      case "chat_set_swipe_variables":
+        this.handleChatSetSwipeVariables(msg.requestId, msg.chatId, msg.messageId, msg.input);
         break;
       case "chat_append_message":
         void this.handleChatAppendMessage(
@@ -3873,6 +3878,22 @@ export class WorkerHost {
     const rawRole = extra?.spindle_role;
     if (rawRole === "system") return "system";
     return "assistant";
+  }
+
+  private handleChatSetSwipeVariables(requestId: string, chatId: string, messageId: string, input: any): void {
+    try {
+      if (!this.hasPermission("chat_mutation") || !this.hasPermission("chats")) throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation and chats permissions are required`);
+      const userId = this.getChatOwnerId(chatId);
+      if (!userId) throw new Error("Chat not found");
+      this.enforceScopedUser(userId);
+      const map = (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(entry => typeof entry === "string");
+      const variables = (value: any) => !!value && map(value.global) && map(value.chat);
+      if (!input || !variables(input.expected_variables) || !Array.isArray(input.variables) || !input.variables.length || !input.variables.every(variables) ||
+          !Array.isArray(input.expected_swipes) || !input.expected_swipes.length || !input.expected_swipes.every((value: unknown) => typeof value === "string") ||
+          (input.expected_revision !== null && (typeof input.expected_revision !== "string" || !input.expected_revision))) throw new Error("Invalid swipe variable states");
+      const result = chatsSvc.setSwipeVariables(userId, chatId, messageId, input);
+      this.postToWorker({ type: "response", requestId, result });
+    } catch (error: any) { this.postToWorker({ type: "response", requestId, error: error.message }); }
   }
 
   private handleChatGetMessages(requestId: string, chatId: string): void {

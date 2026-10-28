@@ -247,8 +247,8 @@ function stampCortexFreshnessSnapshot(
     },
   };
 
-  getDb().query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(
-    JSON.stringify(metadata),
+  getDb().query("UPDATE chats SET metadata = json_set(metadata, '$.cortex_rebuild_state', json(?)) WHERE id = ? AND user_id = ?").run(
+    JSON.stringify(metadata.cortex_rebuild_state),
     chatId,
     userId,
   );
@@ -277,8 +277,8 @@ function stampCortexRebuildAttempt(userId: string, chatId: string): void {
     },
   };
 
-  getDb().query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(
-    JSON.stringify(metadata),
+  getDb().query("UPDATE chats SET metadata = json_set(metadata, '$.cortex_rebuild_state', json(?)) WHERE id = ? AND user_id = ?").run(
+    JSON.stringify(metadata.cortex_rebuild_state),
     chatId,
     userId,
   );

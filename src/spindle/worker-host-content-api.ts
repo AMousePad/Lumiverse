@@ -1030,12 +1030,13 @@ export class WorkerHostContentApi {
 
   // ─── Chats CRUD (gated: "chats") ──────────────────────────────────
 
-  private toChatDTO(c: any): ChatDTO {
+  private toChatDTO(c: any): ChatDTO & { variable_revision?: string } {
     return {
       id: c.id,
       character_id: c.character_id,
       name: c.name || "",
       metadata: (typeof c.metadata === "object" && c.metadata) ? c.metadata : {},
+      ...(typeof c.metadata?._swipe_variable_state?.revision === "string" ? { variable_revision: c.metadata._swipe_variable_state.revision } : {}),
       created_at: c.created_at,
       updated_at: c.updated_at,
     };

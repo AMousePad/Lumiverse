@@ -1,6 +1,7 @@
 import { getDb } from "../db/connection";
 import { executeDatabaseOperation } from "../db/execution";
 import { readDatabaseRow, readDatabaseRows } from "../db/queries";
+import { mutateChatWithDb } from "../db/chat-operations";
 import {
   InvalidCharacterLibraryScopeError, normalizeCharacterLibraryScope,
   explicitCharacterInputScope, canonicalCharacterExtensions,
@@ -674,11 +675,11 @@ function clearRemovedChatAvatarReferences(userId: string, removedImageIds: Itera
       else delete metadata.group_active_avatar_entry_ids;
     }
     if (!changed) continue;
-    const now = Math.floor(Date.now() / 1000);
-    getDb().query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-      .run(JSON.stringify(metadata), now, row.id, userId);
+    const partial = Object.fromEntries(["active_avatar_id", "active_avatar_entry_id", "group_active_avatar_ids", "group_active_avatar_entry_ids"].map(key => [key, metadata[key]]));
+    const result = mutateChatWithDb(getDb(), { action: "merge", userId, id: row.id, partial });
+    if (!result) continue;
     eventBus.emit(EventType.CHAT_CHANGED, {
-      chat: { ...row, metadata, updated_at: now },
+      chat: result.after,
       changedFields: ["metadata.active_avatar_id", "metadata.group_active_avatar_ids"],
     }, userId);
   }
