@@ -3496,20 +3496,21 @@ function emitCreatedChatBranch(userId: string, created: CreatedChatBranch): Chat
 }
 
 export function branchChat(userId: string, chatId: string, atMessageId: string, requestedName?: string): Chat | null {
-  const chat = getChat(userId, chatId);
-  if (!chat) return null;
-  const msg = getMessage(userId, atMessageId);
-  if (!msg || msg.chat_id !== chatId) return null;
-
-  let created: CreatedChatBranch;
+  let created: CreatedChatBranch | null;
 
   try {
-    created = getDb().transaction(() => createChatBranchRows(userId, chat, msg, requestedName))();
+    created = getDb().transaction(() => {
+      const chat = getChat(userId, chatId);
+      if (!chat) return null;
+      const msg = getMessage(userId, atMessageId);
+      if (!msg || msg.chat_id !== chatId) return null;
+      return createChatBranchRows(userId, chat, msg, requestedName);
+    }).immediate();
   } catch (err) {
     console.error("[chats] Branch failed:", err);
     return null;
   }
-  return emitCreatedChatBranch(userId, created);
+  return created ? emitCreatedChatBranch(userId, created) : null;
 }
 
 export type EditAndSendMode = "normal" | "swipe";

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import type { ExtensionInfo, HostToWorker, SpindleManifest } from "lumiverse-spindle-types";
 import { WorkerHost } from "../spindle/worker-host";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
@@ -43,9 +44,9 @@ import {
 } from "./chats.service";
 import { makePromptActivationSource, promptActivationSource } from "./prompt-activation.service";
 
-function initChatsTestDb(): void {
+function initChatsTestDb(path = ":memory:"): void {
   closeDatabase();
-  initDatabase(":memory:");
+  initDatabase(path);
   const db = getDb();
 
   db.run(`CREATE TABLE settings (
@@ -320,6 +321,75 @@ describe("chat greeting selection", () => {
 });
 
 describe("chat lifecycle events", () => {
+  test.each([undefined, "Named fork"])("forks reserve the write transaction before reading with name %s", async (name) => {
+    const directory = mkdtempSync(join(tmpdir(), "chat-fork-contention-"));
+    const path = join(directory, "database.sqlite");
+    initChatsTestDb(path);
+    seedCharacter("c1", "Alpha");
+    seedChat("source", "c1", "Source", "{}", 100);
+    seedMessage("reply", "source", "Reply", {}, { index: 0 });
+    const writer = new Database(path);
+    writer.exec("PRAGMA busy_timeout = 0");
+    const statement = getDb().query("SELECT * FROM chats WHERE id = ? AND user_id = ?");
+    const read = statement.get.bind(statement);
+    let attempted = false;
+    let blocked = false;
+    const backgroundWrite = () => writer
+      .query("INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)")
+      .run("u1", "concurrent", "true");
+    const hook = spyOn(statement, "get").mockImplementation((...values) => {
+      const result = read(...values);
+      if (!attempted) {
+        attempted = true;
+        try {
+          backgroundWrite();
+        } catch (error) {
+          if (!(error instanceof Error) || !("code" in error) || error.code !== "SQLITE_BUSY") throw error;
+          blocked = true;
+        }
+      }
+      return result;
+    });
+    try {
+      const fork = branchChat("u1", "source", "reply", name);
+      expect(attempted).toBe(true);
+      expect(fork).not.toBeNull();
+      expect(blocked).toBe(true);
+      expect(getMessages("u1", fork!.id).map(message => message.content)).toEqual(["Reply"]);
+      backgroundWrite();
+      expect(writer.query("SELECT value FROM settings WHERE key = 'concurrent'").get()).toEqual({ value: "true" });
+      await Bun.sleep(0);
+    } finally {
+      hook.mockRestore();
+      writer.close();
+      closeDatabase();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects inaccessible chats and mismatched fork messages without rows or events", async () => {
+    seedChat("source", "c1", "Source", "{}", 100);
+    seedChat("other", "c1", "Other", "{}", 100);
+    seedMessage("reply", "source", "Reply", {}, { index: 0 });
+    seedMessage("other-reply", "other", "Other reply", {}, { index: 0 });
+    const events: EventMessage[] = [];
+    const unsubscribe = eventBus.on(EventType.CHAT_FORKED, (event) => events.push(event));
+
+    try {
+      expect(branchChat("u2", "source", "reply")).toBeNull();
+      expect(branchChat("u1", "source", "other-reply")).toBeNull();
+      expect(branchChat("u1", "missing", "reply")).toBeNull();
+      expect(branchChat("u1", "source", "missing")).toBeNull();
+      expect(getDb().inTransaction).toBe(false);
+      expect(getDb().query("SELECT COUNT(*) as count FROM chats").get()).toEqual({ count: 2 });
+      expect(getDb().query("SELECT COUNT(*) as count FROM messages").get()).toEqual({ count: 2 });
+      await Bun.sleep(0);
+      expect(events).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test("emits CHAT_CREATED after solo creation and group conversion", async () => {
     const events: EventMessage[] = [];
     const unsubscribe = eventBus.on(EventType.CHAT_CREATED, (event) => events.push(event));
