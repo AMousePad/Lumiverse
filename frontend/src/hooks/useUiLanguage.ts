@@ -1,15 +1,22 @@
 import { useEffect } from 'react'
-import { changeUiLanguage } from '@/i18n'
+import { applyLoginLanguage, changeUiLanguage } from '@/i18n'
 import { useStore } from '@/store'
 
-/** Apply account settings after hydration and SETTINGS_UPDATED reloads. */
+/** Auth screens use a device preference; authenticated screens use account settings. */
 export function useUiLanguage() {
   const userId = useStore(s => s.isAuthenticated ? s.user?.id : null)
   const language = useStore(s => s.uiLanguage)
 
   useEffect(() => {
-    if (!userId || !language) return
     let cancelled = false
+    if (!userId) {
+      const isCurrent = () => !cancelled && !useStore.getState().isAuthenticated
+      void applyLoginLanguage(isCurrent).catch(error => {
+        if (isCurrent()) console.error('[i18n] Failed to apply login language:', error)
+      })
+      return () => { cancelled = true }
+    }
+    if (!language) return
     const isCurrent = () => {
       const state = useStore.getState()
       return !cancelled && state.isAuthenticated && state.user?.id === userId

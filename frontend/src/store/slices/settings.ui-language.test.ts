@@ -27,6 +27,7 @@ function database(rows: Map<string, unknown>) {
 afterEach(() => {
   resetSettingsPersistence()
   localStorage.removeItem('__lumiverse_pending_settings')
+  localStorage.removeItem('lumiverse-ui-language')
   settingsApi.getAll = original.getAll
   settingsApi.putMany = original.putMany
 })
@@ -51,14 +52,22 @@ test('an explicit English selection persists and hydrates on another device with
   expect(writtenLanguage).toBe(false)
 })
 
-test('device detection never seeds an account without an explicit preference', async () => {
+test('an account without a language saves English once instead of a device-detected cache', async () => {
   const rows = new Map<string, unknown>()
   database(rows)
+  localStorage.setItem('lumiverse-ui-language', 'fr')
   const phone = store()
   await phone.loadSettings()
   await flushSettingsNow()
-  expect(phone.uiLanguage).toBeNull()
-  expect(rows.has('uiLanguage')).toBe(false)
+  expect(phone.uiLanguage).toBe('en')
+  expect(rows.get('uiLanguage')).toBe('en')
+
+  let writes = 0
+  settingsApi.putMany = async () => { writes++; return [] }
+  await phone.loadSettings()
+  await flushSettingsNow()
+  expect(phone.uiLanguage).toBe('en')
+  expect(writes).toBe(0)
 })
 
 test('ignores malformed server and pending recovery language values', async () => {
@@ -68,11 +77,12 @@ test('ignores malformed server and pending recovery language values', async () =
     localStorage.setItem('__lumiverse_pending_settings', JSON.stringify({ uiLanguage: value }))
     const app = store()
     await app.loadSettings()
-    expect(app.uiLanguage).toBeNull()
+    expect(app.uiLanguage).toBe('en')
   }
 })
 
 test('a selection made during settings hydration wins over the older server language', async () => {
+  settingsApi.putMany = async () => []
   let resolveRows!: (rows: Awaited<ReturnType<typeof settingsApi.getAll>>) => void
   settingsApi.getAll = () => new Promise(resolve => { resolveRows = resolve })
   const app = store()
@@ -81,4 +91,44 @@ test('a selection made during settings hydration wins over the older server lang
   resolveRows([{ key: 'uiLanguage', value: 'fr', updated_at: 1 }])
   await loading
   expect(app.uiLanguage).toBe('en')
+})
+
+test('a manual change starts saving immediately and a new client restores it', async () => {
+  const rows = new Map<string, unknown>([['uiLanguage', 'en']])
+  database(rows)
+  const app = store()
+  await app.loadSettings()
+  app.setSetting('uiLanguage', 'fr')
+  expect(rows.get('uiLanguage')).toBe('fr')
+  await flushSettingsNow()
+
+  const reopened = store()
+  await reopened.loadSettings()
+  expect(reopened.uiLanguage).toBe('fr')
+})
+
+test('the first saved default cannot replace a selection made during hydration', async () => {
+  let resolveRows!: (rows: Awaited<ReturnType<typeof settingsApi.getAll>>) => void
+  settingsApi.getAll = () => new Promise(resolve => { resolveRows = resolve })
+  const writes: Record<string, unknown>[] = []
+  settingsApi.putMany = async values => { writes.push(values); return [] }
+  const app = store()
+  const loading = app.loadSettings()
+  app.setSetting('uiLanguage', 'fr')
+  resolveRows([])
+  await loading
+  await flushSettingsNow()
+  expect(app.uiLanguage).toBe('fr')
+  expect(writes.map(values => values.uiLanguage)).toEqual(['fr'])
+})
+
+test('pending offline language recovery wins over the initial default', async () => {
+  const rows = new Map<string, unknown>()
+  database(rows)
+  localStorage.setItem('__lumiverse_pending_settings', JSON.stringify({ uiLanguage: 'fr' }))
+  const app = store()
+  await app.loadSettings()
+  await flushSettingsNow()
+  expect(app.uiLanguage).toBe('fr')
+  expect(rows.get('uiLanguage')).toBe('fr')
 })

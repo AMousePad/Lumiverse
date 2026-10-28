@@ -36,7 +36,7 @@ mock.module('@/i18n/resources', () => ({
     add(code, 'common', { greeting: code === 'fr' ? 'Bonjour' : 'Hello' })
   },
 }))
-const { default: i18n, initI18n, UI_LANGUAGE_STORAGE_KEY } = await import('@/i18n')
+const { default: i18n, initI18n, UI_LANGUAGE_STORAGE_KEY, LOGIN_LANGUAGE_STORAGE_KEY } = await import('@/i18n')
 const { useUiLanguage } = await import('./useUiLanguage')
 const { default: LanguageSwitcher } = await import('@/components/shared/LanguageSwitcher')
 localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'fr')
@@ -52,6 +52,7 @@ const update = async (patch: Partial<ReturnType<typeof useStore.getState>>) => {
 
 beforeEach(async () => {
   loading = undefined
+  localStorage.removeItem(LOGIN_LANGUAGE_STORAGE_KEY)
   useStore.setState({ isAuthenticated: true, user: { id: 'owner' }, uiLanguage: null })
   await i18n.changeLanguage('fr')
   container = document.createElement('div')
@@ -88,7 +89,7 @@ test('the language selector updates the account preference and the interface', a
   expect(i18n.language).toBe('en')
 })
 
-test('an account without a saved choice retains the detected language', async () => {
+test('the cached language remains while the account preference is still loading', async () => {
   await render()
   expect(i18n.language).toBe('fr')
   expect(useStore.getState().uiLanguage).toBeNull()
@@ -104,6 +105,20 @@ test('a chunk completing after an account change cannot apply the old preference
   expect(i18n.language).toBe('fr')
 })
 
+test('switching accounts applies each saved language without changing the login preference', async () => {
+  localStorage.setItem(LOGIN_LANGUAGE_STORAGE_KEY, 'ko')
+  useStore.setState({ uiLanguage: 'en' })
+  await render()
+  expect(i18n.language).toBe('en')
+  await update({ user: { id: 'other' }, uiLanguage: 'fr' })
+  expect(i18n.language).toBe('fr')
+  expect(useStore.getState().uiLanguage).toBe('fr')
+  await update({ user: { id: 'owner' }, uiLanguage: 'en' })
+  expect(i18n.language).toBe('en')
+  expect(useStore.getState().uiLanguage).toBe('en')
+  expect(localStorage.getItem(LOGIN_LANGUAGE_STORAGE_KEY)).toBe('ko')
+})
+
 test('a slower earlier selection cannot overwrite the latest selection', async () => {
   let release!: () => void
   loading = new Promise(resolve => { release = resolve })
@@ -113,4 +128,36 @@ test('a slower earlier selection cannot overwrite the latest selection', async (
   await update({ uiLanguage: 'fr' })
   await act(async () => { release(); await Promise.resolve() })
   expect(i18n.language).toBe('fr')
+})
+
+test('signed-out visitors use the login preference without changing the account cache', async () => {
+  localStorage.setItem(LOGIN_LANGUAGE_STORAGE_KEY, 'fr')
+  localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko')
+  useStore.setState({ isAuthenticated: false })
+  await render()
+  expect(i18n.language).toBe('fr')
+  expect(localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('ko')
+  expect(useStore.getState().uiLanguage).toBeNull()
+})
+
+test('signing in overrides the login language with the saved account preference', async () => {
+  localStorage.setItem(LOGIN_LANGUAGE_STORAGE_KEY, 'fr')
+  useStore.setState({ isAuthenticated: false })
+  await render()
+  await update({ isAuthenticated: true, uiLanguage: 'en' })
+  expect(i18n.language).toBe('en')
+  expect(localStorage.getItem(LOGIN_LANGUAGE_STORAGE_KEY)).toBe('fr')
+})
+
+test('a pending login locale cannot replace the account language after sign-in', async () => {
+  localStorage.setItem(LOGIN_LANGUAGE_STORAGE_KEY, 'fr')
+  let release!: () => void
+  loading = new Promise(resolve => { release = resolve })
+  useStore.setState({ isAuthenticated: false })
+  await render()
+  loading = undefined
+  await update({ isAuthenticated: true, uiLanguage: 'en' })
+  await act(async () => { release(); await Promise.resolve() })
+  expect(i18n.language).toBe('en')
+  expect(localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('en')
 })

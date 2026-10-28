@@ -42,7 +42,6 @@
     "fuse.js": "^7.0.0",
     "highlight.js": "^11.11.1",
     "i18next": "^26.2.0",
-    "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^0.468.0",
     "lumiverse-spindle-types": "0.6.61",
     "marked": "^15.0.4",

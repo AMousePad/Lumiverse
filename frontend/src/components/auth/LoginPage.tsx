@@ -2,7 +2,11 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { motion, LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { Globe } from 'lucide-react'
 import { useStore } from '@/store'
+import { changeLoginLanguage } from '@/i18n'
+import { UI_LANGUAGES, UI_LANGUAGE_NAMES, isUiLanguage } from '@/i18n/languages'
+import { useUiLanguage } from '@/hooks/useUiLanguage'
 import { ssoProvidersApi, type SsoLoginOption } from '@/api/sso-providers'
 import { startSsoPopup } from '@/lib/ssoPopup'
 import { isNativeIOS } from '@/lib/ios-native'
@@ -18,7 +22,8 @@ function usesBrowserResizedKeyboardViewport(): boolean {
 
 export default function LoginPage() {
   const { t } = useTranslation('auth')
-  const { t: tc } = useTranslation('common')
+  const { t: tc, i18n } = useTranslation('common')
+  useUiLanguage()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -202,6 +207,23 @@ export default function LoginPage() {
           transition={{ duration: 0.5, delay: 0.15, ease: [0.22, 1, 0.36, 1] }}
         >
           <div className={styles.cardHighlight} />
+
+          <div className={styles.languagePicker}>
+            <label htmlFor="lumiverse-login-language">
+              <Globe size={16} aria-hidden="true" />
+              {tc('language.label')}
+            </label>
+            <select
+              id="lumiverse-login-language"
+              value={isUiLanguage(i18n.language) ? i18n.language : 'en'}
+              onChange={event => {
+                void changeLoginLanguage(event.target.value, () => !useStore.getState().isAuthenticated)
+                  .catch(error => console.error('[i18n] Failed to change login language:', error))
+              }}
+            >
+              {UI_LANGUAGES.map(code => <option key={code} value={code}>{UI_LANGUAGE_NAMES[code]}</option>)}
+            </select>
+          </div>
 
           <form ref={formRef} className={styles.form} onSubmit={handleSubmit}>
             <motion.div

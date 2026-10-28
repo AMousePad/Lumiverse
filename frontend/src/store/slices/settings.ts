@@ -1,7 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, EnterToSendSettings, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource, ToastPosition } from '@/types/store'
 import { settingsApi } from '@/api/settings'
-import { isUiLanguage } from '@/i18n/languages'
+import { DEFAULT_UI_LANGUAGE, isUiLanguage } from '@/i18n/languages'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
 import { activeTab } from '@/lib/active-tab'
@@ -993,6 +993,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       if (!automatic || get().fullSettingsLoaded) {
         persistKey(key as string, value, source)
         if (unboundReasoningSettings) persistKey('unboundReasoningSettings', unboundReasoningSettings, source)
+        // Persist a language selection before the app can be closed or opened
+        // on another device; the pending-settings bridge still covers failures.
+        if (key === 'uiLanguage' && source === 'user') {
+          void flushSettingsNow().catch(() => {})
+        }
       } else {
         traceSettings('setSetting:pre-hydration-skip', {
           key: key as string,
@@ -1386,6 +1391,16 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         }
       }
 
+      // Accounts created before language persistence may have no language row.
+      // Give them one stable app default instead of promoting a device-detected
+      // cache. Preserve a Settings edit made while this GET was in flight.
+      const initializeUiLanguage = !hasNewerLocalSetting('uiLanguage', localRevisionAtLoadStart)
+        && !rows.some(row => row.key === 'uiLanguage' && isUiLanguage(row.value))
+        && !isUiLanguage(pendingKeys?.uiLanguage)
+      if (initializeUiLanguage) {
+        patch.uiLanguage = defaults.uiLanguage ?? DEFAULT_UI_LANGUAGE
+      }
+
       if (!isCurrentLoad()) return
       // Migration: discard old ThemeConfig shape (has baseColors but no accent)
       if (patch.theme && 'baseColors' in patch.theme && !('accent' in patch.theme)) {
@@ -1538,6 +1553,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // image-generation row still waits for profile reconciliation when needed.
       if (!isCurrentLoad()) return
       set({ fullSettingsLoaded: true })
+      if (initializeUiLanguage) persistKey('uiLanguage', get().uiLanguage, 'compatibility')
       traceSettings('loadSettings:hydrated', {
         loadGeneration,
         pendingKeys: pendingKeys ? Object.keys(pendingKeys) : [],

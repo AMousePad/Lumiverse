@@ -752,7 +752,7 @@ export interface EnterToSendSettings {
 }
 
 export interface SettingsSlice {
-  /** Explicit account preference; null leaves browser/device detection in effect. */
+  /** Saved account preference; null until account settings are hydrated. */
   uiLanguage: UiLanguage | null
   settingsLoaded: boolean
   /** Full persisted settings loaded; startup settings intentionally set only `settingsLoaded`. */
