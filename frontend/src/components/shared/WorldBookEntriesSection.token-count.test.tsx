@@ -515,6 +515,39 @@ describe('WorldBookEntriesSection token-count invalidation', () => {
     }
   })
 
+  for (const mobile of [false, true]) for (const presentation of [undefined, 'workspace', 'navigation'] as const) {
+    test(`collapsed quick controls save order without opening an editor: ${mobile}/${presentation}`, async () => {
+      mobileFixture = mobile
+      const original = entry('quick-entry')
+      updateDeferred = createDeferred<WorldBookEntry>()
+      const { root, host } = await render([original], presentation)
+      try {
+        const row = host.querySelector<HTMLElement>('[data-world-book-entry-row="quick-entry"]')!
+        expect(row.querySelector('button[aria-label^="changeEntryTypeFrom:"]')).not.toBeNull()
+        expect(row.querySelector('button[aria-label^="changeEntryPositionFrom:"]')).not.toBeNull()
+        const input = row.querySelector<HTMLInputElement>('input[type="number"][aria-label^="order:"]')!
+        expect(input).not.toBeNull()
+        act(() => { input.click(); input.focus(); input.value = '123'; input.blur() })
+        await act(async () => { await flush() })
+        expect(updateCalls).toEqual([{ bookId: book.id, entryId: original.id, input: { order_value: 123, expected_revision: 7 } }])
+        await act(async () => { updateDeferred!.resolve({ ...original, order_value: 123, revision: 8 }); await flush() })
+        const current = row.querySelector<HTMLInputElement>('input[type="number"]')!
+        expect(current.value).toBe('123')
+        for (const invalid of ['', '1.5']) {
+          act(() => { current.focus(); current.value = invalid; current.blur() })
+          expect(current.value).toBe('123')
+        }
+        act(() => {
+          current.focus(); current.value = '999'
+          current.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        })
+        expect(current.value).toBe('123')
+        expect(updateCalls).toHaveLength(1)
+        expect(host.querySelector('[data-world-book-entry-editor]')).toBeNull()
+      } finally { unmount(root) }
+    })
+  }
+
   test('renders stable row and token-cell anchors with an immediate estimate', async () => {
     const { root, host } = await render([entry('entry-anchor', '12345678')])
     try {
