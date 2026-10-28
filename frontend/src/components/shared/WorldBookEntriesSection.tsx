@@ -1379,7 +1379,7 @@ export default function WorldBookEntriesSection({
     await loadEntries(selectedBookId, { force: true })
   }, [selectedBookId, loadEntries])
 
-  const persistEntryUpdate = useCallback(async (entryId: string, intent: EntryIntent) => {
+  const persistEntryUpdate = useCallback(async function persistEntryUpdate(entryId: string, intent: EntryIntent) {
     const generation = requestGenerationRef.current
     const expected_revision = entriesRef.current.find((entry) => entry.id === entryId)?.revision
     try {

@@ -1,4 +1,4 @@
-import { upgradeWebSocket } from "hono/bun";
+import { upgradeWebSocket } from "@hono/bun";
 import { Buffer } from "node:buffer";
 import { eventBus } from "./bus";
 import { EventType } from "./events";

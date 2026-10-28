@@ -896,7 +896,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   // iPhone-specific: match input bar bottom corners to device screen curvature
   const screenCornerRadius = useDeviceFrameRadius()
   const [inputFocused, setInputFocused] = useState(false)
-  const composerTouchFocus = useMemo(createComposerTouchFocusHandlers, [])
+  const composerTouchFocus = useMemo(() => createComposerTouchFocusHandlers(), [])
   const [sttStatus, setSttStatus] = useState<'idle' | 'starting' | 'listening' | 'processing'>('idle')
   const [sttLoadingProgress, setSttLoadingProgress] = useState<number | null>(null)
   const sttSessionConfigRef = useRef<{ provider: string; language: string; connectionId: string | null } | null>(null)
@@ -955,6 +955,21 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     ta.style.height = `${Math.min(ta.scrollHeight, TEXTAREA_MAX_HEIGHT)}px`
     syncTextareaMirrorScroll()
   }, [syncTextareaMirrorScroll])
+
+  useLayoutEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    // Folding and pane resizing can rewrap a draft without changing its text.
+    // Watch width only so our own height writes do not cause a resize loop.
+    let width = -1
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry || entry.contentRect.width === width) return
+      width = entry.contentRect.width
+      resizeTextarea(ta)
+    })
+    observer.observe(ta)
+    return () => observer.disconnect()
+  }, [resizeTextarea])
 
   const queueTextareaSelection = useCallback((start: number, end = start, direction: 'forward' | 'backward' | 'none' = 'none') => {
     pendingSelectionRef.current = { start, end, direction }

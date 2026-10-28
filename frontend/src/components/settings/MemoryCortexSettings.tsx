@@ -254,7 +254,7 @@ export default function MemoryCortexSettings() {
   } | null>(null);
   // Wall-clock "now" tick driving the "X seconds ago" subtext so it updates
   // while a long LLM call is mid-flight even without new WS events.
-  const [, setNow] = useState(Date.now());
+  const [, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!rebuilding) return;
     const id = setInterval(() => setNow(Date.now()), 1000);

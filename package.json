@@ -10,11 +10,12 @@
     "sharp"
   ],
   "dependencies": {
-    "@better-auth/oauth-provider": "1.7.2",
+    "@better-auth/oauth-provider": "1.7.14",
+    "@hono/bun": "^1.0.1",
     "@lancedb/lancedb": "0.37.1",
     "@lenml/tokenizer-claude": "^3.7.2",
     "@lenml/tokenizers": "^3.7.2",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@mozilla/readability": "^0.6.0",
     "@msgpack/msgpack": "^3.1.2",
     "@opentelemetry/api": "^1.9.1",
@@ -23,15 +24,15 @@
     "@zilliz/milvus2-sdk-node": "^3.0.3",
     "apache-arrow": "18.1.0",
     "archiver": "^8.0.0",
-    "better-auth": "1.7.2",
-    "fflate": "^0.8.2",
+    "better-auth": "1.7.14",
+    "fflate": "^0.8.3",
     "gpt-tokenizer": "^2.8.1",
-    "hono": "^4.7.0",
+    "hono": "^4.13.14",
     "js-tiktoken": "^1.0.16",
     "linkedom": "0.18.13",
     "lumiverse-spindle-types": "0.6.68",
     "mute-stream": "^3.0.0",
-    "sharp": "^0.34.5",
+    "sharp": "0.35.5",
     "ssh2-sftp-client": "^12.1.1"
   },
   "devDependencies": {
@@ -45,12 +46,14 @@
   "overrides": {
     "lru-cache": "11.2.7",
     "kysely": "0.28.17",
-    "protobufjs": "8.7.0"
+    "protobufjs": "8.7.0",
+    "sharp": "0.35.5"
   },
   "resolutions": {
     "lru-cache": "11.2.7",
     "kysely": "0.28.17",
-    "protobufjs": "8.7.0"
+    "protobufjs": "8.7.0",
+    "sharp": "0.35.5"
   },
   "scripts": {
     "test": "bun test --isolate",

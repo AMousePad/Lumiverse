@@ -86,7 +86,7 @@ mock.restore()
 let root: Root | null = null
 let surface: ReturnType<typeof useLoomBuilder>
 
-/* eslint-disable react-compiler/react-compiler */
+/* eslint-disable react-hooks/globals */
 function Harness() {
   surface = useLoomBuilder()
   const preset = surface.activePreset
@@ -97,7 +97,7 @@ function Harness() {
   }, [preset])
   return createElement('div', null, surface.activePreset?.description.trim())
 }
-/* eslint-enable react-compiler/react-compiler */
+/* eslint-enable react-hooks/globals */
 
 function addPreset(id: string, malformed = false, name = id): Preset {
   const row = { ...marshalPreset(createNewLoomPreset(name)), id, created_at: 1, updated_at: 1 } as Preset

@@ -28,9 +28,9 @@ afterEach(() => {
   }
 })
 
-function layout(height: number, revision = 1) {
+function layout(height: number, revision = 1, overrides: Record<string, unknown> = {}) {
   return { version: 1, revision, width: 390, height, safeArea: { top: 47, right: 0, bottom: 34, left: 0 },
-    divisions: [], occlusions: [] }
+    divisions: [], occlusions: [], hingeStatus: 'unknown', ...overrides }
 }
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 const emit = (height: number, revision: number) => window.dispatchEvent(
@@ -76,4 +76,27 @@ test('ignores replies and layout events after disposal', async () => {
   resolveStatus(layout(844))
   await flush()
   expect(shellHeight()).toBe('')
+})
+
+test('publishes native foldable capability while closed and after opening', async () => {
+  stop = subscribeIOSNativeViewport(() => {})
+  resolveStatus(layout(678, 1, { isFoldable: true, hingeStatus: 'closed' }))
+  await flush()
+  const root = document.documentElement
+  expect(root.hasAttribute('data-ios-foldable')).toBe(true)
+  expect(root.getAttribute('data-ios-hinge')).toBe('closed')
+  window.dispatchEvent(new dom.window.CustomEvent('lumiverse:ios-layout', {
+    detail: layout(669, 2, { isFoldable: true, hingeStatus: 'fullyOpen' }),
+  }))
+  expect(root.hasAttribute('data-ios-foldable')).toBe(true)
+  expect(root.getAttribute('data-ios-hinge')).toBe('fullyOpen')
+})
+
+test('supports older wrapper hinge snapshots without identifying ordinary phones as foldable', async () => {
+  stop = subscribeIOSNativeViewport(() => {})
+  resolveStatus(layout(678, 1, { hingeStatus: 'closed' }))
+  await flush()
+  expect(document.documentElement.hasAttribute('data-ios-foldable')).toBe(true)
+  emit(844, 2)
+  expect(document.documentElement.hasAttribute('data-ios-foldable')).toBe(false)
 })

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { ANDROID_SHARP_BUNDLE } from "../src/sharp-preflight";
 
 // Package the same relocatable Android libraries used by the bundled APK.
 // Usage: bun scripts/package-android-sharp.ts <native-output> <app-commit> <output.tar.gz>
@@ -11,8 +12,12 @@ if (!directory || !output || !revision || !/^[a-f0-9]{40}$/.test(revision)) {
 const root = resolve(directory);
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const metadata = JSON.parse(readFileSync(join(root, "sharp.json"), "utf8"));
-if (metadata.version !== "0.34.5" || metadata.target !== "aarch64-linux-android" || metadata.api !== 29) {
+if (metadata.version !== ANDROID_SHARP_BUNDLE.version || metadata.libvips !== ANDROID_SHARP_BUNDLE.libvips
+  || metadata.target !== "aarch64-linux-android" || metadata.api !== 29) {
   throw new Error("Update the Android Sharp package pin before packaging a different native build.");
+}
+for (const [name, version] of Object.entries({ libvips: "8.18.7-2", libheif: "1.23.7", librsvg: "2.63.4" })) {
+  if (metadata.packages?.[name] !== version) throw new Error(`Android Sharp requires the verified ${name} ${version} build.`);
 }
 const files: Record<string, Uint8Array> = {};
 for (const library of metadata.libraries as Array<{ name: string; sha256: string }>) {
@@ -34,7 +39,10 @@ function addNotices(directory: string, prefix: string): void {
 addNotices(join(root, "notices"), "notices/");
 const manifest = JSON.stringify({
   format: 1, version: metadata.version, libvips: metadata.libvips, api: metadata.api,
-  source: { repository: "prolix-oc/Lumiverse-AndroidApp", revision },
+  packages: metadata.packages,
+  // The revision identifies the checkout base; hashes identify the actual
+  // build inputs, including any uncommitted changes used for this artifact.
+  source: { repository: "prolix-oc/Lumiverse-AndroidApp", revision, buildInputs: metadata.buildInputs },
   files: Object.fromEntries(Object.entries(files).sort(([a], [b]) => a.localeCompare(b)).map(([name, bytes]) => [name, sha256(bytes)])),
 }, null, 2) + "\n";
 files["manifest.json"] = new TextEncoder().encode(manifest);

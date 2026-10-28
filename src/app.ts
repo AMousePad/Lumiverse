@@ -3,7 +3,7 @@ import { Hono, type Handler } from "hono";
 import { cors } from "hono/cors";
 import { compress } from "./middleware/compress";
 import { bodyLimit } from "hono/body-limit";
-import { serveStatic } from "hono/bun";
+import { serveStatic } from "@hono/bun";
 import { websocket } from "./ws/transport";
 import { env } from "./env";
 import { auth } from "./auth";

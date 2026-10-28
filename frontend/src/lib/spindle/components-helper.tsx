@@ -113,7 +113,7 @@ import { canMovePresetEditorPromptVariables, movePresetEditorPromptVariable } fr
 // object passed from the extension runtime. This is an intentional escape hatch
 // from React's pure-render model, so the React Compiler cannot safely optimize
 // these components.
-/* eslint-disable react-compiler/react-compiler */
+/* eslint-disable react-hooks/immutability */
 
 // ── Tracking & lifecycle ──────────────────────────────────────────────────
 
@@ -2024,4 +2024,4 @@ export function createComponentsHelper(
   }
 }
 
-/* eslint-enable react-compiler/react-compiler */
+/* eslint-enable react-hooks/immutability */

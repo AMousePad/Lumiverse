@@ -18,6 +18,7 @@ WORKDIR /app/frontend
 
 # Install dependencies first (cache layer)
 COPY frontend/package.json frontend/bun.lock* ./
+COPY frontend/patches/ ./patches/
 COPY frontend/scripts/postinstall-bindings.cjs ./scripts/
 # Fail loudly if the lockfile is missing or out of sync. Do NOT fall back to a
 # non-frozen `bun install` — that silently re-resolves caret ranges and lets the

@@ -2043,9 +2043,6 @@ function PromptBehaviorSettings({ promptBehavior, onSave }: { promptBehavior: an
 // ============================================================================
 
 function CompletionSettingsPanel({ completionSettings, onSave }: { completionSettings: any; onSave: (updates: Record<string, any>) => void }) {
-  // The compiler's hook-name heuristic falsely flags the `useSystemPrompt`
-  // boolean setting as a Hook reference. Suppress only this component.
-  /* eslint-disable react-compiler/react-compiler */
   const { t } = useLb()
   const { continuePostfixOptions } = useLoomOptionLabels()
   const [isExpanded, setIsExpanded] = useState(false)
@@ -2111,7 +2108,6 @@ function CompletionSettingsPanel({ completionSettings, onSave }: { completionSet
       )}
     </div>
   )
-  /* eslint-enable react-compiler/react-compiler */
 }
 
 // ============================================================================

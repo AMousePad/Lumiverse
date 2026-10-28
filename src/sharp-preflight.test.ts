@@ -16,7 +16,7 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 
 async function fixture(overrides: Record<string, string> = {}) {
   const files = { "lib/libsharp.so": "binding", "lib/libvips_42.so": "vips", "lib/libvips-heif.so": "heif", "lib/libvips-jxl.so": "jxl", ...overrides };
-  const manifest = JSON.stringify({ format: 1, version: "0.34.5", libvips: "8.18.7-1", api: 29,
+  const manifest = JSON.stringify({ format: 1, version: "0.35.5", libvips: "8.18.7-2", api: 29,
     files: Object.fromEntries(Object.entries(files).map(([name, value]) => [name, hash(value)])) });
   const archive = await new Bun.Archive({ ...files, "manifest.json": manifest }, { compress: "gzip" }).bytes();
   const bundle = { ...ANDROID_SHARP_BUNDLE, sha256: hash(archive), manifestSha256: hash(manifest) };
@@ -67,28 +67,41 @@ test("native Android installs the Sharp loader and codecs again after node_modul
   const directory = root(), input = await fixture();
   const sharp = join(directory, "node_modules/sharp");
   mkdirSync(sharp, { recursive: true });
-  writeFileSync(join(sharp, "package.json"), JSON.stringify({ version: "0.34.5" }));
+  writeFileSync(join(sharp, "package.json"), JSON.stringify({ version: "0.35.5" }));
   const env: NodeJS.ProcessEnv = {};
   const options = { workspaceRoot: directory, platform: "android", arch: "arm64", env, ...input };
   await configureSharpNativeOverride(options);
-  const wrapper = join(directory, "node_modules/@img/sharp-android-arm64");
-  expect(JSON.parse(readFileSync(join(wrapper, "package.json"), "utf8")).exports["./sharp.node"]).toBe("./index.cjs");
-  expect(readFileSync(join(wrapper, "index.cjs"), "utf8")).toContain("libc.symbols.setenv");
+  const localBuild = join(sharp, "src/build/Release");
+  const binding = join(localBuild, "sharp-android-arm64-0.35.5.node");
+  expect(readFileSync(binding, "utf8")).toContain("process.dlopen(module,");
+  expect(readFileSync(binding, "utf8")).toContain("lib/libsharp.so");
   expect(readFileSync(join(env.VIPSHOME!, "lib/vips-modules-8.18/vips-heif.so"), "utf8")).toBe("heif");
-  rmSync(wrapper, { recursive: true });
+  rmSync(localBuild, { recursive: true });
   await configureSharpNativeOverride(options);
-  expect(existsSync(join(wrapper, "index.cjs"))).toBe(true);
+  expect(readFileSync(binding, "utf8")).toContain("process.dlopen(module,");
   expect(input.downloads()).toBe(1);
   writeFileSync(join(sharp, "package.json"), JSON.stringify({ version: "0.35.0" }));
   await expect(configureSharpNativeOverride(options)).rejects.toThrow("installed 0.35.0");
 });
 
-test("Linux/proot, other architectures and the APK's installed engine bypass the standalone installer", async () => {
+test("Linux/proot and other architectures bypass the standalone installer", async () => {
   const directory = root();
   for (const options of [
     { platform: "linux", arch: "arm64", env: { LUMIVERSE_IS_TERMUX: "true" } },
     { platform: "android", arch: "x64", env: {} },
-    { platform: "android", arch: "arm64", env: { LUMIVERSE_NATIVE_DIR: "/installed/apk/lib" } },
   ]) await configureSharpNativeOverride({ ...options, workspaceRoot: directory });
+  expect(existsSync(join(directory, "vendor"))).toBe(false);
+});
+
+test("the APK links its installed native binding without downloading a standalone engine", async () => {
+  const directory = root(), native = join(directory, "apk-native");
+  mkdirSync(native, { recursive: true });
+  writeFileSync(join(native, "libsharp.so"), "apk binding");
+  const sharp = join(directory, "node_modules/sharp");
+  mkdirSync(sharp, { recursive: true });
+  writeFileSync(join(sharp, "package.json"), JSON.stringify({ version: "0.35.5" }));
+  await configureSharpNativeOverride({ workspaceRoot: directory, platform: "android", arch: "arm64",
+    env: { LUMIVERSE_NATIVE_DIR: native }, fetchBundle: async () => { throw new Error("Unexpected download"); } });
+  expect(readFileSync(join(sharp, "src/build/Release/sharp-android-arm64-0.35.5.node"), "utf8")).toContain(join(native, "libsharp.so"));
   expect(existsSync(join(directory, "vendor"))).toBe(false);
 });

@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const ANDROID_SHARP_BUNDLE = {
-  version: "0.34.5",
-  id: "0.34.5-r1",
-  libvips: "8.18.7-1",
-  url: "https://github.com/prolix-oc/Lumiverse/releases/download/android-sharp-v0.34.5-r1/lumiverse-sharp-android-arm64.tar.gz",
-  sha256: "cef22f8f4c09e5a6ebeea4131f5eadec7e2682444809527ce500b46c37cabecb",
-  manifestSha256: "887965de95a8b0b810cd79fb0ddd55f6cc34b27d8a98b5d9e12eebe8fa8f9955",
+  version: "0.35.5",
+  id: "0.35.5-r1",
+  libvips: "8.18.7-2",
+  url: "https://github.com/prolix-oc/Lumiverse/releases/download/android-sharp-v0.35.5-r1/lumiverse-sharp-android-arm64.tar.gz",
+  sha256: "d7beee5c7e5cf4248be620963de6bdf2c1193923509bd89ba1c10e41207a01cd",
+  manifestSha256: "0eea8a45a7ecebddfb6f7b80706f090838d3adcb445088a5551716ee339ce807",
 };
 
 type Bundle = typeof ANDROID_SHARP_BUNDLE;
@@ -98,9 +98,8 @@ export async function configureSharpNativeOverride(options: {
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
   const env = options.env ?? process.env;
-  // Glibc/proot runtimes use the official Linux binding. The APK host already
-  // installs its own Android binding and codec paths in nativeLibraryDir.
-  if (platform !== "android" || arch !== "arm64" || env.LUMIVERSE_NATIVE_DIR) return;
+  // Glibc/proot runtimes use the official Linux binding.
+  if (platform !== "android" || arch !== "arm64") return;
   const root = options.workspaceRoot ?? resolve(import.meta.dir, "..");
   const bundle = options.bundle ?? ANDROID_SHARP_BUNDLE;
   const sharpPackage = join(root, "node_modules", "sharp", "package.json");
@@ -108,28 +107,45 @@ export async function configureSharpNativeOverride(options: {
   if (installedVersion !== bundle.version) {
     throw new Error(`Android Sharp requires sharp ${bundle.version}; installed ${installedVersion}. Update the native engine pin with the package.`);
   }
-  const directory = await installAndroidSharp(root, bundle, options.fetchBundle);
-  const modules = join(directory, "vips", "lib", "vips-modules-8.18");
-  mkdirSync(modules, { recursive: true });
-  for (const codec of ["heif", "jxl"]) {
-    const link = join(modules, `vips-${codec}.so`);
-    rmSync(link, { force: true });
-    symlinkSync(join(directory, "lib", `libvips-${codec}.so`), link);
+  let binding: string;
+  if (env.LUMIVERSE_NATIVE_DIR) {
+    if (!isAbsolute(env.LUMIVERSE_NATIVE_DIR)) throw new Error("The APK native library directory must be absolute");
+    // The APK host sets VIPSHOME and installs codecs before launching Bun.
+    binding = join(env.LUMIVERSE_NATIVE_DIR, "libsharp.so");
+  } else {
+    const directory = await installAndroidSharp(root, bundle, options.fetchBundle);
+    const modules = join(directory, "vips", "lib", "vips-modules-8.18");
+    mkdirSync(modules, { recursive: true });
+    for (const codec of ["heif", "jxl"]) {
+      const link = join(modules, `vips-${codec}.so`);
+      rmSync(link, { force: true });
+      symlinkSync(join(directory, "lib", `libvips-${codec}.so`), link);
+    }
+    env.VIPSHOME = join(directory, "vips");
+    // Android Bun 1.4.4's process.env updates do not reach native getenv().
+    // libvips needs its plugin home in libc before the addon initializes.
+    if (process.platform === "android") {
+      const { dlopen } = await import("bun:ffi");
+      const libc = dlopen("libc.so", { setenv: { args: ["ptr", "ptr", "i32"], returns: "i32" } });
+      try {
+        if (libc.symbols.setenv(Buffer.from("VIPSHOME\0"), Buffer.from(env.VIPSHOME + "\0"), 1) !== 0)
+          throw new Error("Could not configure Android libvips codec discovery");
+      } finally { libc.close(); }
+    }
+    binding = join(directory, "lib", "libsharp.so");
   }
-  env.VIPSHOME = join(directory, "vips");
+  // Bun follows symlinks before selecting its loader, so pointing a .node link
+  // directly at libsharp.so parses the ELF as JavaScript. Use an explicit
+  // process.dlopen wrapper, as the APK does for its other native bindings.
   const wrapper = join(root, "node_modules", "@img", "sharp-android-arm64");
   mkdirSync(wrapper, { recursive: true });
-  writeFileSync(join(wrapper, "package.json"), JSON.stringify({ name: "@img/sharp-android-arm64", version: bundle.version,
-    main: "index.cjs", exports: { ".": "./index.cjs", "./sharp.node": "./index.cjs", "./package.json": "./package.json" } }));
-  writeFileSync(join(wrapper, "index.cjs"), `if (process.platform !== 'android' || process.arch !== 'arm64') throw new Error('Android Sharp requires Android ARM64');
-// Android Bun 1.4.4's process.env updates do not reach native getenv().
-// Set libvips' plugin home in libc before the addon initializes its codecs.
-const { dlopen } = require('bun:ffi');
-const libc = dlopen('libc.so', { setenv: { args: ['ptr', 'ptr', 'i32'], returns: 'i32' } });
-try {
-  if (libc.symbols.setenv(Buffer.from('VIPSHOME\\0'), Buffer.from(${JSON.stringify(join(directory, "vips") + "\0")}), 1) !== 0)
-    throw new Error('Could not configure Android libvips codec discovery');
-} finally { libc.close(); }
-process.dlopen(module, ${JSON.stringify(join(directory, "lib", "libsharp.so"))});
-`);
+  const entry = join(wrapper, "index.cjs");
+  writeFileSync(entry, `process.dlopen(module, ${JSON.stringify(binding)});\n`);
+  // Sharp 0.35 uses a fixed platform switch with no Android case. Its local
+  // build lookup runs first and reaches the same verified native binding.
+  const localBuild = join(root, "node_modules", "sharp", "src", "build", "Release");
+  mkdirSync(localBuild, { recursive: true });
+  const link = join(localBuild, `sharp-android-arm64-${bundle.version}.node`);
+  rmSync(link, { force: true });
+  symlinkSync(entry, link);
 }

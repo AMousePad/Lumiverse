@@ -53,6 +53,8 @@ test('rejects malformed bridge geometry', () => {
   expect(isIOSLayoutSnapshot(snapshot({ width: NaN }))).toBe(false)
   expect(isIOSLayoutSnapshot({ ...snapshot(), divisions: [{ x: 400, y: 0, width: -1, height: 720, isActive: true }] })).toBe(false)
   expect(resolveDuoLayout(null, 'right')).toBeNull()
+  expect(isIOSLayoutSnapshot({ ...snapshot(), isFoldable: 'true' })).toBe(false)
+  expect(isIOSLayoutSnapshot(snapshot({ isFoldable: true, hingeStatus: 'closed', divisions: [] }))).toBe(true)
 })
 
 const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')

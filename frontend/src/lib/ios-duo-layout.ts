@@ -10,6 +10,8 @@ export interface IOSLayoutSnapshot {
   horizontalSizeClass: number
   verticalSizeClass: number
   hingeStatus: string
+  /** Native hinge capability, retained on the outer display while folded. */
+  isFoldable?: boolean
   safeArea: { top: number; right: number; bottom: number; left: number }
   divisions: IOSReservedRegion[]
   occlusions: IOSReservedRegion[]
@@ -32,6 +34,7 @@ export function isIOSLayoutSnapshot(value: unknown): value is IOSLayoutSnapshot 
   if (!value || typeof value !== 'object') return false
   const s = value as IOSLayoutSnapshot
   return s.version === 1 && finite(s.revision) && finite(s.width) && s.width > 0 && finite(s.height) && s.height > 0
+    && (s.isFoldable === undefined || typeof s.isFoldable === 'boolean')
     && !!s.safeArea && [s.safeArea.top, s.safeArea.right, s.safeArea.bottom, s.safeArea.left].every(v => finite(v) && v >= 0)
     && Array.isArray(s.divisions) && s.divisions.every(isRect) && Array.isArray(s.occlusions) && s.occlusions.every(isRect)
 }

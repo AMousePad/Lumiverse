@@ -7,6 +7,7 @@ import type { Message } from '@/types/api'
 import type { STTEngine, STTResult } from '@/lib/sttEngine'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://lumiverse.test', pretendToBeVisual: true })
+const resizeObservers = new Map<Element, (entries: { contentRect: { width: number } }[]) => void>()
 Object.assign(globalThis, {
   window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
   localStorage: dom.window.localStorage, HTMLElement: dom.window.HTMLElement,
@@ -15,7 +16,13 @@ Object.assign(globalThis, {
   requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
   cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
   MutationObserver: class { observe() {} disconnect() {} },
-  ResizeObserver: class { observe() {} disconnect() {} unobserve() {} },
+  ResizeObserver: class {
+    targets = new Set<Element>()
+    constructor(private callback: (entries: { contentRect: { width: number } }[]) => void) {}
+    observe(target: Element) { this.targets.add(target); resizeObservers.set(target, this.callback) }
+    disconnect() { for (const target of this.targets) resizeObservers.delete(target) }
+    unobserve(target: Element) { this.targets.delete(target); resizeObservers.delete(target) }
+  },
 })
 Object.assign(dom.window, {
   matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
@@ -140,6 +147,24 @@ afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
   consoleError.mockRestore()
+})
+
+test('rewrapped drafts resize when folding narrows the composer without editing text', async () => {
+  const textarea = host.querySelector<HTMLTextAreaElement>('textarea[name="chat-message"]')!
+  let scrollHeight = 36
+  Object.defineProperty(textarea, 'scrollHeight', { get: () => scrollHeight })
+  const resize = resizeObservers.get(textarea)!
+  expect(resize).toBeDefined()
+  resize([{ contentRect: { width: 480 } }])
+  expect(textarea.style.height).toBe('36px')
+  scrollHeight = 72
+  resize([{ contentRect: { width: 180 } }])
+  expect(textarea.style.height).toBe('72px')
+  expect(textarea.value).toBe('my work')
+  expect(saved().text).toBe('my work')
+  scrollHeight = 36
+  resize([{ contentRect: { width: 480 } }])
+  expect(textarea.style.height).toBe('36px')
 })
 
 test('failed sends retain the editable message, persist through refresh, and can be retried', async () => {

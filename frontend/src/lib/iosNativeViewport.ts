@@ -6,7 +6,13 @@ import { subscribeIOSLayout } from './ios-duo-layout'
  * These are scene dimensions, so rotation and iPad window resizing still work. */
 export function subscribeIOSNativeViewport(onHeight: (height: number) => void): () => void {
   return subscribeIOSLayout(layout => {
-    document.documentElement.style.setProperty('--ios-native-viewport-height', `${layout.height}px`)
+    const root = document.documentElement
+    root.style.setProperty('--ios-native-viewport-height', `${layout.height}px`)
+    // Older wrappers already report hinge state/regions. Prefer the explicit
+    // capability on new wrappers, with native geometry as a compatible fallback.
+    const foldable = layout.isFoldable ?? (['closed', 'partiallyOpen', 'fullyOpen'].includes(layout.hingeStatus) || layout.divisions.length > 0)
+    root.toggleAttribute('data-ios-foldable', foldable)
+    root.setAttribute('data-ios-hinge', layout.hingeStatus ?? 'unknown')
     onHeight(layout.height)
   })
 }
