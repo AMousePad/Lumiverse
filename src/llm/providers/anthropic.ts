@@ -1,4 +1,5 @@
 import type { LlmProvider } from "../provider";
+import { omitDisabledPenalties } from "../generation-parameters";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import {
@@ -849,7 +850,7 @@ export class AnthropicProvider implements LlmProvider {
   ]);
 
   protected buildBody(request: GenerationRequest, stream: boolean): any {
-    const params = request.parameters || {};
+    const params = omitDisabledPenalties(request.parameters);
     const omitSampling = this.omitsSamplingParams(request.model);
     const systemBlocks: Array<Record<string, unknown>> = [];
     const normalizedMessages: Array<{

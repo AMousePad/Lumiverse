@@ -1,4 +1,5 @@
 import { parseGoogleResponse, readGoogleStream } from "./google-response";
+import { omitDisabledPenalties } from "../generation-parameters";
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import { fetchWithPreflightAbort, readJsonWithAbort } from "../stream-utils";
@@ -725,7 +726,7 @@ export class GoogleVertexProvider implements LlmProvider {
   ]);
 
   private buildBody(request: GenerationRequest): any {
-    const params = request.parameters || {};
+    const params = omitDisabledPenalties(request.parameters);
 
     // Vertex exposes a single systemInstruction. Preserve any system message
     // after the leading prefix in-place as user-role content so configured

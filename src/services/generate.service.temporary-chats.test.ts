@@ -158,6 +158,22 @@ test("temporary chats with a preset still apply its blocks, sampler, and Continu
   expect(continued.content).toBe(`Reply.${POSTFIX_MARKER}Reply.`);
 });
 
+test("dry runs omit disabled penalty overrides while preserving enabled values", async () => {
+  const chat = await createChat();
+  const parameters = { repetition_penalty: 0, frequency_penalty: 0, presence_penalty: 0.5, seed: 0 };
+  const preview = await dryRunGeneration({
+    userId: USER, chat_id: chat.id, connection_id: connectionId,
+    messages: [{ role: "user", content: "Hello" }],
+    parameters,
+  });
+
+  expect(preview.parameters).not.toHaveProperty("repetition_penalty");
+  expect(preview.parameters).not.toHaveProperty("frequency_penalty");
+  expect(preview.parameters.presence_penalty).toBe(0.5);
+  expect(preview.parameters.seed).toBe(0);
+  expect(parameters.repetition_penalty).toBe(0);
+});
+
 test("dry runs preserve media, tool parts and reasoning only when opted in", async () => {
   const chat = await createChat();
   const messages: LlmMessage[] = [{

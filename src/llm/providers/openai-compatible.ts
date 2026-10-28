@@ -1,4 +1,5 @@
 import { describeGenerationStop } from "../generation-stop";
+import { omitDisabledPenalties } from "../generation-parameters";
 import { incompleteStream, readProviderSse, throwIfProviderError } from "../provider-sse";
 import type { LlmProvider } from "../provider";
 import type { ProviderCapabilities } from "../param-schema";
@@ -462,7 +463,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
 
   /** Build the request body using capabilities as the parameter allowlist. */
   protected buildBody(request: GenerationRequest, stream: boolean): any {
-    const params = request.parameters || {};
+    const params = omitDisabledPenalties(request.parameters);
     const allowed = this.capabilities.parameters;
 
     const body: any = {

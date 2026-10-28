@@ -282,7 +282,7 @@ export class WebSocketClient {
   }
 
   private startPing() {
-    if (this.lifecyclePaused || !this.isDocumentVisible()) return
+    if (this.lifecyclePaused || (!this.isDocumentVisible() && !this.keepsAndroidConnection())) return
     this.stopPing()
     const generation = ++this.heartbeatGeneration
     if (this.ensureHeartbeatWorker()) {
@@ -458,7 +458,7 @@ export class WebSocketClient {
     // doesn't fire a spurious resume-check ping. onopen → forcePing already
     // verifies round-trip for the initial connection.
     this.wasVisible = this.isDocumentVisible()
-    this.lifecyclePaused = !this.wasVisible
+    this.lifecyclePaused = !this.wasVisible && !this.keepsAndroidConnection()
 
     const onVisibilityChange = () => {
       if (this.isDocumentVisible()) this.resumeFromBackground()
@@ -609,7 +609,7 @@ export class WebSocketClient {
   }
 
   private sendStreamFocus(forceHidden = false) {
-    const chatId = !forceHidden && this.isDocumentFocused() ? this.focusedChatId : null
+    const chatId = ((!forceHidden && this.isDocumentFocused()) || this.keepsAndroidConnection()) ? this.focusedChatId : null
     this.send({ type: 'stream_focus', chatId })
   }
 
@@ -665,7 +665,19 @@ export class WebSocketClient {
     return this.isDocumentVisible() && document.hasFocus()
   }
 
+  /** The new Android wrapper protects JS with a foreground service and wake lock.
+   * Presence remains hidden, but token subscriptions and liveness must continue for TTS. */
+  private keepsAndroidConnection() {
+    return (window as Window & { __LUMIVERSE_ANDROID_BACKGROUND_CONNECTION__?: boolean })
+      .__LUMIVERSE_ANDROID_BACKGROUND_CONNECTION__ === true
+  }
+
   private pauseForBackground() {
+    if (this.keepsAndroidConnection()) {
+      this.lifecyclePaused = false
+      this.startPing()
+      return
+    }
     if (this.lifecyclePaused) return
     this.lifecyclePaused = true
     this.wasVisible = false
@@ -749,10 +761,9 @@ export class WebSocketClient {
 
   private scheduleReconnect(foregroundRecovery = false) {
     if (this.reconnectTimer) return
-    // Background timers are not reliable and reconnecting a socket that the OS
-    // is about to suspend wastes resources. Foreground lifecycle handlers will
-    // restart recovery.
-    if (!this.isDocumentVisible()) return
+    // Suspended browser/iOS sessions recover on foreground. The Android wrapper
+    // explicitly protects its timers and connection while backgrounded.
+    if (!this.isDocumentVisible() && !this.keepsAndroidConnection()) return
     const delay = foregroundRecovery
       ? RESUME_RECONNECT_SETTLE_MS
       : Math.min(INITIAL_RECONNECT_MS * (2 ** this.reconnectAttempts), MAX_RECONNECT_MS)

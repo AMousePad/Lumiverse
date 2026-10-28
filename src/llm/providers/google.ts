@@ -1,4 +1,5 @@
 import { parseGoogleResponse, readGoogleStream } from "./google-response";
+import { omitDisabledPenalties } from "../generation-parameters";
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import { fetchWithPreflightAbort, readJsonWithAbort } from "../stream-utils";
@@ -204,7 +205,7 @@ export class GoogleProvider implements LlmProvider {
   ]);
 
   private buildBody(request: GenerationRequest): any {
-    const params = request.parameters || {};
+    const params = omitDisabledPenalties(request.parameters);
 
     // Gemini has one top-level systemInstruction, so lift only the contiguous
     // leading prefix. Later system messages are mapped to user-role contents

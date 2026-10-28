@@ -1,4 +1,5 @@
 import { readGenerationVariableSeed } from "../db/swipe-variable-state";
+import { omitDisabledPenalties } from "../llm/generation-parameters";
 import { withVariableValues } from "../utils/variable-checkpoint";
 import {
   getTextContent,
@@ -7756,7 +7757,7 @@ export function buildParameters(
     applyProviderReasoningOffSwitch(params, providerName, modelName);
   }
 
-  return params;
+  return omitDisabledPenalties(params);
 }
 
 /**

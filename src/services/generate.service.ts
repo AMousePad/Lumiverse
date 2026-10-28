@@ -2,6 +2,7 @@ import { processResponseText, type PreparedResponseContext } from "./generation/
 import { readVariableValues } from "../utils/variable-checkpoint";
 import { getActiveFrontendSession } from "../spindle/frontend-session";
 import { describeGenerationStop } from "../llm/generation-stop";
+import { omitDisabledPenalties } from "../llm/generation-parameters";
 import type { LlmProvider } from "../llm/provider";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -3199,7 +3200,7 @@ export async function dryRunGeneration(
 
   // Build ground-truth outbound parameters: strip internal-only keys that
   // never reach the provider, and inject defaults the provider would add.
-  const outboundParams: Record<string, any> = { ...pipeline.parameters };
+  const outboundParams = omitDisabledPenalties(pipeline.parameters);
   delete outboundParams.max_context_length;
   delete outboundParams._include_usage;
 

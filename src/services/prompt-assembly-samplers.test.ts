@@ -23,6 +23,40 @@ function samplerOverrides(
 }
 
 describe("sampler parameter assembly", () => {
+  const penalties = [
+    ["frequencyPenalty", "frequency_penalty"],
+    ["presencePenalty", "presence_penalty"],
+    ["repetitionPenalty", "repetition_penalty"],
+  ] as const;
+
+  for (const [samplerKey, apiKey] of penalties) {
+    for (const value of [null, 0]) {
+      test(`omits ${apiKey} when its sampler is ${value === null ? "off" : "zero"}`, () => {
+        expect(buildParameters(samplerOverrides({ [samplerKey]: value }), null))
+          .not.toHaveProperty(apiKey);
+      });
+
+      test(`omits ${apiKey} when a custom body sets it to ${value}`, () => {
+        const parameters = buildParameters(
+          samplerOverrides({ [samplerKey]: 1.2 }),
+          null,
+          { customBody: { enabled: true, rawJson: JSON.stringify({ [apiKey]: value }) } },
+        );
+
+        expect(parameters).not.toHaveProperty(apiKey);
+      });
+    }
+
+    test(`omits ${apiKey} when sampler overrides are disabled`, () => {
+      expect(buildParameters(samplerOverrides({ enabled: false, [samplerKey]: 1.2 }), null))
+        .not.toHaveProperty(apiKey);
+    });
+
+    test(`preserves an enabled ${apiKey}`, () => {
+      expect(buildParameters(samplerOverrides({ [samplerKey]: 1.2 }), null)[apiKey]).toBe(1.2);
+    });
+  }
+
   test("omits Top P when its include checkbox is unchecked", () => {
     const parameters = buildParameters(
       samplerOverrides({ topP: null }),
