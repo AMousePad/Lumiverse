@@ -548,6 +548,38 @@ describe('WorldBookEntriesSection token-count invalidation', () => {
     })
   }
 
+  for (const key of ['Escape', 'Enter']) test(`live order updates preserve quick-control drafts and use the latest revision on ${key}`, async () => {
+    const original = entry('quick-live-entry')
+    const { root, host } = await render([original])
+    try {
+      const input = host.querySelector<HTMLInputElement>('input[aria-label="order: quick-live-entry"]')!
+      act(() => {
+        input.focus()
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(input, '42')
+        input.dispatchEvent(new window.Event('input', { bubbles: true }))
+      })
+      const server = { ...original, order_value: 100, revision: 8 }
+      listEntriesResult = { data: [server], total: 1 }
+      await act(async () => {
+        wsHandlers.get('world-book-entry-changed')?.({ id: original.id, worldBookId: book.id, entry: server })
+        await flush()
+      })
+      expect(host.querySelector('input[aria-label="order: quick-live-entry"]') === input).toBe(true)
+      expect(document.activeElement === input).toBe(true)
+      expect(input.value).toBe('42')
+      updateDeferred = createDeferred<WorldBookEntry>()
+      act(() => { input.dispatchEvent(new window.KeyboardEvent('keydown', { key, bubbles: true })) })
+      if (key === 'Escape') {
+        expect(input.value).toBe('100')
+        expect(updateCalls).toHaveLength(0)
+      } else {
+        expect(updateCalls).toEqual([{ bookId: book.id, entryId: original.id, input: { order_value: 42, expected_revision: 8 } }])
+        await act(async () => { updateDeferred!.resolve({ ...server, order_value: 42, revision: 9 }); await flush() })
+        expect(input.value).toBe('42')
+      }
+    } finally { unmount(root) }
+  })
+
   test('renders stable row and token-cell anchors with an immediate estimate', async () => {
     const { root, host } = await render([entry('entry-anchor', '12345678')])
     try {

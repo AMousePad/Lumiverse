@@ -74,6 +74,7 @@ import { ModalPresentation } from '@/components/shared/ModalPresentation'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import { FormField, Select, TextInput, Button } from '@/components/shared/FormComponents'
 import Pagination from '@/components/shared/Pagination'
+import NumericInput from '@/components/shared/NumericInput'
 import EntryOrganizationControls, { EntryFolderList, type EntryOrganizationHandle } from './EntryOrganizationControls'
 import { useStore } from '@/store'
 import type {
@@ -576,27 +577,15 @@ const EntryRowContent = memo(function EntryRowContent({
                   {...controlWrapProps}
                 >
                   <Hash size={10} aria-hidden="true" />
-                  <input
-                    key={entry.order_value}
+                  <NumericInput
                     className={styles.orderInput}
-                    type="number"
                     step="1"
-                    defaultValue={entry.order_value}
+                    value={entry.order_value}
+                    integer
+                    commitOnBlur
                     aria-label={`${tEntryFields('order')}: ${entry.comment || entry.uid}`}
-                    onKeyDown={(event) => {
-                      event.stopPropagation()
-                      if (event.key === 'Escape') {
-                        event.currentTarget.value = String(entry.order_value)
-                        event.currentTarget.blur()
-                      } else if (event.key === 'Enter') event.currentTarget.blur()
-                    }}
-                    onBlur={(event) => {
-                      const input = event.currentTarget
-                      const next = input.valueAsNumber
-                      if (input.validity.valid && Number.isSafeInteger(next) && next !== entry.order_value) {
-                        onUpdate(entry.id, { order_value: next })
-                      } else input.value = String(entry.order_value)
-                    }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    onChange={(order_value) => onUpdate(entry.id, { order_value })}
                   />
                 </span>
                 {showTokens && <EntryTokenCell bookId={bookId} entry={entry} selected={selected || expanded} />}
