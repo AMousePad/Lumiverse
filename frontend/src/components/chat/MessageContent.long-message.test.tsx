@@ -105,6 +105,8 @@ mock.module('react-i18next', () => ({
 mock.module('@/i18n', () => ({
   default: { t: translate },
   changeUiLanguage: async () => {},
+  applyLoginLanguage: async () => {},
+  changeLoginLanguage: async () => {},
   ensureLanguageLoaded: async () => {},
   initI18n: async () => ({ t: translate }),
   UI_LANGUAGE_STORAGE_KEY: 'lumiverse-ui-language',
