@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
+import { UI_LANGUAGES } from './languages'
 
 const I18N = import.meta.dir
 const SRC = `${I18N}/..`
@@ -47,7 +48,7 @@ describe('ko locale', () => {
     const index = readFileSync(`${I18N}/index.ts`, 'utf8')
     const resources = readFileSync(`${I18N}/resources.ts`, 'utf8')
     const switcher = readFileSync(`${SRC}/components/shared/LanguageSwitcher.tsx`, 'utf8')
-    expect(index).toMatch(/const SUPPORTED = \[[^\]]*'ko'[^\]]*\]/)
+    expect(UI_LANGUAGES).toContain('ko')
     expect(index).toContain("if (nav.startsWith('ko')) return 'ko'")
     expect(index).toContain("ko: ['en'],")
     expect(resources).toContain("ko: import.meta.glob('./locales/ko/*.json')")

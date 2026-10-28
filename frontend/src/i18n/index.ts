@@ -1,6 +1,7 @@
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
+import { UI_LANGUAGES, isUiLanguage } from './languages'
 import {
   I18N_NAMESPACES,
   type I18nNamespace,
@@ -9,8 +10,6 @@ import {
 } from './resources'
 
 export const UI_LANGUAGE_STORAGE_KEY = 'lumiverse-ui-language'
-
-const SUPPORTED = ['en', 'zh', 'zh-TW', 'ja', 'fr', 'it', 'de', 'ko'] as const
 
 /** Longest first so a longer namespace wins over a shorter prefix of it. */
 const NAMESPACES_BY_LENGTH = [...I18N_NAMESPACES].sort((a, b) => b.length - a.length)
@@ -47,7 +46,7 @@ type ResourceStore = Record<string, Partial<Record<I18nNamespace, Record<string,
 function detectInitialLanguage(): string {
   try {
     const stored = localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)
-    if (stored && SUPPORTED.includes(stored as (typeof SUPPORTED)[number])) return stored
+    if (isUiLanguage(stored)) return stored
   } catch {
     /* ignore */
   }
@@ -114,7 +113,7 @@ export function initI18n(): Promise<typeof i18n> {
             ko: ['en'],
             default: ['en'],
           },
-          supportedLngs: [...SUPPORTED],
+          supportedLngs: [...UI_LANGUAGES],
           nonExplicitSupportedLngs: true,
           load: 'currentOnly',
           defaultNS: 'common',
@@ -133,8 +132,11 @@ export function initI18n(): Promise<typeof i18n> {
   return initPromise
 }
 
-export async function changeUiLanguage(code: string): Promise<void> {
+export async function changeUiLanguage(code: string, isCurrent: () => boolean = () => true): Promise<void> {
+  if (!isUiLanguage(code)) return
   await ensureLanguageLoaded(code)
+  // Locale chunks can finish after another selection or an account change.
+  if (!isCurrent()) return
   await i18n.changeLanguage(code)
   try {
     localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, code)

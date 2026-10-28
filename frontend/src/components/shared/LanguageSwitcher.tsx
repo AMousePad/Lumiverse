@@ -1,6 +1,8 @@
 import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
 import { changeUiLanguage } from '@/i18n'
+import { isUiLanguage } from '@/i18n/languages'
+import { useStore } from '@/store'
 import sectionStyles from '@/components/settings/SettingsSection.module.css'
 import styles from './LanguageSwitcher.module.css'
 
@@ -36,7 +38,13 @@ export default function LanguageSwitcher({ className }: LanguageSwitcherProps) {
   const current = resolveUiLanguage(i18n.resolvedLanguage)
 
   const setLanguage = (code: string) => {
-    void changeUiLanguage(code)
+    if (!isUiLanguage(code)) return
+    const state = useStore.getState()
+    if (state.isAuthenticated) {
+      state.setSetting('uiLanguage', code)
+    } else {
+      void changeUiLanguage(code)
+    }
   }
 
   return (

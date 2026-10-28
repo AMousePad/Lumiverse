@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, EnterToSendSettings, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource, ToastPosition } from '@/types/store'
 import { settingsApi } from '@/api/settings'
+import { isUiLanguage } from '@/i18n/languages'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
 import { activeTab } from '@/lib/active-tab'
@@ -32,6 +33,7 @@ export const REASONING_DEFAULTS: ReasoningSettings = {
 
 /** Keys that represent persisted data (not functions) */
 export const DATA_KEYS: ReadonlySet<string> = new Set([
+  'uiLanguage',
   'landingPageChatsDisplayed',
   'landingPageLayoutMode',
   'landingPageGalleryWidth',
@@ -170,7 +172,8 @@ function isToastPosition(value: unknown): value is ToastPosition {
   return typeof value === 'string' && TOAST_POSITIONS.has(value)
 }
 
-function isValidGreetingImageSetting(key: string, value: unknown): boolean {
+function isValidSettingValue(key: string, value: unknown): boolean {
+  if (key === 'uiLanguage') return isUiLanguage(value)
   if (key === 'showGreetingImage') return typeof value === 'boolean'
   if (key === 'greetingImagePosition') return value === 'top' || value === 'bottom'
   return true
@@ -693,6 +696,7 @@ if (typeof window !== 'undefined') {
 }
 
 export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> = (set, get) => ({
+  uiLanguage: null,
   settingsLoaded: false,
   fullSettingsLoaded: false,
   landingPageChatsDisplayed: 12,
@@ -933,6 +937,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }),
 
   setSetting: (key, value, source: SettingsWriteSource = 'user') => {
+    if (key === 'uiLanguage' && !isUiLanguage(value)) return
     if (key === 'inputBarEnterToSend') {
       get().setInputBarEnterToSend(value as EnterToSendSettings)
       return
@@ -1332,7 +1337,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           // Drop values outside the ToastPosition union; the startup payload
           // validates identically so the two hydration paths cannot disagree.
           || (canonicalKey === 'toastPosition' && !isToastPosition(row.value))
-          || !isValidGreetingImageSetting(canonicalKey, row.value)
+          || !isValidSettingValue(canonicalKey, row.value)
         ) continue
         const storedValue = migrateStoredSettingValue(canonicalKey, row.value)
         if (canonicalKey === 'quickToolbarSettings' && !pendingValuesMatch(storedValue, row.value)) {
@@ -1371,7 +1376,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           if (
             !DATA_KEYS.has(k)
             || hasNewerLocalSetting(k, localRevisionAtLoadStart)
-            || !isValidGreetingImageSetting(k, v)
+            || !isValidSettingValue(k, v)
           ) continue
           const pendingValue = migrateStoredSettingValue(k, v)
           if (k === 'quickToolbarSettings' && !pendingValuesMatch(pendingValue, v)) {
@@ -1558,7 +1563,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       }
       if (pendingKeys) {
         for (const [key, value] of Object.entries(pendingKeys)) {
-          if (!DATA_KEYS.has(key) || key === 'imageGeneration' || !isValidGreetingImageSetting(key, value)) continue
+          if (!DATA_KEYS.has(key) || key === 'imageGeneration' || !isValidSettingValue(key, value)) continue
           if (!isCurrentLoad()) return
           persistKey(key, patch[key] ?? value)
         }

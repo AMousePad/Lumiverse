@@ -1,6 +1,7 @@
 import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, GroupedRecentChat, PaginatedResult, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
 import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, WeaverNarrationMode, WeaverPersonaRegister, WeaverPersonaPlan, PersonaDraft, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
 import type { ImpersonationPreference } from '@/lib/impersonationPreset'
+import type { UiLanguage } from '@/i18n/languages'
 
 // ---- Chat Slice ----
 export interface ChatSlice {
@@ -751,6 +752,8 @@ export interface EnterToSendSettings {
 }
 
 export interface SettingsSlice {
+  /** Explicit account preference; null leaves browser/device detection in effect. */
+  uiLanguage: UiLanguage | null
   settingsLoaded: boolean
   /** Full persisted settings loaded; startup settings intentionally set only `settingsLoaded`. */
   fullSettingsLoaded: boolean
