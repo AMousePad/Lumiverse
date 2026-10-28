@@ -54,7 +54,8 @@ import type {
   ImageListOptionsDTO,
   ImageUploadDTO,
   ImageUploadFromDataUrlOptionsDTO,
-  ChatMessageDTO,
+  ChatGetMessagesOptionsDTO,
+  ChatGetMessagesResultDTO,
   ChatChunkDTO,
   ChatLinkAttachDTO,
   ChatLinkDTO,
@@ -1590,6 +1591,20 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
 
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
+function getChatMessages<O extends ChatGetMessagesOptionsDTO | undefined>(
+  chatId: string,
+  options: O,
+): Promise<Array<ChatGetMessagesResultDTO<O>>>;
+function getChatMessages(chatId: string, options?: undefined): Promise<Array<ChatGetMessagesResultDTO<undefined>>>;
+async function getChatMessages(
+  chatId: string,
+  options?: ChatGetMessagesOptionsDTO,
+): Promise<Array<ChatGetMessagesResultDTO<ChatGetMessagesOptionsDTO | undefined>>> {
+  const requestId = crypto.randomUUID();
+  const result = await request({ type: "chat_get_messages", requestId, chatId, options });
+  return result as Array<ChatGetMessagesResultDTO<ChatGetMessagesOptionsDTO | undefined>>;
+}
+
 const spindleApi: RuntimeSpindleAPI = {
   decisions: {
     async listProviders(options) {
@@ -2370,14 +2385,7 @@ const spindleApi: RuntimeSpindleAPI = {
       assertMutationAllowed("spindle.chat.setSwipeVariables()");
       return await request({ type: "chat_set_swipe_variables", requestId: crypto.randomUUID(), chatId, messageId, input }) as boolean;
     },
-    async getMessages(chatId: string) {
-      const requestId = crypto.randomUUID();
-      const result = await request({ type: "chat_get_messages", requestId, chatId });
-      return result as Array<ChatMessageDTO & {
-        role: "system" | "user" | "assistant";
-        metadata?: Record<string, unknown>;
-      }>;
-    },
+    getMessages: getChatMessages,
     async appendMessage(chatId: string, message, options?: ChatAppendMessageOptions) {
       assertMutationAllowed("spindle.chat.appendMessage()");
       const requestId = crypto.randomUUID();
