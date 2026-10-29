@@ -148,6 +148,7 @@ mock.module('@/lib/i18n/loomOptionLabels', () => ({ useLoomOptionLabels: () => (
 mock.module('@/lib/dndUiScale', () => ({
   DndContext: ({ children }: { children?: unknown }) => children,
   useScaledSortableStyle: (input: unknown) => input,
+  useScaledSortable: () => ({ attributes: {}, listeners: {}, setNodeRef: noop, style: {}, isDragging: false }),
 }))
 mock.module('@/hooks/useScrollGate', () => ({ useScrollGate: noop }))
 let mobileFixture = false

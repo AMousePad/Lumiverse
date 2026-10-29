@@ -1,4 +1,5 @@
 import type { Transform } from '@dnd-kit/utilities'
+import { useSortable, type UseSortableArguments } from '@dnd-kit/sortable'
 import { DndContext as BaseDndContext, getClientRect, type DndContextProps, type Modifier } from '@dnd-kit/core'
 import { createContext, createElement, useCallback, useContext, useLayoutEffect, useReducer, useRef } from 'react'
 import { getUiScale } from './uiScale'
@@ -63,6 +64,12 @@ interface DragGeometry {
 }
 
 const DragGeometryContext = createContext<{ current: DragGeometry | null } | null>(null)
+
+/** Shared sortable row geometry, used by lists and folder containers alike. */
+export function useScaledSortable(options: UseSortableArguments) {
+  const sortable = useSortable(options)
+  return { ...sortable, ...useScaledSortableStyle(sortable) }
+}
 
 /** Use with useScaledSortableStyle so measurement and painting share units. */
 export function DndContext({ measuring, modifiers, ...props }: DndContextProps) {

@@ -36,7 +36,6 @@ import {
   MouseSensor,
   TouchSensor,
   KeyboardSensor,
-  DragOverlay,
   closestCenter,
   useSensor,
   useSensors,
@@ -48,11 +47,10 @@ import {
   SortableContext,
   arrayMove,
   sortableKeyboardCoordinates,
-  useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { DndContext, useScaledSortableStyle } from '@/lib/dndUiScale'
-import { getUiScale } from '@/lib/uiScale'
+import { DndContext, useScaledSortable } from '@/lib/dndUiScale'
+import SortableDragOverlay from './SortableDragOverlay'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import useIsMobile from '@/hooks/useIsMobile'
 import { useEntryWorkspace } from './useEntryWorkspace'
@@ -662,32 +660,22 @@ const EntryRowContent = memo(function EntryRowContent({
 function EntryDragOverlay() {
   const { active } = useDndContext()
   const rowProps = active?.data.current?.entryRowProps as EntryRowProps | undefined
-  const scale = getUiScale()
-  // A transformed drawer is a containing block for fixed descendants. Keep the
-  // overlay in viewport coordinates, then restore the row's own UI scale inside.
-  return createPortal(
-    <DragOverlay dropAnimation={null} zIndex={10010} style={{ zoom: 1 / scale }}>
-      {rowProps && <div data-lorebook-drag-preview aria-hidden="true" inert style={{ zoom: scale }}>
+  return (
+    <SortableDragOverlay>
+      {rowProps && <div data-lorebook-drag-preview>
         <div className={rowProps.workspaceMode ? styles.workspaceList : undefined} style={{ display: 'contents' }}>
           <EntryRowContent {...rowProps} expanded={false} inlineEditor={false} isDragging />
         </div>
       </div>}
-    </DragOverlay>,
-    document.body,
+    </SortableDragOverlay>
   )
 }
 
 function SortableEntryRow(props: EntryRowProps) {
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
+  const { attributes, listeners, setNodeRef, style, isDragging } = useScaledSortable({
     id: props.entry.id,
     data: { entryRowProps: props },
     disabled: !props.dragEnabled,
-  })
-  const { setNodeRef, style } = useScaledSortableStyle({
-    setNodeRef: setSortableRef,
-    transform,
-    transition,
-    isDragging,
   })
 
   return (
