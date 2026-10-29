@@ -45,6 +45,7 @@ export default function ConnectionCollection<T extends SearchableConnection>({
   const listId = useId()
   // Search opens matches temporarily without changing manual expansion state.
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const defaultCollapsed = library.folders.length > 1
   const expandFolder = useCallback((id: string) => {
     setCollapsed(current => current[id] === false ? current : { ...current, [id]: false })
   }, [])
@@ -83,7 +84,7 @@ export default function ConnectionCollection<T extends SearchableConnection>({
     return folder ? [{
       folder,
       profiles: group.items.map(id => allById.get(id)).filter((profile): profile is T => !!profile),
-      collapsed: !searching && (collapsed[group.id] ?? true),
+      collapsed: !searching && (collapsed[group.id] ?? defaultCollapsed),
     }] : []
   })
   const folderHasEditor = (folderId: string) => profiles.some(profile =>
@@ -135,7 +136,7 @@ export default function ConnectionCollection<T extends SearchableConnection>({
                   receiving={sort.receivingFolder === folder.id}
                   hidden={searching && !draggingConnection && count === 0} collapsed={isCollapsed}
                   controls={members.map(profile => `${listId}-${profile.id}`).join(' ') || undefined}
-                  onToggle={() => setCollapsed(value => ({ ...value, [folder.id]: !(value[folder.id] ?? true) }))}
+                  onToggle={() => setCollapsed(value => ({ ...value, [folder.id]: !(value[folder.id] ?? defaultCollapsed) }))}
                   header={folderEditor.editing?.folderId === folder.id ? renderFolderEditor() : undefined}
                   actions={folder.id && <>
                     <button type="button" className={styles.iconButton} onClick={() => folderEditor.startRename(folder)}
