@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { build } from '../../frontend/node_modules/esbuild/lib/main.js'
-import * as playwright from 'playwright'
+import { launchTestBrowser } from './browser-runtime.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const fixture = fileURLToPath(new URL('../../frontend/tests/background-swipe.fixture.tsx', import.meta.url)).replaceAll('\\', '/')
@@ -21,13 +21,14 @@ const bundle = await build({absWorkingDir:root, entryPoints:[fixture], outfile:'
   }}]})
 const js=bundle.outputFiles.find(file=>file.path.endsWith('.js')).text
 const css=bundle.outputFiles.find(file=>file.path.endsWith('.css')).text
-for(const name of (process.env.SWIPE_BROWSERS||'chromium,webkit').split(',')) {
-  const browser=await playwright[name].launch({headless:true})
+for(const name of (process.env.SWIPE_BROWSERS||'chromium,firefox,webkit').split(',')) {
+  const launched=await launchTestBrowser(name)
+  const { browser }=launched
   try {
     for(const width of [1280,390]) {
       const page=await browser.newPage({viewport:{width,height:844},hasTouch:width===390,isMobile:width===390})
       const errors=[];page.on('pageerror',error=>errors.push(error.message))
-      await page.setContent(`<style>${css}body{background:#181b18;color:#e9dfc3;font:16px sans-serif;margin:24px}article{min-height:180px;padding:24px;border:1px solid #aaa6;border-radius:12px}button{min-height:44px}main{max-width:700px;margin:auto}</style><div id="root"></div>`)
+      await page.setContent(`<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}body{background:#181b18;color:#e9dfc3;font:16px sans-serif;margin:24px}article{min-height:180px;padding:24px;border:1px solid #aaa6;border-radius:12px}button{min-height:44px}main{max-width:700px;margin:auto}</style><div id="root"></div>`)
       await page.addScriptTag({content:js})
       const reply=page.getByRole('article',{name:'Selected reply'})
       await reply.waitFor()
@@ -97,5 +98,5 @@ for(const name of (process.env.SWIPE_BROWSERS||'chromium,webkit').split(',')) {
       console.log(`${name} ${width}px: background generation preserves selected response; native ready/navigation pass`)
       await page.close()
     }
-  } finally {await browser.close()}
+  } finally {await launched.close()}
 }
