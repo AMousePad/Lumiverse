@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { INTEL_LANCEDB, readIntelLanceDbArtifact, stageIntelLanceDb, validateIntelMachO, type IntelLanceDbManifest } from "../scripts/lancedb-macos-native";
+import { INTEL_LANCEDB, INTEL_LANCEDB_RELEASE_PROFILE, intelLanceDbBuildId, readIntelLanceDbArtifact, stageIntelLanceDb, validateIntelMachO, type IntelLanceDbManifest } from "../scripts/lancedb-macos-native";
 
 const temporary: string[] = [];
 afterEach(() => { for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
@@ -51,9 +51,23 @@ test("rejects stale npm versions, source revisions, and modified native binaries
   expect(() => readIntelLanceDbArtifact(fixture.directory, "0.36.0")).toThrow("source pin");
   writeFileSync(join(fixture.directory, "manifest.json"), JSON.stringify({ ...fixture.manifest, sourceCommit: "wrong" }));
   expect(() => readIntelLanceDbArtifact(fixture.directory, INTEL_LANCEDB.version)).toThrow("build policy");
+  writeFileSync(join(fixture.directory, "manifest.json"), JSON.stringify({ ...fixture.manifest, buildId: "wrong-recipe" }));
+  expect(() => readIntelLanceDbArtifact(fixture.directory, INTEL_LANCEDB.version)).toThrow("build policy");
   writeFileSync(join(fixture.directory, "manifest.json"), JSON.stringify(fixture.manifest));
   writeFileSync(join(fixture.directory, INTEL_LANCEDB.binaryName), Buffer.concat([fixture.binary, Buffer.from("modified")]));
   expect(() => readIntelLanceDbArtifact(fixture.directory, INTEL_LANCEDB.version)).toThrow("checksum");
+});
+
+test("dependency identity follows source and compilation policy without hashing application or test files", () => {
+  const original = intelLanceDbBuildId();
+  expect(intelLanceDbBuildId({ ...INTEL_LANCEDB }, { ...INTEL_LANCEDB_RELEASE_PROFILE })).toBe(original);
+  for (const key of ["version", "sourceCommit", "rustToolchain", "minimumMacOS", "cpu", "buildRevision"] as const) {
+    expect(intelLanceDbBuildId({ ...INTEL_LANCEDB, [key]: `${INTEL_LANCEDB[key]}-changed` })).not.toBe(original);
+  }
+  expect(intelLanceDbBuildId(INTEL_LANCEDB, { ...INTEL_LANCEDB_RELEASE_PROFILE, lto: "off" })).not.toBe(original);
+  expect(intelLanceDbBuildId(INTEL_LANCEDB, { ...INTEL_LANCEDB_RELEASE_PROFILE, codegenUnits: 32 })).not.toBe(original);
+  // The pre-release-cache migration remains usable only under the original recipe.
+  expect(original).toBe("437cd5aee067c3949e41f3f64eacae668b1e011fbeae1203f0050fe496528c12");
 });
 
 test("rejects the wrong architecture, newer macOS requirements, and truncated Mach-O files", () => {

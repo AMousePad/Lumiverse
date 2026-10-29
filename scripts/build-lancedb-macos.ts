@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { INTEL_LANCEDB, readIntelLanceDbArtifact, validateIntelMachO, type IntelLanceDbManifest } from "./lancedb-macos-native";
+import { INTEL_LANCEDB, INTEL_LANCEDB_RELEASE_PROFILE, intelLanceDbBuildId, readIntelLanceDbArtifact, validateIntelMachO, type IntelLanceDbManifest } from "./lancedb-macos-native";
 
 const root = resolve(import.meta.dir, "..");
 
@@ -89,14 +89,14 @@ async function build(): Promise<void> {
     MACOSX_DEPLOYMENT_TARGET: INTEL_LANCEDB.minimumMacOS,
     CARGO_TARGET_DIR: targetDirectory,
     CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: `-C target-cpu=${INTEL_LANCEDB.cpu}`,
-    CARGO_PROFILE_RELEASE_LTO: "thin",
-    CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16",
+    CARGO_PROFILE_RELEASE_LTO: INTEL_LANCEDB_RELEASE_PROFILE.lto,
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS: String(INTEL_LANCEDB_RELEASE_PROFILE.codegenUnits),
     // Rust 1.97's LLVM strip can misalign Mach-O proc-macros on macOS 27.
     // Keep host debug tables and use Apple's strip only on the finished addon.
-    CARGO_PROFILE_RELEASE_STRIP: "none",
-    CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP: "none",
-    CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_DEBUG: "1",
-    CARGO_INCREMENTAL: "0",
+    CARGO_PROFILE_RELEASE_STRIP: INTEL_LANCEDB_RELEASE_PROFILE.strip,
+    CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP: INTEL_LANCEDB_RELEASE_PROFILE.buildOverrideStrip,
+    CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_DEBUG: String(INTEL_LANCEDB_RELEASE_PROFILE.buildOverrideDebug),
+    CARGO_INCREMENTAL: INTEL_LANCEDB_RELEASE_PROFILE.incremental ? "1" : "0",
     CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || "4",
     CFLAGS: `-mmacosx-version-min=${INTEL_LANCEDB.minimumMacOS}`,
     CXXFLAGS: `-mmacosx-version-min=${INTEL_LANCEDB.minimumMacOS}`,
@@ -119,7 +119,7 @@ async function build(): Promise<void> {
     throw new Error(`Intel LanceDB requires an unbundled dynamic library: ${dependency}`);
   }
   if (!/\b_napi_register_module_v1$/m.test(capture(["/usr/bin/nm", "-gU", binary]))) throw new Error("Missing LanceDB Node-API addon entrypoint.");
-  const manifest: IntelLanceDbManifest = { format: 1, version, sourceCommit: commit, target: INTEL_LANCEDB.target,
+  const manifest: IntelLanceDbManifest = { format: 1, buildId: intelLanceDbBuildId(), version, sourceCommit: commit, target: INTEL_LANCEDB.target,
     rustToolchain: INTEL_LANCEDB.rustToolchain, minimumMacOS: INTEL_LANCEDB.minimumMacOS, cpu: INTEL_LANCEDB.cpu,
     sha256: createHash("sha256").update(bytes).digest("hex") };
   copyFileSync(join(source, "LICENSE"), join(outputDirectory, "LICENSE"));

@@ -17,7 +17,7 @@ export interface DesktopFeed {
 // Include shipped sources, dependencies, native assets, and packaging policy.
 // A docs-only commit outside this set does not rebuild the desktop nightly.
 export const BUNDLED_SOURCE_PATHS = ["src", "frontend", "desktop", "user-docs/docs", "package.json", "bun.lock", "tsconfig.json", "LICENSE.md",
-  "scripts/build-server.ts", "scripts/build-desktop-server.ts", "scripts/build-lancedb-macos.ts", "scripts/lancedb-macos-native.ts", "scripts/reset-password.ts",
+  "scripts/build-server.ts", "scripts/build-desktop-server.ts", "scripts/build-lancedb-macos.ts", "scripts/lancedb-macos-native.ts", "scripts/lancedb-macos-release.ts", "scripts/reset-password.ts",
   "scripts/input.ts", "scripts/ui.ts", "scripts/tauri-finalized.ts", "scripts/appimage-patchelf.sh", "scripts/finalize-appimage.sh", "scripts/verify-appimage-permissions.sh", "scripts/verify-appimage-gstreamer.sh",
   "scripts/appimage-apprun.sh", "scripts/appimage-runtime-manifest.ts",
   "scripts/private-linux-release.ts", "scripts/linux-appimage-builder",
@@ -138,5 +138,10 @@ export class ReleaseAPI {
     const response = await this.transport(`${this.base}/releases/assets/${asset.id}`, { headers: { Authorization: `Bearer ${this.token}`, Accept: "application/octet-stream" } });
     if (!response.ok) throw new Error(`Could not read ${asset.name} (${response.status})`);
     return await response.json() as DesktopFeed;
+  }
+  async assetBytes(asset: GitHubAsset): Promise<Uint8Array> {
+    const response = await this.transport(`${this.base}/releases/assets/${asset.id}`, { headers: { Authorization: `Bearer ${this.token}`, Accept: "application/octet-stream" } });
+    if (!response.ok) throw new Error(`Could not read ${asset.name} (${response.status})`);
+    return new Uint8Array(await response.arrayBuffer());
   }
 }

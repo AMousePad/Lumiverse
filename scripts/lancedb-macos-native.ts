@@ -11,10 +11,29 @@ export const INTEL_LANCEDB = {
   minimumMacOS: "13.0",
   cpu: "x86-64",
   binaryName: "lancedb.darwin-x64.node",
+  // Bump only for compilation changes not represented by the policy below.
+  buildRevision: 1,
 } as const;
+
+export const INTEL_LANCEDB_RELEASE_PROFILE = {
+  lto: "thin", codegenUnits: 16, strip: "none", buildOverrideStrip: "none", buildOverrideDebug: 1, incremental: false,
+} as const;
+
+/** Stable across application, workflow, and validation-only changes. */
+export function intelLanceDbBuildId(
+  policy: { [K in keyof typeof INTEL_LANCEDB]: string | number } = INTEL_LANCEDB,
+  profile: { [K in keyof typeof INTEL_LANCEDB_RELEASE_PROFILE]: string | number | boolean } = INTEL_LANCEDB_RELEASE_PROFILE,
+): string {
+  return createHash("sha256").update(JSON.stringify({ policy, profile })).digest("hex");
+}
+
+// The first verified CI build predates buildId in manifest.json. Accept it only
+// for this exact original recipe, so changing build settings cannot adopt it.
+const LEGACY_BUILD_ID = "437cd5aee067c3949e41f3f64eacae668b1e011fbeae1203f0050fe496528c12";
 
 export interface IntelLanceDbManifest {
   format: 1;
+  buildId?: string;
   version: string;
   sourceCommit: string;
   target: string;
@@ -56,7 +75,8 @@ export function readIntelLanceDbArtifact(directory: string, packageVersion: stri
   if (manifest.format !== 1 || manifest.version !== packageVersion
     || manifest.sourceCommit !== INTEL_LANCEDB.sourceCommit || manifest.target !== INTEL_LANCEDB.target
     || manifest.rustToolchain !== INTEL_LANCEDB.rustToolchain || manifest.minimumMacOS !== INTEL_LANCEDB.minimumMacOS
-    || manifest.cpu !== INTEL_LANCEDB.cpu) throw new Error("The Intel LanceDB artifact does not match the pinned build policy.");
+    || manifest.cpu !== INTEL_LANCEDB.cpu
+    || (manifest.buildId ?? LEGACY_BUILD_ID) !== intelLanceDbBuildId()) throw new Error("The Intel LanceDB artifact does not match the pinned build policy.");
   const bytes = readFileSync(join(directory, INTEL_LANCEDB.binaryName));
   if (createHash("sha256").update(bytes).digest("hex") !== manifest.sha256) throw new Error("Intel LanceDB checksum mismatch.");
   validateIntelMachO(bytes);

@@ -153,7 +153,7 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
       - name: Test launcher, release policy, and desktop lifecycle
-        run: bun test tests/server-bundle.test.ts tests/lancedb-macos-native.test.ts tests/bun-runtime-version-policy.test.ts scripts/desktop-toolchain.test.ts scripts/private-linux-release.test.ts scripts/desktop-release.test.ts desktop/src-tauri/permissions.test.ts desktop/tests/desktop-updates.test.ts desktop/tests/instance-connection.test.ts desktop/tests/custom-url-ui.test.ts desktop/tests/local-server.test.ts desktop/tests/runner-client.test.ts scripts/desktop-session-restoration.test.ts scripts/tauri-finalized.test.ts scripts/appimage-packaging.test.ts scripts/appimage-runtime-manifest.test.ts desktop/tests/linux-desktop.test.ts src/spindle/runtime-transport.test.ts src/db/execution-transport.test.ts
+        run: bun test tests/server-bundle.test.ts tests/lancedb-macos-native.test.ts scripts/lancedb-macos-release.test.ts tests/bun-runtime-version-policy.test.ts scripts/desktop-toolchain.test.ts scripts/private-linux-release.test.ts scripts/desktop-release.test.ts desktop/src-tauri/permissions.test.ts desktop/tests/desktop-updates.test.ts desktop/tests/instance-connection.test.ts desktop/tests/custom-url-ui.test.ts desktop/tests/local-server.test.ts desktop/tests/runner-client.test.ts scripts/desktop-session-restoration.test.ts scripts/tauri-finalized.test.ts scripts/appimage-packaging.test.ts scripts/appimage-runtime-manifest.test.ts desktop/tests/linux-desktop.test.ts src/spindle/runtime-transport.test.ts src/db/execution-transport.test.ts
       - name: Test nightly release notifications
         run: bun --no-env-file test scripts/notify-nightly-release.test.ts
       - name: Test production browser cookie transport
@@ -167,55 +167,14 @@ jobs:
         run: |
           bun x tsc --noEmit
           bun x tsc --project scripts/tsconfig.server-bundle.json --noEmit
-      - name: Restore validated Intel LanceDB addon
+      - name: Download the versioned Intel LanceDB dependency
         if: matrix.platform == 'darwin-x86_64'
-        id: intel-lancedb
-        uses: actions/cache/restore@v5
-        with:
-          path: dist/native/lancedb-darwin-x64
-          key: intel-lancedb-addon-${{ hashFiles('scripts/build-lancedb-macos.ts', 'scripts/lancedb-macos-native.ts', 'scripts/check-lancedb-macos.ts', 'src/runtime/lancedb-check.ts') }}
-      - name: Install Intel LanceDB build prerequisites
-        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
-        run: brew install protobuf cmake
-      - uses: dtolnay/rust-toolchain@stable
-        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
-        with:
-          toolchain: 1.97.0
-          targets: x86_64-apple-darwin
-      - name: Prepare pinned Intel LanceDB source
-        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
-        run: bun run build:lancedb:macos --prepare-only
-      - name: Build and test Intel LanceDB native engine
-        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
-        shell: bash
         env:
-          CARGO_TERM_PROGRESS_WHEN: always
-          CARGO_TERM_PROGRESS_WIDTH: '100'
-        run: |
-          set -euo pipefail
-          # Cargo's last "Compiling" line may belong to a small crate while
-          # another parallel rustc process spends minutes on a large dependency.
-          # Report executable names only; process arguments can contain secrets.
-          (
-            while sleep 60; do
-              echo "[Intel LanceDB] $(date -u '+%Y-%m-%dT%H:%M:%SZ'): CPU %, RSS in KiB, and elapsed time"
-              ps -axo pid,ppid,pcpu,rss,etime,comm | awk 'NR == 1 || $NF ~ /(^|\/)(cargo|rustc|clang|clang\+\+|cc1|ld|cmake)$/'
-              /usr/sbin/sysctl vm.swapusage
-              df -h "$RUNNER_TEMP"
-            done
-          ) &
-          monitor_pid=$!
-          trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
-          bun run build:lancedb:macos
-      - name: Revalidate cached Intel LanceDB checksum and native operations
-        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit == 'true'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun --no-env-file scripts/lancedb-macos-release.ts download
+      - name: Verify the downloaded Intel LanceDB checksum and native operations
+        if: matrix.platform == 'darwin-x86_64'
         run: bun --no-env-file scripts/check-lancedb-macos.ts --artifact-dir dist/native/lancedb-darwin-x64
-      - name: Cache only the verified Intel addon, manifest, and license
-        if: matrix.platform == 'darwin-x86_64' && steps.intel-lancedb.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: dist/native/lancedb-darwin-x64
-          key: ${{ steps.intel-lancedb.outputs.cache-primary-key }}
       - name: Build standalone server and test outside the checkout
         shell: bash
         run: |

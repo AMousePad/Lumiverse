@@ -651,16 +651,39 @@ After installing the repository, frontend, and desktop build dependencies:
 bun run build:desktop-server
 ```
 
-Intel Mac builds require the version-matched native engine first:
+Intel Mac builds download the version-matched native engine first. Set
+`GITHUB_TOKEN` to a token with repository read access, then run:
 
 ```sh
-# Requires Xcode command-line tools and rustup.
-brew install protobuf cmake
-bun run build:lancedb:macos
+bun --no-env-file scripts/lancedb-macos-release.ts download
+bun --no-env-file scripts/check-lancedb-macos.ts --artifact-dir dist/native/lancedb-darwin-x64
 bun run build:desktop-server
 ```
 
-Staging CI builds and tests the engine and bundled app on `macos-15-intel`.
+Desktop CI downloads the published dependency and tests native database operations
+on `macos-15-intel`. It never recompiles LanceDB on a cache miss or download error.
+The **Intel LanceDB Native Dependency** workflow (`intel-lancedb.yml`) publishes
+the addon, checksum/build manifest, and upstream license as a versioned GitHub
+prerelease. These releases are retained independently of desktop nightlies.
+
+After changing the pinned LanceDB version/source, Rust toolchain, CPU baseline,
+minimum macOS version, or release compilation profile, dispatch that dependency
+workflow before building desktop apps. Those settings determine the release tag;
+application changes and native-test edits reuse the existing binary. Bump
+`INTEL_LANCEDB.buildRevision` for compilation changes not captured in those
+settings. The workflow reuses an existing release or verified build cache before
+compiling, and cannot replace a published binary with different bytes.
+
+```sh
+gh workflow run intel-lancedb.yml --repo prolix-oc/Lumiverse --ref main
+```
+
+An optional `seed_cache_key` migrates an existing validated build without
+compiling; dispatch on the cache's owning branch. A missing migration cache fails
+without starting a rebuild. For an intentional local source build, install
+Xcode command-line tools, rustup, protobuf, and cmake, then run
+`bun run build:lancedb:macos`.
+
 The Intel installer includes LanceDB; end users do not need a Rust toolchain
 or a separate database installation. Bundled macOS apps require macOS 13 or later.
 
