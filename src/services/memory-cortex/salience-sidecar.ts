@@ -698,7 +698,9 @@ function validateExtractionObject(json: any): void {
 function validateExtractionTools(calls: Array<{ name: string; args: Record<string, unknown> }>, graded: boolean): void {
   const required = ["score_salience", "extract_entities", "extract_relationships", "extract_font_colors", ...(graded ? ["grade_heuristic_candidates"] : [])];
   for (const name of required) {
-    if (calls.filter((call) => call?.name === name && call.args && typeof call.args === "object").length !== 1) throw new Error(`Incomplete extraction tool: ${name}`);
+    if (calls.filter((call) => call?.name === name && call.args && typeof call.args === "object").length !== 1) {
+      throw new Error(`Incomplete extraction tool: ${name} (expected exactly one call; received tools=${JSON.stringify(calls.map((call) => call?.name ?? "unknown"))})`);
+    }
   }
   const args = (name: string): any => calls.find((call) => call?.name === name)!.args;
   validateExtractionObject({ ...args("score_salience"), ...args("extract_entities"),
@@ -808,6 +810,10 @@ export async function extractWithSidecar(
     && (arbiter.heuristicEntities.length > 0
       || arbiter.heuristicRelationships.length > 0
       || arbiter.existingGraphEntities.length > 0);
+  const tag = options?.logTag ?? "single";
+  const startedAt = Date.now();
+  let stage = "prompt";
+  let responseSummary = "";
 
   try {
     // Build entity context for the prompt — prefer full entities with aliases over bare names
@@ -822,7 +828,6 @@ export async function extractWithSidecar(
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
     const userContent = `Analyze the exact roleplay passage below. Call ${toolListing} exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${buildConversationHint(content, options?.characterNames ?? [], options?.descriptionAliases, options?.participants)}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${arbiterBlock}\n\n<passage>\n${content}\n</passage>`;
-    const tag = options?.logTag ?? "single";
     logSidecarDispatch(tag, {
       chunks: 1,
       arbiter: arbiterActive,
@@ -831,6 +836,7 @@ export async function extractWithSidecar(
       tokenCounter: options?.tokenCounter,
     });
     const sentAt = Date.now();
+    stage = "request";
 
     const response = await generateRawFn({
 
@@ -844,7 +850,9 @@ export async function extractWithSidecar(
       tools,
       signal: options?.signal,
     });
-    logSidecarResponse(tag, { ms: Date.now() - sentAt, hasToolCalls: !!response.tool_calls?.length });
+    stage = "response validation";
+    responseSummary = ` ${summarizeSidecarResponse(response)}`;
+    logSidecarResponse(tag, { ms: Date.now() - sentAt, responseSummary });
 
     // Tool calls: parse structured results from tool_calls
     if (response.tool_calls && response.tool_calls.length > 0) {
@@ -861,17 +869,14 @@ export async function extractWithSidecar(
     // Fallback: try parsing the text content as JSON (some providers inline it)
     const json = extractJson(response.content);
     if (!json) {
-      if (options?.throwOnFailure) {
-        throw new Error("sidecar response had no tool_calls and no parseable JSON");
-      }
-      return null;
+      throw new Error(`sidecar response had no tool_calls and no parseable JSON (${summarizeSidecarResponse(response)})`);
     }
 
     if (arbiterActive) validateLegacyGrading(json.grading, arbiter, [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
     return buildResultFromJsonObject(json, options);
   } catch (err) {
     if (options?.throwOnFailure) throw err;
-    console.warn("[memory-cortex] Sidecar extraction failed, falling back to heuristic:", err);
+    console.warn(`[memory-cortex] ${tag}: Sidecar extraction failed, falling back to heuristic (connection=${sidecarConnectionId} stage=${stage} elapsed=${Date.now() - startedAt}ms${responseSummary}):`, err);
     return null;
   }
 }
@@ -1064,6 +1069,10 @@ export async function extractBatchWithSidecar(
   );
   const batchExistingActive = (options?.batchExistingEntities ?? []).length > 0;
   const anyArbiterActive = arbiterActiveByIndex.some(Boolean) || batchExistingActive;
+  const tag = options?.logTag ?? "batch";
+  const startedAt = Date.now();
+  let stage = "prompt";
+  let responseSummary = "";
 
   try {
     const entityHint = buildEntityHint(options);
@@ -1101,7 +1110,6 @@ export async function extractBatchWithSidecar(
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
     const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${arbiterInstruction}${entityHint}${aliasBlock}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${batchExistingBlock}\n\n${passages}`;
-    const tag = options?.logTag ?? "batch";
     logSidecarDispatch(tag, {
       chunks: chunks.length,
       arbiter: anyArbiterActive,
@@ -1111,6 +1119,7 @@ export async function extractBatchWithSidecar(
       batchExistingCount: (options?.batchExistingEntities ?? []).length,
     });
     const sentAt = Date.now();
+    stage = "request";
 
     const response = await generateRawFn({
 
@@ -1124,6 +1133,8 @@ export async function extractBatchWithSidecar(
       tools: [TOOL_ANALYZE_PASSAGE_BATCH],
     });
     const responseMs = Date.now() - sentAt;
+    stage = "response validation";
+    responseSummary = ` ${summarizeSidecarResponse(response)}`;
 
     // Be defensive here as this is the boundary for provider-normalized data.
     // A malformed/sparse entry should simply be treated as no batch tool call,
@@ -1145,37 +1156,45 @@ export async function extractBatchWithSidecar(
     }
 
     const results: Array<SidecarExtractionResult | null> = new Array(chunks.length).fill(null);
-    const missing: number[] = [];
+    const failures: Array<{ index: number; reason: unknown }> = [];
     for (let i = 0; i < chunks.length; i++) {
       const obj = duplicates.has(i) ? null : byIndex.get(i);
       if (obj) {
         try {
           if (arbiterActiveByIndex[i] || batchExistingActive) validateLegacyGrading(obj.grading, singleChunkArbiterFor(i), [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
           results[i] = buildResultFromJsonObject(obj, options);
-        } catch { missing.push(i); }
+        } catch (err) { failures.push({ index: i, reason: err }); }
       } else {
-        missing.push(i);
+        failures.push({ index: i, reason: duplicates.has(i) ? "Duplicate passage index"
+          : parsed ? "Missing passage result" : "No parseable batch results" });
       }
     }
     logSidecarResponse(tag, {
       ms: responseMs,
-      hasToolCalls: !!batchToolCall,
-      parsed: chunks.length - missing.length,
-      missing: missing.length,
+      responseSummary,
+      parsed: chunks.length - failures.length,
+      missing: failures.length,
     });
 
-    if (missing.length > 0) {
-      console.warn(`[memory-cortex] ${tag}: ${missing.length}/${chunks.length} passage(s) missing from batch response`);
+    if (failures.length > 0) {
+      console.warn(`[memory-cortex] ${tag}: ${failures.length}/${chunks.length} passage(s) missing or invalid in batch response (connection=${sidecarConnectionId}${responseSummary}):`, failures);
     }
 
     return results;
-  } catch (err: any) {
-    console.warn(`[memory-cortex] ${options?.logTag ?? "batch"} failed (${err?.name ?? "Error"}: ${err?.message ?? err})`);
+  } catch (err: unknown) {
+    console.warn(`[memory-cortex] ${tag}: batch extraction failed (connection=${sidecarConnectionId} stage=${stage} elapsed=${Date.now() - startedAt}ms${responseSummary}):`, err);
     return chunks.map(() => null);
   }
 }
 
 // ─── Diagnostic logging ─────────────────────────────────────────
+
+/** Shape only: never log passage text or the provider's generated content. */
+function summarizeSidecarResponse(response: Awaited<ReturnType<SidecarGenerateFn>>): string {
+  const calls = Array.isArray(response?.tool_calls) ? response.tool_calls : [];
+  const names = calls.slice(0, 20).map((call) => typeof call?.name === "string" ? call.name.slice(0, 100) : "unknown");
+  return `content_chars=${typeof response?.content === "string" ? response.content.length : 0} tool_calls=${JSON.stringify(names)}${calls.length > 20 ? ` (${calls.length} total)` : ""}`;
+}
 
 function logSidecarDispatch(
   tag: string,
@@ -1209,12 +1228,13 @@ function logSidecarDispatch(
 
 function logSidecarResponse(
   tag: string,
-  opts: { ms: number; hasToolCalls: boolean; parsed?: number; missing?: number },
+  opts: { ms: number; responseSummary: string; parsed?: number; missing?: number },
 ): void {
   const parts = [
     `[memory-cortex] ${tag} ← ${opts.ms}ms`,
-    opts.hasToolCalls ? "tool_calls=yes" : (opts.parsed !== undefined ? `parsed=${opts.parsed}/${opts.parsed + (opts.missing ?? 0)}` : "tool_calls=no"),
+    opts.responseSummary.trim(),
   ];
+  if (opts.parsed !== undefined) parts.push(`parsed=${opts.parsed}/${opts.parsed + (opts.missing ?? 0)}`);
   console.info(parts.join(" "));
 }
 

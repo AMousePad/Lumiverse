@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { formatLogArguments } from "../../utils/log-format";
 
 import {
   extractBatchWithSidecar,
@@ -272,5 +273,102 @@ describe("extraction completeness", () => {
   test("a complete empty JSON extraction succeeds", async () => {
     const result = await extractWithSidecar("Quiet weather.", async () => ({ content: JSON.stringify({ importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [], relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] }) }), "test", { throwOnFailure: true });
     expect(result?.score).toBe(0.2);
+  });
+});
+
+describe("sidecar failure diagnostics", () => {
+  const emptyExtraction = { importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [],
+    relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] };
+
+  test("request failures retain the error and identify the connection and operation", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const error = new Error("fetch failed", { cause: new Error("ECONNRESET") });
+    try {
+      const result = await extractWithSidecar("private passage", async () => { throw error; }, "connection-1", { logTag: "rebuild:batch-3" });
+      expect(result).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[1]).toBe(error);
+      const text = formatLogArguments(warn.mock.calls[0]!);
+      for (const detail of ["rebuild:batch-3", "connection=connection-1", "stage=request", "elapsed=", "fetch failed", "ECONNRESET"]) {
+        expect(text).toContain(detail);
+      }
+      expect(text).not.toContain("private passage");
+    } finally { warn.mockRestore(); }
+  });
+
+  test("an unparseable single response is diagnosed even when returning null", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await extractWithSidecar("private passage", async () => ({ content: "private invalid output" }), "connection-1");
+      expect(result).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const text = formatLogArguments(warn.mock.calls[0]!);
+      expect(text).toContain("stage=response validation");
+      expect(text).toContain("no tool_calls and no parseable JSON");
+      expect(text).toContain("content_chars=22");
+      expect(text).toContain("tool_calls=[]");
+      expect(text).not.toContain("private invalid output");
+      expect(text).not.toContain("private passage");
+    } finally { warn.mockRestore(); }
+  });
+
+  test("strict extraction preserves the original typed failure for fallback classification", async () => {
+    const error = Object.assign(new Error("interactive inference preempted sidecar"), { code: "INFERENCE_PREEMPTED" });
+    await expect(extractWithSidecar("passage", async () => { throw error; }, "connection-1", { throwOnFailure: true })).rejects.toBe(error);
+  });
+
+  test("strict validation identifies the missing tool and the tools actually received", async () => {
+    await expect(extractWithSidecar("passage", async () => ({ content: "", tool_calls: [
+      { name: "score_salience", args: { importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [] } },
+    ] }), "connection-1", { throwOnFailure: true })).rejects.toThrow('extract_entities (expected exactly one call; received tools=["score_salience"])');
+  });
+
+  test("batch diagnostics distinguish invalid, duplicate and missing passage results", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await extractBatchWithSidecar(
+        Array.from({ length: 4 }, (_, index) => ({ index, content: "private passage" })),
+        async () => ({ content: "", tool_calls: [{ name: "analyze_passage_batch", args: { results: [
+          { ...emptyExtraction, index: 0 },
+          { ...emptyExtraction, index: 1, importance: "bad" },
+          { ...emptyExtraction, index: 2 },
+          { ...emptyExtraction, index: 2 },
+        ] } }] }), "connection-1", { logTag: "rebuild:batch-3" },
+      );
+      expect(result.map((entry) => entry?.score ?? null)).toEqual([0.2, null, null, null]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const text = formatLogArguments(warn.mock.calls[0]!);
+      for (const detail of ["rebuild:batch-3", "connection=connection-1", "3/4", "index: 1", "Invalid or missing importance", "Duplicate passage index", "Missing passage result", 'tool_calls=["analyze_passage_batch"]']) {
+        expect(text).toContain(detail);
+      }
+      expect(text).not.toContain("private passage");
+    } finally { warn.mockRestore(); }
+  });
+
+  test("an unparseable batch reports response shape without dumping response text", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await extractBatchWithSidecar([{ index: 0, content: "passage" }, { index: 1, content: "passage" }],
+        async () => ({ content: "private invalid output" }), "connection-1");
+      expect(result).toEqual([null, null]);
+      const text = formatLogArguments(warn.mock.calls[0]!);
+      expect(text).toContain("No parseable batch results");
+      expect(text).toContain("content_chars=22 tool_calls=[]");
+      expect(text).not.toContain("private invalid output");
+    } finally { warn.mockRestore(); }
+  });
+
+  test("batch request failures retain nested causes", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const error = new Error("fetch failed", { cause: new Error("socket closed") });
+    try {
+      const result = await extractBatchWithSidecar([{ index: 0, content: "passage" }, { index: 1, content: "passage" }],
+        async () => { throw error; }, "connection-1");
+      expect(result).toEqual([null, null]);
+      expect(warn.mock.calls[0]?.[1]).toBe(error);
+      const text = formatLogArguments(warn.mock.calls[0]!);
+      expect(text).toContain("connection=connection-1 stage=request");
+      expect(text).toContain("socket closed");
+    } finally { warn.mockRestore(); }
   });
 });

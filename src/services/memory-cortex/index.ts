@@ -1315,7 +1315,7 @@ export async function runQueryGenerationSidecar<T>(options: {
     const timeoutController = sidecarTimeoutMs > 0 ? new AbortController() : null;
     const timer = timeoutController
       ? setTimeout(() => {
-          console.warn("[memory-cortex] Sidecar extraction timed out, aborting LLM call");
+          console.warn(`[memory-cortex] Sidecar ${target.role} extraction timed out after ${sidecarTimeoutMs}ms (connection=${target.connectionProfileId} model=${target.model ?? "default"}), aborting LLM call`);
           timeoutController.abort();
         }, sidecarTimeoutMs)
       : null;
@@ -1325,6 +1325,7 @@ export async function runQueryGenerationSidecar<T>(options: {
 
     attempts += 1;
     invokedAny = true;
+    const startedAt = Date.now();
     try {
       const result = await extract({
         ...target,
@@ -1354,8 +1355,8 @@ export async function runQueryGenerationSidecar<T>(options: {
       const name = err && typeof err === "object" && "name" in err ? String((err as { name?: unknown }).name) : "";
       if (name !== "AbortError" && !timedOut) {
         console.warn(
-          `[memory-cortex] Sidecar ${target.role} failed:`,
-          err instanceof Error ? err.message : err,
+          `[memory-cortex] Sidecar ${target.role} failed (connection=${target.connectionProfileId} model=${target.model ?? "default"} attempt=${attempts} elapsed=${Date.now() - startedAt}ms):`,
+          err,
         );
       }
     } finally {
