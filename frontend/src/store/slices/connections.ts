@@ -1,3 +1,4 @@
+import { withRecentConnection } from '@/lib/connectionRecents'
 import type { StateCreator } from 'zustand'
 import type { ActiveProfileSwitchReason, AppStore, ConnectionsSlice } from '@/types/store'
 import type { ConnectionProfile } from '@/types/api'
@@ -62,6 +63,11 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
     const reasoningChanged = !areReasoningSettingsEqual(nextReasoningSettings, state.reasoningSettings)
 
     set({ activeProfileId: id, reasoningSettings: nextReasoningSettings, unboundReasoningSettings })
+    if (reason === 'user_selection' && newProfile && state.fullSettingsLoaded !== false) {
+      const recentConnections = withRecentConnection(state.recentConnections, 'llm', newProfile.id, state.connectionsPickerSettings?.recentProfileIds)
+      set({ recentConnections })
+      persistKey('recentConnections', recentConnections, 'user-interaction')
+    }
     if (shouldPersistActiveProfileId(reason)) {
       settingsApi.put('activeProfileId', id).catch(() => {})
     }

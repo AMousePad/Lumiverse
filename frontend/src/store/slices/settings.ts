@@ -147,6 +147,8 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'pushNotificationPreferences',
   // Connection reorder persistence
   'connectionsOrder',
+  'connectionLibraries',
+  'recentConnections',
   'customCSS',
   'componentOverrides',
   // Saved theme library (My Themes)
@@ -524,7 +526,12 @@ export function clearPendingSettings(persisted: Record<string, unknown>): void {
   } catch {}
 }
 
-function mergeStoredSetting(defaultValue: any, storedValue: any): any {
+function mergeStoredSetting(defaultValue: any, storedValue: any, settingKey?: string): any {
+  // These maps are complete snapshots. Deep merging with the previous load
+  // resurrects removed assignments or histories after another tab saves them.
+  if (settingKey === 'connectionLibraries' || settingKey === 'recentConnections') {
+    return isPlainObject(storedValue) ? storedValue : {}
+  }
   if (!isPlainObject(defaultValue)) return storedValue
   if (!isPlainObject(storedValue)) return defaultValue
   const merged: Record<string, any> = { ...defaultValue }
@@ -849,6 +856,8 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   },
   ...PRODUCTIVITY_DEFAULTS,
 
+  recentConnections: {},
+  connectionLibraries: {},
   connectionsOrder: normalizeConnectionsOrder(),
 
   hydrateStartupSettings: (settings: StartupSettings) => {
@@ -1359,7 +1368,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         if (canonicalKey === 'quickToolbarSettings' && !pendingValuesMatch(storedValue, row.value)) {
           migratedProductivityKeys.add(canonicalKey)
         }
-        patch[canonicalKey] = mergeStoredSetting((defaults as any)[canonicalKey], storedValue)
+        patch[canonicalKey] = mergeStoredSetting((defaults as any)[canonicalKey], storedValue, canonicalKey)
         if (canonicalKey !== row.key) legacySettingsToPersist[canonicalKey] = patch[canonicalKey]
       }
 
@@ -1398,7 +1407,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           if (k === 'quickToolbarSettings' && !pendingValuesMatch(pendingValue, v)) {
             migratedProductivityKeys.add(k)
           }
-          patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], pendingValue)
+          patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], pendingValue, k)
         }
       }
 
