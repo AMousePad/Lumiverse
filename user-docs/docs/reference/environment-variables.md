@@ -157,11 +157,13 @@ Normally configure this through Operator. Setting `LUMIVERSE_VECTOR_STORE_PROVID
 | `LUMIVERSE_QDRANT_URL` | Empty | Qdrant server URL when using that provider. |
 | `LUMIVERSE_QDRANT_API_KEY` | Empty | Optional Qdrant authentication key. |
 | `LUMIVERSE_MILVUS_ADDRESS` | Empty | Milvus server address. |
+| `LUMIVERSE_MILVUS_DATABASE` | Server default | Milvus database shared by runtime and maintenance tools. |
 | `LUMIVERSE_MILVUS_USERNAME` | Empty | Milvus username. |
 | `LUMIVERSE_MILVUS_PASSWORD` | Empty | Milvus password. |
 | `LUMIVERSE_MILVUS_SSL` | `false` | Set exactly `true` for a TLS connection to Milvus. |
 | `LUMIVERSE_MILVUS_CONNECT_TIMEOUT_MS` | Provider default | Positive connection timeout in milliseconds. |
 | `LUMIVERSE_MILVUS_REQUEST_TIMEOUT_MS` | Provider default | Non-negative request timeout in milliseconds; `0` is accepted. |
+| `LUMIVERSE_MILVUS_FLUSH_POLICY` | `per_write` | Set `manual` to flush during explicit maintenance, using Strong reads for visibility. Validate with the [Milvus maintenance tools](../settings/milvus-maintenance.md) before enabling. |
 
 ## Migration and remote files
 

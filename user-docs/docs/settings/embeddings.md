@@ -4,6 +4,9 @@ title: Embeddings
 
 # Embeddings
 
+For external Milvus deployments, see [Milvus maintenance](milvus-maintenance.md)
+for migration, BM25 backfill, flush policy, and benchmark commands.
+
 Embeddings power two features in Lumiverse: **semantic world book activation** (finding lorebook entries by meaning, not just keywords) and **long-term chat memory** (recalling relevant past moments). Both require an embedding provider to be configured.
 
 ---

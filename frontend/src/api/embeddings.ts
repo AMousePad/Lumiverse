@@ -416,6 +416,7 @@ export interface MilvusConnectionConfig {
   transport?: 'grpc' | 'http'
   connectTimeoutMs?: number
   requestTimeoutMs?: number
+  flushPolicy?: 'per_write' | 'manual'
 }
 
 export interface MilvusHybridSearchConfig {

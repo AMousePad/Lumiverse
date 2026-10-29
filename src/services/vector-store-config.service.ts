@@ -50,6 +50,8 @@ export interface MilvusConnectionConfig {
   transport?: "grpc" | "http";
   connectTimeoutMs?: number;
   requestTimeoutMs?: number;
+  /** manual relies on Strong reads; explicit optimize/maintenance still flushes. */
+  flushPolicy?: "per_write" | "manual";
 }
 
 export interface MilvusHybridSearchConfig {
@@ -163,6 +165,7 @@ export function normalizeVectorStoreConfig(input: any): VectorStoreConfig {
       transport: m.transport === "http" ? "http" : "grpc",
       connectTimeoutMs: normalizeMilvusConnectTimeoutMs(m.connectTimeoutMs),
       requestTimeoutMs: normalizeMilvusRequestTimeoutMs(m.requestTimeoutMs),
+      ...(m.flushPolicy === "manual" || m.flushPolicy === "per_write" ? { flushPolicy: m.flushPolicy } : {}),
     };
   }
 
@@ -183,10 +186,12 @@ function envVectorStoreConfig(): VectorStoreConfig | null {
   if (provider === "milvus" && env.vectorStore.milvusAddress) {
     cfg.milvus = {
       address: env.vectorStore.milvusAddress,
+      database: env.vectorStore.milvusDatabase || undefined,
       ssl: env.vectorStore.milvusSsl,
       username: env.vectorStore.milvusUsername || undefined,
       connectTimeoutMs: env.vectorStore.milvusConnectTimeoutMs,
       requestTimeoutMs: env.vectorStore.milvusRequestTimeoutMs,
+      flushPolicy: env.vectorStore.milvusFlushPolicy,
     };
   }
   return cfg;
