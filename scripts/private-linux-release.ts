@@ -333,6 +333,7 @@ async function main() {
     const builders = await resolvePrivateBuilds(new BridgeAPI(process.env.LINUX_RELEASE_BRIDGE_TOKEN!, BUILDER_REPOSITORY), request);
     if (builders.ready !== "true") { console.log("Private builds have not finished; release remains a draft."); return; }
     await publishDesktopRelease(new ReleaseAPI(SOURCE_REPOSITORY, process.env.GITHUB_TOKEN!), request);
+    output({ published_tag: request.tag, published_channel: request.channel });
     // Cleanup is retryable and must never turn a published update into failure.
     try {
       const removed = await cleanupPublishedBuildArtifacts(
