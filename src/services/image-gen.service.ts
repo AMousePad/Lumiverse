@@ -546,14 +546,7 @@ export async function generateSceneBackground(
     // Resolve img2img source images (init image) for providers that accept
     // image input. Reuses the reference-image config surface; SwarmUI/ComfyUI
     // consume the first image, Gemini/OpenRouter/SD API consume all of them.
-    if (
-      connection.provider === "swarmui" ||
-      connection.provider === "comfyui" ||
-      connection.provider === "google_gemini" ||
-      connection.provider === "openrouter" ||
-      connection.provider === "openai" ||
-      connection.provider === "sdapi"
-    ) {
+    if (providerAcceptsSourceImages(connection.provider)) {
       const sources = await resolveSourceImages(userId, chatId, params);
       if (opts?.sourceImageId) {
         const image = await imagesSvc.getImageAsync(userId, opts.sourceImageId);
@@ -1953,6 +1946,31 @@ function parseSceneJson(input: string): SceneData {
 }
 
 // --- Prompt Building ---
+
+/**
+ * Providers whose generation request consumes `resolvedSourceImages`
+ * (init image / reference editing). Kept in sync with each provider's
+ * `generate` implementation and the weaver visual adapters.
+ */
+const SOURCE_IMAGE_PROVIDERS = new Set<string>([
+  "comfyui",
+  "swarmui",
+  "google_gemini",
+  "openrouter",
+  "openai",
+  "sdapi",
+  "xai",
+  "ideogram",
+  "bfl",
+  "fal",
+  "together",
+  "stability",
+  "runware",
+]);
+
+function providerAcceptsSourceImages(provider: string): boolean {
+  return SOURCE_IMAGE_PROVIDERS.has(provider);
+}
 
 function buildImagePrompt(
   scene: SceneData,

@@ -8,17 +8,37 @@ import type {
 } from "../../../../types/weaver";
 import type { VisualProviderAdapter } from "../provider-adapter";
 
-type SimpleVisualProvider = Extract<
+type SimpleVisualProvider = Exclude<
   WeaverVisualProvider,
-  "novelai" | "nanogpt" | "google_gemini" | "openrouter" | "sdapi" | "swarmui"
+  "comfyui"
 >;
 
-const IMAGE_INPUT: Record<SimpleVisualProvider, WeaverVisualImageInputMechanism> = {
+const IMAGE_INPUT: Record<SimpleVisualProvider, WeaverVisualImageInputMechanism | null> = {
   google_gemini: "edit",
   nanogpt: "edit",
   novelai: "reference",
   openrouter: "edit",
   sdapi: "init",
+  openai: "edit",
+  pollinations: null,
+  custom_openai: null,
+  together: "edit",
+  xai: "edit",
+  venice: null,
+  venice_compat: null,
+  recraft: null,
+  deepinfra: null,
+  ideogram: "edit",
+  fireworks: null,
+  stability: "edit",
+  bfl: "edit",
+  fal: "edit",
+  replicate: null,
+  leonardo: null,
+  runware: "init",
+  civitai: null,
+  civitai_chat: null,
+  huggingface: null,
   swarmui: "init",
 };
 
@@ -47,7 +67,21 @@ function applySourceImage(
   switch (provider) {
     case "google_gemini":
     case "openrouter":
+    case "openai":
+    case "xai":
+    case "ideogram":
+    case "bfl":
+    case "fal":
+    case "together":
       parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
+      return;
+    case "stability":
+      parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
+      if (parameters.strength == null) parameters.strength = INIT_DENOISE_DEFAULT;
+      return;
+    case "runware":
+      parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
+      if (parameters.strength == null) parameters.strength = INIT_DENOISE_DEFAULT;
       return;
     case "nanogpt":
       parameters.referenceImages = [{ data: source.data, mimeType: source.mimeType }];
@@ -71,6 +105,8 @@ function applySourceImage(
     case "swarmui":
       parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
       return;
+    default:
+      return;
   }
 }
 
@@ -88,34 +124,101 @@ function buildProviderSpecificParameters(
   provider: SimpleVisualProvider,
   asset: WeaverVisualAsset,
 ): Record<string, any> {
+  const sizeParams = (asset.provider_state?.params ?? {}) as Record<string, unknown>;
+  const width = sizeParams.width != null ? Number(sizeParams.width) : NaN;
+  const height = sizeParams.height != null ? Number(sizeParams.height) : NaN;
+  const stateWidth = Number.isFinite(width) && width > 0 ? width : asset.width;
+  const stateHeight = Number.isFinite(height) && height > 0 ? height : asset.height;
+  const seed = asset.seed != null ? { seed: asset.seed } : {};
+
   switch (provider) {
     case "novelai":
       return {
         resolution: `${asset.width}x${asset.height}`,
-        ...(asset.seed != null ? { seed: asset.seed } : {}),
+        ...seed,
       };
     case "nanogpt":
       return {
         size: `${asset.width}x${asset.height}`,
-        ...(asset.seed != null ? { seed: asset.seed } : {}),
+        ...seed,
       };
     case "google_gemini":
     case "openrouter":
+    case "fireworks":
+    case "stability":
+    case "civitai_chat":
       return {
         aspectRatio: asset.aspect_ratio,
+        ...seed,
       };
+    // Ideogram 4.5 takes `size` and 3.0/2.x take `aspect_ratio`; send both so
+    // the provider picks per model. 4.0's `resolution` is a fixed enum, so it is
+    // left to the connection default rather than derived from the scene size.
+    case "ideogram":
+      return {
+        size: `${stateWidth}x${stateHeight}`,
+        aspectRatio: asset.aspect_ratio.replace(":", "x"),
+        ...seed,
+      };
+    case "together":
+    case "deepinfra":
+    case "venice_compat":
+    case "recraft":
+    case "custom_openai":
+      return {
+        size: `${stateWidth}x${stateHeight}`,
+        ...seed,
+      };
+    // xAI sizes with aspect_ratio (not `size`); other reference-image providers
+    // that take an aspect ratio are grouped above.
+    case "xai":
+      return {
+        aspectRatio: asset.aspect_ratio,
+        ...seed,
+      };
+    case "venice":
+    case "leonardo":
+    case "bfl":
+    case "runware":
+    case "civitai":
+      return {
+        width: stateWidth,
+        height: stateHeight,
+        ...seed,
+      };
+    case "fal":
+      return {
+        imageSize: falSizePreset(stateWidth, stateHeight),
+        ...seed,
+      };
+    case "replicate":
+      return {
+        aspectRatio: asset.aspect_ratio,
+        ...seed,
+      };
+    case "huggingface":
+      return { ...seed };
+    case "pollinations":
     case "sdapi":
     case "swarmui": {
-      const stateParams = (asset.provider_state?.params ?? {}) as Record<string, unknown>;
-      const stateWidth = stateParams.width != null ? Number(stateParams.width) : NaN;
-      const stateHeight = stateParams.height != null ? Number(stateParams.height) : NaN;
       return {
-        width: Number.isFinite(stateWidth) && stateWidth > 0 ? stateWidth : asset.width,
-        height: Number.isFinite(stateHeight) && stateHeight > 0 ? stateHeight : asset.height,
-        ...(asset.seed != null ? { seed: asset.seed } : {}),
+        width: stateWidth,
+        height: stateHeight,
+        ...seed,
       };
     }
+    default:
+      return {};
   }
+}
+
+function falSizePreset(width: number, height: number): string {
+  const ratio = width / height;
+  if (ratio > 1.4) return "landscape_16_9";
+  if (ratio > 1.05) return "landscape_4_3";
+  if (ratio < 0.72) return "portrait_16_9";
+  if (ratio < 0.96) return "portrait_4_3";
+  return "square_hd";
 }
 
 export function createSimpleProviderAdapter(
@@ -132,6 +235,14 @@ export function createSimpleProviderAdapter(
           supported: false,
           mechanism: null,
           reason: "NovelAI V5 does not currently support Vibe Transfer or Precise Reference.",
+        };
+      }
+      // Stability's Core endpoint has no image-to-image mode; Ultra and SD3 do.
+      if (provider === "stability" && connection.model === "core") {
+        return {
+          supported: false,
+          mechanism: null,
+          reason: "Stable Image Core does not accept a source image. Use the Ultra or SD3 model.",
         };
       }
       return { supported: true, mechanism: IMAGE_INPUT[provider] };
