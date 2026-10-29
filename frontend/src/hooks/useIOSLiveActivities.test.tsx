@@ -8,7 +8,8 @@ Object.assign(globalThis, { window: dom.window, document: dom.window.document, I
 const nativeCalls: { action: string; payload: any }[] = []
 const apiCalls: { path: string; payload: any }[] = []
 let appState = 'active', enabled = true
-let native = { available: true, generationIds: [] as string[], suppressedGenerationIds: [] as string[], deviceId: 'installation-123456789', bundleId: 'chat.lumiverse.ios', environment: 'development' }
+let failSpindle = false
+let native: { available: boolean; generationIds: string[]; suppressedGenerationIds: string[]; deviceId: string; bundleId: string; environment: string; spindleAvailable?: boolean; spindleRegistrationIds?: string[] } = { available: true, generationIds: [] as string[], suppressedGenerationIds: [] as string[], deviceId: 'installation-123456789', bundleId: 'chat.lumiverse.ios', environment: 'development' }
 let snapshot = { active: [] as { generationId: string }[], existing: [] as { generationId: string; state: { phase: string; label: string } }[] }
 let prepare: (() => Promise<Record<string, unknown>>) | undefined
 let configure: (() => Promise<unknown>) | undefined
@@ -17,6 +18,7 @@ mock.module('@/api/client', () => ({
   get: async () => ({ configured: true, bundleId: native.bundleId }),
   post: async (path: string, payload: any) => {
     apiCalls.push({ path, payload })
+    if (path.includes('/spindle-activities/')) { if (failSpindle) throw new Error('Enrollment pending'); return { items: [{ registrationId: 'extension-task' }] } }
     if (path.endsWith('/snapshot')) return snapshot
     return prepare ? prepare() : { registrationId: 'new-registration', ...payload }
   },
@@ -39,8 +41,8 @@ let root: Root
 let hook: typeof import('./useIOSLiveActivities').useIOSLiveActivities
 beforeAll(async () => { hook = (await import('./useIOSLiveActivities')).useIOSLiveActivities })
 beforeEach(async () => {
-  appState = 'active'; enabled = true; prepare = undefined; configure = undefined
-  native = { ...native, generationIds: [], suppressedGenerationIds: [] }
+  appState = 'active'; enabled = true; prepare = undefined; configure = undefined; failSpindle = false
+  native = { ...native, available: true, generationIds: [], suppressedGenerationIds: [], spindleAvailable: undefined, spindleRegistrationIds: undefined }
   snapshot = { active: [], existing: [] }
   nativeCalls.length = 0; apiCalls.length = 0
   const container = document.createElement('div'); document.body.append(container)
@@ -122,4 +124,26 @@ test('foreground recovery replaces a suspended prepare and ignores its late enro
   expect(nativeCalls.filter(call => call.action === 'activities.start')).toHaveLength(1)
   release({ registrationId: 'stale-registration' }); await settle()
   expect(nativeCalls.filter(call => call.action === 'activities.start')).toHaveLength(1)
+})
+
+
+test('template-capable apps enroll extension activities without requiring a chat generation', async () => {
+  native.spindleAvailable = true; native.spindleRegistrationIds = ['known-registration']
+  await render('owner'); await settle()
+  expect(apiCalls.find(call => call.path.includes('/spindle-activities/'))?.payload).toMatchObject({ registrationIds: ['known-registration'], serverOrigin: 'https://lumiverse.example' })
+  expect(nativeCalls.find(call => call.action === 'activities.spindleSync')?.payload).toEqual({ items: [{ registrationId: 'extension-task' }] })
+  expect(nativeCalls.some(call => call.action === 'activities.start')).toBe(false)
+})
+
+test('an extension enrollment failure does not block generation activity recovery', async () => {
+  native.spindleAvailable = true; failSpindle = true; snapshot.active = [{ generationId: 'generation' }]
+  await render('owner'); await settle()
+  expect(nativeCalls.some(call => call.action === 'activities.spindleSync')).toBe(false)
+  expect(nativeCalls.some(call => call.action === 'activities.start')).toBe(true)
+})
+
+test('native authorization denial revokes template delivery even when all activities are unavailable', async () => {
+  native.available = false; native.spindleAvailable = false
+  await render('owner'); await settle()
+  expect(apiCalls.map(call => call.path)).toEqual(['/push/ios/spindle-activities/disable'])
 })

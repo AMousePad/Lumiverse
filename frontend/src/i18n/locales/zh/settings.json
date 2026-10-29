@@ -72,6 +72,8 @@
       "tabSize": "标签大小",
       "tabSizeLarge": "大",
       "tabSizeCompact": "紧凑",
+      "duoAlwaysOpen": "展开时始终显示抽屉（iPhone Duo）",
+      "duoAlwaysOpenHint": "展开时将抽屉保留在独立区域中。关闭后可按常规方式打开和关闭抽屉。",
       "showTabLabels": "显示标签文字",
       "showTabLabelsHint": "在侧栏每个标签图标下方显示短名称",
       "panelWidth": "面板宽度",

@@ -129,7 +129,8 @@ function Application() {
 
   const isMobile = useIsMobile()
   const drawerSide = useStore((s) => s.drawerSettings.side)
-  const duoLayout = useIOSDuoLayout(drawerSide)
+  const duoAlwaysOpen = useStore((s) => s.drawerSettings.duoAlwaysOpen !== false)
+  const duoLayout = useIOSDuoLayout(drawerSide, duoAlwaysOpen)
   const customCSSDockUnavailable = useIsMobile(CUSTOM_CSS_DOCK_BREAKPOINT)
   const customCSSDockOpen = useStore((s) => s.customCSSDockOpen)
   const customCSSDockSize = useStore((s) => s.customCSSDockSize)

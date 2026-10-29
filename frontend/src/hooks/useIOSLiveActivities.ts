@@ -10,7 +10,12 @@ export function useIOSLiveActivities(userId: string | null | undefined) {
   const enabled = useIOSLiveActivitiesEnabled()
   useEffect(() => {
     if (!hasIOSNativeBridge() || userId === undefined) return
-    const configure = () => iosNativeRequest('activities.configure', { accountId: userId, enabled: enabled && !!userId })
+    const configure = async () => {
+      const status = await iosNativeRequest<{ deviceId?: string; bundleId?: string; environment?: string }>('activities.configure', { accountId: userId, enabled: enabled && !!userId })
+      if (userId && !enabled && status.deviceId) {
+        await post('/push/ios/spindle-activities/disable', { deviceId: status.deviceId, bundleId: status.bundleId, environment: status.environment, serverOrigin: window.location.origin }).catch(() => {})
+      }
+    }
     // Account/preference changes must clean up even while the app is hidden.
     if (!userId || !enabled || !isIOSForeground()) void configure().catch(() => {})
     if (!userId || !enabled) return
@@ -18,7 +23,22 @@ export function useIOSLiveActivities(userId: string | null | undefined) {
       await configure()
       if (signal.aborted) return
       const native = await getIOSActivityStatus()
+      if (signal.aborted) return
+      if (native.spindleAvailable === false) {
+        await post('/push/ios/spindle-activities/disable', { deviceId: native.deviceId, bundleId: native.bundleId,
+          environment: native.environment, serverOrigin: window.location.origin }, { signal }).catch(() => {})
+      }
       if (signal.aborted || !native.available) return
+      if (native.spindleAvailable) {
+        try {
+          const extensions = await post<{ items: unknown[] }>("/push/ios/spindle-activities/snapshot", {
+            deviceId: native.deviceId, bundleId: native.bundleId, environment: native.environment, serverOrigin: window.location.origin,
+            registrationIds: (native.spindleRegistrationIds ?? []).slice(0, 32),
+          }, { signal })
+          if (!signal.aborted && isIOSForeground()) await iosNativeRequest("activities.spindleSync", extensions)
+        } catch { /* Notification enrollment may not be ready yet; retry on foreground recovery. */ }
+      }
+      if (signal.aborted) return
       const snapshot = await post<{ active: { generationId: string }[]; existing: ActivitySnapshot[] }>(
         '/push/ios/activities/snapshot', { generationIds: native.generationIds.slice(0, 32) }, { signal })
       if (signal.aborted) return

@@ -1,4 +1,4 @@
-import { subscribeIOSLayout } from './ios-duo-layout'
+import { isIOSFoldable, subscribeIOSLayout } from './ios-duo-layout'
 
 /** Use the WKWebView's bounds, including the home-indicator area, instead of
  * WebKit viewport units that can exclude safe areas or resolve differently
@@ -8,11 +8,14 @@ export function subscribeIOSNativeViewport(onHeight: (height: number) => void): 
   return subscribeIOSLayout(layout => {
     const root = document.documentElement
     root.style.setProperty('--ios-native-viewport-height', `${layout.height}px`)
-    // Older wrappers already report hinge state/regions. Prefer the explicit
-    // capability on new wrappers, with native geometry as a compatible fallback.
-    const foldable = layout.isFoldable ?? (['closed', 'partiallyOpen', 'fullyOpen'].includes(layout.hingeStatus) || layout.divisions.length > 0)
+    const foldable = isIOSFoldable(layout)
     root.toggleAttribute('data-ios-foldable', foldable)
     root.setAttribute('data-ios-hinge', layout.hingeStatus ?? 'unknown')
+    // Composer alignment follows native side insets even with persistent
+    // panes disabled, including on the folded outer display.
+    const flatEdges = foldable ? (['left', 'right'] as const).filter(side => layout.safeArea[side] > 0) : []
+    if (flatEdges.length) root.setAttribute('data-ios-composer-flat-edges', flatEdges.join(' '))
+    else root.removeAttribute('data-ios-composer-flat-edges')
     onHeight(layout.height)
   })
 }

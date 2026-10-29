@@ -749,6 +749,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     panelWidthMode: 'default',
     customPanelWidth: 35,
     showTabLabels: true,
+    duoAlwaysOpen: true,
     hiddenTabIds: [],
     tabOrder: [],
     layout: [],

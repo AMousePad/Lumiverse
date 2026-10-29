@@ -213,6 +213,22 @@ export async function sendAPNsLiveActivity(destination: Pick<APNsDestination, "d
   return sendAPNsRequest(config, destination, payload, "liveactivity", immediate || terminal || state.phase === "inputNeeded" ? "10" : "5");
 }
 
+/** Versioned, encrypted content decoded by the compiled Spindle activity renderer. */
+export async function sendAPNsSpindleActivity(destination: Pick<APNsDestination, "device_token" | "bundle_id" | "environment" | "delivery_mode" | "relay_credential">,
+  state: { version: number; encrypted: import("./apns-encryption").EncryptedAPNsEnvelope }, timestamp: number, terminal: boolean): Promise<APNsDelivery> {
+  const route = getAPNsRoute(destination.bundle_id), mode = destination.delivery_mode ?? "direct";
+  if (route.mode !== mode) return { sent: false };
+  if (mode === "relay") return destination.relay_credential
+    ? sendAPNsRelayNotification(destination.bundle_id, destination.relay_credential, { version: 2, type: "liveactivity",
+        timestamp, terminal, state }) : { sent: false };
+  const config = getLiveConfiguration();
+  if (!config || config.bundleId !== destination.bundle_id) return { sent: false };
+  const payload = JSON.stringify({ aps: { timestamp, event: terminal ? "end" : "update", "content-state": state,
+    "stale-date": timestamp + 300, ...(terminal ? { "dismissal-date": timestamp + 60 } : {}) } });
+  if (Buffer.byteLength(payload) > 4096) throw new Error("Live Activity content is too large");
+  return sendAPNsRequest(config, destination, payload, "liveactivity", terminal ? "10" : "5");
+}
+
 async function sendAPNsRequest(config: APNsConfiguration, destination: Pick<APNsDestination, "device_token" | "bundle_id" | "environment">,
   payload: string, pushType: "alert" | "liveactivity", priority: string, collapseId?: string): Promise<APNsDelivery> {
   const now = Math.floor(Date.now() / 1000);

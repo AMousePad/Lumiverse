@@ -156,6 +156,8 @@
       "tabSize": "TAILLE DES ONGLETS",
       "tabSizeLarge": "Grand",
       "tabSizeCompact": "Compact",
+      "duoAlwaysOpen": "Toujours afficher le panneau une fois déplié (iPhone Duo)",
+      "duoAlwaysOpenHint": "Garde le panneau dans une zone distincte lorsque l’appareil est déplié. Désactivez cette option pour l’ouvrir et le fermer normalement.",
       "showTabLabels": "Afficher les étiquettes des onglets",
       "showTabLabelsHint": "Afficher les noms courts sous chaque icône d'onglet dans la barre latérale",
       "panelWidth": "LARGEUR DU PANNEAU",

@@ -82,7 +82,7 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
       { key: 'zoom', titleKey: 'display.zoom.title', titleFallback: 'Zoom', keywords: ['pinch', 'zoom', 'desktop', 'trackpad'] },
       { key: 'longMessages', titleKey: 'display.longMessages.title', titleFallback: 'Long Messages', keywords: ['long messages', 'assistant messages', 'collapse', 'read more', 'show less', 'message height'] },
       { key: 'modalWidth', titleKey: 'display.modalWidth.title', titleFallback: 'Modal Width', keywords: ['modal width', 'width', 'max width', 'full', 'comfortable', 'compact', 'custom'] },
-      { key: 'drawer', titleKey: 'display.drawer.title', titleFallback: 'Drawer', keywords: ['drawer', 'sidebar', 'side', 'panel width', 'tab position', 'tab size', 'tab labels'] },
+      { key: 'drawer', titleKey: 'display.drawer.title', titleFallback: 'Drawer', keywords: ['drawer', 'sidebar', 'side', 'panel width', 'tab position', 'tab size', 'tab labels', 'iPhone Duo', 'unfolded', 'always show'] },
       { key: 'toast', titleKey: 'display.toast.title', titleFallback: 'Notifications', keywords: ['toast', 'toast position', 'popup position', 'alert position'] },
       { key: 'chatHeads', titleKey: 'display.chatHeads.title', titleFallback: 'Chat Heads', keywords: ['chat heads', 'heads', 'floating avatar', 'completion sound', 'opacity', 'size', 'direction'] },
       { key: 'landing', titleKey: 'display.landing.title', titleFallback: 'Pagination', keywords: ['landing', 'pagination', 'recent chats', 'chats displayed', 'layout', 'page size'] },

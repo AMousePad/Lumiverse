@@ -948,6 +948,8 @@ export interface DrawerSettings {
   /** Drag-resized width in layout pixels. Legacy vw widths are used until the first resize. */
   panelWidthPx?: number
   showTabLabels: boolean
+  /** Keep the drawer in a separate pane while iPhone Duo is unfolded. Defaults to true. */
+  duoAlwaysOpen?: boolean
   hiddenTabIds: string[]
   /** Legacy flat tab order retained for downgrade compatibility and migration. */
   tabOrder: string[]

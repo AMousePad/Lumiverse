@@ -30,6 +30,8 @@ Lumiverse's interface is built around a central chat view with a tabbed drawer t
 
 Drawer panels can be docked to the opposite edge using the [Spindle](../extensions/index.md) **dockPanels** system, and on mobile the drawer slides in as a sheet.
 
+In the iOS app on iPhone Duo, unfolding keeps the drawer visible in a separate pane by default. Go to **Settings → Display → Drawer** and turn off **Always show drawer when unfolded (iPhone Duo)** to use the standard drawer that you open and close as needed. This preference is saved with your drawer settings and can also be changed while the Duo is folded. The composer keeps its straight edge beside the Duo's status area in either mode.
+
 ---
 
 ## Drawer Tabs

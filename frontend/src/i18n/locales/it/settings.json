@@ -72,6 +72,8 @@
       "tabSize": "DIMENSIONE SCHEDA",
       "tabSizeLarge": "Grande",
       "tabSizeCompact": "Compatto",
+      "duoAlwaysOpen": "Mostra sempre il pannello quando aperto (iPhone Duo)",
+      "duoAlwaysOpenHint": "Mantiene il pannello in un’area separata quando il dispositivo è aperto. Disattiva per aprirlo e chiuderlo normalmente.",
       "showTabLabels": "Mostra etichette schede",
       "showTabLabelsHint": "Visualizza i nomi brevi sotto ogni icona della scheda nella barra laterale",
       "panelWidth": "LARGHEZZA PANNELLO",

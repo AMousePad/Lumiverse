@@ -28,6 +28,7 @@ import { Button, TextInput } from '@/components/shared/FormComponents'
 import NumericInput from '@/components/shared/NumericInput'
 import ChatImageSettings from '@/components/settings/ChatImageSettings'
 import DrawerWidthSettings from '@/components/settings/DrawerWidthSettings'
+import IOSDuoDisplaySettings from '@/components/settings/IOSDuoDisplaySettings'
 import { Toggle } from '@/components/shared/Toggle'
 import { spinClass } from '@/components/shared/Spinner'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
@@ -538,6 +539,8 @@ function DisplaySettings() {
       )}
 
       <h3 id={sectionAnchorId('display', 'drawer')} className={sectionTitleClass} style={{ marginTop: 12 }}>{t('display.drawer.title')}</h3>
+
+      <IOSDuoDisplaySettings settings={drawerSettings} onChange={updateDrawer} />
 
       <div className={styles.drawerRow}>
         <div className={styles.field}>

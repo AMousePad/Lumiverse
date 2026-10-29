@@ -39,6 +39,11 @@ export function isIOSLayoutSnapshot(value: unknown): value is IOSLayoutSnapshot 
     && Array.isArray(s.divisions) && s.divisions.every(isRect) && Array.isArray(s.occlusions) && s.occlusions.every(isRect)
 }
 
+/** Prefer the native capability, with native hinge geometry for older wrappers. */
+export function isIOSFoldable(layout: IOSLayoutSnapshot | null): boolean {
+  return !!layout && (layout.isFoldable ?? (['closed', 'partiallyOpen', 'fullyOpen'].includes(layout.hingeStatus) || layout.divisions.length > 0))
+}
+
 /** Initial snapshot + live changes, including protection against a stale startup reply. */
 export function subscribeIOSLayout(onLayout: (layout: IOSLayoutSnapshot) => void): () => void {
   if (!hasIOSNativeBridge()) return () => {}

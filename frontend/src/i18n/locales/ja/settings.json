@@ -156,6 +156,8 @@
       "tabSize": "タブのサイズ",
       "tabSizeLarge": "大きい",
       "tabSizeCompact": "コンパクト",
+      "duoAlwaysOpen": "展開時にドロワーを常に表示（iPhone Duo）",
+      "duoAlwaysOpenHint": "展開時はドロワーを別の領域に表示します。オフにすると通常どおり開閉できます。",
       "showTabLabels": "タブのラベルを表示する",
       "showTabLabelsHint": "サイドバーの各タブ アイコンの下に短い名前を表示",
       "panelWidth": "パネル幅",

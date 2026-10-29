@@ -170,6 +170,8 @@
       "tabSize": "TAB SIZE",
       "tabSizeLarge": "Large",
       "tabSizeCompact": "Compact",
+      "duoAlwaysOpen": "Always show drawer when unfolded (iPhone Duo)",
+      "duoAlwaysOpenHint": "Keep the drawer in a separate pane while unfolded. Turn off to open and close it normally.",
       "showTabLabels": "Show tab labels",
       "showTabLabelsHint": "Display short names below each tab icon in the sidebar",
       "resizeLabel": "Resize sidebar",

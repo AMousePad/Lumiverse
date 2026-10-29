@@ -270,6 +270,8 @@ const { initPushListeners } = await import("./services/push.service");
 initPushListeners();
 const { initLiveActivityListeners } = await import("./services/ios-live-activities.service");
 initLiveActivityListeners();
+const { initSpindleLiveActivityDelivery } = await import("./services/spindle-live-activities.service");
+initSpindleLiveActivityDelivery();
 
 // Register background image-generation fallback listeners
 const { initImageGenAutoListeners } = await import("./services/image-gen-auto.service");

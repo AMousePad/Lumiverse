@@ -317,6 +317,7 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: import("./message-generation").BeginMessageGenerationInput }
   | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
   | ActivationPatternsMessage
@@ -751,7 +752,8 @@ interface RuntimeLumiverseVersionInfo {
   branch: string | null;
 }
 
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version" | "liveActivities"> & {
+  liveActivities: import("./live-activities-contract").SpindleLiveActivitiesAPI;
   chat: SpindleAPI["chat"] & {
     setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean>;
   };
@@ -4077,6 +4079,24 @@ const spindleApi: RuntimeSpindleAPI = {
       const normalized = normalizeOwnedRpcPoolEndpoint(endpoint);
       sharedRpcHandlers.delete(normalized);
       post({ type: "rpc_pool_unregister", endpoint: normalized });
+    },
+  },
+
+  liveActivities: {
+    async getStatus(userId) {
+      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "status", userId }) as import("./live-activities-contract").LiveActivityStatus;
+    },
+    async start(input, userId) {
+      assertMutationAllowed("spindle.liveActivities.start()");
+      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "start", input, userId }) as import("./live-activities-contract").LiveActivityResult;
+    },
+    async update(id, input, userId) {
+      assertMutationAllowed("spindle.liveActivities.update()");
+      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "update", id, input, userId }) as import("./live-activities-contract").LiveActivityResult;
+    },
+    async end(id, userId) {
+      assertMutationAllowed("spindle.liveActivities.end()");
+      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "end", id, userId }) as import("./live-activities-contract").LiveActivityResult;
     },
   },
 

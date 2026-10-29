@@ -211,3 +211,7 @@ async function runLongAnalysis(chatId: string) {
     - Fall back to `spindle.toast` when push isn't available
     - Keep titles short and bodies actionable
     - Use `url` so clicking the notification takes the user somewhere useful
+
+## Extension Live Activities
+
+For native iOS status, progress and image preview cards, see [Live Activities](live-activities.md). The separate lifecycle API supports encrypted background updates after a foreground start.

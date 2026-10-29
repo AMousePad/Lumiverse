@@ -346,6 +346,7 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: BeginMessageGenerationInput }
   | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
   | ActivationPatternsMessage
@@ -2642,6 +2643,9 @@ export class WorkerHost {
         this.handleUploadsDelete(msg.requestId, msg.uploadId, msg.userId);
         break;
       // ─── Push Notifications (gated: "push_notification") ──────────────
+      case "live_activity":
+        void this.presentationApi.handleLiveActivity(msg);
+        break;
       case "push_send":
         this.presentationApi.handlePushSend(msg.requestId, msg.title, msg.body, msg.tag, msg.url, msg.userId, msg.icon, msg.rawTitle, msg.image);
         break;

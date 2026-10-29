@@ -46,14 +46,18 @@
   padding-bottom: calc(10px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)) / var(--lumiverse-ui-scale, 1));
 }
 
-:global([data-duo-drawer-side='right'] [data-duo-chat]) .container {
+/* Flatten beside either the Duo hinge or its native side status area.
+   Status-area alignment also applies to the standard drawer layout. */
+:global([data-duo-drawer-side='right'] [data-duo-chat]) .container,
+:global(html[data-tauri-mobile='ios'][data-ios-composer-flat-edges~='right']) .container {
   --composer-right-edge-radius: 0px;
   right: 0;
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
 
-:global([data-duo-drawer-side='left'] [data-duo-chat]) .container {
+:global([data-duo-drawer-side='left'] [data-duo-chat]) .container,
+:global(html[data-tauri-mobile='ios'][data-ios-composer-flat-edges~='left']) .container {
   --composer-left-edge-radius: 0px;
   left: 0;
   border-top-left-radius: 0;
