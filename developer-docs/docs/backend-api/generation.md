@@ -124,6 +124,37 @@ Use the same `call_id` returned in `ToolCallDTO` as `tool_use.id` and `tool_resu
 !!! note "Tool result formatting"
     Anthropic requires the `tool_result` parts to come first in the content array of the user message that follows an assistant `tool_use`. The host enforces this; you just need to put them in a dedicated user message that immediately follows.
 
+### Reasoning before a tool call
+
+A reasoning model may think before it calls a tool. The result then carries that reasoning next to `tool_calls`, both in the non-stream response and on the stream's `done` chunk:
+
+| Field | Type | Returned by |
+|---|---|---|
+| `thinking_blocks` | `LlmThinkingBlockDTO[]` | Anthropic: signed `thinking` blocks and encrypted `redacted_thinking` blocks |
+| `reasoning_details` | `Record<string, unknown>[]` | OpenRouter, and other OpenAI-compatible providers that return them |
+
+Put them, unchanged, on the `assistant` message that carries the `tool_use` parts. The host sends them back in the provider's own format: Anthropic blocks open the assistant turn, and `reasoning_details` go on the assistant `tool_calls` message. Anthropic requires the blocks on a tool continuation while thinking is on.
+
+```ts
+const first = await spindle.generate.raw({ messages, tools, connection_id })
+const followup = await spindle.generate.raw({
+  messages: [
+    ...messages,
+    {
+      role: 'assistant',
+      content: first.tool_calls.map(call => ({ type: 'tool_use', id: call.call_id, name: call.name, input: call.args })),
+      thinking_blocks: first.thinking_blocks,
+      reasoning_details: first.reasoning_details,
+    },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: first.tool_calls[0].call_id, content: '72F, clear' }] },
+  ],
+  tools,
+  connection_id,
+})
+```
+
+Both fields are opaque: don't edit, reorder, or merge them. Providers that don't use a field ignore it. Gemini keeps its reasoning signature on each tool call instead (`ToolCallDTO.thought_signature`); pass it back as `tool_use.thought_signature`.
+
 ### ToolSchemaDTO
 
 | Field | Type | Description |
@@ -350,7 +381,7 @@ A discriminated union with three variants:
 |---|---|---|
 | `"token"` | `token: string` | Incremental content token. |
 | `"reasoning"` | `token: string` | Incremental chain-of-thought token (provider-dependent). |
-| `"done"` | `content: string`, `reasoning?: string`, `finish_reason: string`, `tool_calls?: ToolCallDTO[]`, `usage?: { prompt_tokens, completion_tokens, total_tokens }` | Terminal chunk — emitted exactly once on success. Carries the aggregated response so you don't need to accumulate manually if you don't want to. |
+| `"done"` | `content: string`, `reasoning?: string`, `finish_reason: string`, `tool_calls?: ToolCallDTO[]`, `thinking_blocks?: LlmThinkingBlockDTO[]`, `reasoning_details?: Record<string, unknown>[]`, `usage?: { prompt_tokens, completion_tokens, total_tokens }` | Terminal chunk — emitted exactly once on success. Carries the aggregated response so you don't need to accumulate manually if you don't want to. |
 
 !!! note "No `batchStream`"
     Batch is just a wrapper around N raw calls. If you want parallel streamed responses, run `Promise.all([rawStream(a), rawStream(b)])` and consume each iterator however you like.
