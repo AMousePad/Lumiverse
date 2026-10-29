@@ -156,6 +156,25 @@ test("live and batch extraction retain configured participants alongside known e
   }
 });
 
+test("generative extraction cannot request or return candidate-review verdicts", async () => {
+  const requests: Array<Parameters<Parameters<typeof extractWithSidecar>[1]>[0]> = [];
+  const extraction = { importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [],
+    relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [], grading: { rejected_existing_entities: ["Mara"] } };
+  const generate: Parameters<typeof extractWithSidecar>[1] = async (request) => {
+    requests.push(request);
+    return { content: JSON.stringify(request.requestPurpose === "batch extraction" ? { results: [{ ...extraction, index: 0 }, { ...extraction, index: 1 }] } : extraction) };
+  };
+  const single = await extractWithSidecar("Quiet weather.", generate, "fixture");
+  const batch = await extractBatchWithSidecar([{ index: 0, content: "Quiet weather." }, { index: 1, content: "Clear skies." }], generate, "fixture");
+  expect(single).not.toHaveProperty("gradedHeuristics");
+  expect(batch.every((result) => result?.score === 0.2)).toBe(true);
+  for (const request of requests) {
+    expect(request.messages[0]!.content).not.toContain("arbiter");
+    expect(JSON.stringify(request.tools)).not.toContain("grading");
+    expect(JSON.stringify(request.tools)).not.toContain("grade_heuristic_candidates");
+  }
+});
+
 describe("extractBatchWithSidecar", () => {
   test("a failed batch does not fan out into more provider requests", async () => {
     let calls = 0;

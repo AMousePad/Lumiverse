@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { arbitrateCortexCandidates, buildArbitrationBatches, validateArbitrationVerdicts, type CortexArbitrationInput } from "./arbitration";
 import { attributeFactsToEntities, buildCortexArbitrationPlan } from "./arbitration-plan";
 import { DEFAULT_CORTEX_CONFIG, normalizeCortexConfig } from "./config";
 import { getCortexStructuralSignature } from "./index";
+import * as decisions from "../decisions.service";
 
 const input: CortexArbitrationInput = { passage: "Mara, known as Red, promised to protect Tovin.", canonicals: [{ id: "c0", name: "Mara", aliases: ["Red"] }], candidates: [
   { id: "e0", kind: "entity", name: "Red", canonicalIds: ["c0"] },
@@ -53,38 +54,28 @@ describe("Cortex arbitration contract", () => {
     expect(batch!.questions.f0!.instructions).not.toContain("For lover");
     expect(batch!.questions.x0!.instructions).toContain("Absence from this passage or low importance is never grounds for rejection");
   });
-  test("an incomplete legacy reviewer fails over without accepting omitted candidates", async () => {
-    const config = normalizeCortexConfig({ ...DEFAULT_CORTEX_CONFIG, queryGeneration: {
-      primary: { connectionProfileId: "bad", model: "bad" }, secondary: { connectionProfileId: "good", model: "good" },
-    } });
-    const calls: string[] = [];
-    const result = await arbitrateCortexCandidates({ userId: "test", config, input, generate: async (options) => {
-      calls.push(options.connectionId);
-      return { content: JSON.stringify({ verdicts: options.connectionId === "bad" ? [] : [
-        { id: "e0", action: "resolve", canonicalId: "c0" }, { id: "e1", action: "keep" },
-      ] }) };
-    } });
-    expect(calls).toEqual(["bad", "good"]);
-    expect(result.verdicts[0]?.canonicalId).toBe("c0");
+  test("an unconfigured reviewer never calls a Decision default or a generative sidecar", async () => {
+    const evaluate = spyOn(decisions, "evaluateDecisionAnswers").mockImplementation(async () => { throw new Error("Unexpected inference"); });
+    try {
+      const config = normalizeCortexConfig({ ...DEFAULT_CORTEX_CONFIG, queryGeneration: {
+        primary: { connectionProfileId: "llm-default", model: "llm-model" }, secondary: null,
+      } });
+      await expect(arbitrateCortexCandidates({ userId: "test", config, input })).rejects.toThrow("Select a Decision arbitration connection");
+      expect(evaluate).not.toHaveBeenCalled();
+    } finally { evaluate.mockRestore(); }
   });
-  test("a cancelled review does not invoke fallback", async () => {
+  test("a cancelled review never starts inference", async () => {
     const controller = new AbortController();
-    const config = normalizeCortexConfig({ ...DEFAULT_CORTEX_CONFIG, queryGeneration: {
-      primary: { connectionProfileId: "primary", model: null }, secondary: { connectionProfileId: "fallback", model: null },
-    } });
-    let calls = 0;
-    await expect(arbitrateCortexCandidates({ userId: "test", config, input, signal: controller.signal, generate: async () => {
-      calls++; controller.abort(); return { content: "{}" };
-    } })).rejects.toThrow();
-    expect(calls).toBe(1);
+    controller.abort();
+    await expect(arbitrateCortexCandidates({ userId: "test", config: DEFAULT_CORTEX_CONFIG, input, signal: controller.signal })).rejects.toThrow();
   });
   test("legacy configs remain optional and relevant settings invalidate warmup", () => {
     const config = normalizeCortexConfig({ enabled: true });
     expect(config.sidecarReliability.arbitratesHeuristics).toBe(false);
-    expect(config.arbitration.backend).toBe("sidecar");
-    const enabled = { ...config, sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: true } };
+    expect(config.arbitration.backend).toBe("decision");
+    const enabled = { ...config, arbitration: { ...config.arbitration, connectionProfileId: "decision-a" }, sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: true } };
     const signature = getCortexStructuralSignature(enabled);
-    expect(getCortexStructuralSignature({ ...enabled, arbitration: { ...enabled.arbitration, backend: "decision" } })).not.toBe(signature);
+    expect(getCortexStructuralSignature({ ...enabled, arbitration: { ...enabled.arbitration, connectionProfileId: "decision-b" } })).not.toBe(signature);
     expect(getCortexStructuralSignature({ ...enabled, arbitration: { ...enabled.arbitration, minConfidence: 0.9 } })).not.toBe(signature);
     expect(getCortexStructuralSignature({ ...enabled, nonProseScaffoldTags: ["hud"] })).not.toBe(signature);
   });

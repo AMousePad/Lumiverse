@@ -26,6 +26,7 @@ import {
   putCortexConfig,
   shouldUseCortexSidecar,
   shouldUseCortexSidecarForChunkAnalysis,
+  shouldReviewCortexCandidates,
   type MemoryCortexConfig,
 } from "./config";
 import { scoreChunkHeuristic } from "./salience-heuristic";
@@ -75,6 +76,7 @@ export {
   applyCortexPreset,
   shouldUseCortexSidecar,
   shouldUseCortexSidecarForChunkAnalysis,
+  shouldReviewCortexCandidates,
   listCortexSidecarEndpoints,
   updateCortexSidecarEndpoints,
   migrateSidecarIntoEndpointPairs,
@@ -333,14 +335,13 @@ export function getCortexStructuralSignature(config: MemoryCortexConfig): string
     nonProseScaffoldTags: config.nonProseScaffoldTags,
     arbitration: {
       version: CORTEX_ARBITRATION_VERSION,
-      enabled: config.sidecarReliability.arbitratesHeuristics,
+      enabled: shouldReviewCortexCandidates(config),
       gradesExistingRecords: config.sidecarReliability.gradesExistingRecords,
-      ...(config.sidecarReliability.arbitratesHeuristics ? {
+      ...(shouldReviewCortexCandidates(config) ? {
         backend: config.arbitration.backend,
         connectionProfileId: config.arbitration.connectionProfileId,
         model: config.arbitration.model,
         minConfidence: config.arbitration.minConfidence,
-        ...(config.arbitration.backend === "sidecar" ? { endpoints: config.queryGeneration } : {}),
       } : {}),
     },
   });
@@ -1479,7 +1480,7 @@ export async function processChunk(
   if (signal?.aborted) return;
   const queryTargets = collectQueryGenerationTargets(config, sidecarConnectionId);
   const sidecarActive = !!precomputedExtraction || (shouldUseCortexSidecarForChunkAnalysis(config) && !!generateRawFn && queryTargets.length > 0);
-  const arbitrationActive = config.sidecarReliability.arbitratesHeuristics;
+  const arbitrationActive = shouldReviewCortexCandidates(config);
   const warmupSignature = getCortexStructuralSignature(config);
 
   const db = getDb();
@@ -1848,8 +1849,7 @@ export async function processChunk(
         const plan = buildCortexArbitrationPlan({ passage: proseContent, graph: graphPlan,
           knownEntities: reviewEntities, characterNames, participants, canonicalAliases: descriptionAliases, existingEvidence: evidence,
           gradeExisting: config.sidecarReliability.gradesExistingRecords });
-        const result = await arbitrateCortexCandidates({ userId: data.userId, config, input: plan.input,
-          generate: generateRawFn, sidecarConnectionId, signal });
+        const result = await arbitrateCortexCandidates({ userId: data.userId, config, input: plan.input, signal });
         const applied = plan.apply(result.verdicts);
         graphPlan = applied.graph;
         cleanupActions = applied.cleanup;
@@ -2106,7 +2106,7 @@ export async function processChunk(
     // ask it whether to reactivate; otherwise auto-reactivate.
     if (arbitrationActive) {
       await evaluatePendingReactivations(
-        data.userId, data.chatId, proseContent, generateRawFn, sidecarConnectionId, config, signal, data.chunkId,
+        data.userId, data.chatId, proseContent, config, signal, data.chunkId,
       );
     } else {
       // Non-arbiter mode: auto-reactivate any pending relations
@@ -2807,7 +2807,7 @@ function autoReactivatePendingRelations(chatId: string): void {
 
 /**
  * Arbiter-evaluated reactivation of dormant user-curated relations.
- * Asks the sidecar whether dormant relations should be restored based on
+ * Asks the selected Decision model whether dormant relations should be restored based on
  * the current passage content (are the entities meaningfully interacting
  * in a way that re-establishes the relationship?).
  */
@@ -2815,13 +2815,11 @@ export async function evaluatePendingReactivations(
   userId: string,
   chatId: string,
   passageContent: string,
-  generateRawFn: import("./salience-sidecar").SidecarGenerateFn | undefined,
-  connectionId: string | undefined,
   config: MemoryCortexConfig,
   signal?: AbortSignal,
   chunkId?: string,
 ): Promise<void> {
-  if (signal?.aborted) return;
+  if (signal?.aborted || !shouldReviewCortexCandidates(config)) return;
   const db = getDb();
   const rows = db.query(`SELECT r.id, r.relation_type, r.relation_label, r.status, r.updated_at, r.metadata, r.user_edited_at,
       s.name AS source, t.name AS target
@@ -2838,8 +2836,7 @@ export async function evaluatePendingReactivations(
   });
   if (!candidates.length) return;
   try {
-    const result = await arbitrateCortexCandidates({ userId, config, generate: generateRawFn,
-      sidecarConnectionId: connectionId, signal, input: { passage: passageContent, canonicals: [],
+    const result = await arbitrateCortexCandidates({ userId, config, signal, input: { passage: passageContent, canonicals: [],
         candidates: candidates.map((row, index) => ({ id: `reactivation_${index}`, kind: "reactivation",
           source: row.source, target: row.target, type: row.relation_type,
           evidence: [row.relation_label ?? row.relation_type, `Current status: ${row.status}`] })) } });

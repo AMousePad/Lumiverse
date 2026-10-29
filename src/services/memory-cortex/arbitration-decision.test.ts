@@ -57,6 +57,28 @@ function response(body: any, invalid: (id: string, candidate: any) => boolean = 
 }
 const evaluate = (signal?: AbortSignal) => arbitrateCortexCandidates({ userId, config, input, signal });
 
+test("an unselected reviewer stays unused even when a default Decision connection exists", async () => {
+  getDb().query("UPDATE decision_connections SET is_default = 1 WHERE id = ?").run(profileId);
+  const unconfigured = putCortexConfig(userId, { ...config,
+    arbitration: { ...config.arbitration, connectionProfileId: null, model: null },
+  });
+  expect(unconfigured.sidecarReliability.arbitratesHeuristics).toBe(true);
+  expect(unconfigured.arbitration.connectionProfileId).toBeNull();
+  provider(() => { throw new Error("Unconfigured review must not start inference"); });
+  await expect(arbitrateCortexCandidates({ userId, config: unconfigured, input })).rejects.toThrow("Select a Decision arbitration connection");
+  const chatId = "unconfigured-review-chat";
+  const passage = "Mara returned home.";
+  const db = getDb();
+  db.query("INSERT INTO chats (id, user_id) VALUES (?, ?)").run(chatId, userId);
+  db.query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('unconfigured-chunk', ?, 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(chatId, passage);
+  const heuristic = runHeuristicAnalysis({ cleanContent: passage, knownEntities: [], characterNames: ["Mara"], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
+  await processChunk({ chunkId: "unconfigured-chunk", chatId, userId, characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 },
+    ["Mara"], undefined, undefined, undefined, heuristic, true);
+  expect(requests).toEqual([]);
+  expect(db.query("SELECT id FROM memory_salience WHERE chunk_id = 'unconfigured-chunk'").get()).not.toBeNull();
+  expect((db.query("SELECT cortex_warmup_signature FROM chat_chunks WHERE id = 'unconfigured-chunk'").get() as any).cortex_warmup_signature).not.toBeNull();
+});
+
 for (const verdict of ["keep", "reject", "defer", "low-confidence"] as const) {
   test(`sidecar rebuild proposes omitted first-person romance to native Decision review: ${verdict}`, async () => {
     const chatId = "romance-rebuild-chat";

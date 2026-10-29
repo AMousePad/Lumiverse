@@ -1025,8 +1025,7 @@ app.get("/health", async (c) => {
   const sidecarRequired =
     config.entityExtractionMode === "sidecar" ||
     config.salienceScoringMode === "sidecar" ||
-    config.consolidation.useSidecar
-    || (config.sidecarReliability.arbitratesHeuristics && config.arbitration.backend === "sidecar");
+    config.consolidation.useSidecar;
 
   const sidecarProfile = sidecarConnectionId
     ? connectionsSvc.resolveConnection(userId, sidecarConnectionId)
@@ -1089,13 +1088,12 @@ app.get("/health", async (c) => {
     );
   }
 
-  const arbitrationEnabled = config.sidecarReliability.arbitratesHeuristics;
-  const decisionProfile = config.arbitration.backend === "decision" && config.arbitration.connectionProfileId
+  const arbitrationEnabled = memoryCortex.shouldReviewCortexCandidates(config);
+  const decisionProfile = config.arbitration.connectionProfileId
     ? decisionConnectionsSvc.getConnection(userId, config.arbitration.connectionProfileId) : null;
   const readableDecisionProfile = decisionProfile
     ? await withReadableApiKeyStatus(userId, decisionProfile, decisionConnectionsSvc.decisionConnectionSecretKey) : null;
-  const arbitrationReady = !arbitrationEnabled || (config.arbitration.backend === "decision"
-    ? !!readableDecisionProfile?.has_api_key : sidecarReady);
+  const arbitrationReady = !arbitrationEnabled || !!readableDecisionProfile?.has_api_key;
   if (arbitrationEnabled) pushCheck("arbitration_ready", "Candidate review", arbitrationReady ? "pass" : "fail",
     arbitrationReady ? "The selected reviewer is configured. Live Decision inference is checked during ingestion."
       : "Candidate review is enabled but its connection or readable credential is missing. Chunks remain pending until review succeeds.");
@@ -1360,8 +1358,8 @@ app.get("/health", async (c) => {
     },
     arbitration: {
       enabled: arbitrationEnabled, backend: config.arbitration.backend, ready: arbitrationReady,
-      connectionProfileId: config.arbitration.backend === "decision" ? config.arbitration.connectionProfileId : sidecarConnectionId,
-      model: config.arbitration.backend === "decision" ? config.arbitration.model || decisionProfile?.model || null : config.sidecar.model,
+      connectionProfileId: config.arbitration.connectionProfileId,
+      model: config.arbitration.model || decisionProfile?.model || null,
       minConfidence: config.arbitration.minConfidence, timeoutMs: config.arbitration.timeoutMs,
       maxInputTokens: config.arbitration.maxInputTokens,
     },

@@ -88,6 +88,7 @@ const storeState = {
   openModal: () => undefined,
   extensions: [{ identifier: "lumiverse_suite", enabled: true, has_frontend: true }],
   profiles: [{ id: "primary-conn", name: "Primary", metadata: {} }],
+  decisionProfiles: [] as Array<{ id: string; name: string; model: string; is_default: boolean }>,
   activeChatId: "chat-1",
 };
 
@@ -173,15 +174,19 @@ mock.module("@/components/panels/connection-manager/ModelCombobox", () => ({
     createElement("input", { defaultValue: value, placeholder }),
 }));
 mock.module("@/components/shared/ConnectionSelect", () => ({
-  default: ({ value, ariaLabel, onChange, kind }: {
+  default: ({ value, ariaLabel, onChange, kind, modelValue, seedDefaultModel }: {
     value: string;
     kind?: string;
     ariaLabel?: string;
     onChange: (id: string) => void;
+    modelValue?: string;
+    seedDefaultModel?: boolean;
   }) =>
     createElement("select", {
       "aria-label": ariaLabel,
       "data-kind": kind,
+      "data-model-value": modelValue,
+      "data-seed-model": String(seedDefaultModel),
       value,
       onChange: (event: { target: { value: string } }) => onChange(event.target.value),
     },
@@ -195,7 +200,10 @@ mock.module("@/components/shared/NumericInput", () => ({
   default: ({ value }: { value: number }) => createElement("input", { defaultValue: String(value) }),
 }));
 mock.module("@/components/shared/Toggle", () => ({
-  Toggle: { Checkbox: () => createElement("input", { type: "checkbox" }) },
+  Toggle: { Checkbox: ({ checked, disabled, label, hint, onChange }: {
+    checked: boolean; disabled?: boolean; label?: string; hint?: string; onChange: (value: boolean) => void;
+  }) => createElement("input", { type: "checkbox", checked, disabled, "aria-label": label, title: hint,
+    onChange: (event: { target: { checked: boolean } }) => onChange(event.target.checked) }) },
 }));
 mock.module("@/lib/reasoning-binding", () => ({ getReasoningBindingSummary: () => "" }));
 mock.module("@/ws/client", () => ({ wsClient: { on: () => () => undefined } }));
@@ -232,6 +240,7 @@ describe("MemoryCortexSettings secondary fallback", () => {
     host = null;
     patches.length = 0;
     resetPersistedConfig();
+    storeState.decisionProfiles = [];
   });
 
   // Waits for a condition to hold while letting pending async work settle inside
@@ -301,6 +310,7 @@ describe("MemoryCortexSettings secondary fallback", () => {
     h.querySelector<HTMLSelectElement>(`[data-testid="${testId}"] select`);
 
   test("Decision review is configurable without a generative sidecar", async () => {
+    storeState.decisionProfiles = [{ id: "decision-conn", name: "Decision", model: "decision-model", is_default: true }];
     persistedConfig = { ...structuredClone(config), sidecar: { ...config.sidecar, connectionProfileId: null },
       sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: true },
       arbitration: { backend: "decision", connectionProfileId: null, model: null, timeoutMs: 30000, requestsPerMinute: 0, minConfidence: 0.8 },
@@ -310,6 +320,35 @@ describe("MemoryCortexSettings secondary fallback", () => {
     expect(select?.getAttribute("data-kind")).toBe("decision");
     await changeSelect(select!, "decision-conn");
     expect(patches.at(-1)).toMatchObject({ arbitration: { backend: "decision", connectionProfileId: "decision-conn", minConfidence: 0.8 } });
+  });
+
+  test("candidate review cannot be enabled without a Decision connection", async () => {
+    const h = await mount();
+    const toggle = h.querySelector<HTMLInputElement>('[aria-label="memoryCortex.arbitratesHeuristics"]');
+    expect(toggle?.disabled).toBe(true);
+    expect(toggle?.checked).toBe(false);
+    expect(toggle?.title).toBe("memoryCortex.arbitrationNeedsConnection");
+    expect(h.querySelector('[aria-label="memoryCortex.arbitrationBackend"]')).toBeNull();
+    expect(h.querySelector('[aria-label="memoryCortex.decisionConnection"]')).toBeNull();
+  });
+
+  test("enabling review leaves even the default Decision connection and model unselected", async () => {
+    storeState.decisionProfiles = [{ id: "decision-conn", name: "Decision", model: "decision-model", is_default: true }];
+    const h = await mount();
+    const toggle = h.querySelector<HTMLInputElement>('[aria-label="memoryCortex.arbitratesHeuristics"]');
+    expect(toggle?.disabled).toBe(false);
+    expect(patches).toEqual([]);
+    await click(toggle);
+    const select = h.querySelector<HTMLSelectElement>('[aria-label="memoryCortex.decisionConnection"]');
+    expect(select?.value).toBe("");
+    expect(select?.getAttribute("data-model-value")).toBe("");
+    expect(select?.getAttribute("data-seed-model")).toBe("false");
+    expect(patches).toEqual([{ sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: true } }]);
+    expect(h.querySelector('[aria-label="memoryCortex.arbitrationBackend"]')).toBeNull();
+    await changeSelect(select!, "decision-conn");
+    expect(patches.at(-1)).toMatchObject({ arbitration: { backend: "decision", connectionProfileId: "decision-conn", model: null } });
+    await changeSelect(select!, "");
+    expect(patches.at(-1)).toMatchObject({ arbitration: { connectionProfileId: null, model: null } });
   });
 
   test("renders secondary profile controls and unavailable state", async () => {

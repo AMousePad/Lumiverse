@@ -1,17 +1,32 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../src/db/connection";
 import { DEFAULT_CORTEX_CONFIG, getCortexConfig, putCortexConfig } from "../src/services/memory-cortex/config";
 import { curateEntityFactsWithLLM, processChunk } from "../src/services/memory-cortex";
 import { runHeuristicAnalysis } from "../src/services/memory-cortex/heuristic-analysis";
 import * as graph from "../src/services/memory-cortex/entity-graph";
 import { getColorMap } from "../src/services/memory-cortex/font-attribution";
+import * as decisions from "../src/services/decisions.service";
+import type { CortexArbitrationInput, ArbitrationVerdict } from "../src/services/memory-cortex/arbitration";
+
+let reviewSpy: ReturnType<typeof spyOn> | undefined;
+function mockDecisionReview(review: (state: CortexArbitrationInput) => ArbitrationVerdict[]) {
+  reviewSpy = spyOn(decisions, "evaluateDecisionAnswers").mockImplementation(async (_userId, request) => {
+    expect(request.connection_id).toBe("decision-reviewer");
+    const verdicts = review(request.state as unknown as CortexArbitrationInput);
+    return { issues: [], result: { model: "fixture", answers: Object.fromEntries(verdicts.map((verdict) => {
+      const choice = verdict.action === "resolve" ? `resolve_${verdict.canonicalId}` : verdict.action;
+      return [verdict.id, { type: "choice" as const, choice, confidence: 1, probabilities: { [choice]: 1 } }];
+    })) } };
+  });
+}
+const noGenerativeReview = async () => { throw new Error("Candidate review must not call a generative sidecar"); };
 
 beforeEach(async () => {
   closeDatabase(); initDatabase(":memory:");
   getDb().run("PRAGMA foreign_keys = OFF");
   getDb().run(await Bun.file(new URL("../src/db/baseline.sql", import.meta.url)).text());
 });
-afterEach(() => closeDatabase());
+afterEach(() => { reviewSpy?.mockRestore(); reviewSpy = undefined; closeDatabase(); });
 
 test("heuristic-only ingestion records a wrapped thought without a sidecar", async () => {
   const config = putCortexConfig("thought-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
@@ -34,7 +49,7 @@ for (const { review, endpointAction } of [
 ] as const) {
   test(`omitted known relationship endpoints honor review=${review} and endpoint verdict ${endpointAction}`, async () => {
     const config = putCortexConfig("relation-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
-      queryGeneration: { primary: { connectionProfileId: "reviewer", model: "fixture" }, secondary: null },
+      arbitration: { ...DEFAULT_CORTEX_CONFIG.arbitration, connectionProfileId: "decision-reviewer" },
       sidecarReliability: { ...DEFAULT_CORTEX_CONFIG.sidecarReliability, arbitratesHeuristics: review },
       consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
     });
@@ -44,14 +59,14 @@ for (const { review, endpointAction } of [
     const tovin = graph.upsertEntity("relation-chat", { name: "Tovin", type: "character", aliases: ["Tov"], confidence: 1 }, "old", 1);
     const heuristic = runHeuristicAnalysis({ cleanContent: "Quiet weather.", knownEntities: [], characterNames: [], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
     let reviewed = false;
-    await processChunk({ chunkId: "relation-chunk", chatId: "relation-chat", userId: "relation-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara"], async (request) => {
-      const state = JSON.parse(request.messages[1]!.content);
+    mockDecisionReview((state) => {
       expect(state.candidates).toContainEqual(expect.objectContaining({ kind: "relationship", source: "Tovin", target: "Mara", type: "mentor" }));
       reviewed = true;
-      return { content: JSON.stringify({ verdicts: state.candidates.map((candidate: any) => ({ id: candidate.id,
+      return state.candidates.map((candidate: any) => ({ id: candidate.id,
         action: candidate.kind === "entity" && candidate.name === "Tovin" ? endpointAction
-          : candidate.kind === "relationship" || ["Mara", "Tovin"].includes(candidate.name) ? "keep" : "reject" })) }) };
-    }, "reviewer", undefined, heuristic, true, undefined, {
+          : candidate.kind === "relationship" || ["Mara", "Tovin"].includes(candidate.name) ? "keep" : "reject" }));
+    });
+    await processChunk({ chunkId: "relation-chunk", chatId: "relation-chat", userId: "relation-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara"], noGenerativeReview, "unused-llm", undefined, heuristic, true, undefined, {
       score: 0.3, emotionalTags: [], narrativeFlags: [], entitiesPresent: [], statusChanges: [], keyFacts: [], discoveredAliases: [], fontColors: [],
       relationshipsShown: [{ source: "Tov", target: "mara", type: "mentor", label: "longstanding mentor", sentiment: 0.5 }],
     });
@@ -67,7 +82,7 @@ for (const { review, endpointAction } of [
 for (const aliasAction of ["keep", "reject", "defer"] as const) {
   test(`a relationship follows a new alias only after alias verdict ${aliasAction}`, async () => {
     const config = putCortexConfig("alias-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
-      queryGeneration: { primary: { connectionProfileId: "reviewer", model: "fixture" }, secondary: null },
+      arbitration: { ...DEFAULT_CORTEX_CONFIG.arbitration, connectionProfileId: "decision-reviewer" },
       sidecarReliability: { ...DEFAULT_CORTEX_CONFIG.sidecarReliability, arbitratesHeuristics: true },
       consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
     });
@@ -75,12 +90,12 @@ for (const aliasAction of ["keep", "reject", "defer"] as const) {
     getDb().query("INSERT INTO chats (id, user_id) VALUES ('alias-chat', 'alias-user')").run();
     getDb().query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('alias-chunk', 'alias-chat', 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(passage);
     const heuristic = runHeuristicAnalysis({ cleanContent: "Quiet weather.", knownEntities: [], characterNames: [], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
-    await processChunk({ chunkId: "alias-chunk", chatId: "alias-chat", userId: "alias-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara", "Tovin"], async (request) => {
-      const state = JSON.parse(request.messages[1]!.content);
+    mockDecisionReview((state) => {
       expect(state.candidates).toContainEqual(expect.objectContaining({ kind: "relationship", source: "Red", target: "Tovin" }));
-      return { content: JSON.stringify({ verdicts: state.candidates.map((candidate: any) => ({ id: candidate.id,
-        action: candidate.kind === "alias" ? aliasAction : candidate.kind === "relationship" || ["Mara", "Tovin"].includes(candidate.name) ? "keep" : "reject" })) }) };
-    }, "reviewer", undefined, heuristic, true, undefined, {
+      return state.candidates.map((candidate: any) => ({ id: candidate.id,
+        action: candidate.kind === "alias" ? aliasAction : candidate.kind === "relationship" || ["Mara", "Tovin"].includes(candidate.name) ? "keep" : "reject" }));
+    });
+    await processChunk({ chunkId: "alias-chunk", chatId: "alias-chat", userId: "alias-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara", "Tovin"], noGenerativeReview, "unused-llm", undefined, heuristic, true, undefined, {
       score: 0.3, emotionalTags: [], narrativeFlags: [], entitiesPresent: [{ name: "Mara", type: "character" }], statusChanges: [], keyFacts: [], fontColors: [],
       discoveredAliases: [{ canonicalName: "Mara", alias: "Red", evidence: "Mara, known as Red" }],
       relationshipsShown: [{ source: "Red", target: "Tovin", type: "mentor", label: "mentor", sentiment: 0.5 }],
@@ -94,7 +109,7 @@ for (const aliasAction of ["keep", "reject", "defer"] as const) {
 for (const entityAction of ["keep", "reject"] as const) {
   test(`color claims for a newly discovered character follow its ${entityAction} identity verdict`, async () => {
     const config = putCortexConfig("new-color-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
-      queryGeneration: { primary: { connectionProfileId: "reviewer", model: "fixture" }, secondary: null },
+      arbitration: { ...DEFAULT_CORTEX_CONFIG.arbitration, connectionProfileId: "decision-reviewer" },
       sidecarReliability: { ...DEFAULT_CORTEX_CONFIG.sidecarReliability, arbitratesHeuristics: true },
       consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
     });
@@ -102,12 +117,12 @@ for (const entityAction of ["keep", "reject"] as const) {
     getDb().query("INSERT INTO chats (id, user_id) VALUES ('new-color-chat', 'new-color-user')").run();
     getDb().query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('new-color-chunk', 'new-color-chat', 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(passage);
     const heuristic = runHeuristicAnalysis({ cleanContent: "Quiet weather.", knownEntities: [], characterNames: [], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
-    await processChunk({ chunkId: "new-color-chunk", chatId: "new-color-chat", userId: "new-color-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, [], async (request) => {
-      const state = JSON.parse(request.messages[1]!.content);
+    mockDecisionReview((state) => {
       expect(state.candidates).toContainEqual(expect.objectContaining({ kind: "color", name: "Selene", type: "thought" }));
-      return { content: JSON.stringify({ verdicts: state.candidates.map((candidate: any) => ({ id: candidate.id,
-        action: candidate.kind === "color" ? "keep" : candidate.name === "Selene" ? entityAction : "reject" })) }) };
-    }, "reviewer", undefined, heuristic, true, undefined, {
+      return state.candidates.map((candidate: any) => ({ id: candidate.id,
+        action: candidate.kind === "color" ? "keep" : candidate.name === "Selene" ? entityAction : "reject" }));
+    });
+    await processChunk({ chunkId: "new-color-chunk", chatId: "new-color-chat", userId: "new-color-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, [], noGenerativeReview, "unused-llm", undefined, heuristic, true, undefined, {
       score: 0.3, emotionalTags: [], narrativeFlags: [], entitiesPresent: [{ name: "Selene", type: "character" }], statusChanges: [], keyFacts: [], discoveredAliases: [], relationshipsShown: [],
       fontColors: [{ hexColor: "#abc", characterName: "Selene", usageType: "thought" }],
     });
@@ -118,7 +133,7 @@ for (const entityAction of ["keep", "reject"] as const) {
 for (const action of ["keep", "reject", "defer"] as const) {
   test(`ingestion explicitly reviews colored thoughts and applies ${action} without double counting`, async () => {
     const config = putCortexConfig("color-user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
-      queryGeneration: { primary: { connectionProfileId: "reviewer", model: "fixture" }, secondary: null },
+      arbitration: { ...DEFAULT_CORTEX_CONFIG.arbitration, connectionProfileId: "decision-reviewer" },
       sidecarReliability: { ...DEFAULT_CORTEX_CONFIG.sidecarReliability, arbitratesHeuristics: true },
       consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
     });
@@ -127,15 +142,15 @@ for (const action of ["keep", "reject", "defer"] as const) {
     getDb().query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('color-chunk', 'color-chat', 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(passage);
     const heuristic = runHeuristicAnalysis({ cleanContent: passage, knownEntities: [], characterNames: ["Mara"], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
     let reviewedColors = 0;
-    await processChunk({ chunkId: "color-chunk", chatId: "color-chat", userId: "color-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara"], async (request) => {
-      const state = JSON.parse(request.messages[1]!.content);
+    mockDecisionReview((state) => {
       const colors = state.candidates.filter((candidate: any) => candidate.kind === "color");
       reviewedColors += colors.length;
       expect(colors).toHaveLength(1);
       expect(colors[0]).toMatchObject({ name: "Mara", hexColor: "#aabbcc", type: "thought" });
       expect(colors[0].evidence.join(" ")).toContain("<font color=#abc>");
-      return { content: JSON.stringify({ verdicts: state.candidates.map((candidate: any) => ({ id: candidate.id, action: candidate.kind === "color" ? action : "keep" })) }) };
-    }, "reviewer", undefined, heuristic, true, undefined, {
+      return state.candidates.map((candidate: any) => ({ id: candidate.id, action: candidate.kind === "color" ? action : "keep" }));
+    });
+    await processChunk({ chunkId: "color-chunk", chatId: "color-chat", userId: "color-user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara"], noGenerativeReview, "unused-llm", undefined, heuristic, true, undefined, {
       score: 0.3, emotionalTags: [], narrativeFlags: [], entitiesPresent: [{ name: "Mara", type: "character" }],
       statusChanges: [], keyFacts: [], relationshipsShown: [], discoveredAliases: [], fontColors: [
         { hexColor: "#abc", characterName: "Mara", usageType: "thought" },
@@ -230,7 +245,7 @@ test("partial arbitration updates preserve the selected connection and model", (
 for (const change of ["source", "config"] as const) {
   test(`a ${change} edit during review prevents stale persistence`, async () => {
     const config = putCortexConfig("user", { ...DEFAULT_CORTEX_CONFIG, enabled: true,
-      queryGeneration: { primary: { connectionProfileId: "reviewer", model: "fixture" }, secondary: null },
+      arbitration: { ...DEFAULT_CORTEX_CONFIG.arbitration, connectionProfileId: "decision-reviewer" },
       sidecarReliability: { ...DEFAULT_CORTEX_CONFIG.sidecarReliability, arbitratesHeuristics: true },
       consolidation: { ...DEFAULT_CORTEX_CONFIG.consolidation, enabled: false },
     });
@@ -239,13 +254,13 @@ for (const change of ["source", "config"] as const) {
     getDb().query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES ('chunk', 'chat', 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(passage);
     const heuristic = runHeuristicAnalysis({ cleanContent: passage, knownEntities: [], characterNames: ["Mara"], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
     let reviewed = false;
-    await processChunk({ chunkId: "chunk", chatId: "chat", userId: "user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara"], async (request) => {
+    mockDecisionReview((state) => {
       reviewed = true;
       if (change === "source") getDb().query("UPDATE chat_chunks SET content = 'Revised text' WHERE id = 'chunk'").run();
       else putCortexConfig("user", { arbitration: { ...config.arbitration, minConfidence: 0.95 } });
-      const state = JSON.parse(request.messages[1]!.content);
-      return { content: JSON.stringify({ verdicts: state.candidates.map((c: any) => ({ id: c.id, action: "keep" })) }) };
-    }, "reviewer", undefined, heuristic, true);
+      return state.candidates.map((c: any) => ({ id: c.id, action: "keep" }));
+    });
+    await processChunk({ chunkId: "chunk", chatId: "chat", userId: "user", characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Mara"], noGenerativeReview, "unused-llm", undefined, heuristic, true);
     expect(reviewed).toBe(true);
     expect(graph.getEntities("chat")).toEqual([]);
     expect(getDb().query("SELECT id FROM memory_salience").all()).toEqual([]);

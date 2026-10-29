@@ -73,8 +73,8 @@ export interface SidecarReliabilityConfig {
   fallback: "heuristic" | "skip";
   /** Opt-in: only an explicit boolean true enables candidate review. Default: false.
    *  Review every entity, relationship, alias and font-color proposal before persistence.
-   *  The arbitration backend can be the generative sidecar or a native Decision
-   *  connection. Failed/incomplete reviews leave the chunk pending. */
+   *  Requires an explicitly selected native Decision connection.
+   *  Failed/incomplete reviews leave the chunk pending. */
   arbitratesHeuristics: boolean;
   /** Also review existing records against historical excerpts. Cleanup never
    *  removes manually edited entities or incident manually edited relations. */
@@ -96,7 +96,7 @@ export interface FactManagementConfig {
 
 /** Arbitration is independent of generative extraction and summarization. */
 export interface CortexArbitrationConfig {
-  backend: "sidecar" | "decision";
+  backend: "decision";
   connectionProfileId: string | null;
   model: string | null;
   timeoutMs: number;
@@ -308,7 +308,7 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
     gradesExistingRecords: false,
   },
   arbitration: {
-    backend: "sidecar",
+    backend: "decision",
     connectionProfileId: null,
     model: null,
     timeoutMs: 30000,
@@ -646,8 +646,7 @@ export function shouldUseCortexSidecar(config: MemoryCortexConfig): boolean {
   return !!getCortexSidecarConnectionId(config) && (
     config.entityExtractionMode === "sidecar" ||
     config.salienceScoringMode === "sidecar" ||
-    (config.consolidation.enabled && config.consolidation.useSidecar) ||
-    (config.sidecarReliability.arbitratesHeuristics && config.arbitration.backend === "sidecar")
+    (config.consolidation.enabled && config.consolidation.useSidecar)
   );
 }
 
@@ -659,6 +658,11 @@ export function shouldUseCortexSidecarForChunkAnalysis(config: MemoryCortexConfi
   );
 }
 
+/** Enabling review alone never selects a default connection or starts inference. */
+export function shouldReviewCortexCandidates(config: MemoryCortexConfig): boolean {
+  return config.sidecarReliability.arbitratesHeuristics && !!config.arbitration.connectionProfileId;
+}
+
 /**
  * Normalize a partial config into a full config by merging with defaults.
  */
@@ -666,6 +670,8 @@ export function normalizeCortexConfig(
   input: Partial<MemoryCortexConfig>,
 ): MemoryCortexConfig {
   const defaults = DEFAULT_CORTEX_CONFIG;
+  // Old generative reviewers must not be reinterpreted as Decision connections.
+  const decisionArbitration = input.arbitration?.backend === "decision";
   const sidecar = {
     connectionProfileId: input.sidecar?.connectionProfileId ?? defaults.sidecar.connectionProfileId,
     model: input.sidecar?.model ?? defaults.sidecar.model,
@@ -715,12 +721,12 @@ export function normalizeCortexConfig(
     sidecarTimeoutMs: input.sidecarTimeoutMs ?? defaults.sidecarTimeoutMs,
     sidecarReliability: {
       fallback: input.sidecarReliability?.fallback === "skip" ? "skip" : defaults.sidecarReliability.fallback,
-      arbitratesHeuristics: input.sidecarReliability?.arbitratesHeuristics === true,
+      arbitratesHeuristics: decisionArbitration && input.sidecarReliability?.arbitratesHeuristics === true,
       gradesExistingRecords: input.sidecarReliability?.gradesExistingRecords === true,
     },
     arbitration: {
-      backend: input.arbitration?.backend === "decision" ? "decision" : "sidecar",
-      ...normalizeCortexModelEndpoint(input.arbitration),
+      backend: "decision",
+      ...normalizeCortexModelEndpoint(decisionArbitration ? input.arbitration : undefined),
       timeoutMs: boundedNumber(input.arbitration?.timeoutMs, 100, 30000, defaults.arbitration.timeoutMs),
       maxInputTokens: boundedNumber(input.arbitration?.maxInputTokens, 1024, 262144, defaults.arbitration.maxInputTokens),
       requestsPerMinute: normalizeRequestsPerMinute(input.arbitration?.requestsPerMinute, 0),

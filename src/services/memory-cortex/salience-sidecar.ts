@@ -8,7 +8,7 @@
  * This is Tier 2 functionality: opt-in, async, never blocks generation.
  */
 
-import type { SidecarExtractionResult, SidecarFontColor, DiscoveredAlias, EmotionalTag, NarrativeFlag, StatusChange, ExtractedEntity, ExtractedRelationship, SidecarGradedHeuristics } from "./types";
+import type { SidecarExtractionResult, SidecarFontColor, DiscoveredAlias, EmotionalTag, NarrativeFlag, StatusChange, ExtractedEntity, ExtractedRelationship } from "./types";
 import { normalizeFontColor, type ThoughtDelimiters } from "./font-attribution";
 import { buildConversationHint, type CortexParticipant } from "./conversation-context";
 import { scoreChunkHeuristic } from "./salience-heuristic";
@@ -74,7 +74,6 @@ CANONICAL ALIAS RULE
 When a <canonical_aliases> block is present in the user message, treat it as authoritative — it comes from character/persona definitions, not heuristic guessing.
 - If the passage uses an alias from the left side, emit the canonical name on the right side everywhere (extract_entities, extract_relationships, status_changes, color_attributions).
 - Never emit an entity whose name is one of the aliases on the left side.
-- In arbiter mode, any heuristic candidate matching a left-side alias MUST appear in transformed_heuristic_entities mapping the alias to its canonical name.
 
 ALIAS RULE
 A nickname, diminutive, affectionate variant, descriptive riff, or shortened/extended form of a known character's name is an ALIAS, not a new entity. Report it via discovered_aliases pointing at the canonical name; do NOT also create a separate entity for it.
@@ -89,9 +88,6 @@ Sufficient evidence for a discovered_alias is ANY ONE of:
 When you detect an alias:
 1. Do NOT include the alias as its own entry in entities_present.
 2. DO include it in discovered_aliases with canonical_name = the known canonical, alias = the surface form, and brief evidence from the passage.
-3. In arbiter mode:
-   - If the alias appears in heuristic_entities, emit it in transformed_heuristic_entities (from = alias, to = canonical).
-   - If it appears in batch_existing_entities, emit it in rejected_existing_entities so the bad standalone entry gets cleaned up.
 
 Do NOT report aliases on superficial similarity alone (no shared substring, no shared role, no addressing, no clear in-passage referent). When unsure, omit.
 
@@ -137,29 +133,6 @@ TOOL CHECKLIST
 2. extract_entities
 3. extract_relationships
 4. extract_font_colors
-
-${EXTRACTION_RULES}`;
-
-// Arbiter mode: passage analysis PLUS a verdict on heuristic / existing-graph candidates.
-const ARBITER_EXTRACTION_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
-
-Convert ONE passage into structured data AND judge the candidate records supplied
-by the caller. Call ALL FIVE tools exactly once. Return empty arrays when a tool
-has nothing to report.
-
-${EXTRACTION_GLOBAL_RULES}
-- Treat each tool independently. A relationship or fact must be supported by the passage itself.
-- For grade_heuristic_candidates: judge ONLY the candidates listed in the user message. Do not invent new ones to reject. Confirm by omission — silence means the candidate is acceptable.
-  - Reject a heuristic candidate when it falls into any category from the ENTITY RULES "Do NOT extract" list, or when it isn't actually present in the passage.
-  - Transform a heuristic candidate when it refers to a real known entity but uses a different surface form (alias, diminutive, partial name, or sentence-start capitalization). Pair the alias-rule outcomes with transform entries here.
-- For rejected_existing_entities: flag a pre-existing graph entity whenever it falls into any category from the ENTITY RULES "Do NOT extract" list, OR when it is an alias of a known canonical character that should never have been persisted as a standalone entity. Importance disagreement alone is NOT grounds for rejection — only structural / categorical mistakes are.
-
-TOOL CHECKLIST
-1. score_salience
-2. extract_entities
-3. extract_relationships
-4. extract_font_colors
-5. grade_heuristic_candidates
 
 ${EXTRACTION_RULES}`;
 
@@ -317,65 +290,12 @@ const TOOL_FONT_COLORS: ToolDefinition = {
   },
 };
 
-const TOOL_GRADE_HEURISTIC_CANDIDATES: ToolDefinition = {
-  name: "grade_heuristic_candidates",
-  description: "Judge the candidate records supplied in the user message against the passage. Reject candidates that are not real proper-name entities or are not actually supported by the passage. Be especially aggressive about rejecting common English words that are only capitalized due to sentence position, dialogue formatting, or emphasis — these are the most frequent false positives. Transform candidates that refer to a real entity but use the wrong form. Confirmation is by omission — silence means the candidate is acceptable. Use empty arrays when nothing needs flagging.",
-  parameters: {
-    type: "object",
-    properties: {
-      rejected_heuristic_entities: {
-        type: "array",
-        items: { type: "string" },
-        description: "Exact names from the heuristic_entities candidate list that should NOT be persisted. Reject: verbs, adjectives, adverbs, abstract nouns (Beauty, Darkness, Silence, Power, Magic, Chaos, Destiny, Fate, Honor, Vengeance, Shadow, Truth, Nothing), common English words only capitalized because of sentence position or shouted dialogue or emphasis formatting, meta-references, and names not actually present in the passage. Examples: 'Beautiful' (adjective), 'Darkness' (abstract noun), 'Important' (adjective), 'Ancient' (adjective), 'Suddenly' (adverb), 'Nothing' (pronoun), 'Perhaps' (adverb). Match the candidate name verbatim.",
-      },
-      transformed_heuristic_entities: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            from: { type: "string", description: "The candidate name verbatim from the heuristic_entities list." },
-            to: { type: "string", description: "The canonical proper name this candidate actually refers to." },
-          },
-          required: ["from", "to"],
-        },
-        description: "Candidates that refer to a real entity but use the wrong name. Example: heuristic captured 'Marlowe' but the passage establishes 'Detective Marlowe' — transform from='Marlowe' to='Detective Marlowe'. Only use when the canonical form is supported by the passage.",
-      },
-      rejected_heuristic_relationships: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            source: { type: "string" },
-            target: { type: "string" },
-            type: { type: "string" },
-          },
-          required: ["source", "target", "type"],
-        },
-        description: "Exact triples from the heuristic_relationships list that are NOT supported by the passage (co-occurrence without a real connection, contradicted by the text, or involving rejected entities). Match source/target/type verbatim.",
-      },
-      rejected_existing_entities: {
-        type: "array",
-        items: { type: "string" },
-        description: "Names from the existing_graph_entities list that are not real proper-name entities (verbs, adjectives, abstract nouns like Darkness/Beauty/Power/Shadow/Silence/Chaos, adverbs, pronouns, sentence fragments, meta-references that were incorrectly persisted in a prior chunk). Be conservative — only reject obvious mistakes, not entities you simply find unimportant.",
-      },
-    },
-    required: [
-      "rejected_heuristic_entities",
-      "transformed_heuristic_entities",
-      "rejected_heuristic_relationships",
-      "rejected_existing_entities",
-    ],
-  },
-};
-
 const EXTRACTION_TOOLS: ToolDefinition[] = [TOOL_SALIENCE, TOOL_ENTITIES, TOOL_RELATIONSHIPS, TOOL_FONT_COLORS];
-const ARBITER_EXTRACTION_TOOLS: ToolDefinition[] = [...EXTRACTION_TOOLS, TOOL_GRADE_HEURISTIC_CANDIDATES];
 
 const salienceProperties = (TOOL_SALIENCE.parameters as any).properties;
 const entityProperties = (TOOL_ENTITIES.parameters as any).properties;
 const relationshipProperties = (TOOL_RELATIONSHIPS.parameters as any).properties;
 const fontColorProperties = (TOOL_FONT_COLORS.parameters as any).properties;
-const gradingProperties = (TOOL_GRADE_HEURISTIC_CANDIDATES.parameters as any).properties;
 
 /** One tool call for a whole rebuild batch. Tool arguments are substantially
  *  more reliable than asking smaller/local models to print a large JSON blob
@@ -401,12 +321,6 @@ const TOOL_ANALYZE_PASSAGE_BATCH: ToolDefinition = {
             status_changes: entityProperties.status_changes,
             color_attributions: fontColorProperties.color_attributions,
             discovered_aliases: entityProperties.discovered_aliases,
-            grading: {
-              type: "object",
-              properties: gradingProperties,
-              required: (TOOL_GRADE_HEURISTIC_CANDIDATES.parameters as any).required,
-              description: "Candidate grading for this passage. Omit when no arbiter block was supplied for the passage.",
-            },
           },
           required: [
             "index",
@@ -477,7 +391,6 @@ export function parseToolCallResults(
   let relationships: Array<{ source: string; target: string; type: string; label: string; sentiment: number }> = [];
   let fontColors: SidecarFontColor[] = [];
   let discoveredAliases: DiscoveredAlias[] = [];
-  let gradedHeuristics: SidecarGradedHeuristics | undefined;
 
   for (const call of toolCalls) {
     // Sidecar providers are external and occasionally return sparse tool-call
@@ -501,9 +414,6 @@ export function parseToolCallResults(
         break;
       case "extract_font_colors":
         fontColors = validateFontColors(args.color_attributions);
-        break;
-      case "grade_heuristic_candidates":
-        gradedHeuristics = validateGradedHeuristics(args);
         break;
     }
   }
@@ -529,41 +439,12 @@ export function parseToolCallResults(
     relationshipsShown: relationships as any[],
     fontColors,
     discoveredAliases,
-    gradedHeuristics,
   };
 }
 
 /** Get the extraction tools array (for passing to generate calls) */
 export function getExtractionTools(): ToolDefinition[] {
   return EXTRACTION_TOOLS;
-}
-
-function validateGradedHeuristics(args: any): SidecarGradedHeuristics {
-  const rejectedEntities = Array.isArray(args?.rejected_heuristic_entities)
-    ? args.rejected_heuristic_entities.filter((s: any) => typeof s === "string" && s.trim().length > 0).map((s: string) => s.trim())
-    : [];
-  const transformed = Array.isArray(args?.transformed_heuristic_entities)
-    ? args.transformed_heuristic_entities
-        .filter((t: any) => t && typeof t.from === "string" && typeof t.to === "string"
-          && t.from.trim().length > 0 && t.to.trim().length > 0
-          && t.from.trim().toLowerCase() !== t.to.trim().toLowerCase())
-        .map((t: any) => ({ from: t.from.trim(), to: t.to.trim() }))
-    : [];
-  const rejectedRels = Array.isArray(args?.rejected_heuristic_relationships)
-    ? args.rejected_heuristic_relationships
-        .filter((r: any) => r && typeof r.source === "string" && typeof r.target === "string" && typeof r.type === "string")
-        .map((r: any) => ({ source: r.source.trim(), target: r.target.trim(), type: r.type.trim() }))
-    : [];
-  const rejectedExisting = Array.isArray(args?.rejected_existing_entities)
-    ? args.rejected_existing_entities.filter((s: any) => typeof s === "string" && s.trim().length > 0).map((s: string) => s.trim())
-    : [];
-
-  return {
-    rejectedHeuristicEntities: rejectedEntities,
-    transformedHeuristicEntities: transformed,
-    rejectedHeuristicRelationships: rejectedRels,
-    rejectedExistingEntities: rejectedExisting,
-  };
 }
 
 // Legacy export kept for compatibility — now returns empty (tools handle everything)
@@ -695,8 +576,8 @@ function validateExtractionObject(json: any): void {
   }
 }
 
-function validateExtractionTools(calls: Array<{ name: string; args: Record<string, unknown> }>, graded: boolean): void {
-  const required = ["score_salience", "extract_entities", "extract_relationships", "extract_font_colors", ...(graded ? ["grade_heuristic_candidates"] : [])];
+function validateExtractionTools(calls: Array<{ name: string; args: Record<string, unknown> }>): void {
+  const required = ["score_salience", "extract_entities", "extract_relationships", "extract_font_colors"];
   for (const name of required) {
     if (calls.filter((call) => call?.name === name && call.args && typeof call.args === "object").length !== 1) {
       throw new Error(`Incomplete extraction tool: ${name} (expected exactly one call; received tools=${JSON.stringify(calls.map((call) => call?.name ?? "unknown"))})`);
@@ -707,17 +588,6 @@ function validateExtractionTools(calls: Array<{ name: string; args: Record<strin
     entities_present: args("extract_entities").entities,
     relationships_shown: args("extract_relationships").relationships,
     color_attributions: args("extract_font_colors").color_attributions });
-}
-
-function validateLegacyGrading(value: any, arbiter: NonNullable<Parameters<typeof extractWithSidecar>[3]>["arbiter"], canonicals: string[]): void {
-  if (!arbiter) return;
-  for (const key of ["rejected_heuristic_entities", "transformed_heuristic_entities", "rejected_heuristic_relationships", "rejected_existing_entities"]) {
-    if (!Array.isArray(value?.[key])) throw new Error(`Incomplete legacy grading: ${key}`);
-  }
-  if (value.rejected_heuristic_entities.some((name: string) => !arbiter.heuristicEntities.some((e) => e.name === name))
-    || value.rejected_existing_entities.some((name: string) => !arbiter.existingGraphEntities.includes(name))
-    || value.transformed_heuristic_entities.some((entry: any) => !arbiter.heuristicEntities.some((e) => e.name === entry?.from) || !canonicals.includes(entry?.to))
-    || value.rejected_heuristic_relationships.some((r: any) => !arbiter.heuristicRelationships.some((c) => c.source === r?.source && c.target === r?.target && c.type === r?.type))) throw new Error("Legacy grading targeted an unsupplied candidate or canonical");
 }
 
 // Validate a parsed JSON extraction object into a SidecarExtractionResult.
@@ -748,7 +618,6 @@ function buildResultFromJsonObject(
     relationshipsShown: relationships,
     fontColors: validateFontColors(json.color_attributions),
     discoveredAliases: validateDiscoveredAliases(json.discovered_aliases),
-    gradedHeuristics: json.grading ? validateGradedHeuristics(json.grading) : undefined,
   };
   if (options?.knownEntities?.length) {
     result = resolveAliasesInResult(result, options.knownEntities);
@@ -774,13 +643,6 @@ export async function extractWithSidecar(
     participants?: CortexParticipant[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
     thoughtDelimiters?: ThoughtDelimiters;
-    /** When provided, the sidecar is asked to judge these candidates and grading
-     *  is returned in the result's gradedHeuristics field. */
-    arbiter?: {
-      heuristicEntities: Array<{ name: string; type: string }>;
-      heuristicRelationships: Array<{ source: string; target: string; type: string }>;
-      existingGraphEntities: string[];
-    };
     /** Sampling parameters forwarded to the underlying LLM call. Caller is
      *  responsible for passing the user-configured sidecar temperature/top_p/
      *  max_tokens here. Defaults to a low-temperature extraction profile when
@@ -805,11 +667,6 @@ export async function extractWithSidecar(
     signal?: AbortSignal;
   },
 ): Promise<SidecarExtractionResult | null> {
-  const arbiter = options?.arbiter;
-  const arbiterActive = !!arbiter
-    && (arbiter.heuristicEntities.length > 0
-      || arbiter.heuristicRelationships.length > 0
-      || arbiter.existingGraphEntities.length > 0);
   const tag = options?.logTag ?? "single";
   const startedAt = Date.now();
   let stage = "prompt";
@@ -818,19 +675,11 @@ export async function extractWithSidecar(
   try {
     // Build entity context for the prompt — prefer full entities with aliases over bare names
     const entityHint = buildEntityHint(options);
-    const arbiterBlock = arbiterActive ? buildArbiterBlock(arbiter!) : "";
-
-    const tools = arbiterActive ? ARBITER_EXTRACTION_TOOLS : EXTRACTION_TOOLS;
-    const systemPrompt = arbiterActive ? ARBITER_EXTRACTION_SYSTEM_PROMPT : EXTRACTION_SYSTEM_PROMPT;
-    const toolListing = arbiterActive
-      ? "score_salience, extract_entities, extract_relationships, extract_font_colors, and grade_heuristic_candidates"
-      : "score_salience, extract_entities, extract_relationships, and extract_font_colors";
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze the exact roleplay passage below. Call ${toolListing} exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${buildConversationHint(content, options?.characterNames ?? [], options?.descriptionAliases, options?.participants)}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${arbiterBlock}\n\n<passage>\n${content}\n</passage>`;
+    const userContent = `Analyze the exact roleplay passage below. Call score_salience, extract_entities, extract_relationships, and extract_font_colors exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${buildConversationHint(content, options?.characterNames ?? [], options?.descriptionAliases, options?.participants)}${buildThoughtMarkerHint(options?.thoughtDelimiters)}\n\n<passage>\n${content}\n</passage>`;
     logSidecarDispatch(tag, {
       chunks: 1,
-      arbiter: arbiterActive,
       userContent,
       connectionId: sidecarConnectionId,
       tokenCounter: options?.tokenCounter,
@@ -843,11 +692,11 @@ export async function extractWithSidecar(
       requestPurpose: "extraction",
       connectionId: sidecarConnectionId,
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
         { role: "user", content: userContent },
       ],
       parameters: options?.samplingParameters ?? { temperature: 0.1 },
-      tools,
+      tools: EXTRACTION_TOOLS,
       signal: options?.signal,
     });
     stage = "response validation";
@@ -856,8 +705,7 @@ export async function extractWithSidecar(
 
     // Tool calls: parse structured results from tool_calls
     if (response.tool_calls && response.tool_calls.length > 0) {
-      validateExtractionTools(response.tool_calls, arbiterActive);
-      if (arbiterActive) validateLegacyGrading(response.tool_calls.find((call) => call?.name === "grade_heuristic_candidates")?.args, arbiter, [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
+      validateExtractionTools(response.tool_calls);
       let result = parseToolCallResults(response.tool_calls);
       // Resolve any remaining aliases to canonical names (safety net if LLM used alias)
       if (options?.knownEntities?.length) {
@@ -872,7 +720,6 @@ export async function extractWithSidecar(
       throw new Error(`sidecar response had no tool_calls and no parseable JSON (${summarizeSidecarResponse(response)})`);
     }
 
-    if (arbiterActive) validateLegacyGrading(json.grading, arbiter, [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
     return buildResultFromJsonObject(json, options);
   } catch (err) {
     if (options?.throwOnFailure) throw err;
@@ -903,28 +750,8 @@ function buildAliasReconciliationBlock(
 Persona, character, and world-book definitions establish these alias→canonical name mappings. They take priority over guesses:
 - When the passage uses an alias on the left, use the canonical name on the right in your output (extract_entities, extract_relationships, status_changes, font color attributions).
 - Never emit an entity whose name is one of these aliases. The canonical name is always the correct identifier.
-- In arbiter mode, if a heuristic candidate's name is one of these aliases, you MUST emit a transformed_heuristic_entities entry mapping from the alias to the canonical name.
 ${lines}
 </canonical_aliases>`;
-}
-
-function buildArbiterBlock(arbiter: NonNullable<Parameters<typeof extractWithSidecar>[3]>["arbiter"]): string {
-  if (!arbiter) return "";
-  const sections: string[] = [];
-  if (arbiter.heuristicEntities.length > 0) {
-    const lines = arbiter.heuristicEntities.map((e) => `- ${e.name} [${e.type}]`).join("\n");
-    sections.push(`<heuristic_entities>\n${lines}\n</heuristic_entities>`);
-  }
-  if (arbiter.heuristicRelationships.length > 0) {
-    const lines = arbiter.heuristicRelationships.map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
-    sections.push(`<heuristic_relationships>\n${lines}\n</heuristic_relationships>`);
-  }
-  if (arbiter.existingGraphEntities.length > 0) {
-    const lines = arbiter.existingGraphEntities.map((n) => `- ${n}`).join("\n");
-    sections.push(`<existing_graph_entities>\n${lines}\n</existing_graph_entities>`);
-  }
-  if (sections.length === 0) return "";
-  return `\n\nGRADE THESE CANDIDATES via grade_heuristic_candidates:\n${sections.join("\n\n")}`;
 }
 
 /**
@@ -974,43 +801,6 @@ ${EXTRACTION_GLOBAL_RULES}
 
 ${EXTRACTION_RULES}`;
 
-// Arbiter variant of the batch system prompt: each passage may include
-// candidate records to grade. The output gains a "grading" field per result.
-const BATCH_ARBITER_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
-
-You will receive several roleplay passages, each wrapped in <passage index="N"> tags.
-Some passages are followed by an <arbiter index="N"> block listing candidate
-records to judge. Analyze EACH passage independently AND, when its arbiter
-block is present, grade those candidates.
-
-OUTPUT FORMAT
-Call analyze_passage_batch exactly once with arguments matching this shape:
-{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|destroyed|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}],"grading":{"rejected_heuristic_entities":[],"transformed_heuristic_entities":[{"from":"","to":""}],"rejected_heuristic_relationships":[{"source":"","target":"","type":""}],"rejected_existing_entities":[]}}]}
-- Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
-- Use empty arrays for any field with nothing to report.
-- Include "grading" ONLY for passages that had an <arbiter> block. For other passages, omit the grading field entirely.
-
-${EXTRACTION_GLOBAL_RULES}
-- Score and extract each passage in isolation. Do NOT carry information between passages.
-- For grading: judge ONLY the heuristic candidates listed in that passage's <arbiter> block. Confirmation is by omission — silence means the candidate is acceptable.
-  - Reject a heuristic candidate when it falls into any category from the ENTITY RULES "Do NOT extract" list, or when it isn't actually present in that passage.
-  - Transform a heuristic candidate when it refers to a real known entity but uses a different surface form (alias, diminutive, partial name, sentence-start capitalization).
-- For rejected_existing_entities: judge entries from the single batch-level <batch_existing_entities> list (NOT a per-passage list). Flag entries whenever they fall into any category from the ENTITY RULES "Do NOT extract" list, OR when they are aliases of a known canonical character that should never have been persisted as standalone entries. Importance disagreement alone is NOT grounds for rejection.
-
-${EXTRACTION_RULES}`;
-
-// Extract all passages in one LLM request. Results align with input order.
-// Missing or failed results stay null so the caller can apply its fallback
-// policy without issuing more provider requests.
-/** Per-chunk arbiter input for the batched path. Position-parallel to chunks.
- *  existingGraphEntities is intentionally NOT here — it's the same list across
- *  every chunk in a batch, so it's passed once via batchExistingEntities to
- *  avoid 5x prompt-token duplication. */
-export interface BatchArbiterChunk {
-  heuristicEntities: Array<{ name: string; type: string }>;
-  heuristicRelationships: Array<{ source: string; target: string; type: string }>;
-}
-
 export async function extractBatchWithSidecar(
   chunks: Array<{ index: number; content: string }>,
   generateRawFn: SidecarGenerateFn,
@@ -1020,15 +810,6 @@ export async function extractBatchWithSidecar(
     participants?: CortexParticipant[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
     thoughtDelimiters?: ThoughtDelimiters;
-    /** Position-parallel to `chunks`. Entries may be null when a chunk has
-     *  nothing to grade. When any entry is non-null with content, the batch
-     *  uses the arbiter system prompt and embeds per-passage <arbiter> blocks. */
-    perChunkArbiter?: Array<BatchArbiterChunk | null>;
-    /** Names of entities already in the chat's graph that the sidecar may flag
-     *  via rejected_existing_entities. Rendered once at batch level (not per
-     *  passage) to avoid duplicating the same list 5x in the prompt. Subject
-     *  to the same conservative grading rules. */
-    batchExistingEntities?: string[];
     /** alias → canonical name mappings from character/persona/world-book
      *  descriptions. Rendered once at batch level (applies to every passage). */
     descriptionAliases?: Array<{ alias: string; canonicalName: string }>;
@@ -1041,34 +822,13 @@ export async function extractBatchWithSidecar(
   },
 ): Promise<Array<SidecarExtractionResult | null>> {
   if (chunks.length === 0) return [];
-  // Flatten batch-level existing entities into each per-chunk arbiter input
-  // when the single-chunk extractor is used (it doesn't have a batch level).
-  const singleChunkArbiterFor = (i: number): NonNullable<Parameters<typeof extractWithSidecar>[3]>["arbiter"] | undefined => {
-    const a = options?.perChunkArbiter?.[i];
-    const existing = options?.batchExistingEntities ?? [];
-    if (!a && existing.length === 0) return undefined;
-    return {
-      heuristicEntities: a?.heuristicEntities ?? [],
-      heuristicRelationships: a?.heuristicRelationships ?? [],
-      existingGraphEntities: existing,
-    };
-  };
-
   // One chunk does not benefit from batching.
   if (chunks.length === 1) {
     return [
-      await extractWithSidecar(chunks[0].content, generateRawFn, sidecarConnectionId, {
-        ...options,
-        arbiter: singleChunkArbiterFor(0),
-      }).catch(() => null),
+      await extractWithSidecar(chunks[0].content, generateRawFn, sidecarConnectionId, options),
     ];
   }
 
-  const arbiterActiveByIndex = (options?.perChunkArbiter ?? []).map(
-    (a) => !!a && (a.heuristicEntities.length > 0 || a.heuristicRelationships.length > 0),
-  );
-  const batchExistingActive = (options?.batchExistingEntities ?? []).length > 0;
-  const anyArbiterActive = arbiterActiveByIndex.some(Boolean) || batchExistingActive;
   const tag = options?.logTag ?? "batch";
   const startedAt = Date.now();
   let stage = "prompt";
@@ -1078,45 +838,16 @@ export async function extractBatchWithSidecar(
     const entityHint = buildEntityHint(options);
     // Array position is the prompt index so results map back positionally.
     const passages = chunks
-      .map((c, i) => {
-        const passage = `<passage index="${i}">\n${c.content}\n</passage>${buildConversationHint(c.content, options?.characterNames ?? [], options?.descriptionAliases, options?.participants)}`;
-        if (!arbiterActiveByIndex[i]) return passage;
-        const arbiter = options!.perChunkArbiter![i]!;
-        const sections: string[] = [];
-        if (arbiter.heuristicEntities.length > 0) {
-          const lines = arbiter.heuristicEntities.map((e) => `- ${e.name} [${e.type}]`).join("\n");
-          sections.push(`<heuristic_entities>\n${lines}\n</heuristic_entities>`);
-        }
-        if (arbiter.heuristicRelationships.length > 0) {
-          const lines = arbiter.heuristicRelationships.map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
-          sections.push(`<heuristic_relationships>\n${lines}\n</heuristic_relationships>`);
-        }
-        const arbiterBlock = `<arbiter index="${i}">\n${sections.join("\n")}\n</arbiter>`;
-        return `${passage}\n${arbiterBlock}`;
-      })
+      .map((c, i) => `<passage index="${i}">\n${c.content}\n</passage>${buildConversationHint(c.content, options?.characterNames ?? [], options?.descriptionAliases, options?.participants)}`)
       .join("\n\n");
 
-    // Existing graph entities are batch-level: the same list applies to every
-    // passage, so we render it once instead of duplicating it per chunk.
-    const batchExisting = options?.batchExistingEntities ?? [];
-    const batchExistingBlock = batchExisting.length > 0
-      ? `\n\n<batch_existing_entities>\n${batchExisting.map((n) => `- ${n}`).join("\n")}\n</batch_existing_entities>`
-      : "";
-
-    const systemPrompt = anyArbiterActive ? BATCH_ARBITER_SYSTEM_PROMPT : BATCH_EXTRACTION_SYSTEM_PROMPT;
-    const arbiterInstruction = anyArbiterActive
-      ? " Where an <arbiter> block follows a passage, also populate that passage's grading field per the system prompt. The <batch_existing_entities> list (if present) applies to every passage; flag entries via rejected_existing_entities only when they are clearly not real proper-name entities."
-      : "";
-
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${arbiterInstruction}${entityHint}${aliasBlock}${buildThoughtMarkerHint(options?.thoughtDelimiters)}${batchExistingBlock}\n\n${passages}`;
+    const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${entityHint}${aliasBlock}${buildThoughtMarkerHint(options?.thoughtDelimiters)}\n\n${passages}`;
     logSidecarDispatch(tag, {
       chunks: chunks.length,
-      arbiter: anyArbiterActive,
       userContent,
       connectionId: sidecarConnectionId,
       tokenCounter: options?.tokenCounter,
-      batchExistingCount: (options?.batchExistingEntities ?? []).length,
     });
     const sentAt = Date.now();
     stage = "request";
@@ -1126,7 +857,7 @@ export async function extractBatchWithSidecar(
       requestPurpose: "batch extraction",
       connectionId: sidecarConnectionId,
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: BATCH_EXTRACTION_SYSTEM_PROMPT },
         { role: "user", content: userContent },
       ],
       parameters: options?.samplingParameters ?? { temperature: 0.1 },
@@ -1161,7 +892,6 @@ export async function extractBatchWithSidecar(
       const obj = duplicates.has(i) ? null : byIndex.get(i);
       if (obj) {
         try {
-          if (arbiterActiveByIndex[i] || batchExistingActive) validateLegacyGrading(obj.grading, singleChunkArbiterFor(i), [...(options?.knownEntities?.map((e) => e.name) ?? []), ...(options?.characterNames ?? [])]);
           results[i] = buildResultFromJsonObject(obj, options);
         } catch (err) { failures.push({ index: i, reason: err }); }
       } else {
@@ -1200,12 +930,10 @@ function logSidecarDispatch(
   tag: string,
   opts: {
     chunks: number;
-    arbiter: boolean;
     userContent: string;
     connectionId: string;
     requestPurpose?: string;
     tokenCounter?: (text: string) => number;
-    batchExistingCount?: number;
   },
 ): void {
   const chars = opts.userContent.length;
@@ -1218,11 +946,7 @@ function logSidecarDispatch(
     `chunks=${opts.chunks}`,
     `tokens≈${tokens}`,
     `chars=${chars}`,
-    opts.arbiter ? "arbiter=on" : "arbiter=off",
   ];
-  if (opts.batchExistingCount && opts.batchExistingCount > 0) {
-    parts.push(`existing=${opts.batchExistingCount}`);
-  }
   console.info(parts.join(" "));
 }
 

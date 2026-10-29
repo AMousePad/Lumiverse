@@ -54,7 +54,7 @@ export interface CortexConfig {
     gradesExistingRecords: boolean;
   };
   arbitration?: {
-    backend: "sidecar" | "decision";
+    backend: "decision";
     connectionProfileId: string | null;
     model: string | null;
     timeoutMs: number;
@@ -392,7 +392,7 @@ export interface CortexHealthReport {
   };
   arbitration?: {
     enabled: boolean;
-    backend: "sidecar" | "decision";
+    backend: "decision";
     ready: boolean;
     connectionProfileId: string | null;
     model: string | null;

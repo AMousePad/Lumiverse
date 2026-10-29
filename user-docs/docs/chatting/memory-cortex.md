@@ -70,9 +70,9 @@ After the chain fails:
 
 ### Optional Candidate Review
 
-In **Advanced → Candidate review**, enable **Review memory candidates** and choose **Generative sidecar** or **Decision model**. Review is off by default. It covers heuristic, AI and provisional entity proposals, relationships, proposed aliases and character color attributions before saving. Review adds model requests, including during rebuilds.
+In **Advanced → Candidate review**, enable **Review memory candidates** and explicitly select a **Decision connection**. You must first create a Decision connection in Connections to enable this option. Review is off by default, no connection is selected automatically (including your default Decision connection), and it remains inactive until you choose a connection. Generative LLMs cannot review candidates. Review covers heuristic, AI and provisional entity proposals, relationships, proposed aliases and character color attributions before saving, and adds model requests, including during rebuilds.
 
-For **Decision model**, first create a Decision connection in Connections, then select that connection here. The model override is optional; leaving it empty uses the connection's saved default. Decision review also works with heuristic extraction and importance scoring. AI extraction, fact curation and summaries still use the generative sidecar.
+The model override is optional; leaving it empty uses the explicitly selected connection's saved default without filling in the override. Decision review also works with heuristic extraction and importance scoring. AI extraction, fact curation and summaries still use the generative sidecar. Existing generative reviewer settings are disabled and cleared; existing Decision reviewer selections are preserved.
 
 **Minimum confidence** defaults to 0.8. Both the chosen answer's probability and its confidence must meet the threshold; otherwise that candidate is deferred. This is a retention threshold, not a measured guarantee of accuracy. **Review timeout** is capped at 30 seconds per request; **Requests per minute** limits Decision request starts (0 disables throttling).
 

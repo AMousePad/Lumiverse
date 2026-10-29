@@ -2,8 +2,7 @@ import type { DecisionEvaluationInput, DecisionQuestion } from "../../decision/c
 import type { DecisionAnswerReport } from "../../decision/validation";
 import { evaluateDecisionAnswers } from "../decisions.service";
 import { ProviderRequestError } from "../../utils/provider-errors";
-import { listCortexFallbackEndpoints, type MemoryCortexConfig } from "./config";
-import type { SidecarGenerateFn } from "./salience-sidecar";
+import type { MemoryCortexConfig } from "./config";
 import { waitForCortexSidecarRpmSlot } from "./sidecar-rpm-gate";
 import type { CortexParticipant } from "./conversation-context";
 
@@ -69,7 +68,6 @@ const RULES_BY_TOPIC = {
   thought: "A standalone first-person thought continues the established first-person narrative viewpoint of its current message, including My/my/MY references. Other characters in separate paragraphs do not change that viewpoint. Explicit attribution to another thinker takes precedence.",
   defer: "Use defer whenever evidence is ambiguous or insufficient. Every candidate needs exactly one explicit answer.",
 };
-const RULES = Object.values(RULES_BY_TOPIC).join("\n");
 
 /** Each Decision question carries only the rules relevant to that judgment. */
 function rulesFor(candidate: ArbitrationCandidate): string {
@@ -153,7 +151,7 @@ export function buildArbitrationBatches(input: CortexArbitrationInput, maxInputT
   return batches;
 }
 
-/** Validate complete coverage and bounded targets for both evaluator backends. */
+/** Validate complete coverage and bounded targets for the Decision evaluator. */
 export function validateArbitrationVerdicts(value: unknown, candidates: ArbitrationCandidate[]): ArbitrationVerdict[] {
   if (!Array.isArray(value) || value.length !== candidates.length) throw new Error("Incomplete arbitration verdicts");
   const remaining = new Map(candidates.map((c) => [c.id, c]));
@@ -177,113 +175,79 @@ export async function arbitrateCortexCandidates(options: {
   userId: string;
   config: MemoryCortexConfig;
   input: CortexArbitrationInput;
-  generate?: SidecarGenerateFn;
-  sidecarConnectionId?: string;
   signal?: AbortSignal;
 }): Promise<CortexArbitrationResult> {
   const started = performance.now();
   const { config, input, signal } = options;
-  const batches = buildArbitrationBatches(input, config.arbitration.backend === "decision" ? config.arbitration.maxInputTokens : undefined);
+  signal?.throwIfAborted();
+  if (!config.arbitration.connectionProfileId) throw new Error("Select a Decision arbitration connection in Memory Cortex settings");
+  const batches = buildArbitrationBatches(input, config.arbitration.maxInputTokens);
   const verdicts: ArbitrationVerdict[] = [];
   const models = new Set<string>();
   for (const batch of batches) {
     signal?.throwIfAborted();
     const candidates = input.candidates.filter((c) => Object.hasOwn(batch.questions, c.id));
-    if (config.arbitration.backend === "decision") {
-      if (!config.arbitration.connectionProfileId) throw new Error("Select a Decision arbitration connection in Memory Cortex settings");
-      let requestTimeout: AbortSignal | undefined;
-      const evaluate = async (request: DecisionEvaluationInput): Promise<DecisionAnswerReport> => {
-        await waitForCortexSidecarRpmSlot({ userId: options.userId, provider: `cortex-decision:${config.arbitration.connectionProfileId}`,
-          requestsPerMinute: config.arbitration.requestsPerMinute, signal });
-        requestTimeout = AbortSignal.timeout(config.arbitration.timeoutMs);
-        const effectiveSignal = signal ? AbortSignal.any([signal, requestTimeout]) : requestTimeout;
-        try {
-          const report = await evaluateDecisionAnswers(options.userId, { ...request,
-            connection_id: config.arbitration.connectionProfileId!,
-            ...(config.arbitration.model ? { model: config.arbitration.model } : {}),
-          }, effectiveSignal);
-          effectiveSignal.throwIfAborted();
-          models.add(report.result.model);
-          return report;
-        } catch (error) {
-          signal?.throwIfAborted();
-          if (!isContextLimitError(error)) throw error;
-          const requested = candidates.filter((candidate) => Object.hasOwn(request.questions, candidate.id));
-          if (requested.length < 2) throw new ProviderRequestError({ provider: error.provider, operation: error.operation,
-            status: error.status, code: error.code, detail: `${inputBudgetError().message} Provider: ${error.detail ?? error.message}`, retryable: false });
-          const middle = Math.ceil(requested.length / 2);
-          console.warn(`[memory-cortex] Decision context limit; splitting ${requested.length} candidates without truncating evidence`);
-          // Strictly smaller subsets bound recursion. Rebuild state too: removing
-          // only question keys leaves unrelated candidates/canonicals consuming context.
-          const first = await evaluate(decisionInput(input, requested.slice(0, middle)));
-          const second = await evaluate(decisionInput(input, requested.slice(middle)));
-          return { result: { ...first.result, answers: { ...first.result.answers, ...second.result.answers } },
-            issues: [...first.issues, ...second.issues] };
-        }
-      };
-      const report = await evaluate(batch);
-      const answers = { ...report.result.answers };
-      if (report.issues.length) {
-        console.warn(`[memory-cortex] Decision answer validation failed; retrying ${report.issues.length} candidate(s): ${report.issues.map((issue) => issue.message).join("; ")}`);
-        const invalidIds = new Set(report.issues.map((issue) => issue.questionId));
-        // Retain the original state/candidate context and bounded targets, but
-        // ask only the invalid questions. One retry per batch, never a loop.
-        const retry = { ...batch, questions: Object.fromEntries(Object.entries(batch.questions).filter(([id]) => invalidIds.has(id))) };
-        try {
-          const recovered = await evaluate(retry);
-          Object.assign(answers, recovered.result.answers);
-          if (recovered.issues.length) console.warn(`[memory-cortex] Deferring ${recovered.issues.length} invalid Decision candidate(s) after retry: ${recovered.issues.map((issue) => issue.message).join("; ")}`);
-        } catch (error) {
-          signal?.throwIfAborted();
-          // An optional repair request cannot discard already valid answers.
-          // Configuration/authentication errors still fail the chunk normally.
-          if (!requestTimeout?.aborted && !(error instanceof ProviderRequestError && error.retryable)) throw error;
-          console.warn(`[memory-cortex] Decision answer retry failed; deferring ${invalidIds.size} candidate(s): ${error instanceof Error ? error.message : "request failed"}`);
-        }
+    let requestTimeout: AbortSignal | undefined;
+    const evaluate = async (request: DecisionEvaluationInput): Promise<DecisionAnswerReport> => {
+      await waitForCortexSidecarRpmSlot({ userId: options.userId, provider: `cortex-decision:${config.arbitration.connectionProfileId}`,
+        requestsPerMinute: config.arbitration.requestsPerMinute, signal });
+      requestTimeout = AbortSignal.timeout(config.arbitration.timeoutMs);
+      const effectiveSignal = signal ? AbortSignal.any([signal, requestTimeout]) : requestTimeout;
+      try {
+        const report = await evaluateDecisionAnswers(options.userId, { ...request,
+          connection_id: config.arbitration.connectionProfileId!,
+          ...(config.arbitration.model ? { model: config.arbitration.model } : {}),
+        }, effectiveSignal);
+        effectiveSignal.throwIfAborted();
+        models.add(report.result.model);
+        return report;
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (!isContextLimitError(error)) throw error;
+        const requested = candidates.filter((candidate) => Object.hasOwn(request.questions, candidate.id));
+        if (requested.length < 2) throw new ProviderRequestError({ provider: error.provider, operation: error.operation,
+          status: error.status, code: error.code, detail: `${inputBudgetError().message} Provider: ${error.detail ?? error.message}`, retryable: false });
+        const middle = Math.ceil(requested.length / 2);
+        console.warn(`[memory-cortex] Decision context limit; splitting ${requested.length} candidates without truncating evidence`);
+        // Strictly smaller subsets bound recursion. Rebuild state too: removing
+        // only question keys leaves unrelated candidates/canonicals consuming context.
+        const first = await evaluate(decisionInput(input, requested.slice(0, middle)));
+        const second = await evaluate(decisionInput(input, requested.slice(middle)));
+        return { result: { ...first.result, answers: { ...first.result.answers, ...second.result.answers } },
+          issues: [...first.issues, ...second.issues] };
       }
-      verdicts.push(...validateArbitrationVerdicts(candidates.map((c) => {
-        const answer = answers[c.id];
-        // Invalid answers never reach thresholds or graph cleanup. An explicit
-        // host deferral preserves existing records and omits new candidates.
-        if (!answer) return { id: c.id, action: "defer" };
-        if (answer.type !== "choice") throw new Error("Arbitration requires Choice answers");
-        const probability = answer.probabilities[answer.choice]!;
-        const choice = Math.min(probability, answer.confidence) >= config.arbitration.minConfidence ? answer.choice : "defer";
-        return { id: c.id, action: choice.startsWith("resolve_") ? "resolve" : choice,
-          ...(choice.startsWith("resolve_") ? { canonicalId: choice.slice(8) } : {}), confidence: answer.confidence, probability };
-      }), candidates));
-    } else {
-      if (!options.generate) throw new Error("Cortex arbitration sidecar is unavailable");
-      const primary = config.queryGeneration.primary;
-      const targets = [{ connectionProfileId: primary.connectionProfileId || config.sidecar.connectionProfileId || options.sidecarConnectionId,
-        model: primary.model ?? config.sidecar.model }, ...listCortexFallbackEndpoints(config.queryGeneration)];
-      let batchVerdicts: ArbitrationVerdict[] | undefined;
-      let lastError: unknown = new Error("Cortex arbitration sidecar is unavailable");
-      for (const target of targets) {
-        if (!target.connectionProfileId) continue;
-        const timeout = AbortSignal.timeout(config.arbitration.timeoutMs);
-        const effectiveSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-        try {
-          const response = await options.generate({ connectionId: target.connectionProfileId, requestPurpose: "candidate arbitration",
-            messages: [{ role: "system", content: `${RULES}\nCall arbitrate_candidates exactly once. Return one verdict per candidate ID; action is keep, reject, resolve or defer. For resolve include canonicalId.` },
-              { role: "user", content: JSON.stringify(batch.state) }],
-            parameters: { temperature: 0.1, max_tokens: config.sidecar.maxTokens, ...(target.model ? { model: target.model } : {}) },
-            tools: [{ name: "arbitrate_candidates", description: "Explicit verdict for every supplied candidate.", parameters: {
-              type: "object", properties: { verdicts: { type: "array", items: { type: "object", properties: {
-                id: { type: "string", enum: candidates.map((c) => c.id) }, action: { type: "string", enum: ["keep", "reject", "resolve", "defer"] }, canonicalId: { type: "string" },
-              }, required: ["id", "action"] } } }, required: ["verdicts"],
-            } }], signal: effectiveSignal });
-          effectiveSignal.throwIfAborted();
-          const calls = response.tool_calls?.filter((c) => c?.name === "arbitrate_candidates");
-          const parsed = calls?.length === 1 ? calls[0]!.args : JSON.parse(response.content.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-          batchVerdicts = validateArbitrationVerdicts(parsed.verdicts, candidates);
-          models.add(target.model ?? "sidecar");
-          break;
-        } catch (error) { signal?.throwIfAborted(); lastError = error; }
+    };
+    const report = await evaluate(batch);
+    const answers = { ...report.result.answers };
+    if (report.issues.length) {
+      console.warn(`[memory-cortex] Decision answer validation failed; retrying ${report.issues.length} candidate(s): ${report.issues.map((issue) => issue.message).join("; ")}`);
+      const invalidIds = new Set(report.issues.map((issue) => issue.questionId));
+      // Retain the original state/candidate context and bounded targets, but
+      // ask only the invalid questions. One retry per batch, never a loop.
+      const retry = { ...batch, questions: Object.fromEntries(Object.entries(batch.questions).filter(([id]) => invalidIds.has(id))) };
+      try {
+        const recovered = await evaluate(retry);
+        Object.assign(answers, recovered.result.answers);
+        if (recovered.issues.length) console.warn(`[memory-cortex] Deferring ${recovered.issues.length} invalid Decision candidate(s) after retry: ${recovered.issues.map((issue) => issue.message).join("; ")}`);
+      } catch (error) {
+        signal?.throwIfAborted();
+        // An optional repair request cannot discard already valid answers.
+        // Configuration/authentication errors still fail the chunk normally.
+        if (!requestTimeout?.aborted && !(error instanceof ProviderRequestError && error.retryable)) throw error;
+        console.warn(`[memory-cortex] Decision answer retry failed; deferring ${invalidIds.size} candidate(s): ${error instanceof Error ? error.message : "request failed"}`);
       }
-      if (!batchVerdicts) throw lastError;
-      verdicts.push(...batchVerdicts);
     }
+    verdicts.push(...validateArbitrationVerdicts(candidates.map((c) => {
+      const answer = answers[c.id];
+      // Invalid answers never reach thresholds or graph cleanup. An explicit
+      // host deferral preserves existing records and omits new candidates.
+      if (!answer) return { id: c.id, action: "defer" };
+      if (answer.type !== "choice") throw new Error("Arbitration requires Choice answers");
+      const probability = answer.probabilities[answer.choice]!;
+      const choice = Math.min(probability, answer.confidence) >= config.arbitration.minConfidence ? answer.choice : "defer";
+      return { id: c.id, action: choice.startsWith("resolve_") ? "resolve" : choice,
+        ...(choice.startsWith("resolve_") ? { canonicalId: choice.slice(8) } : {}), confidence: answer.confidence, probability };
+    }), candidates));
   }
   signal?.throwIfAborted();
   return { verdicts, models: [...models], durationMs: performance.now() - started };

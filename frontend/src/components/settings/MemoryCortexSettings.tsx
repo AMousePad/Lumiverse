@@ -266,6 +266,7 @@ export default function MemoryCortexSettings() {
 
   // Connection profiles for sidecar picker
   const profiles = useStore((s) => s.profiles);
+  const hasDecisionConnections = useStore((s) => s.decisionProfiles.length > 0);
   const [sidecarVisibility, setSidecarVisibility] = useState<"ok" | "unavailable" | "timeout" | null>(null);
 
   // Active chat for stats (if available)
@@ -851,43 +852,35 @@ export default function MemoryCortexSettings() {
             <div className={styles.sectionHeader}><Shield size={14} /><span>{t("memoryCortex.arbitrationTitle")}</span></div>
             <div className={styles.toggleRow}>
               <Toggle.Checkbox checked={config.sidecarReliability?.arbitratesHeuristics ?? false}
+                disabled={!hasDecisionConnections && !config.sidecarReliability?.arbitratesHeuristics}
                 onChange={(v) => updateConfig({ sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: v } })}
-                label={t("memoryCortex.arbitratesHeuristics")} hint={t("memoryCortex.arbitratesHeuristicsHint")} />
+                label={t("memoryCortex.arbitratesHeuristics")} hint={t(hasDecisionConnections ? "memoryCortex.arbitratesHeuristicsHint" : "memoryCortex.arbitrationNeedsConnection")} />
             </div>
             {config.sidecarReliability?.arbitratesHeuristics && (() => {
-              const arbitration = config.arbitration ?? { backend: "sidecar" as const, connectionProfileId: null, model: null, timeoutMs: 30000, maxInputTokens: 16384, requestsPerMinute: 0, minConfidence: 0.8 };
+              const arbitration = config.arbitration ?? { backend: "decision" as const, connectionProfileId: null, model: null, timeoutMs: 30000, maxInputTokens: 16384, requestsPerMinute: 0, minConfidence: 0.8 };
               const update = (patch: Partial<typeof arbitration>) => updateConfig({ arbitration: { ...arbitration, ...patch } });
               return <>
+                <ConnectionSelect kind="decision" value={arbitration.connectionProfileId ?? ""}
+                  onChange={(id) => update({ connectionProfileId: id || null, model: null })}
+                  withModel seedDefaultModel={false} modelValue={arbitration.model ?? ""}
+                  onModelChange={(model) => update({ model: model || null })} clearable portal
+                  ariaLabel={t("memoryCortex.decisionConnection")} modelPlaceholder={t("memoryCortex.useConnectionDefault")} />
                 <div className={styles.infoRow}>
-                  <span className={styles.infoLabel}>{t("memoryCortex.arbitrationBackend")}</span>
-                  <select aria-label={t("memoryCortex.arbitrationBackend")} className={styles.selectInput} value={arbitration.backend} onChange={(e) => update({ backend: e.target.value as "sidecar" | "decision" })}>
-                    <option value="sidecar">{t("memoryCortex.arbitrationSidecar")}</option>
-                    <option value="decision">{t("memoryCortex.arbitrationDecision")}</option>
-                  </select>
+                  <span className={styles.infoLabel}>{t("memoryCortex.arbitrationInputLimit")}</span>
+                  <NumericInput className={styles.numberInput} value={arbitration.maxInputTokens ?? 16384} min={1024} max={262144} step={1024} integer
+                    onChange={(v) => update({ maxInputTokens: v ?? 16384 })} />
                 </div>
-                {arbitration.backend === "decision" && <>
-                  <ConnectionSelect kind="decision" value={arbitration.connectionProfileId ?? ""}
-                    onChange={(id) => update({ connectionProfileId: id || null, model: null })}
-                    withModel seedDefaultModel={false} modelValue={arbitration.model ?? ""}
-                    onModelChange={(model) => update({ model: model || null })} clearable portal
-                    ariaLabel={t("memoryCortex.decisionConnection")} modelPlaceholder={t("memoryCortex.useConnectionDefault")} />
-                  <div className={styles.infoRow}>
-                    <span className={styles.infoLabel}>{t("memoryCortex.arbitrationInputLimit")}</span>
-                    <NumericInput className={styles.numberInput} value={arbitration.maxInputTokens ?? 16384} min={1024} max={262144} step={1024} integer
-                      onChange={(v) => update({ maxInputTokens: v ?? 16384 })} />
-                  </div>
-                  <div className={styles.hintText}>{t("memoryCortex.arbitrationInputLimitHint")}</div>
-                  <div className={styles.infoRow}>
-                    <span className={styles.infoLabel}>{t("memoryCortex.arbitrationConfidence")}</span>
-                    <NumericInput className={styles.numberInput} value={arbitration.minConfidence} min={0} max={1} step={0.05}
-                      onChange={(v) => update({ minConfidence: v ?? 0.8 })} />
-                  </div>
-                  <div className={styles.infoRow}>
-                    <span className={styles.infoLabel}>{t("memoryCortex.rpmLimit")}</span>
-                    <NumericInput className={styles.numberInput} value={arbitration.requestsPerMinute} min={0} max={600} integer
-                      onChange={(v) => update({ requestsPerMinute: v ?? 0 })} />
-                  </div>
-                </>}
+                <div className={styles.hintText}>{t("memoryCortex.arbitrationInputLimitHint")}</div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>{t("memoryCortex.arbitrationConfidence")}</span>
+                  <NumericInput className={styles.numberInput} value={arbitration.minConfidence} min={0} max={1} step={0.05}
+                    onChange={(v) => update({ minConfidence: v ?? 0.8 })} />
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>{t("memoryCortex.rpmLimit")}</span>
+                  <NumericInput className={styles.numberInput} value={arbitration.requestsPerMinute} min={0} max={600} integer
+                    onChange={(v) => update({ requestsPerMinute: v ?? 0 })} />
+                </div>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>{t("memoryCortex.arbitrationTimeout")}</span>
                   <NumericInput className={styles.numberInput} value={arbitration.timeoutMs / 1000} min={0.1} max={30} step={1}

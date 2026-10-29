@@ -123,11 +123,11 @@ describe.skipIf(!baseUrl)("Memory Cortex native Decision simulation", () => {
     getDb().query("INSERT INTO memory_relations (id, chat_id, source_entity_id, target_entity_id, relation_type, status, user_edited_at, metadata, created_at, updated_at) VALUES ('dormant', ?, ?, ?, 'ally', 'dormant', 1, ?, 1, 1)")
       .run(chatId, mara, tovin, JSON.stringify({ pending_reactivation: true, reactivation_evidence_chunk: chunkId }));
     for (const directive of ["SIMULATE_JSON_ERROR", "SIMULATE_LOW_CONFIDENCE"]) {
-      await evaluatePendingReactivations(userId, chatId, directive, undefined, undefined, config, undefined, chunkId);
+      await evaluatePendingReactivations(userId, chatId, directive, config, undefined, chunkId);
       const row = getDb().query("SELECT status, metadata FROM memory_relations WHERE id = 'dormant'").get() as any;
       expect(row.status).toBe("dormant"); expect(JSON.parse(row.metadata).pending_reactivation).toBe(true);
     }
-    await evaluatePendingReactivations(userId, chatId, "Mara and Tovin renewed their alliance.", undefined, undefined, config, undefined, chunkId);
+    await evaluatePendingReactivations(userId, chatId, "Mara and Tovin renewed their alliance.", config, undefined, chunkId);
     expect((getDb().query("SELECT status FROM memory_relations WHERE id = 'dormant'").get() as any).status).toBe("active");
   });
 });
