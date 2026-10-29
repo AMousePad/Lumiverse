@@ -26,6 +26,7 @@ function settingsSliceExports() {
     persistPendingImageGenerationPatch: () => {},
     resetSettingsPersistence: () => {},
     createSettingsSlice: (_set: unknown, get: () => AppStore) => ({
+      setSetting: (key: string, value: unknown) => Object.assign(get(), { [key]: value }),
       reasoningSettings: { ...reasoningDefaults },
       unboundReasoningSettings: null,
       hydrateStartupSettings: (settings: StartupSettings) => {

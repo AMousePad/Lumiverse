@@ -65,8 +65,7 @@ export const createImageGenConnectionsSlice: StateCreator<AppStore, [], [], Imag
     const state = get()
     if (id && state.fullSettingsLoaded !== false && state.imageGenProfiles.some(profile => profile.id === id)) {
       const recentConnections = withRecentConnection(state.recentConnections, 'imageGen', id)
-      set({ recentConnections })
-      persistKey('recentConnections', recentConnections, 'user-interaction')
+      get().setSetting('recentConnections', recentConnections, 'user-interaction')
     }
   },
 
@@ -93,9 +92,8 @@ export const createImageGenConnectionsSlice: StateCreator<AppStore, [], [], Imag
       imageGenProfilesVersion: state.imageGenProfilesVersion + 1,
       activeImageGenConnectionId,
       imageGeneration,
-      connectionsOrder: nextConnectionsOrder,
     })
-    if (nextOrder !== order) persistKey('connectionsOrder', nextConnectionsOrder, 'state-sync')
+    if (nextOrder !== order) get().setSetting('connectionsOrder', nextConnectionsOrder, 'state-sync')
     if (activeChanged) {
       if (state.fullSettingsLoaded) {
         persistImageGeneration(imageGeneration)

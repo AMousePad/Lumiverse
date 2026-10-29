@@ -65,8 +65,7 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
     set({ activeProfileId: id, reasoningSettings: nextReasoningSettings, unboundReasoningSettings })
     if (reason === 'user_selection' && newProfile && state.fullSettingsLoaded !== false) {
       const recentConnections = withRecentConnection(state.recentConnections, 'llm', newProfile.id, state.connectionsPickerSettings?.recentProfileIds)
-      set({ recentConnections })
-      persistKey('recentConnections', recentConnections, 'user-interaction')
+      get().setSetting('recentConnections', recentConnections, 'user-interaction')
     }
     if (shouldPersistActiveProfileId(reason)) {
       settingsApi.put('activeProfileId', id).catch(() => {})
@@ -108,12 +107,11 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
         profiles: existingIndex === -1
           ? [profile, ...state.profiles]
           : state.profiles.map((candidate, index) => index === existingIndex ? profile : candidate),
-        connectionsOrder: nextConnectionsOrder,
       }
     })
     // Pickers and startup hydration use this setting rather than the transient
     // slice order, so a newly-prepended connection must update it as well.
-    if (orderToPersist) persistKey('connectionsOrder', orderToPersist, 'state-sync')
+    if (orderToPersist) get().setSetting('connectionsOrder', orderToPersist, 'state-sync')
   },
   updateProfile: (id, updates) =>
     set((state) => ({

@@ -1,3 +1,4 @@
+import { applyOrganizationEdits } from '../../src/shared/connection-organization-edits'
 import { createRoot } from 'react-dom/client'
 import { useStore } from '../src/store'
 import { flushSettingsNow } from '../src/store/slices/settings'
@@ -48,6 +49,11 @@ window.fetch = async (input, init) => {
   const method = init?.method ?? 'GET'
   const body = init?.body ? JSON.parse(String(init.body)) : undefined
   requests.push({ path, method, body })
+  if (path === '/connections/organization/edit') {
+    const updated = applyOrganizationEdits(JSON.parse(localStorage.getItem(key)!), body)
+    localStorage.setItem(key, JSON.stringify(updated))
+    return Response.json(Object.fromEntries(['connectionLibraries', 'connectionsOrder', 'recentConnections'].map(k => [k, updated[k] ?? {}])))
+  }
   if (path === '/settings') {
     const settings = JSON.parse(localStorage.getItem(key)!)
     if (method === 'PUT') {
