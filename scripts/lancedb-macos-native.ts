@@ -12,7 +12,7 @@ export const INTEL_LANCEDB = {
   cpu: "x86-64",
   binaryName: "lancedb.darwin-x64.node",
   // Bump only for compilation changes not represented by the policy below.
-  buildRevision: 1,
+  buildRevision: 2,
 } as const;
 
 export const INTEL_LANCEDB_RELEASE_PROFILE = {
