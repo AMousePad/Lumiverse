@@ -124,7 +124,16 @@ jobs:
             DESKTOP_PLATFORM="$platform" DESKTOP_TARGET="$target" bun source/scripts/publish-desktop-release.ts upload
           done
       - name: Advance the channel only after every platform succeeds
+        id: publish
         if: steps.resolve.outputs.ready == 'true' || steps.resolve.outputs.published == 'true'
         env:
           LINUX_RELEASE_BRIDGE_TOKEN: ${{ secrets.LINUX_RELEASE_BRIDGE_TOKEN }}
         run: bun scripts/private-linux-release.ts publish
+      # Releases published with GITHUB_TOKEN do not trigger a release workflow.
+      - name: Announce the published desktop nightly in Discord
+        if: steps.publish.outputs.published_channel == 'nightly'
+        continue-on-error: true
+        env:
+          DISCORD_NIGHTLY_WEBHOOK_URL: ${{ secrets.DISCORD_NIGHTLY_WEBHOOK_URL }}
+          RELEASE_TAG: ${{ steps.publish.outputs.published_tag }}
+        run: bun --no-env-file scripts/notify-nightly-release.ts desktop "$RELEASE_TAG"
