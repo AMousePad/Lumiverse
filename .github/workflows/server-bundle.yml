@@ -154,6 +154,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Test launcher, release policy, and desktop lifecycle
         run: bun test tests/server-bundle.test.ts tests/lancedb-macos-native.test.ts tests/bun-runtime-version-policy.test.ts scripts/desktop-toolchain.test.ts scripts/private-linux-release.test.ts scripts/desktop-release.test.ts desktop/src-tauri/permissions.test.ts desktop/tests/desktop-updates.test.ts desktop/tests/instance-connection.test.ts desktop/tests/custom-url-ui.test.ts desktop/tests/local-server.test.ts desktop/tests/runner-client.test.ts scripts/desktop-session-restoration.test.ts scripts/tauri-finalized.test.ts scripts/appimage-packaging.test.ts scripts/appimage-runtime-manifest.test.ts desktop/tests/linux-desktop.test.ts src/spindle/runtime-transport.test.ts src/db/execution-transport.test.ts
+      - name: Test nightly release notifications
+        run: bun --no-env-file test scripts/notify-nightly-release.test.ts
       - name: Test production browser cookie transport
         run: bun --no-env-file test src/auth/request-cookies.integration.test.ts
         env:
