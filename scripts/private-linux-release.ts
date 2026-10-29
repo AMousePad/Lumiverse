@@ -261,25 +261,38 @@ export function verifyMacOSPayload(root: string, request: LinuxReleaseRequest, b
     if (!/^[a-f0-9]{64}$/.test(expected) || createHash("sha256").update(bytes).digest("hex") !== expected) throw new Error(`macOS ${name} checksum mismatch`);
     return { path, bytes };
   };
-  const server = checked("lumiverse-server-darwin-x64", manifest.sha256).bytes;
-  if (server.length < 32 || server.readUInt32LE(0) !== 0xfeedfacf || server.readUInt32LE(4) !== 0x01000007
-    || server.readUInt32LE(12) !== 2) throw new Error("macOS server is not an Intel Mach-O executable");
   const archive = checked("Lumiverse.app.tar.gz", build.archiveSha256).path;
   const dmg = checked("Lumiverse.dmg", build.dmgSha256).path;
-  const native = join(directory, "lancedb");
-  for (const name of ["lancedb.darwin-x64.node", "manifest.json", "LICENSE"]) {
+  if (typeof build.applicationName !== "string" || !/^[A-Za-z0-9_. -]+\.app$/.test(build.applicationName)
+    || !/^[a-f0-9]{64}$/.test(build.bundledServerSha256) || !/^[a-f0-9]{64}$/.test(build.nativeSha256)
+    || typeof build.nativePublished !== "boolean") throw new Error("Invalid macOS bundle metadata");
+  const entry = `${build.applicationName}/Contents/MacOS/lumiverse-server`;
+  const listing = Bun.spawnSync(["tar", "-tzf", archive], { stdout: "pipe", stderr: "pipe" });
+  if (listing.exitCode !== 0 || listing.stdout.toString().split("\n").filter(path => path === entry).length !== 1) {
+    throw new Error("macOS application archive does not contain exactly one bundled server");
+  }
+  const extraction = Bun.spawnSync(["tar", "-xOzf", archive, entry], { stdout: "pipe", stderr: "pipe" });
+  const server = Buffer.from(extraction.stdout);
+  if (extraction.exitCode !== 0 || server.length < 32 || server.readUInt32LE(0) !== 0xfeedfacf
+    || server.readUInt32LE(4) !== 0x01000007 || server.readUInt32LE(12) !== 2
+    || createHash("sha256").update(server).digest("hex") !== build.bundledServerSha256) {
+    throw new Error("Bundled macOS server integrity mismatch");
+  }
+  const native = build.nativePublished ? undefined : join(directory, "lancedb");
+  if (native) for (const name of ["lancedb.darwin-x64.node", "manifest.json", "LICENSE"]) {
     if (!lstatSync(join(native, name)).isFile()) throw new Error("Native LanceDB handoff must contain regular files");
   }
-  return { archive, dmg, native };
+  return { archive, dmg, native, nativeSha256: build.nativeSha256 as string };
 }
 
 // The source checkout owns its own LanceDB policy (main and staging can differ).
 // Validate it in a child without credentials before accepting a private handoff.
-export function verifyMacOSNative(source: string, directory: string) {
+export function verifyMacOSNative(source: string, directory: string): string {
   const environment = Object.fromEntries(["PATH", "SystemRoot", "WINDIR", "PATHEXT", "COMSPEC", "TEMP", "TMP"].flatMap(key => process.env[key] ? [[key, process.env[key]!]] : []));
-  const code = 'import {readIntelLanceDbArtifact} from "./scripts/lancedb-macos-native.ts"; import {readFileSync} from "node:fs"; const pkg=JSON.parse(readFileSync("package.json","utf8")); readIntelLanceDbArtifact(process.argv.at(-1),pkg.dependencies["@lancedb/lancedb"]);';
+  const code = 'import {readIntelLanceDbArtifact} from "./scripts/lancedb-macos-native.ts"; import {readFileSync} from "node:fs"; const pkg=JSON.parse(readFileSync("package.json","utf8")); console.log(readIntelLanceDbArtifact(process.argv.at(-1),pkg.dependencies["@lancedb/lancedb"]).sha256);';
   const result = Bun.spawnSync([process.execPath, "--no-env-file", "-e", code, directory], { cwd: source, env: environment, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) throw new Error("Private macOS LanceDB handoff failed the source build policy");
+  return result.stdout.toString().trim();
 }
 export async function resolvePrivateBuilds(api: BridgeAPI, request: LinuxReleaseRequest) {
   const results = await Promise.all(requestedBuilders(request).map(async builder => ({ builder, result: await resolveBuilderRun(api, request, builder) })));
@@ -356,7 +369,8 @@ async function main() {
         const identity = { run: process.env.PRIVATE_MACOS_RUN!, attempt: process.env.PRIVATE_MACOS_ATTEMPT! };
         if (!/^[1-9]\d*$/.test(identity.run) || !/^[1-9]\d*$/.test(identity.attempt)) throw new Error("Missing private macOS build identity");
         const payload = verifyMacOSPayload(resolve(process.env.MACOS_ARTIFACT_DIRECTORY || "macos-artifacts"), request, identity);
-        verifyMacOSNative(source, payload.native);
+        const native = payload.native || join(source, "dist/native/lancedb-darwin-x64");
+        if (verifyMacOSNative(source, native) !== payload.nativeSha256) throw new Error("Private macOS LanceDB checksum differs from the tested addon");
         files.push({ file: payload.archive, target: MACOS_TARGET, folder: "macos" }, { file: payload.dmg, target: MACOS_TARGET, folder: "dmg" });
         macosNative = payload.native;
         continue;

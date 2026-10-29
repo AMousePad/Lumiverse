@@ -466,8 +466,9 @@ server/installer hashes and private build identity. No signing keys reach the VM
 
 Intel macOS releases use the private `lumiverse-macos-vm` runner. It validates
 and reuses the matching published LanceDB addon, or compiles and tests it if no
-matching build exists. It returns the ad-hoc-signed application, DMG, server,
-native addon and checksummed provenance for hosted publication and updater signing.
+matching build exists. It returns the ad-hoc-signed application, DMG and
+checksummed provenance for hosted publication and updater signing. A newly
+compiled native addon is included for publication; published addons are reused.
 
 The completed private run wakes the public completion workflow. GitHub-hosted
 jobs verify source, runtime provenance, native ARM64 qualification and checksums, sign the finalized payloads,
