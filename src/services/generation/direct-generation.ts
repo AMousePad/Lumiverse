@@ -116,6 +116,10 @@ async function consumeStream(
   let stopDetails: GenerationResponse["stop_details"];
   let stopSequence: string | null | undefined;
   let toolCalls: GenerationResponse["tool_calls"];
+  // Signed reasoning must go back with the tool calls it preceded, so keep it
+  // for callers that continue the turn.
+  let thinkingBlocks: GenerationResponse["thinking_blocks"];
+  let reasoningDetails: GenerationResponse["reasoning_details"];
   let usage: GenerationResponse["usage"];
   const source = userId
     ? wrapDelimitedReasoningForUser(userId, stream)
@@ -128,6 +132,8 @@ async function consumeStream(
     if (chunk.stop_details !== undefined) stopDetails = chunk.stop_details;
     if (chunk.stop_sequence !== undefined) stopSequence = chunk.stop_sequence;
     if (chunk.tool_calls) toolCalls = chunk.tool_calls;
+    if (chunk.thinking_blocks) thinkingBlocks = chunk.thinking_blocks;
+    if (chunk.reasoning_details) reasoningDetails = chunk.reasoning_details;
   }
   return {
     content,
@@ -136,6 +142,8 @@ async function consumeStream(
     stop_details: stopDetails,
     stop_sequence: stopSequence,
     tool_calls: toolCalls,
+    thinking_blocks: thinkingBlocks,
+    reasoning_details: reasoningDetails,
     usage,
   };
 }

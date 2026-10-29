@@ -6,16 +6,18 @@ import { pathToFileURL } from "node:url";
 import type { ExtensionInfo, SpindleManifest } from "lumiverse-spindle-types";
 import * as generateSvc from "../services/generate.service";
 import { storeBreakdown } from "../services/breakdown.service";
+import * as connections from "../services/connections.service";
+import * as secrets from "../services/secrets.service";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { WorkerHost } from "./worker-host";
 import { providerRegistry } from "./provider-registry";
 
 const dryRun = spyOn(generateSvc, "dryRunGeneration");
-beforeAll(() => {
+beforeAll(async () => {
   initDatabase(":memory:");
-  getDb().run(`CREATE TABLE message_breakdowns (
-    message_id TEXT PRIMARY KEY, chat_id TEXT, user_id TEXT, data TEXT NOT NULL
-  )`);
+  // Real generation requests resolve connections and per-user settings.
+  getDb().run("PRAGMA foreign_keys = OFF");
+  getDb().run(await Bun.file(new URL("../db/baseline.sql", import.meta.url)).text());
 });
 afterAll(() => {
   dryRun.mockRestore();
@@ -85,6 +87,126 @@ test("stopping during provider setup cannot emit a late reasoning prefill", asyn
     expect(host.generationAbortControllers.size).toBe(0);
   } finally { raw.mockRestore(); bind.mockRestore(); host.messageGenerations.dispose(); }
 });
+
+type HostMessage = { type: string; chunk?: Record<string, unknown>; error?: string };
+
+const sse = (events: object[]) => events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
+const lookupTool = {
+  name: "lookup", description: "Look up the weather.",
+  parameters: { type: "object", properties: { city: { type: "string" } }, required: ["city"] },
+};
+const lookupCall = { id: "call_1", type: "function", function: { name: "lookup", arguments: '{"city":"SF"}' } };
+const thinkingBlocks = [
+  { type: "thinking", thinking: "Look it up.", signature: "opaque-signature" },
+  { type: "redacted_thinking", data: "encrypted-reasoning" },
+];
+const reasoningDetails = [
+  { type: "reasoning.text", text: "Look it up.", signature: "opaque-signature", format: "anthropic-claude-v1", index: 0 },
+  { type: "reasoning.encrypted", data: "encrypted-reasoning", format: "anthropic-claude-v1", index: 1 },
+];
+const reasoningRoundTrips = [{
+  provider: "anthropic",
+  model: "claude-sonnet-4-6",
+  field: "thinking_blocks",
+  carried: thinkingBlocks,
+  toolCallReply: sse([
+    { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Look it up." } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "opaque-signature" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "redacted_thinking", data: "encrypted-reasoning" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "call_1", name: "lookup", input: {} } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"city":"SF"}' } },
+    { type: "content_block_stop", index: 2 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 20 } },
+    { type: "message_stop" },
+  ]),
+  answerReply: sse([
+    { type: "message_start", message: { usage: { input_tokens: 30, output_tokens: 1 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "72F and clear." } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+    { type: "message_stop" },
+  ]),
+  // Anthropic replays the blocks at the start of the assistant turn.
+  sentBack: { role: "assistant", content: [...thinkingBlocks, { type: "tool_use", id: "call_1", name: "lookup", input: { city: "SF" } }] },
+}, {
+  provider: "openrouter",
+  model: "anthropic/claude-sonnet-4.5",
+  field: "reasoning_details",
+  carried: reasoningDetails,
+  toolCallReply: sse([
+    { choices: [{ delta: { reasoning: "Look it up.", reasoning_details: [{ type: "reasoning.text", text: "Look it up.", format: "anthropic-claude-v1", index: 0 }] } }] },
+    { choices: [{ delta: { reasoning_details: [{ type: "reasoning.text", signature: "opaque-signature", index: 0 }] } }] },
+    { choices: [{ delta: { reasoning_details: [{ type: "reasoning.encrypted", data: "encrypted-reasoning", format: "anthropic-claude-v1", index: 1 }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, ...lookupCall }] }, finish_reason: "tool_calls" }] },
+  ]),
+  answerReply: sse([{ choices: [{ delta: { content: "72F and clear." }, finish_reason: "stop" }] }]),
+  // OpenAI-compatible providers replay them on the assistant tool_calls message.
+  sentBack: { role: "assistant", content: null, tool_calls: [lookupCall], reasoning_details: reasoningDetails },
+}];
+
+for (const roundTrip of reasoningRoundTrips) {
+  test(`${roundTrip.provider} tool-call results carry ${roundTrip.field}, which the next request sends back in the provider's format`, async () => {
+    const { id: connectionId } = await connections.createConnection("alice", {
+      name: roundTrip.provider, provider: roundTrip.provider, model: roundTrip.model, api_url: "https://provider.test",
+    });
+    const secret = spyOn(secrets, "getSecret").mockResolvedValue("test-key");
+    const sent: Array<{ messages: unknown[] }> = [];
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body: { messages: unknown[] } = JSON.parse(String(init?.body));
+      sent.push(body);
+      // Only the follow-up request carries a tool result.
+      return new Response(body.messages.length > 1 ? roundTrip.answerReply : roundTrip.toolCallReply);
+    }) as typeof fetch);
+    const send = fixture();
+    const question = { role: "user", content: "Weather in SF?" };
+    const request = { provider: roundTrip.provider, model: roundTrip.model, connection_id: connectionId, messages: [question], tools: [lookupTool] };
+    try {
+      const results: Record<string, Record<string, unknown>> = {};
+      for (const type of ["raw", "quiet"]) {
+        const response = await send({ type: "request_generation", input: { ...request, type } });
+        expect(response.error).toBeUndefined();
+        results[type] = response.result;
+      }
+      const streamed: HostMessage[] = [];
+      const streamEnded = Promise.withResolvers<void>();
+      send.internal.runtime = {
+        mode: "worker", pid: null, terminate() {},
+        postMessage(message) {
+          // Host-to-worker protocol messages for this request.
+          const event = message as HostMessage;
+          streamed.push(event);
+          if (event.type === "generation_stream_error" || event.chunk?.type === "done") streamEnded.resolve();
+        },
+      };
+      send.internal.handleMessage({ type: "request_generation_stream", requestId: "stream", input: { ...request, type: "raw" } });
+      await streamEnded.promise;
+      expect(streamed.at(-1)).toMatchObject({ type: "generation_stream_chunk", chunk: { type: "done" } });
+      results["raw stream"] = streamed.at(-1)?.chunk ?? {};
+      for (const [path, result] of Object.entries(results)) {
+        expect({ path, finish_reason: result.finish_reason, tool_calls: result.tool_calls, carried: result[roundTrip.field] }).toEqual({
+          path, finish_reason: "tool_calls", tool_calls: [{ name: "lookup", args: { city: "SF" }, call_id: "call_1" }], carried: roundTrip.carried,
+        });
+      }
+
+      const followUp = await send({ type: "request_generation", input: { ...request, type: "raw", messages: [
+        question,
+        { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "lookup", input: { city: "SF" } }], [roundTrip.field]: results.raw[roundTrip.field] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: "72F and clear" }] },
+      ] } });
+      expect(followUp.result.content).toBe("72F and clear.");
+      expect(sent).toHaveLength(4);
+      expect(sent[3].messages[1]).toEqual(roundTrip.sentBack);
+    } finally {
+      fetchSpy.mockRestore();
+      secret.mockRestore();
+    }
+  });
+}
 
 test("retained response contexts return their prefill without requiring structured request output", async () => {
   const dispatch = fixture();
