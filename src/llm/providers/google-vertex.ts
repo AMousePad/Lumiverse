@@ -13,7 +13,7 @@ import {
   GOOGLE_SEARCH_PARAMETERS,
 } from "./google-search";
 import { splitLeadingSystemMessagePrefix } from "../system-message-prefix";
-import { normalizeGoogleMediaMimeType } from "./google-media";
+import { GOOGLE_MEDIA_HANDLED_PARAMS, GOOGLE_MEDIA_PARAMETERS, normalizeGoogleMediaMimeType, resolveGoogleMediaResolution } from "./google-media";
 import { AnthropicProvider } from "./anthropic";
 import { OpenAICompatibleProvider } from "./openai-compatible";
 
@@ -403,6 +403,7 @@ export class GoogleVertexProvider implements LlmProvider {
       top_k: COMMON_PARAMS.top_k,
       stop: COMMON_PARAMS.stop,
       ...GOOGLE_SEARCH_PARAMETERS,
+      ...GOOGLE_MEDIA_PARAMETERS,
     },
     requiresMaxTokens: false,
     supportsSystemRole: true,
@@ -723,6 +724,7 @@ export class GoogleVertexProvider implements LlmProvider {
     "temperature", "max_tokens", "top_p", "top_k", "stop", "thinkingConfig",
     "responseMimeType", "responseSchema", "responseJsonSchema",
     ...GOOGLE_SEARCH_HANDLED_PARAMS,
+    ...GOOGLE_MEDIA_HANDLED_PARAMS,
   ]);
 
   private buildBody(request: GenerationRequest): any {
@@ -763,6 +765,8 @@ export class GoogleVertexProvider implements LlmProvider {
     if (params.top_p !== undefined) generationConfig.topP = params.top_p;
     if (params.top_k !== undefined) generationConfig.topK = params.top_k;
     if (params.stop) generationConfig.stopSequences = params.stop;
+    const mediaResolution = resolveGoogleMediaResolution(params);
+    if (mediaResolution !== undefined) generationConfig.mediaResolution = mediaResolution;
 
     if (params.thinkingConfig) {
       generationConfig.thinkingConfig = params.thinkingConfig;

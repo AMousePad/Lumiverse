@@ -210,6 +210,9 @@ export interface GenerationUsage {
 }
 
 export interface GenerationParameters {
+  /** Google/Vertex input media tokenization detail; not capture size or compression. */
+  media_resolution?: "low" | "medium" | "high" | "unspecified"
+    | "MEDIA_RESOLUTION_LOW" | "MEDIA_RESOLUTION_MEDIUM" | "MEDIA_RESOLUTION_HIGH" | "MEDIA_RESOLUTION_UNSPECIFIED";
   temperature?: number;
   max_tokens?: number;
   top_p?: number;

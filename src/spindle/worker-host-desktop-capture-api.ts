@@ -3,6 +3,7 @@ import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import * as connections from "../services/connections.service";
 import type { LlmMessage } from "../llm/types";
 import { resolveVertexModelRoute } from "../llm/providers/google-vertex";
+import { isZaiVisionModel } from "../llm/providers/zai-models";
 import { desktopCaptureBroker, DesktopCaptureBroker, DesktopCaptureError, type DesktopCaptureOwner } from "./desktop-capture-broker";
 import type { DesktopCaptureDestination, DesktopCaptureKind, DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 
@@ -66,6 +67,7 @@ export class WorkerHostDesktopCaptureApi {
   }
 
   private requireMediaSupport(destination: DesktopCaptureDestination, kind: DesktopCaptureKind): void {
+    if (destination.provider === "zai" && isZaiVisionModel(destination.model)) return;
     const supported = kind === "video" ? ["google", "google_vertex"]
       : ["google", "google_vertex", "openai", "anthropic", "openrouter"];
     if (!supported.includes(destination.provider)
@@ -88,6 +90,11 @@ export class WorkerHostDesktopCaptureApi {
         this.broker.release(this.resolveOwner(message.userId), message.assetId);
         return;
       }
+      if (message.type === "desktop_capture_finish") {
+        this.requirePermission("screen_recording");
+        this.requirePermission("generation");
+        return this.broker.finish(this.resolveOwner(message.userId), message.requestKey);
+      }
       const input = message.input;
       if (!input || !["image", "video"].includes(input.kind)) throw new DesktopCaptureError("INVALID_CAPTURE_REQUEST");
       const permission = input.kind === "image" ? "screen_capture" : "screen_recording";
@@ -106,7 +113,8 @@ export class WorkerHostDesktopCaptureApi {
         try { return this.destination(owner.userId, input.connectionId).revision === destination.revision; }
         catch { return false; }
       };
-      if (message.type === "desktop_capture_approval_status") return this.broker.inspect(owner, input, destination, authorized);
+      if (message.type === "desktop_capture_approval_status") return this.broker.inspect(owner, message.input, destination, authorized);
+      if (message.type === "desktop_capture_optimize") return this.broker.optimize(owner, message.input, destination, authorized);
       return this.broker.request(owner, message.input, destination, authorized);
     }).then((result) => this.context.postResponse({ type: "response", requestId: message.requestId, result }))
       .catch((error: unknown) => this.context.postResponse({ type: "response", requestId: message.requestId,

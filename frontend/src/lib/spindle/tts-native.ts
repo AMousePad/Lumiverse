@@ -9,7 +9,8 @@ import { createFrontendTTSAPI, type FrontendTTSDependencies } from './tts-api'
 export function createNativeTTSAPI(deps: Pick<FrontendTTSDependencies, 'assertActive' | 'requirePermission' | 'onTeardown'>) {
   const start: FrontendTTSDependencies['start'] = (input, options) => {
     const state = useStore.getState()
-    if (!state.voiceSettings.ttsEnabled) throw new Error('TTS_UNAVAILABLE:disabled')
+    // An explicit, Media-authorized extension request has its own opt-in.
+    // The chat-reading toggle must not disable an extension's speech controls.
     if ('messageId' in input) {
       const message = state.messages.find((candidate) => candidate.id === input.messageId)
       if (!message) throw new Error('TTS_MESSAGE_NOT_FOUND: the message is not in the active chat')
@@ -24,7 +25,7 @@ export function createNativeTTSAPI(deps: Pick<FrontendTTSDependencies, 'assertAc
       }
       const playback = startMessageTtsPlaybackSession({
         messageId: message.id, messageName: message.name, messageContent: message.content, messageIsUser: message.is_user,
-      })
+      }, { enabled: true })
       if (!playback) throw new Error('TTS_NOTHING_TO_SPEAK: no voice or no speakable text for this message')
       return { session: getPlaybackSession(), ...playback }
     }

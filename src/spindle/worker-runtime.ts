@@ -1697,9 +1697,17 @@ const spindleApi: RuntimeSpindleAPI = {
         assertMutationAllowed("spindle.desktop.capture.request()");
         return await request({ type: "desktop_capture_request", requestId: crypto.randomUUID(), input }) as CapturedMediaRef;
       },
+      async optimize(input) {
+        assertMutationAllowed("spindle.desktop.capture.optimize()");
+        return await request({ type: "desktop_capture_optimize", requestId: crypto.randomUUID(), input }) as CapturedMediaRef;
+      },
       async release(assetId, options) {
         assertMutationAllowed("spindle.desktop.capture.release()");
         await request({ type: "desktop_capture_release", requestId: crypto.randomUUID(), assetId, userId: options?.userId });
+      },
+      async finish(requestKey, options) {
+        assertMutationAllowed("spindle.desktop.capture.finish()");
+        return await request({ type: "desktop_capture_finish", requestId: crypto.randomUUID(), requestKey, userId: options?.userId }) as boolean;
       },
     },
   },

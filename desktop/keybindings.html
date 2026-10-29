@@ -6,7 +6,7 @@
   <p id="availability"></p>
   <form id="add-binding">
     <p><label for="action">Action</label><select id="action"></select></p>
-    <p><label for="chord">Shortcut</label><input id="chord" readonly placeholder="Click here, then press a shortcut" aria-describedby="chord-help"><span id="chord-help" class="field-hint">Use Control, Alt/Option or Command/Super plus a key. Shortcuts use physical key positions.</span></p>
+    <p><label for="chord">Shortcut</label><input id="chord" readonly placeholder="Click here, then press a shortcut" aria-describedby="chord-help"><span id="chord-help" class="field-hint">F13–F24 work on their own or with modifiers. Other keys require Control, Alt/Option or Command/Super. Shortcuts use physical key positions.</span></p>
     <details><summary>Choose keys manually</summary><p class="field-hint">Use this when the OS or an existing global shortcut intercepts the keys you want to record.</p><div id="manual-chord"><label><input id="ctrl" type="checkbox"> Control</label> <label><input id="alt" type="checkbox"> Alt/Option</label> <label><input id="shift" type="checkbox"> Shift</label> <label><input id="meta" type="checkbox"> Cmd/Super</label><label for="key">Key</label><select id="key"><option value="">Choose a key…</option></select></div></details>
     <p><label for="scope">Where it works</label><select id="scope"><option value="focused">Only while Lumiverse is focused</option><option value="global">Global — also while in the background</option></select></p>
     <button class="button button-secondary" type="submit">Add Binding</button>

@@ -65,6 +65,34 @@ uint32_t lumiverse_capture_capabilities(void) {
     }
 }
 
+static NSString *DisplayIdentity(CGDirectDisplayID display) {
+    CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(display);
+    NSString *identity = uuid ? CFBridgingRelease(CFUUIDCreateString(NULL, uuid)) : nil;
+    if (uuid) CFRelease(uuid);
+    return identity;
+}
+
+// Quartz monitor metadata needs no screen-recording permission and creates no stream.
+void lumiverse_capture_displays(void (*callback)(const uint8_t *, size_t, void *), void *context) {
+    @autoreleasepool {
+        CGDirectDisplayID displays[16];
+        uint32_t count = 0;
+        NSMutableArray *result = [NSMutableArray new];
+        if (CGGetActiveDisplayList(16, displays, &count) == kCGErrorSuccess) {
+            for (uint32_t index = 0; index < count; index++) {
+                CGDirectDisplayID display = displays[index];
+                NSString *identity = DisplayIdentity(display);
+                if (!identity) continue;
+                [result addObject:@{@"identity":identity, @"name":[NSString stringWithFormat:@"Display %u", index + 1],
+                    @"width":@(CGDisplayPixelsWide(display)), @"height":@(CGDisplayPixelsHigh(display)),
+                    @"primary":@(display == CGMainDisplayID())}];
+            }
+        }
+        NSData *json = [NSJSONSerialization dataWithJSONObject:result options:0 error:nil];
+        callback(json.bytes, json.length, context);
+    }
+}
+
 API_AVAILABLE(macos(14.0))
 @interface LumiverseCapture : NSObject <SCContentSharingPickerObserver, SCStreamOutput, SCStreamDelegate> {
     atomic_bool _completed;
@@ -82,12 +110,14 @@ API_AVAILABLE(macos(14.0))
 @property NSString *consent;
 @property NSString *summary;
 @property NSString *savedSource;
+@property NSString *requestedDisplay;
 @property NSString *selectedSource;
 @property BOOL canRemember;
 @property void (*invalidateApproval)(void *);
 @property void (*rememberSource)(void *, const char *);
 @property BOOL remembering;
 @property BOOL video;
+@property BOOL finishRequested;
 @property uint64_t seconds;
 @property NSUInteger maximumBytes;
 @property uint64_t maximumPixels;
@@ -184,13 +214,14 @@ static NSString *NativeSourceSession(void) {
 - (void)showSetup {
     if (self.savedSource.length) { self.invalidateApproval(self.context); self.savedSource = nil; }
     self.remembering = self.canRemember;
-    if (self.canRemember) [self screenRecordingAccess:nil];
+    if (self.canRemember || self.requestedDisplay.length) [self screenRecordingAccess:nil];
     else [self chooseSource:nil];
 }
 
 - (void)restoreSource {
     NSDictionary *saved = [NSJSONSerialization JSONObjectWithData:[self.savedSource dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
     if (![saved isKindOfClass:NSDictionary.class]) { [self showSetup]; return; }
+    if (self.requestedDisplay.length && ![saved[@"display"] isEqual:self.requestedDisplay]) { [self showSetup]; return; }
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *content, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (atomic_load(&self->_completed)) return;
@@ -254,20 +285,34 @@ static NSString *NativeSourceSession(void) {
             NSMenu *sources = [NSMenu new];
             sources.autoenablesItems = NO;
             self.sourceMenu = sources;
-            NSMenuItem *heading = [[NSMenuItem alloc] initWithTitle:@"Choose a source for Lumiverse" action:nil keyEquivalent:@""];
+            NSMenuItem *heading = [[NSMenuItem alloc] initWithTitle:self.requestedDisplay.length ? @"Approve the selected display for Lumiverse" : @"Choose a source for Lumiverse" action:nil keyEquivalent:@""];
             heading.enabled = NO;
             [sources addItem:heading];
+            if (self.requestedDisplay.length) {
+                for (NSString *line in [self.summary componentsSeparatedByString:@"\n"]) {
+                    NSMenuItem *detail = [[NSMenuItem alloc] initWithTitle:line action:nil keyEquivalent:@""];
+                    detail.enabled = NO;
+                    detail.toolTip = self.consent;
+                    [sources addItem:detail];
+                }
+            }
             [sources addItem:NSMenuItem.separatorItem];
             NSUInteger displayIndex = 0;
+            BOOL foundRequestedDisplay = NO;
             for (SCDisplay *display in content.displays) {
                 if (displayIndex >= 16) break;
+                if (self.requestedDisplay.length && ![DisplayIdentity(display.displayID) isEqual:self.requestedDisplay]) continue;
+                foundRequestedDisplay = YES;
                 NSString *title = [NSString stringWithFormat:@"Entire Display %lu — %ld × %ld", ++displayIndex, display.width, display.height];
+                if (self.requestedDisplay.length) title = [NSString stringWithFormat:@"Share selected display — %ld × %ld", display.width, display.height];
                 NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:@selector(selectSource:) keyEquivalent:@""];
                 item.target = self;
                 item.representedObject = display;
                 [sources addItem:item];
             }
+            if (self.requestedDisplay.length && !foundRequestedDisplay) { [self finishOutcome:4]; return; }
             for (SCWindow *window in content.windows) {
+                if (self.requestedDisplay.length) break;
                 if (sources.numberOfItems >= 258) break;
                 if (!window.isOnScreen || window.windowLayer != 0 || !window.owningApplication
                     || window.owningApplication.processID == getpid() || CGRectIsEmpty(window.frame)) continue;
@@ -356,7 +401,7 @@ static NSString *NativeSourceSession(void) {
         NSTimeInterval elapsed = now - self.recordStartedAt;
         [self updateStatus:[NSString stringWithFormat:@"Recording — %.1f / %llu seconds. No audio. Cancel This Capture stops only this request.", MIN(elapsed, self.seconds), self.seconds]];
         self.captureIndicator.button.title = [NSString stringWithFormat:@" %.0fs", ceil(MAX(0, self.seconds - elapsed))];
-        if (elapsed >= self.seconds) [self stopRecording];
+        if (elapsed >= self.seconds || (self.finishRequested && elapsed >= 1.0 / 30.0)) [self stopRecording];
     }
 }
 
@@ -460,7 +505,7 @@ static NSString *NativeSourceSession(void) {
             (__bridge NSString *)kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: @YES,
         },
         AVVideoCompressionPropertiesKey: @{
-            AVVideoAverageBitRateKey: @4000000,
+            AVVideoAverageBitRateKey: @8000000,
             AVVideoExpectedSourceFrameRateKey: @30,
             AVVideoMaxKeyFrameIntervalKey: @30,
             AVVideoAllowFrameReorderingKey: @NO,
@@ -624,12 +669,12 @@ static NSString *NativeSourceSession(void) {
 }
 @end
 
-void lumiverse_capture_begin(const char *request_id, const char *consent, const char *summary, const char *source, bool can_remember, void (*invalidate)(void *), void (*remember)(void *, const char *), bool video, uint64_t seconds,
+void lumiverse_capture_begin(const char *request_id, const char *consent, const char *summary, const char *source, const char *display, bool can_remember, void (*invalidate)(void *), void (*remember)(void *, const char *), bool video, uint64_t seconds,
     size_t max_bytes, uint64_t max_pixels, uint64_t remaining_ms, CaptureCallback callback, void *context) {
     if (@available(macOS 14.0, *)) {
-        if (currentCapture || remaining_ms == 0 || remaining_ms > 120000 || max_bytes == 0 || max_pixels == 0
-            || max_pixels > 16777216 || max_bytes > (video ? 33554432 : 8388608)
-            || (video && (!(lumiverse_capture_capabilities() & 2) || seconds == 0 || seconds > 30))) {
+        if (currentCapture || remaining_ms == 0 || remaining_ms > 300000 || max_bytes == 0 || max_pixels == 0
+            || max_pixels > 16777216 || max_bytes > (video ? 134217728 : 8388608)
+            || (video && (!(lumiverse_capture_capabilities() & 2) || seconds == 0 || seconds > 120))) {
             callback(context, 3, NULL, 0, 0, 0, 0, NULL); return;
         }
         LumiverseCapture *capture = [LumiverseCapture new];
@@ -637,6 +682,7 @@ void lumiverse_capture_begin(const char *request_id, const char *consent, const 
         capture.consent = [NSString stringWithUTF8String:consent];
         capture.summary = [NSString stringWithUTF8String:summary];
         capture.savedSource = source ? [NSString stringWithUTF8String:source] : nil;
+        capture.requestedDisplay = display ? [NSString stringWithUTF8String:display] : nil;
         capture.canRemember = can_remember;
         capture.invalidateApproval = invalidate;
         capture.rememberSource = remember;
@@ -655,6 +701,14 @@ void lumiverse_capture_begin(const char *request_id, const char *consent, const 
 void lumiverse_capture_cancel(const char *request_id) {
     if (@available(macOS 14.0, *)) {
         if ([currentCapture.requestID isEqualToString:[NSString stringWithUTF8String:request_id]]) [currentCapture finishOutcome:2];
+    }
+}
+
+void lumiverse_capture_finish(const char *request_id) {
+    if (@available(macOS 14.0, *)) {
+        if (currentCapture.video && [currentCapture.requestID isEqualToString:[NSString stringWithUTF8String:request_id]]) {
+            currentCapture.finishRequested = YES;
+        }
     }
 }
 

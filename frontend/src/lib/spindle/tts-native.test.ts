@@ -33,6 +33,7 @@ const previous = Object.fromEntries(['window', 'document', 'AudioContext'].map(k
 let dom: JSDOM
 let bridge: ReturnType<typeof createNativeTTSAPI>
 let untrack: (() => void) | undefined
+let mediaGranted: boolean
 const profile: TtsConnectionProfile = {
   id: 'tts', name: 'Voice', provider: 'openai_tts', voice: 'alloy', model: 'tts-1', api_url: '',
   is_default: true, has_api_key: true, default_parameters: {}, metadata: {}, created_at: 1, updated_at: 1,
@@ -50,7 +51,10 @@ beforeEach(() => {
     ttsProfiles: [{ ...profile }], characters: [], isGroupChat: false, activeCharacterId: null,
     activeChatId: 'chat', activeChatMetadata: {}, messages: [{ ...message }], updateMessage() {},
   })
-  bridge = createNativeTTSAPI({ assertActive() {}, requirePermission() {}, onTeardown: () => () => {} })
+  mediaGranted = true
+  bridge = createNativeTTSAPI({ assertActive() {}, requirePermission(permission) {
+    if (!mediaGranted) throw new Error(`PERMISSION_DENIED:${permission}`)
+  }, onTeardown: () => () => {} })
 })
 afterEach(async () => {
   bridge.dispose()
@@ -76,6 +80,37 @@ test.each(['text', 'message', 'saved'] as const)('%s speak preempts a playing sa
   expect(el.paused).toBe(true)
   bridge.api.stop()
   await spoken
+})
+
+test.each(['text', 'message', 'saved'] as const)('extension %s speech works with chat TTS disabled without changing chat settings', async (kind) => {
+  useStore.setState({ voiceSettings: { ...useStore.getState().voiceSettings, ttsEnabled: false } })
+  if (kind === 'saved') useStore.setState({ messages: [{ ...message, extra: { attachments: [{ type: 'audio', image_id: 'saved', swipe_id: 0,
+    mime_type: 'audio/mpeg', original_filename: 'speech.mp3' }] } }] })
+  const paths: string[] = []
+  globalThis.fetch = (async (url: string) => {
+    paths.push(url)
+    return url.endsWith('/save-message-audio') ? Response.json({ message }) : new Response(new Uint8Array([1, 2, 3]))
+  }) as typeof fetch
+  if (kind === 'text') await bridge.api.speak({ text: 'A brief companion reply.' }, { connectionId: 'tts' })
+  else await bridge.api.speak({ messageId: message.id })
+  expect(paths.length).toBeGreaterThan(0)
+  expect(bridge.api.isSpeaking()).toBe(false)
+  expect(useStore.getState().voiceSettings.ttsEnabled).toBe(false)
+})
+
+test('chat reading remains disabled and Media authorization still gates extension speech', async () => {
+  useStore.setState({ voiceSettings: { ...useStore.getState().voiceSettings, ttsEnabled: false } })
+  let requests = 0
+  globalThis.fetch = (async () => { requests++; return new Response(new Uint8Array([1, 2, 3])) }) as unknown as typeof fetch
+  const { startMessageTtsPlaybackSession, synthesizeSaveAndAutoPlay } = await import('../ttsMessagePlayback')
+  const input = { messageId: message.id, messageName: message.name, messageContent: message.content, messageIsUser: message.is_user }
+  expect(startMessageTtsPlaybackSession(input)).toBeNull()
+  expect(await synthesizeSaveAndAutoPlay(input)).toBe(false)
+  mediaGranted = false
+  await expect(bridge.api.speak({ text: 'Not authorized' }, { connectionId: 'tts' })).rejects.toThrow('PERMISSION_DENIED:media')
+  await expect(bridge.api.speak({ messageId: message.id })).rejects.toThrow('PERMISSION_DENIED:media')
+  expect(requests).toBe(0)
+  expect(bridge.api.isSpeaking()).toBe(false)
 })
 
 test.each([false, true])('message speak reports provider failures (streaming: %s)', async (streaming) => {
@@ -137,9 +172,8 @@ test('saved audio load failures reject speak without a synthesis request', async
 test('native validation leaves current playback intact', async () => {
   const el = new FakeAudio()
   untrack = audio.trackTTSAudioElement(el as unknown as HTMLMediaElement)
+  useStore.setState({ voiceSettings: { ...useStore.getState().voiceSettings, ttsEnabled: false } })
   await expect(bridge.api.speak({ messageId: 'missing' })).rejects.toThrow('TTS_MESSAGE_NOT_FOUND')
   await expect(bridge.api.speak({ text: 'Hello' }, { connectionId: 'missing' })).rejects.toThrow('TTS_CONNECTION_NOT_FOUND')
-  useStore.setState({ voiceSettings: { ...useStore.getState().voiceSettings, ttsEnabled: false } })
-  await expect(bridge.api.speak({ text: 'Hello' })).rejects.toThrow('TTS_UNAVAILABLE:disabled')
   expect(el.paused).toBe(false)
 })

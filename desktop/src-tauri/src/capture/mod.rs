@@ -1,6 +1,8 @@
 mod consent;
+mod displays;
 mod identity;
 mod platform;
+mod transport;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -23,9 +25,9 @@ use tokio::sync::{oneshot, Notify};
 use crate::remote_instance::{self, RemoteInstanceState};
 
 const IMAGE_BYTES: usize = 8 * 1024 * 1024;
-const VIDEO_BYTES: usize = 32 * 1024 * 1024;
+const VIDEO_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PIXELS: u64 = 16_777_216;
-const MAX_DURATION: u64 = 30;
+const MAX_DURATION: u64 = 120;
 const API_PATH: &str = "/api/desktop/v1/capture/devices";
 
 #[derive(Default)]
@@ -43,9 +45,22 @@ struct Session {
     stopped: AtomicBool,
     wake: Notify,
     error: Mutex<Option<String>>,
+    prompt_budget: Mutex<PromptBudget>,
 }
 
 impl Session {
+    fn new(origin: String) -> Self {
+        Self {
+            origin,
+            account: Mutex::new(None),
+            account_id: Mutex::new(None),
+            stopped: AtomicBool::new(false),
+            wake: Notify::new(),
+            error: Mutex::new(None),
+            prompt_budget: Mutex::new(PromptBudget::default()),
+        }
+    }
+
     fn stop(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         self.wake.notify_one();
@@ -94,6 +109,9 @@ struct Destination {
 #[serde(rename_all = "camelCase")]
 struct CaptureRequest {
     request_id: String,
+    display_id: Option<String>,
+    #[serde(skip)]
+    display: Option<displays::Display>,
     extension: ExtensionIdentity,
     purpose: String,
     kind: String,
@@ -110,6 +128,10 @@ struct CaptureRequest {
 enum Command {
     Capture(CaptureRequest),
     ApprovalStatus(ApprovalQuery),
+    Finish {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
     Cancel {
         #[serde(rename = "requestId")]
         request_id: String,
@@ -120,6 +142,7 @@ enum Command {
 #[serde(rename_all = "camelCase")]
 struct ApprovalQuery {
     request_id: String,
+    display_id: Option<String>,
     extension: ExtensionIdentity,
     kind: String,
     destination: Destination,
@@ -131,6 +154,8 @@ impl ApprovalQuery {
         let video = self.kind == "video";
         CaptureRequest {
             request_id: self.request_id,
+            display_id: self.display_id,
+            display: None,
             extension: self.extension,
             purpose: "Check native approval".into(),
             kind: self.kind,
@@ -242,6 +267,7 @@ fn safe_label(value: &str, maximum: usize) -> bool {
 impl CaptureRequest {
     fn validate(&self, capabilities: Capabilities, now: u64) -> Result<(), &'static str> {
         if uuid::Uuid::parse_str(&self.request_id).is_err()
+            || self.display_id.as_ref().is_some_and(|id| id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()))
             || !safe_label(&self.extension.id, 128)
             || !safe_label(&self.extension.identifier, 128)
             || !safe_label(&self.extension.name, 120)
@@ -251,7 +277,7 @@ impl CaptureRequest {
             || !safe_label(&self.destination.model, 200)
             || !safe_label(&self.destination.endpoint_origin, 256)
             || self.expires_at <= now
-            || self.expires_at > now.saturating_add(120_000)
+            || self.expires_at > now.saturating_add(300_000)
             || self.max_pixels == 0
             || self.max_pixels > MAX_PIXELS
             || self.max_bytes == 0
@@ -286,7 +312,7 @@ impl CaptureRequest {
         format!("Extension: {}\nIdentifier: {}\nInstallation: {}\nInstance: {}\nDesktop account: {}\nProvider: {}\nModel: {}\nEndpoint: {}\nConnection: {}\nPurpose: {}\n\n{}\nLimit: {} MiB, {} pixels. Local expiry: {} seconds.\nApproved uploads expire from instance memory after 2 minutes.\nSelecting a source authorizes capture and release to the instance/model above. No capture starts before source selection or a matching remembered native approval. This source is remembered for later requests of this capture kind from this extension to this destination until screen capture is turned off. Older servers may require a source choice for each request. Canceling a capture discards only that request without uploading and keeps saved approvals. Turn off screen capture in the desktop tray to revoke saved approvals. Capture and release happen automatically after source selection; no capture window or Send step is required.",
             self.extension.name, self.extension.identifier, self.extension.id, origin, account,
             self.destination.provider, self.destination.model, self.destination.endpoint_origin,
-            self.destination.connection_id, self.purpose,
+            self.destination.connection_id, self.display.as_ref().map_or_else(|| self.purpose.clone(), |display| format!("{}\nSelected display: {} · {} × {}", self.purpose, display.name, display.width, display.height)),
             if self.kind == "video" { format!("Record up to {} seconds. No audio. {}", self.duration_seconds.unwrap_or_default(),
                 if cfg!(target_os = "windows") { "Hardware acceleration requested; Windows may fall back to software H.264." } else { "Hardware H.264 only." }) }
             else { "Take one screenshot of the source you choose. Local memory only.".into() },
@@ -298,7 +324,7 @@ impl CaptureRequest {
     fn consent_summary(&self, origin: &str, account: &str) -> String {
         format!(
             "{} → {} · {}\n{}\n{} · {}\n{}",
-            self.extension.name,
+            self.display.as_ref().map_or_else(|| self.extension.name.clone(), |display| format!("{} · {} ({} × {})", self.extension.name, display.name, display.width, display.height)),
             self.destination.provider,
             self.destination.model,
             self.destination.endpoint_origin,
@@ -403,14 +429,7 @@ pub async fn desktop_capture_connect(
         return Err("Capture requires HTTPS or a loopback instance".into());
     }
     stop(&app, None);
-    let session = Arc::new(Session {
-        origin: canonical.clone(),
-        account: Mutex::new(None),
-        account_id: Mutex::new(None),
-        stopped: AtomicBool::new(false),
-        wake: Notify::new(),
-        error: Mutex::new(None),
-    });
+    let session = Arc::new(Session::new(canonical.clone()));
     *app.state::<DesktopCaptureState>()
         .session
         .lock()
@@ -438,12 +457,9 @@ pub async fn desktop_capture_connect(
         return Err("Capture connection cancelled".into());
     }
     tauri::async_runtime::spawn(async move {
-        if transport(&app, &session, capabilities).await.is_err() {
-            *session.error.lock().unwrap() = Some(
-                "Capture disconnected. Desktop will retry while screen capture is enabled.".into(),
-            );
-        }
-        session.stop();
+        transport::maintain_connection(&session, Duration::from_secs(5), || {
+            transport(&app, &session, capabilities)
+        }).await;
     });
     Ok(())
 }
@@ -630,6 +646,7 @@ async fn upload(
         .bearer_auth(token)
         .header("X-Lumiverse-Capture-Lease", lease)
         .header("Content-Type", "application/json")
+        .timeout(Duration::from_millis(request.expires_at.saturating_sub(now_ms()).min(120_000).max(1)))
         .body(payload)
         .send()
         .await
@@ -652,37 +669,29 @@ async fn transport(
         .build()
         .map_err(|_| ())?;
     let oauth = app.state::<RemoteInstanceState>();
-    let token = oauth.capture_access_token(&session.origin).ok_or(())?;
     let account_id = session
         .account_id
         .lock()
         .map_err(|_| ())?
         .clone()
         .ok_or(())?;
-    tokio::select! {
-        biased;
-        _ = session.wake.notified() => return Ok(()),
-        verified = verify_account(&client, &session.origin, &token, &account_id) => verified?,
-    }
+    // Refresh existing OAuth credentials after an outage, even if the cached
+    // access token has not expired. Keep this session pinned to its original account.
+    // Let a rotating refresh token finish persisting before honoring cancellation.
+    let snapshot = remote_instance::poll_remote_instance(&oauth, session.origin.clone()).await;
+    if session.stopped.load(Ordering::SeqCst) { return Ok(()); }
+    if !snapshot.capture_account().is_some_and(|(id, _)| id == account_id) { return Err(()); }
+    let token = oauth.capture_access_token(&session.origin).ok_or(())?;
     let device_key = identity::device_key(app, &session.origin, &account_id).map_err(|_| ())?;
-    let register = client.post(format!("{}{API_PATH}", session.origin)).bearer_auth(&token)
-        .json(&serde_json::json!({"name":"Lumiverse Desktop","platform":std::env::consts::OS,"capabilities":capabilities,"deviceKey":device_key,"approvalStatus":true}));
-    let registration: Registration = tokio::select! {
+    let mut connection = tokio::select! {
         biased;
         _ = session.wake.notified() => return Ok(()),
-        result = async { bounded_json(register.send().await.map_err(|_| ())?, 4096).await } => result?,
+        result = transport::Connection::register(&client, &session.origin, &token, &account_id, &device_key, capabilities) => result?,
     };
-    if uuid::Uuid::parse_str(&registration.device.id).is_err()
-        || registration.transport_token.len() > 256
-        || registration.transport_token.len() < 32
-    {
-        return Err(());
-    }
-    let endpoint = format!("{}{API_PATH}/{}", session.origin, registration.device.id);
+    let endpoint = connection.endpoint.clone();
     let mut pending: Option<Pending> = None;
     let mut validated_token = token;
     let account = session.account.lock().map_err(|_| ())?.clone().ok_or(())?;
-    let mut prompt_budget = PromptBudget::default();
     let result = async {
         loop {
             if session.stopped.load(Ordering::SeqCst) { return Ok(()); }
@@ -694,6 +703,7 @@ async fn transport(
                 }
                 if session.stopped.load(Ordering::SeqCst) { return Ok(()); }
                 remote_instance::poll_remote_instance(&oauth, session.origin.clone()).await;
+                if session.stopped.load(Ordering::SeqCst) { return Ok(()); }
                 token = oauth.capture_access_token(&session.origin);
             }
             let token = token.ok_or(())?;
@@ -705,34 +715,48 @@ async fn transport(
                 }
                 validated_token = token.clone();
             }
-            let poll = client.get(format!("{endpoint}/commands")).bearer_auth(&token)
-                .header("X-Lumiverse-Capture-Lease", &registration.transport_token);
+            let displays = displays::snapshot(&device_key);
             let response: Commands = tokio::select! {
                 biased;
                 _ = session.wake.notified() => return Ok(()),
-                response = async { bounded_json(poll.send().await.map_err(|_| ())?, 32 * 1024).await } => response?,
+                response = connection.commands(&client, &token, &displays) => response?,
             };
+            *session.error.lock().map_err(|_| ())? = None;
             if response.commands.len() > 16 { return Err(()); }
             for command in response.commands {
                 match command {
                     Command::ApprovalStatus(query) => {
-                        let request = query.request();
+                        let mut request = query.request();
+                        request.display = request.display_id.as_ref().and_then(|id| displays.iter().find(|display| &display.id == id)).cloned();
                         let (approval, source) = if request.validate(capabilities, now_ms()).is_err() {
                             ("unavailable", "unknown")
+                        } else if request.display_id.is_some() && request.display.is_none() {
+                            ("unavailable", "missing")
                         } else {
                             let context = consent::Context::new(app, &request, &session.origin, &account_id);
                             let (approval, source) = context.status();
-                            (approval, source.as_ref().map_or("unknown", |source| platform::source_status(source)))
+                            if cfg!(target_os = "windows") && request.display.is_some() && context.can_remember
+                                && matches!(approval, "required" | "remembered") {
+                                ("remembered", "ready")
+                            } else {
+                                (approval, source.as_ref().map_or("unknown", |source| platform::source_status(source)))
+                            }
                         };
                         // No picker, encoder or capture path is entered for discovery.
                         let response = client.post(format!("{endpoint}/approval-status")).bearer_auth(&token)
-                            .header("X-Lumiverse-Capture-Lease", &registration.transport_token)
+                            .header("X-Lumiverse-Capture-Lease", &connection.lease)
                             .json(&serde_json::json!({"requestId":request.request_id,"approval":approval,"source":source}));
                         let result = tokio::select! { biased;
                             _ = session.wake.notified() => return Ok(()),
                             result = response.send() => result.map_err(|_| ())?,
                         };
                         if !result.status().is_success() && result.status().as_u16() != 410 { return Err(()); }
+                    },
+                    Command::Finish { request_id } => {
+                        if pending.as_ref().is_some_and(|active| active.request.request_id == request_id
+                            && active.request.kind == "video" && active.request.mode.as_deref() == Some("record")) {
+                            platform::finish(app, &request_id);
+                        }
                     },
                     Command::Cancel { request_id } => {
                         if pending.as_ref().is_some_and(|active| active.request.request_id == request_id) {
@@ -741,18 +765,23 @@ async fn transport(
                             platform::cancel(app, &request_id);
                         }
                     },
-                    Command::Capture(request) => {
+                    Command::Capture(mut request) => {
                         if pending.is_some() { return Err(()); }
+                        request.display = request.display_id.as_ref().and_then(|id| displays.iter().find(|display| &display.id == id)).cloned();
                         let approval = consent::Context::new(app, &request, &session.origin, &account_id);
                         let remembered = approval.source();
                         if let Err(outcome) = request.validate(capabilities, now_ms()) {
                             eprintln!("[Lumiverse capture] request rejected before picker: {outcome}");
-                            upload(&client, &endpoint, &token, &registration.transport_token, &request, Err(outcome)).await?;
+                            upload(&client, &endpoint, &token, &connection.lease, &request, Err(outcome)).await?;
+                        } else if request.display_id.is_some() && request.display.is_none() {
+                            upload(&client, &endpoint, &token, &connection.lease, &request, Err("failed")).await?;
                         } else if remembered.is_err() {
-                            upload(&client, &endpoint, &token, &registration.transport_token, &request, Err("denied")).await?;
-                        } else if remembered.as_ref().is_ok_and(|source| source.is_none()) && !prompt_budget.allow(now_ms()) {
+                            upload(&client, &endpoint, &token, &connection.lease, &request, Err("denied")).await?;
+                        } else if !(cfg!(target_os = "windows") && request.display.is_some() && approval.can_remember)
+                            && remembered.as_ref().is_ok_and(|source| source.is_none())
+                            && !session.prompt_budget.lock().map_err(|_| ())?.allow(now_ms()) {
                             eprintln!("[Lumiverse capture] native prompt cooldown or budget exceeded");
-                            upload(&client, &endpoint, &token, &registration.transport_token, &request, Err("denied")).await?;
+                            upload(&client, &endpoint, &token, &connection.lease, &request, Err("denied")).await?;
                         } else {
                             let active = Arc::new(AtomicBool::new(true));
                             let receiver = platform::begin(app, &request, &session.origin, &account,
@@ -776,7 +805,7 @@ async fn transport(
                             tokio::select! {
                                 biased;
                                 _ = session.wake.notified() => return Ok(()),
-                                result = upload(&client, &endpoint, &token, &registration.transport_token, &finished.request, media) => result?,
+                                result = upload(&client, &endpoint, &token, &connection.lease, &finished.request, media) => result?,
                             }
                         },
                         Err(oneshot::error::TryRecvError::Closed) => return Err(()),
@@ -798,7 +827,8 @@ async fn transport(
     let _ = client
         .delete(&endpoint)
         .bearer_auth(validated_token)
-        .header("X-Lumiverse-Capture-Lease", registration.transport_token)
+        .header("X-Lumiverse-Capture-Lease", &connection.lease)
+        .timeout(Duration::from_secs(2))
         .send()
         .await;
     result
@@ -831,7 +861,7 @@ mod tests {
         assert!(capture.validate(caps, 100_000).is_err());
         capture.max_bytes = IMAGE_BYTES;
         assert!(capture.validate(caps, 110_000).is_err());
-        capture.expires_at = 230_001;
+        capture.expires_at = 400_001;
         assert!(capture.validate(caps, 100_000).is_err());
         capture.expires_at = 110_000;
         capture.max_pixels = MAX_PIXELS + 1;
@@ -872,13 +902,17 @@ mod tests {
         let mut capture = request();
         capture.kind = "video".into();
         capture.mode = Some("record".into());
-        capture.duration_seconds = Some(30);
+        capture.duration_seconds = Some(120);
         capture.max_bytes = VIDEO_BYTES;
+        capture.expires_at = 400_000;
         assert!(capture.validate(caps, 100_000).is_ok());
+        capture.max_bytes = VIDEO_BYTES + 1;
+        assert!(capture.validate(caps, 100_000).is_err());
+        capture.max_bytes = VIDEO_BYTES;
         capture.mode = Some("replay".into());
         assert_eq!(capture.validate(caps, 100_000), Err("unsupported"));
         capture.mode = Some("record".into());
-        capture.duration_seconds = Some(31);
+        capture.duration_seconds = Some(121);
         assert!(capture.validate(caps, 100_000).is_err());
         capture.duration_seconds = Some(0);
         assert!(capture.validate(caps, 100_000).is_err());
@@ -967,6 +1001,10 @@ mod tests {
         else {
             panic!("expected cancel request")
         };
+        assert_eq!(request_id, capture.request_id);
+        let Command::Finish { request_id } = serde_json::from_value::<Command>(
+            serde_json::json!({"type":"finish","requestId":capture.request_id})
+        ).unwrap() else { panic!("expected finish request"); };
         assert_eq!(request_id, capture.request_id);
     }
 

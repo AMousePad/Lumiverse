@@ -54,7 +54,7 @@ impl Scope {
             &request.extension.id,
             &request.extension.identifier,
         ));
-        let key = hash(&(
+        let mut key = hash(&(
             &owner,
             &request.extension.approval_revision,
             &request.kind,
@@ -64,6 +64,10 @@ impl Scope {
             &request.destination.model,
             &request.destination.endpoint_origin,
         ));
+        // Preserve existing picker grants, but never reuse them for an explicit display.
+        if let Some(display_id) = &request.display_id {
+            key = hash(&(key, display_id));
+        }
         let valid_revision = |revision: &Option<String>| {
             revision.as_ref().is_some_and(|revision| {
                 revision.len() == 64 && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -317,13 +321,14 @@ mod tests {
                 .unwrap(),
             None
         );
-        for changed in ["installation", "kind", "destination", "grant", "endpoint"] {
+        for changed in ["installation", "kind", "destination", "grant", "endpoint", "display"] {
             let mut request = request.clone();
             match changed {
                 "installation" => request.extension.id = "reinstalled".into(),
                 "kind" => request.kind = "video".into(),
                 "destination" => request.destination.revision = Some("c".repeat(64)),
                 "grant" => request.extension.approval_revision = Some("d".repeat(64)),
+                "display" => request.display_id = Some("e".repeat(64)),
                 _ => request.destination.endpoint_origin = "https://other".into(),
             }
             assert_eq!(
@@ -332,6 +337,20 @@ mod tests {
                     .unwrap(),
                 None
             );
+        }
+    }
+
+    #[test]
+    fn approving_one_display_never_approves_another_or_the_generic_picker() {
+        let mut request = request();
+        request.display_id = Some("a".repeat(64));
+        let scope = Scope::new(&request, "https://instance", "alice");
+        let mut records = Records::default();
+        records.grants.insert(scope.key.clone(), "display-a-source".into());
+        assert_eq!(records.source(&scope).unwrap().as_deref(), Some("display-a-source"));
+        for display_id in [Some("b".repeat(64)), None] {
+            request.display_id = display_id;
+            assert_eq!(records.source(&Scope::new(&request, "https://instance", "alice")).unwrap(), None);
         }
     }
 

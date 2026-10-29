@@ -35,4 +35,25 @@ test('owner settings default to focused and register only after an explicit Save
   await Bun.sleep(0);
   expect(saved[1][1].scope).toBe('global');
   expect(get('status').textContent).toBe('Bindings saved and active.');
+
+  get<HTMLInputElement>('ctrl').checked = false;
+  for (let number = 13; number <= 24; number++) {
+    const code = `F${number}`;
+    expect([...get<HTMLSelectElement>('key').options].some(option => option.value === code)).toBe(true);
+    if (number === 13) {
+      get('chord').dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: code, code, bubbles: true, cancelable: true }));
+    } else {
+      get<HTMLSelectElement>('key').value = code;
+      get('manual-chord').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    }
+    get('add-binding').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    get('save').click();
+    await Bun.sleep(0);
+    expect(saved.at(-1)!.at(-1)).toMatchObject({ scope: 'global', chord: { code, ctrl: false, alt: false, shift: false, meta: false } });
+  }
+  get<HTMLSelectElement>('key').value = 'KeyP';
+  get('manual-chord').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  get('add-binding').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  expect(get('status').textContent).toContain('Include Control');
+  expect(document.querySelectorAll('#bindings p')).toHaveLength(14);
 });

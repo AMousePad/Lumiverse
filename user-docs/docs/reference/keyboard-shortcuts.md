@@ -87,6 +87,9 @@ Open **Settings → Key Bindings** in the desktop frontend. Choose a desktop act
 application command, or command registered by a Spindle extension. Record a shortcut
 (or choose the keys manually), add it, and select **Save Bindings**.
 
+**F13–F24** can be bound on their own or with modifiers, including keys sent by
+macro pads. Other keys require **Control**, **Alt/Option**, or **Command/Super**.
+
 Bindings use app-focused mode by default. Enable **Global key bindings** once
 with desktop confirmation, then choose **Global** for each action you want to
 trigger while Lumiverse is in the background. You can configure and change all

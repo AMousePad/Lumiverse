@@ -198,6 +198,37 @@ test('inline extension editor stays in its panel and saves only its own command'
   expect(calls.some(call => call.command === 'desktop_keybindings_show')).toBe(false)
 })
 
+test('settings record every standalone extended function key and save it as a global binding', async () => {
+  await renderSettings()
+  await act(async () => host!.querySelector<HTMLButtonElement>('[role="switch"]')!.click())
+  await act(async () => button('Add Binding').click())
+  await changeSelect('Scope 1', 'global')
+  for (let number = 13; number <= 24; number++) {
+    const code = `F${number}`
+    const field = select('Shortcut 1')
+    await act(async () => {
+      field.focus()
+      field.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: code, code, bubbles: true, cancelable: true }))
+    })
+    expect(field.textContent).toBe(code)
+    expect(button('Save Bindings').disabled).toBe(false)
+    await act(async () => button('Save Bindings').click())
+    expect(saved.bindings[0]).toMatchObject({ scope: 'global', chord: { code, ctrl: false, alt: false, shift: false, meta: false } })
+    expect(host!.textContent).toContain('Key bindings saved.')
+  }
+})
+
+test('the manual key selector accepts standalone F13 and F24', async () => {
+  await renderSettings({ extensionId: 'installed', commandId: 'analyze' })
+  await act(async () => button('Add Binding').click())
+  for (const code of ['F13', 'F24']) {
+    await changeSelect('Key 1', code)
+    expect(button('Save Bindings').disabled).toBe(false)
+    await act(async () => button('Save Bindings').click())
+    expect(saved.bindings[0]).toMatchObject({ action: 'ext-cmd-installed-analyze', chord: { code, ctrl: false, alt: false, shift: false, meta: false } })
+  }
+})
+
 test('a late catalog response during extension reload cannot replace the restored action name', async () => {
   await renderSettings({ extensionId: 'installed', commandId: 'analyze' })
   await act(async () => button('Add Binding').click())

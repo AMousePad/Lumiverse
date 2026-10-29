@@ -1390,6 +1390,9 @@ export class WorkerHost {
           "decision-images-v1": 1,
           "embeddings-v1": 1,
           "desktop-capture-worker-v1": 1,
+          "desktop-capture-finish-v1": 1,
+          "desktop-capture-optimize-v1": 1,
+          "desktop-capture-displays-v1": 1,
           "desktop-capture-approval-status-v1": 1,
         }),
         extensionInstallationId: this.extensionId,
@@ -1965,6 +1968,8 @@ export class WorkerHost {
       case "desktop_capture_devices":
       case "desktop_capture_approval_status":
       case "desktop_capture_request":
+      case "desktop_capture_finish":
+      case "desktop_capture_optimize":
       case "desktop_capture_release":
         this.desktopCaptureApi.handle(msg);
         break;

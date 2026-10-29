@@ -22,6 +22,7 @@ import {
 } from "../inference-scheduler";
 import * as presetsSvc from "../presets.service";
 import { injectConnectionMetadataFlags } from "./connection-metadata";
+import { resolveGoogleMediaResolution } from "../../llm/providers/google-media";
 import {
   resolveConnection,
   resolveProviderAndKey,
@@ -147,6 +148,10 @@ async function prepareRawCall(
   const { provider, apiKey, apiUrl, connection } =
     await resolveRawProviderAndKey(userId, input);
   const parameters: GenerationParameters = { ...(input.parameters || {}) };
+  if (provider.name === "google" || provider.name === "google_vertex") {
+    const explicitMediaResolution = resolveGoogleMediaResolution(parameters);
+    if (explicitMediaResolution !== undefined) parameters.media_resolution = explicitMediaResolution;
+  }
   applyEffectiveReasoningSettings(
     userId,
     connection || {},
@@ -156,6 +161,14 @@ async function prepareRawCall(
     input.reasoning,
     true,
   );
+  // Raw calls keep their explicit parameters, but can inherit the selected
+  // connection's media detail without importing unrelated sampling settings.
+  if ((provider.name === "google" || provider.name === "google_vertex")
+    && connection?.preset_id && resolveGoogleMediaResolution(parameters) === undefined) {
+    const preset = await presetsSvc.getPresetAsync(userId, connection.preset_id);
+    const mediaResolution = resolveGoogleMediaResolution(preset?.parameters ?? {});
+    if (mediaResolution !== undefined) parameters.media_resolution = mediaResolution;
+  }
   if (connection) injectConnectionMetadataFlags(connection, parameters);
   const cached = applyPromptCaching(
     {

@@ -18,7 +18,7 @@ const PERMISSIONS_DIR = join(HERE, "permissions");
 const CAPABILITIES_DIR = join(HERE, "capabilities");
 
 function readSource(name: string): string {
-  return readFileSync(join(HERE, "src", name), "utf8");
+  return readFileSync(join(HERE, "src", name), "utf8").replace(/\r\n/g, "\n");
 }
 
 /** Commands exposed to the webview via `generate_handler!`. */
@@ -368,7 +368,7 @@ describe("native capture boundary", () => {
 
   test("macOS source selection opens directly without a capture window or Send step", () => {
     const native = readSource("capture/macos.m");
-    expect(native).toContain('initWithTitle:@"Choose a source for Lumiverse"');
+    expect(native).toContain('initWithTitle:self.requestedDisplay.length ? @"Approve the selected display for Lumiverse" : @"Choose a source for Lumiverse"');
     expect(native).toContain('[sources popUpMenuPositioningItem:nil atLocation:NSEvent.mouseLocation inView:nil]');
     expect(native).toContain('action:@selector(selectSource:)');
     expect(native).toContain("item.representedObject = display;");
@@ -511,7 +511,7 @@ describe("native capture boundary", () => {
   });
 
   test("capture exposes one persistent tray toggle and no separate Remember control", () => {
-    const tray = readFileSync(join(HERE, "../src/main.ts"), "utf8");
+    const tray = readFileSync(join(HERE, "../src/main.ts"), "utf8").replace(/\r\n/g, "\n");
     const browser = tray.match(/frontendItem = await Submenu\.new\(\{[\s\S]*?\n  \}\);/)?.[0];
     const root = tray.match(/const menu = await Menu\.new\(\{[\s\S]*?\n  \}\);/)?.[0];
     expect(browser).not.toContain("desktopCaptureItem");

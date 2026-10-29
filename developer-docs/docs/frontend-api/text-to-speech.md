@@ -12,6 +12,13 @@ Feature-detect `ctx.tts` and `ctx.host.capabilities['text-to-speech-v1'] >= 1`.
 Declare `"media"` in `spindle.json`. `speak()` and `stop()` require it.
 `isSpeaking()` and `subscribe()` are free.
 
+Extensions control their own speech enablement. Offer an extension setting for
+automatic speech, or start it from an explicit playback action. The general
+chat **Enable text-to-speech** and **Auto-play responses** settings do not gate
+`ctx.tts.speak()` calls, including message playback. Shared volume, speed, voice
+selection and message speech-detection rules still apply; extension calls do
+not change the user's chat settings.
+
 ```ts
 const tts = ctx.tts
 if (!tts || (ctx.host.capabilities['text-to-speech-v1'] ?? 0) < 1) return
@@ -49,7 +56,7 @@ cannot start or when synthesis fails:
 | Error | Cause |
 | --- | --- |
 | `TTS_INPUT_INVALID` | Neither a non-empty `text` nor a `messageId`, or `connectionId` with `messageId` |
-| `TTS_UNAVAILABLE:disabled` | Text-to-Speech is turned off in Voice & Speech |
+| `TTS_UNAVAILABLE:disabled` | Older hosts gated extensions on the chat TTS switch; update Lumiverse for independent extension playback |
 | `TTS_UNAVAILABLE:connectionRequired` | No TTS connection is selected or marked default |
 | `TTS_CONNECTION_NOT_FOUND` | `connectionId` is not one of the user's TTS connections |
 | `TTS_MESSAGE_NOT_FOUND` | The message is not in the active chat |

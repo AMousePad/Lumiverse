@@ -31,6 +31,18 @@ function fixture(clientId = "lumiverse-desktop") {
 }
 
 describe("native-only desktop capture transport", () => {
+  test("display metadata updates require the matching native account and lease", async () => {
+    const setup = fixture();
+    const native = await setup.register();
+    const displays = ["a", "b", "c"].map((id, index) => ({ id: id.repeat(64), name: `Display ${index + 1}`, width: 1920, height: 1080, primary: index === 0 }));
+    const endpoint = `/capture/devices/${native.device.id}/displays`;
+    const body = JSON.stringify(displays);
+    for (const headers of [{ authorization: "Bearer bob", "X-Lumiverse-Capture-Lease": native.transportToken }, { authorization: "Bearer alice", "X-Lumiverse-Capture-Lease": "forged" }]) {
+      expect((await setup.app.request(endpoint, { method: "POST", headers, body })).status).toBe(401);
+    }
+    expect((await setup.app.request(endpoint, { method: "POST", headers: { authorization: "Bearer alice", "X-Lumiverse-Capture-Lease": native.transportToken }, body })).status).toBe(200);
+    expect(setup.broker.listDevices("alice")[0].displays).toEqual(displays);
+  });
   test("approval replies require the native account and matching lease and return only metadata", async () => {
     const setup = fixture();
     const native = setup.broker.register("alice", { name: "Desktop", platform: "macos", approvalStatus: true, capabilities: { image: true, video: false, replay: false } });

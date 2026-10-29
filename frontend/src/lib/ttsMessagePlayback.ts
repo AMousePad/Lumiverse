@@ -135,13 +135,18 @@ export function startMessageTtsPlayback(args: {
 }
 
 /** Cancellable message playback for callers that need synthesis failures and ownership. */
-export function startMessageTtsPlaybackSession(args: Parameters<typeof startMessageTtsPlayback>[0]): {
+export function startMessageTtsPlaybackSession(
+  args: Parameters<typeof startMessageTtsPlayback>[0],
+  options?: { enabled: boolean },
+): {
   synthesized: Promise<void>
   cancel(): void
 } | null {
   const state = useStore.getState()
   const voiceSettings = state.voiceSettings
-  if (!voiceSettings.ttsEnabled) return null
+  // Chat callers inherit the chat toggle; explicit extension requests supply
+  // their own enablement after the Spindle Media permission check.
+  if (!(options?.enabled ?? voiceSettings.ttsEnabled)) return null
 
   const plan = planMessagePlayback({
     messageName: args.messageName,

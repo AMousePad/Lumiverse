@@ -26,13 +26,10 @@ impl Chord {
             .code
             .parse::<Code>()
             .map_err(|_| "Unsupported shortcut key")?;
+        let function_key = self.code.strip_prefix('F').and_then(|n| n.parse::<u8>().ok());
         let supported = (self.code.starts_with("Key") && self.code.len() == 4)
             || (self.code.starts_with("Digit") && self.code.len() == 6)
-            || self
-                .code
-                .strip_prefix('F')
-                .and_then(|n| n.parse::<u8>().ok())
-                .is_some_and(|n| (1..=24).contains(&n))
+            || function_key.is_some_and(|n| (1..=24).contains(&n))
             || matches!(
                 self.code.as_str(),
                 "Space"
@@ -46,8 +43,9 @@ impl Chord {
                     | "PageUp"
                     | "PageDown"
             );
-        if !supported || !(self.ctrl || self.alt || self.meta) {
-            return Err("Use Control, Alt/Option or Command/Super with a letter, number, function or navigation key".into());
+        let standalone = function_key.is_some_and(|n| (13..=24).contains(&n));
+        if !supported || !(self.ctrl || self.alt || self.meta || standalone) {
+            return Err("Use F13–F24 alone, or Control, Alt/Option or Command/Super with a letter, number, function or navigation key".into());
         }
         let mut modifiers = Modifiers::empty();
         if self.ctrl {
@@ -881,6 +879,64 @@ mod tests {
         binding.chord.ctrl = true;
         binding.chord.code = "ShiftLeft".into();
         assert!(validate(&[binding]).is_err());
+    }
+
+    #[test]
+    fn extended_function_keys_support_standalone_and_modified_global_bindings() {
+        let mut bindings = Vec::new();
+        let mut shortcut_ids = BTreeSet::new();
+        for number in 13..=24 {
+            for (ctrl, alt, shift, meta) in [
+                (false, false, false, false),
+                (false, false, true, false),
+                (true, false, false, false),
+                (false, true, false, false),
+                (false, false, false, true),
+            ] {
+                let mut binding = binding();
+                binding.scope = Scope::Global;
+                binding.chord = Chord {
+                    code: format!("F{number}"),
+                    ctrl,
+                    alt,
+                    shift,
+                    meta,
+                };
+                assert!(shortcut_ids.insert(binding.chord.shortcut().unwrap().id()));
+                bindings.push(binding);
+            }
+        }
+        assert!(validate(&bindings).is_ok());
+        let mut duplicate = bindings[0].clone();
+        duplicate.id = uuid::Uuid::new_v4().to_string();
+        duplicate.scope = Scope::Focused;
+        assert!(validate(&[bindings[0].clone(), duplicate]).is_err());
+    }
+
+    #[test]
+    fn other_keys_still_require_control_alt_or_super() {
+        for code in ["F1", "F12", "KeyP", "Digit1", "Space", "Enter", "ArrowUp"] {
+            for shift in [false, true] {
+                let chord = Chord {
+                    code: code.into(),
+                    ctrl: false,
+                    alt: false,
+                    shift,
+                    meta: false,
+                };
+                assert!(chord.shortcut().is_err(), "{code} must require a modifier");
+            }
+        }
+        for code in ["F0", "F25", "F013", "ShiftLeft"] {
+            let chord = Chord {
+                code: code.into(),
+                ctrl: true,
+                alt: false,
+                shift: false,
+                meta: false,
+            };
+            assert!(chord.shortcut().is_err(), "{code} is unsupported");
+        }
     }
 
     #[test]

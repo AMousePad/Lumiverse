@@ -17,6 +17,11 @@ export const DESKTOP_KEYBINDING_KEYS = [
   ...Array.from({ length: 24 }, (_, i) => `F${i + 1}`),
   'Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown',
 ]
+/** Extended function keys can be used directly by keyboards and macro pads. */
+export function isCompleteDesktopChord(chord: DesktopChord) {
+  return DESKTOP_KEYBINDING_KEYS.includes(chord.code)
+    && (chord.ctrl || chord.alt || chord.meta || /^F(1[3-9]|2[0-4])$/.test(chord.code))
+}
 export const formatDesktopChord = (chord: DesktopChord) => chord.code
   ? [chord.ctrl && 'Ctrl', chord.alt && 'Alt/Option', chord.shift && 'Shift', chord.meta && 'Cmd/Super', chord.code.replace(/^Key|^Digit/, '')].filter(Boolean).join(' + ') : ''
 export interface KeybindingTrigger { type: 'keybind'; bindingId: string; scope: 'focused' | 'global' }

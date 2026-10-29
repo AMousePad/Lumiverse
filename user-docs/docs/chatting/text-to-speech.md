@@ -20,6 +20,11 @@ Lumiverse can speak assistant replies aloud using a configurable text-to-speech 
 
 Once a connection exists, open **Settings → Voice & Speech** and turn on **Enable text-to-speech**. Playback uses the TTS connection marked as default unless you select another connection from the dropdown. Narration and speech use that connection's saved voice unless you set a narrator, character, or chat voice override.
 
+That enable switch controls chat reading. Extensions such as Desk Companion use
+their own speech setting and require the **Media** permission. Their spoken
+replies can play while chat reading is disabled, using your configured TTS
+connections and shared volume and speed.
+
 ---
 
 ## Providers

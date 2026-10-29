@@ -8,7 +8,7 @@ import { listen } from '@tauri-apps/api/event'
 import { useStore } from '@/store'
 import { hasTauriDesktopBridge } from '@/lib/desktopWebView'
 import { isDesktopFloatingWidgetWindow } from '@/lib/desktop-floating-widget'
-import { DESKTOP_KEYBINDING_ACTIONS, DESKTOP_KEYBINDING_KEYS, formatDesktopChord, type ConfiguredDesktopBinding, type DesktopChord, type DesktopKeybindingsSnapshot } from '@/lib/desktop-keybindings'
+import { DESKTOP_KEYBINDING_ACTIONS, DESKTOP_KEYBINDING_KEYS, formatDesktopChord, isCompleteDesktopChord, type ConfiguredDesktopBinding, type DesktopChord, type DesktopKeybindingsSnapshot } from '@/lib/desktop-keybindings'
 import styles from './DesktopKeybindingsSettings.module.css'
 
 const KEY_LABELS: Record<string, string> = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', PageUp: 'Page Up', PageDown: 'Page Down' }
@@ -94,7 +94,7 @@ export default function DesktopKeybindingsSettings({ extensionCommand }: { exten
   const modifierLabels = ['Control', isMac ? 'Option' : 'Alt', 'Shift', isMac ? 'Command' : 'Super']
   const keyLabel = (code: string) => KEY_LABELS[code] ?? code.replace(/^Key|^Digit/, '')
   const chordLabels = (chord: DesktopChord) => [chord.ctrl && 'Ctrl', chord.alt && (isMac ? '⌥' : 'Alt'), chord.shift && (isMac ? '⇧' : 'Shift'), chord.meta && (isMac ? '⌘' : 'Super'), chord.code && keyLabel(chord.code)].filter(Boolean) as string[]
-  const incomplete = bindings.some(binding => !binding.chord.code || !(binding.chord.ctrl || binding.chord.alt || binding.chord.meta))
+  const incomplete = bindings.some(binding => !isCompleteDesktopChord(binding.chord))
   const discard = () => {
     dirtyRef.current = false; setDirty(false)
     setBindings(snapshot!.bindings.filter(binding => !commandId || binding.action === commandId))
@@ -154,9 +154,10 @@ export default function DesktopKeybindingsSettings({ extensionCommand }: { exten
                     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); event.currentTarget.blur(); return }
                     if (event.repeat || event.nativeEvent.isComposing || !DESKTOP_KEYBINDING_KEYS.includes(event.code)) return
                     event.preventDefault(); event.stopPropagation()
-                    if (!(event.ctrlKey || event.altKey || event.metaKey)) { setRecordingHint(`Include Control, ${isMac ? 'Option or Command' : 'Alt or Super'}.`); return }
+                    const nextChord = { code: event.code, ctrl: event.ctrlKey, alt: event.altKey, shift: event.shiftKey, meta: event.metaKey }
+                    if (!isCompleteDesktopChord(nextChord)) { setRecordingHint(`Include Control, ${isMac ? 'Option or Command' : 'Alt or Super'}, or use F13–F24 on their own.`); return }
                     setRecordingHint('')
-                    setChord(binding, { code: event.code, ctrl: event.ctrlKey, alt: event.altKey, shift: event.shiftKey, meta: event.metaKey })
+                    setChord(binding, nextChord)
                   }}>
                   <span className={styles.keycaps}>{binding.chord.code ? chordLabels(binding.chord).map((label, key) => <kbd key={key} className={styles.keycap}>{label}</kbd>) : <span className={recordingId === binding.id ? styles.recording : styles.placeholder}>{recordingId === binding.id ? 'Press a shortcut…' : 'Click to record…'}</span>}</span>
                   <Keyboard size={13} aria-hidden="true" />
@@ -189,7 +190,7 @@ export default function DesktopKeybindingsSettings({ extensionCommand }: { exten
         </div>
       </section>
       <details className={styles.help}><summary>About shortcuts</summary>
-        <p>Use Control, Alt/Option or Command/Super with a key. In Lumiverse shortcuts work while the app is focused; Global shortcuts also work in other apps.</p>
+        <p>F13–F24 work on their own or with modifiers. Other keys require Control, Alt/Option or Command/Super. In Lumiverse shortcuts work while the app is focused; Global shortcuts also work in other apps.</p>
         <p>App and extension shortcuts belong to this account and instance. Keep the integrated browser open and signed in. Commands follow their usual page and chat restrictions.</p>
       </details>
     </>}

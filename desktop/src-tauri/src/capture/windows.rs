@@ -14,7 +14,7 @@ use std::{
 use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder};
 use tokio::sync::oneshot;
 use windows::{
-    core::{w, AgileReference, Error, Interface, Result, HSTRING},
+    core::{w, AgileReference, Error, Interface, Result, HSTRING, PCWSTR},
     Foundation::Metadata::ApiInformation,
     Foundation::{TimeSpan, TypedEventHandler},
     Graphics::{
@@ -43,6 +43,10 @@ use windows::{
     Win32::{
         Foundation::{E_FAIL, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
+            Gdi::{
+                EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW, HDC,
+                HMONITOR, MONITORINFO, MONITORINFOEXW,
+            },
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::*,
             Dxgi::{
@@ -72,12 +76,19 @@ use windows_future::{
 };
 
 use super::{Capabilities, CaptureRequest, Media};
+mod display;
+use display::{DisplayCapture, DpiAwareness};
 
 const EVENT_MESSAGE: u32 = WM_APP + 71;
 const FRAME_TICKS: i64 = 10_000_000 / 30;
 
+fn recording_end_ticks(seconds: u64, elapsed: i64, last_sample: i64) -> i64 {
+    elapsed.max(last_sample.saturating_add(FRAME_TICKS)).clamp(FRAME_TICKS, seconds as i64 * 10_000_000)
+}
+
 struct Control {
     request_id: String,
+    finish_requested: AtomicBool,
     active: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
     window: AtomicUsize,
@@ -142,6 +153,82 @@ fn unsupported() -> Capabilities {
     }
 }
 
+fn monitor_info(monitor: HMONITOR) -> Option<(super::displays::NativeDisplay, windows::Win32::Foundation::RECT)> {
+    unsafe {
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if !GetMonitorInfoW(monitor, &mut info as *mut _ as *mut MONITORINFO).as_bool() {
+            return None;
+        }
+        let text = |value: &[u16]| {
+            String::from_utf16_lossy(
+                &value[..value.iter().position(|value| *value == 0).unwrap_or(value.len())],
+            )
+        };
+        let device_name = text(&info.szDevice);
+        let mut device = DISPLAY_DEVICEW {
+            cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32,
+            ..Default::default()
+        };
+        // Include the monitor interface identity so a different panel on the same output
+        // cannot inherit this display's saved approval.
+        if !EnumDisplayDevicesW(
+            PCWSTR(info.szDevice.as_ptr()), 0, &mut device, EDD_GET_DEVICE_INTERFACE_NAME,
+        ).as_bool() {
+            return None;
+        }
+        let identity = serde_json::to_string(&(&device_name, text(&device.DeviceID))).unwrap();
+        let rect = info.monitorInfo.rcMonitor;
+        if rect.right > rect.left && rect.bottom > rect.top {
+            return Some((
+                super::displays::NativeDisplay {
+                    identity,
+                    name: format!("Display {}", device_name.trim_start_matches(r"\\.\DISPLAY")),
+                    width: (rect.right - rect.left) as u32,
+                    height: (rect.bottom - rect.top) as u32,
+                    primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+                },
+                rect,
+            ));
+        }
+        None
+    }
+}
+
+// Enumerate monitor metadata without opening a capture session or an OS picker.
+fn display_monitors() -> Vec<(super::displays::NativeDisplay, HMONITOR)> {
+    let Ok(_dpi) = DpiAwareness::enter() else {
+        return Vec::new();
+    };
+    unsafe extern "system" fn visit(
+        monitor: HMONITOR,
+        _: HDC,
+        _: *mut windows::Win32::Foundation::RECT,
+        context: LPARAM,
+    ) -> windows::core::BOOL {
+        let result = &mut *(context.0 as *mut Vec<(super::displays::NativeDisplay, HMONITOR)>);
+        if let Some((display, _)) = monitor_info(monitor) {
+            result.push((display, monitor));
+        }
+        true.into()
+    }
+    let mut result: Vec<(super::displays::NativeDisplay, HMONITOR)> = Vec::new();
+    if !unsafe {
+        EnumDisplayMonitors(None, None, Some(visit), LPARAM(&mut result as *mut _ as isize))
+    }.as_bool() {
+        result.clear();
+    }
+    result.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    result
+}
+
+pub fn displays() -> Vec<super::displays::NativeDisplay> {
+    display_monitors()
+        .into_iter()
+        .map(|(display, _)| display)
+        .collect()
+}
+
 // Keep OS-selected capture items native. Tokens never reach the extension or survive this process.
 struct RememberedItem {
     item: AgileReference<GraphicsCaptureItem>,
@@ -172,8 +259,8 @@ pub fn source_status(source: &str) -> &'static str {
 
 pub fn begin(
     request: &CaptureRequest,
-    consent: String,
-    summary: String,
+    _consent: String,
+    _summary: String,
     approval: super::consent::Context,
     active: Arc<AtomicBool>,
 ) -> oneshot::Receiver<std::result::Result<Media, &'static str>> {
@@ -187,6 +274,7 @@ pub fn begin(
     };
     let control = Arc::new(Control {
         request_id: request.request_id.clone(),
+        finish_requested: AtomicBool::new(false),
         active,
         alive: Arc::new(AtomicBool::new(true)),
         window: AtomicUsize::new(0),
@@ -207,8 +295,6 @@ pub fn begin(
             let result = catch_unwind(AssertUnwindSafe(|| {
                 run(
                     request,
-                    consent,
-                    summary,
                     approval,
                     saved_source,
                     thread_control.clone(),
@@ -237,6 +323,13 @@ pub fn begin(
         *current().lock().unwrap() = None;
     }
     receiver
+}
+
+pub fn finish(request_id: &str) {
+    if let Some(control) = current().lock().unwrap().as_ref().filter(|control| control.request_id == request_id) {
+        // Finalization preserves active; cancellation always wins over this flag.
+        control.finish_requested.store(true, Ordering::SeqCst);
+    }
 }
 
 pub fn cancel(request_id: &str) {
@@ -569,6 +662,7 @@ struct Ui {
     item: Option<GraphicsCaptureItem>,
     closed_token: Option<i64>,
     pool: Option<Direct3D11CaptureFramePool>,
+    display_capture: Option<DisplayCapture>,
     capture: Option<GraphicsCaptureSession>,
     source: Option<MediaStreamSource>,
     stream: Option<InMemoryRandomAccessStream>,
@@ -585,6 +679,7 @@ struct Ui {
     start: Option<Instant>,
     last_sample: i64,
     final_sample: bool,
+    end_ticks: Option<i64>,
     pixels: Option<Pixels>,
     media: Option<Media>,
     player: Option<MediaPlayer>,
@@ -619,6 +714,7 @@ impl Ui {
             item: None,
             closed_token: None,
             pool: None,
+            display_capture: None,
             capture: None,
             source: None,
             stream: None,
@@ -635,6 +731,7 @@ impl Ui {
             start: None,
             last_sample: -1,
             final_sample: false,
+            end_ticks: None,
             pixels: None,
             media: None,
             player: None,
@@ -767,6 +864,29 @@ impl Ui {
         Ok(())
     }
 
+    fn selected_display(&mut self) -> Result<()> {
+        if !self.still_active() || !self.approval.can_remember || self.approval.source().is_err() {
+            self.finish(Err("denied"));
+            return Ok(());
+        }
+        let display = self.request.display.as_ref()
+            .ok_or_else(|| Error::from_hresult(E_FAIL))?;
+        let gpu = Gpu::new()?;
+        let capture = DisplayCapture::new(display, self.request.max_pixels, &gpu)?;
+        (self.source_width, self.source_height) = capture.size();
+        (self.width, self.height) = output_size(self.source_width, self.source_height);
+        self.gpu = Some(gpu);
+        self.display_capture = Some(capture);
+        if self.request.kind == "video" {
+            self.start = Some(Instant::now());
+        }
+        self.phase = Phase::Recording;
+        if self.request.kind == "video" {
+            self.start_video()?;
+        }
+        Ok(())
+    }
+
     fn start_video(&mut self) -> Result<()> {
         let properties = VideoEncodingProperties::CreateUncompressed(
             &MediaEncodingSubtypes::Bgra8()?,
@@ -810,7 +930,7 @@ impl Ui {
         let output = profile.Video()?;
         output.SetWidth(self.width)?;
         output.SetHeight(self.height)?;
-        output.SetBitrate(4_000_000)?;
+        output.SetBitrate(8_000_000)?;
         output.FrameRate()?.SetNumerator(30)?;
         output.FrameRate()?.SetDenominator(1)?;
         let stream = InMemoryRandomAccessStream::new()?;
@@ -840,27 +960,31 @@ impl Ui {
     }
 
     fn frame(&mut self) -> Result<()> {
-        let Some(pool) = self.pool.as_ref() else {
-            return Ok(());
-        };
-        for _attempt in 0..2 {
-            let frame = match pool.TryGetNextFrame() {
-                Ok(frame) => frame,
-                Err(_) => break,
-            };
-            let size = frame.ContentSize()?;
-            if size.Width != self.source_width as i32 || size.Height != self.source_height as i32 {
-                let _ = frame.Close();
-                self.finish(Err("cancelled"));
-                return Ok(());
+        if let Some(capture) = &self.display_capture {
+            let gpu = self.gpu.as_ref().ok_or_else(|| Error::from_hresult(E_FAIL))?;
+            self.last_surface = Some(capture.frame(gpu)?);
+        } else if let Some(pool) = &self.pool {
+            for _attempt in 0..2 {
+                let frame = match pool.TryGetNextFrame() {
+                    Ok(frame) => frame,
+                    Err(_) => break,
+                };
+                let size = frame.ContentSize()?;
+                if size.Width != self.source_width as i32 || size.Height != self.source_height as i32 {
+                    let _ = frame.Close();
+                    self.finish(Err("cancelled"));
+                    return Ok(());
+                }
+                let surface = self
+                    .gpu
+                    .as_ref()
+                    .ok_or_else(|| Error::from_hresult(E_FAIL))?
+                    .copy(&frame.Surface()?, self.source_width, self.source_height)?;
+                frame.Close()?;
+                self.last_surface = Some(surface);
             }
-            let surface = self
-                .gpu
-                .as_ref()
-                .ok_or_else(|| Error::from_hresult(E_FAIL))?
-                .copy(&frame.Surface()?, self.source_width, self.source_height)?;
-            frame.Close()?;
-            self.last_surface = Some(surface);
+        } else {
+            return Ok(());
         }
         if self.request.kind == "image" && self.last_surface.is_some() {
             self.close_capture();
@@ -936,7 +1060,7 @@ impl Ui {
             return Ok(());
         }
         let start = self.start.ok_or_else(|| Error::from_hresult(E_FAIL))?;
-        let maximum = self.request.duration_seconds.unwrap_or_default() as i64 * 10_000_000;
+        let maximum = self.end_ticks.unwrap_or(self.request.duration_seconds.unwrap_or_default() as i64 * 10_000_000);
         let elapsed = (start.elapsed().as_nanos() / 100) as i64;
         if elapsed >= maximum {
             self.phase = Phase::Finishing;
@@ -999,6 +1123,18 @@ impl Ui {
                 self.finish(Err("failed"));
                 return Ok(());
             }
+        }
+        if self.phase == Phase::Recording && self.request.kind == "video"
+            && self.control.finish_requested.load(Ordering::SeqCst) && self.last_surface.is_some()
+            && self.start.is_some_and(|start| start.elapsed().as_nanos() / 100 >= FRAME_TICKS as u128)
+        {
+            let elapsed = (self.start.unwrap().elapsed().as_nanos() / 100) as i64;
+            self.end_ticks = Some(recording_end_ticks(self.request.duration_seconds.unwrap_or_default(), elapsed, self.last_sample));
+            if let Some(source) = &self.source {
+                source.SetDuration(TimeSpan { Duration: self.end_ticks.unwrap() })?;
+            }
+            self.phase = Phase::Finishing;
+            self.close_capture();
         }
         if self.phase == Phase::Recording
             && self.request.kind == "video"
@@ -1253,6 +1389,7 @@ impl Ui {
     }
 
     fn close_capture(&mut self) {
+        self.display_capture = None;
         if let Some(capture) = self.capture.take() {
             let _ = capture.Close();
         }
@@ -1434,13 +1571,12 @@ unsafe extern "system" fn window_proc(
 
 fn run(
     request: CaptureRequest,
-    _consent: String,
-    _summary: String,
     approval: super::consent::Context,
     saved_source: Option<String>,
     control: Arc<Control>,
 ) -> std::result::Result<Media, &'static str> {
     let _apartment = Apartment::new(RO_INIT_SINGLETHREADED).map_err(|_| "unsupported")?;
+    let _dpi = DpiAwareness::enter().map_err(|_| "unsupported")?;
     let queue = unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
             dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
@@ -1505,7 +1641,9 @@ fn run(
                 }
                 saved.item.resolve().ok()
             });
-            if let Some(item) = restored {
+            if state.request.display.is_some() {
+                state.selected_display()?;
+            } else if let Some(item) = restored {
                 state.remembering = true;
                 state.selected_source = state.saved_source.clone();
                 state.selected(item)?;
@@ -1564,6 +1702,47 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn early_recording_end_is_short_and_includes_the_last_frame_without_exceeding_cutoff() {
+        assert_eq!(recording_end_ticks(30, 25_000_000, 24_000_000), 25_000_000);
+        assert_eq!(recording_end_ticks(30, 0, -1), FRAME_TICKS);
+        assert_eq!(recording_end_ticks(30, 1_000_000, 1_000_000), 1_000_000 + FRAME_TICKS);
+        assert_eq!(recording_end_ticks(1, 12_000_000, 9_900_000), 10_000_000);
+    }
+
+    #[test]
+    #[ignore = "requires a Windows desktop with connected displays; metadata only"]
+    fn connected_display_discovery() {
+        let displays = displays();
+        assert!(!displays.is_empty());
+        for display in displays {
+            assert!(display.width > 0 && display.height > 0);
+            println!("{} · {} × {} · primary={}", display.name, display.width, display.height, display.primary);
+        }
+    }
+
+    #[test]
+    #[ignore = "reads one local frame from each connected Windows display; no files or uploads"]
+    fn connected_display_frames() {
+        let _apartment = Apartment::new(RO_INIT_MULTITHREADED).unwrap();
+        let gpu = Gpu::new().unwrap();
+        let displays = super::super::displays::snapshot("local-capture-test");
+        assert!(!displays.is_empty());
+        for display in displays {
+            let capture = DisplayCapture::new(&display, super::super::MAX_PIXELS, &gpu).unwrap();
+            assert_eq!(capture.size(), (display.width, display.height));
+            let surface = capture.frame(&gpu).unwrap();
+            let pixels = gpu.pixels(&surface, display.width, display.height).unwrap();
+            assert_eq!(pixels.bytes.len(), (display.width * display.height * 4) as usize);
+            assert!(pixels.bytes.chunks_exact(4).all(|pixel| pixel[3] == 255));
+            println!("{}: captured {} × {} without a capture session or popup", display.name, display.width, display.height);
+            let mut missing = display.clone();
+            missing.identity = "disconnected-monitor".into();
+            assert!(DisplayCapture::new(&missing, super::super::MAX_PIXELS, &gpu).is_err());
+            assert!(DisplayCapture::new(&display, 1, &gpu).is_err());
+        }
+    }
 
     #[test]
     fn output_sizes_are_even_and_bounded() {

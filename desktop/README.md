@@ -126,20 +126,31 @@ the top-level **Let Extensions Capture the Screen** tray toggle beside system au
 uses native OAuth and does not reuse browser cookies. The selected instance's
 transport is remembered and reconnects with existing credentials after restart
 or failure; interrupted captures are canceled and never retried automatically.
+The native capture session handles reconnection directly, including after a
+server restart or frontend reload. It registers a fresh lease and republishes
+monitor metadata without waiting for the tray menu or restarting Desktop.
+Reconnection stays bound to the original instance and account, preserves saved
+capture approvals, and stops when capture is disabled or the instance changes.
 
-First use opens native source selection directly, without a Capture & Send window. Selecting a source starts capture and remembers it for later
+Selecting a named Windows display in an extension starts capture using the tray
+opt-in and current extension permissions, without another approval dialog or
+Windows capture border. Coordinates use physical pixels on mixed-DPI desktops.
+Disconnecting or moving the selected display stops capture without substituting
+another display. The widget shows capture and generation progress.
+
+For native picker sources, first use opens source selection directly. Selecting a source starts capture and remembers it for later
 requests from this extension, account, capture kind and destination until capture
 is turned off. There is no separate Remember choice. macOS display choices survive restart by UUID;
 window choices require fresh selection after Desktop or the owning app restarts.
-Windows retains the exact OS-selected item while Desktop and the source remain
+Windows picker captures retain the exact OS-selected item while Desktop and the source remain
 alive; after restart it asks for a source again. Missing sources are never
 replaced automatically. Remembered source identities and approval stay native.
 
 Canceling a capture discards only that request and keeps saved permissions.
-The macOS menu-bar indicator includes **Cancel This Capture**; Windows retains
-its OS capture border. Turn **Let Extensions Capture the Screen** off in the
+The macOS menu-bar indicator includes **Cancel This Capture**; Windows picker
+captures retain their OS capture border. Turn **Let Extensions Capture the Screen** off in the
 tray to stop capture and forget saved approvals. Turning it on again requires a
-new source choice; enabling it never starts a capture by itself. There is no
+new source choice for picker captures; enabling it never starts a capture by itself. There is no
 capture/review window, extra Send step, or always-on screen buffer.
 
 The macOS development executable embeds `src-tauri/Info.plist` to retain the
@@ -160,7 +171,12 @@ approval/source is available. Instance changes and desktop OAuth sign-out cancel
 current capture.
 
 Images stay in native memory. Both adapters record video-only H.264 MP4, at most
-1080p/30fps and 30 seconds; oversized output is discarded before sharing.
+1080p/30fps with an 8 Mbps bitrate target and up to 120 seconds; oversized output
+is discarded before sharing.
+The requested duration is a cutoff. Extensions may finish a matching recording
+early through `spindle.desktop.capture.finish()` and send the shorter clip through
+the original request. Desk Companion maps a second invocation of its existing
+share action to this control. Cancel still discards the recording.
 
 - **macOS:** ScreenCaptureKit plus hardware-required VideoToolbox/AVAssetWriter
   encoding. An owner-only temporary MP4 is removed after preview/share/discard.
@@ -231,7 +247,7 @@ bun run tauri dev
 ```
 
 Enable capture in the tray, grant the test extension `screen_capture`,
-`screen_recording`, and `generation`, then request an image and 1–30-second clips
+`screen_recording`, and `generation`, then request an image and 1–120-second clips
 against a model that supports the selected media type. Confirm picker selection,
 native preview/playback, explicit Share versus Discard, and cancellation on lock,
 permission revocation, and instance/transport changes. A Windows N edition may
