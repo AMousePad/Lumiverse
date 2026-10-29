@@ -36,6 +36,9 @@ ARG FRONTEND_REFRESH=unset
 
 # Build frontend
 COPY frontend/ ./
+# MessageContent shares this import-free helper with the server. Preserve its
+# repository-relative path so the isolated frontend stage can resolve it.
+COPY src/utils/regex-action-signature.ts /app/src/utils/
 RUN echo "frontend-refresh: ${FRONTEND_REFRESH}" && bun run build
 
 # ---------------------------------------------------------------------------
