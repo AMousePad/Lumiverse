@@ -136,24 +136,55 @@ A reasoning model may think before it calls a tool. The result then carries that
 Put them, unchanged, on the `assistant` message that carries the `tool_use` parts. The host sends them back in the provider's own format: Anthropic blocks open the assistant turn, and `reasoning_details` go on the assistant `tool_calls` message. Anthropic requires the blocks on a tool continuation while thinking is on.
 
 ```ts
-const first = await spindle.generate.raw({ messages, tools, connection_id })
-const followup = await spindle.generate.raw({
-  messages: [
-    ...messages,
-    {
-      role: 'assistant',
-      content: first.tool_calls.map(call => ({ type: 'tool_use', id: call.call_id, name: call.name, input: call.args })),
-      thinking_blocks: first.thinking_blocks,
-      reasoning_details: first.reasoning_details,
-    },
-    { role: 'user', content: [{ type: 'tool_result', tool_use_id: first.tool_calls[0].call_id, content: '72F, clear' }] },
-  ],
-  tools,
-  connection_id,
-})
+import type { GenerationResponseDTO } from 'lumiverse-spindle-types'
+
+// messages, tools and connection_id are prepared by the extension.
+// runTool(call) executes a tool and returns its result as a string.
+const first = await spindle.generate.quiet({
+  type: 'quiet', messages, tools, connection_id,
+}) as GenerationResponseDTO
+
+if (first.finish_reason === 'tool_calls' && first.tool_calls?.length) {
+  const results = await Promise.all(first.tool_calls.map(async call => ({
+    type: 'tool_result' as const,
+    tool_use_id: call.call_id,
+    content: await runTool(call),
+  })))
+  const followup = await spindle.generate.quiet({
+    type: 'quiet',
+    messages: [
+      ...messages,
+      {
+        role: 'assistant',
+        content: [
+          ...(first.content ? [{ type: 'text' as const, text: first.content }] : []),
+          ...first.tool_calls.map(call => ({
+            type: 'tool_use' as const, id: call.call_id, name: call.name, input: call.args,
+            ...(call.thought_signature ? { thought_signature: call.thought_signature } : {}),
+          })),
+        ],
+        thinking_blocks: first.thinking_blocks,
+        reasoning_details: first.reasoning_details,
+      },
+      { role: 'user', content: results },
+    ],
+    tools,
+    connection_id,
+  })
+}
 ```
 
-Both fields are opaque: don't edit, reorder, or merge them. Providers that don't use a field ignore it. Gemini keeps its reasoning signature on each tool call instead (`ToolCallDTO.thought_signature`); pass it back as `tool_use.thought_signature`.
+Both fields are opaque: don't edit, reorder, or merge them. Providers that don't use a field ignore it. Gemini keeps its reasoning signature on each tool call instead (`ToolCallDTO.thought_signature`); pass it back as `tool_use.thought_signature`, as above. Some providers, such as DeepSeek, require the plain `reasoning` to be echoed as `reasoning_content` on the assistant message as well.
+
+!!! note "Stream types"
+    In `lumiverse-spindle-types` 0.6.74, the runtime `done` chunk includes these fields but `StreamChunkDTO` does not declare them yet. After narrowing to `type === 'done'`, use a local intersection type until the public types are updated:
+
+    ```ts
+    import type { GenerationResponseDTO, StreamChunkDTO } from 'lumiverse-spindle-types'
+    type ReasoningDone = Extract<StreamChunkDTO, { type: 'done' }>
+      & Pick<GenerationResponseDTO, 'thinking_blocks' | 'reasoning_details'>
+    // const done = chunk as ReasoningDone
+    ```
 
 ### ToolSchemaDTO
 
