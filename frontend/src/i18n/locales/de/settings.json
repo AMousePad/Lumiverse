@@ -46,7 +46,7 @@
     "webSearch": {
       "shortName": "Websuche",
       "tabName": "Websuche",
-      "tabDescription": "SearXNG-, Exa- oder Tavily-Websuche für Council-Tools konfigurieren"
+      "tabDescription": "SearXNG-, Exa-, Tavily- oder DeepSeek-Websuche für Council-Tools konfigurieren"
     },
     "embeddings": {
       "shortName": "Embeddings",
@@ -639,12 +639,14 @@
   "webSearch": {
     "title": "Websuche",
     "loading": "Einstellungen der Websuche werden geladen...",
-    "helper": "Konfigurieren Sie SearXNG, Exa oder Tavily für das hostgestützte Council-Websuch-Tool. Das Tool erscheint im Council, sobald die Suche aktiviert und der gewählte Anbieter konfiguriert ist.",
+    "helper": "Konfigurieren Sie SearXNG, Exa, Tavily oder DeepSeek für das hostgestützte Council-Websuch-Tool. Das Tool erscheint im Council, sobald die Suche aktiviert und der gewählte Anbieter konfiguriert ist.",
     "enable": "Websuche aktivieren",
     "inlineToolEnable": "Dem Modell die Suche während der Generierung erlauben",
     "inlineToolHint": "Erfordert Funktionsaufrufe im aktiven Preset. Suchergebnisse werden erst nach einer Suchanfrage des Modells als begrenzter, nicht vertrauenswürdiger Referenzkontext hinzugefügt.",
     "provider": "Anbieter",
     "providerSearxng": "SearXNG",
+    "providerDeepseek": "DeepSeek",
+    "deepseekHint": "Verwenden Sie einen DeepSeek-API-Schlüssel. Suchanfragen unterstützen Operatoren wie site: und dürfen höchstens 128 Unicode-Zeichen enthalten.",
     "providerExa": "Exa",
     "providerTavily": "Tavily",
     "apiUrl": "API-URL",

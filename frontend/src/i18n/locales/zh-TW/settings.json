@@ -586,6 +586,8 @@
     "enable": "啟用網頁搜索",
     "provider": "提供商",
     "providerSearxng": "SearXNG",
+    "providerDeepseek": "DeepSeek",
+    "deepseekHint": "使用 DeepSeek API 金鑰。搜尋詞支援 site: 等運算子，最多可包含 128 個 Unicode 字元。",
     "apiUrl": "API URL",
     "apiUrlPlaceholder": "https://your-searxng.example.com/search",
     "apiKey": "API 密鑰",

@@ -586,6 +586,8 @@
     "enable": "Activer la recherche Web",
     "provider": "Fournisseur",
     "providerSearxng": "RechercherXNG",
+    "providerDeepseek": "DeepSeek",
+    "deepseekHint": "Utilisez une clé API DeepSeek. Les requêtes acceptent des opérateurs comme site: et sont limitées à 128 caractères Unicode.",
     "apiUrl": "URL API",
     "apiUrlPlaceholder": "https://your-searxng.example.com/search",
     "apiKey": "Clé API",

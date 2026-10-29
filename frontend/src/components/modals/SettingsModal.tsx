@@ -54,7 +54,7 @@ import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
 import { notificationSoundsApi } from '@/api/notification-sounds'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
-import { webSearchApi, type WebSearchProviderProfile, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
+import { webSearchApi, type WebSearchProvider, type WebSearchProviderProfile, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
 import type { DrawerSettings, GuidedGeneration, LongMessageCollapsePreset, QuickReplySet } from '@/types/store'
 import type { EmbeddingConfig, ChatMemorySettings, ChatSummary, Character, CharacterSummary } from '@/types/api'
 import type { ImpersonationPreference } from '@/lib/impersonationPreset'
@@ -3372,7 +3372,7 @@ function EmbeddingsSettings() {
 
 interface WebSearchSettingsState {
   enabled: boolean
-  provider: 'searxng' | 'exa' | 'tavily'
+  provider: WebSearchProvider
   apiUrl: string
   requestTimeoutMs: number
   defaultResultCount: number
@@ -3384,7 +3384,7 @@ interface WebSearchSettingsState {
   engines: string[]
   inlineToolEnabled: boolean
   hasApiKey: boolean
-  providerProfiles: Partial<Record<'searxng' | 'exa' | 'tavily', WebSearchProviderProfile>>
+  providerProfiles: Partial<Record<WebSearchProvider, WebSearchProviderProfile>>
 }
 
 const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
@@ -3404,8 +3404,12 @@ const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
   providerProfiles: {},
 }
 
-const EXA_SEARCH_API_URL = 'https://api.exa.ai/search'
-const TAVILY_SEARCH_API_URL = 'https://api.tavily.com/search'
+const WEB_SEARCH_API_URLS: Record<WebSearchProvider, string> = {
+  searxng: '',
+  exa: 'https://api.exa.ai/search',
+  tavily: 'https://api.tavily.com/search',
+  deepseek: 'https://api.deepseek.com/v1/tools/search',
+}
 
 function WebSearchSettings() {
   const { t } = useTranslation('settings')
@@ -3531,7 +3535,7 @@ function WebSearchSettings() {
               ? { ...saved, provider, hasApiKey: saved.hasApiKey ?? false }
               : {
                   provider,
-                  apiUrl: provider === 'exa' ? EXA_SEARCH_API_URL : provider === 'tavily' ? TAVILY_SEARCH_API_URL : '',
+                  apiUrl: WEB_SEARCH_API_URLS[provider],
                   hasApiKey: false,
                 })
             setEnginesInput(saved?.engines.join(', ') ?? '')
@@ -3541,8 +3545,11 @@ function WebSearchSettings() {
           <option value="searxng">{t('webSearch.providerSearxng')}</option>
           <option value="exa">{t('webSearch.providerExa')}</option>
           <option value="tavily">{t('webSearch.providerTavily')}</option>
+          <option value="deepseek">{t('webSearch.providerDeepseek')}</option>
         </select>
       </div>
+
+      {cfg.provider === 'deepseek' && <p className={styles.placeholder}>{t('webSearch.deepseekHint')}</p>}
 
       {cfg.provider === 'searxng' && (
         <div className={styles.field}>

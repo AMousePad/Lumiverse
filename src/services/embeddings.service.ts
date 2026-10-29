@@ -1425,7 +1425,9 @@ export function getProviderDefaults(provider: EmbeddingProvider) {
 
 const NVIDIA_NIM_EMBEDDING_MODELS = [
   "nvidia/llama-nemotron-embed-1b-v2",
+  "nvidia/llama-nemotron-embed-vl-1b-v2",
   "nvidia/nemotron-3-embed-1b",
+  "nvidia/nemotron-3.5-embed-1b",
   "nvidia/nv-embed-v1",
   "nvidia/nv-embedqa-e5-v5",
 ];
@@ -1436,13 +1438,6 @@ const MISTRAL_EMBEDDING_MODELS = [
 ];
 
 type EmbeddingInputType = "query" | "passage";
-
-function nvidiaNimNeedsInputType(cfg: { provider: string; model: string }): boolean {
-  return cfg.provider === "nvidia-nim" && [
-    "nvidia/llama-nemotron-embed-1b-v2",
-    "nvidia/nv-embedqa-e5-v5",
-  ].includes(cfg.model);
-}
 
 function isLikelyEmbeddingModel(model: string): boolean {
   return /(?:embed|retriev)/i.test(model);
@@ -2464,7 +2459,9 @@ async function requestEmbeddingsWithDriverInner(
   if (!isOllamaNative && driver.provider !== "cohere") {
     body.encoding_format = "float";
   }
-  if (nvidiaNimNeedsInputType(driver)) {
+  // NIM accepts query/passage roles at the provider level. Do not gate this on
+  // model IDs: newer Nemotron models and custom served names need it too.
+  if (driver.provider === "nvidia-nim") {
     body.input_type = options?.inputType ?? "passage";
   }
   if (!options?.omitDimensions && driver.send_dimensions && driver.dimensions) {
@@ -3467,7 +3464,6 @@ export const __test__ = {
   mergeEmbeddingConfigUpdate,
   putEmbeddingSecret,
   NVIDIA_NIM_EMBEDDING_MODELS,
-  nvidiaNimNeedsInputType,
   parseEmbeddingResponse,
   collectWorldBookHitsByUniqueSource,
   collapseWorldBookHitsBySource,

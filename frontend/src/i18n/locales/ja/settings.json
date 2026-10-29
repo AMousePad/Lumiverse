@@ -586,6 +586,8 @@
     "enable": "ウェブ検索を有効にする",
     "provider": "供給者",
     "providerSearxng": "SearXNG",
+    "providerDeepseek": "DeepSeek",
+    "deepseekHint": "DeepSeek API キーを使用します。検索クエリは site: などの演算子に対応し、128 Unicode 文字以内で指定する必要があります。",
     "apiUrl": "API URL",
     "apiUrlPlaceholder": "https://your-searxng.example.com/search",
     "apiKey": "APIキー",
