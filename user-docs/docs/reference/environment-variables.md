@@ -149,7 +149,7 @@ Replace `example.extension` with the installed extension's actual identifier.
 
 ## Vector database overrides
 
-Normally configure this through Operator. Setting `LUMIVERSE_VECTOR_STORE_PROVIDER` overrides the stored configuration and makes the connection read-only in the Operator UI. Provider credentials here are secrets.
+Normally configure this through Operator. Setting `LUMIVERSE_VECTOR_STORE_PROVIDER` overrides the stored provider and connection and makes those fields read-only in the Operator UI. Saved runtime tuning remains effective. Provider credentials here are secrets.
 
 | Variable | Default | What it changes |
 |----------|---------|-----------------|
@@ -163,7 +163,7 @@ Normally configure this through Operator. Setting `LUMIVERSE_VECTOR_STORE_PROVID
 | `LUMIVERSE_MILVUS_SSL` | `false` | Set exactly `true` for a TLS connection to Milvus. |
 | `LUMIVERSE_MILVUS_CONNECT_TIMEOUT_MS` | Provider default | Positive connection timeout in milliseconds. |
 | `LUMIVERSE_MILVUS_REQUEST_TIMEOUT_MS` | Provider default | Non-negative request timeout in milliseconds; `0` is accepted. |
-| `LUMIVERSE_MILVUS_FLUSH_POLICY` | `per_write` | Set `manual` to flush during explicit maintenance, using Strong reads for visibility. Validate with the [Milvus maintenance tools](../settings/milvus-maintenance.md) before enabling. |
+| `LUMIVERSE_MILVUS_FLUSH_POLICY` | `per_write` | Set `manual` to flush during explicit maintenance, using Strong reads for visibility. A policy saved in Operator takes precedence. Validate with the [Milvus maintenance tools](../settings/milvus-maintenance.md) before enabling. |
 
 ## Migration and remote files
 

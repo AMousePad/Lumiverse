@@ -21,10 +21,12 @@ counts, dense search, BM25, and hybrid search. Successful collection/index setup
 is cached until reset or reconnection; failed setup remains retryable.
 
 The default **Flush after each write** behavior remains available. After live
-validation, select **Flush during maintenance** in Operator's Milvus settings,
-or set `LUMIVERSE_MILVUS_FLUSH_POLICY=manual` for an environment-managed connection.
-This also prevents ordinary embedding orchestration from immediately requesting
-another flush. Explicit maintenance still flushes. Strong reads can increase
+validation, select **Flush during maintenance** in Operator's Milvus settings
+and choose **Apply Runtime Tuning**. For an environment-managed connection,
+`LUMIVERSE_MILVUS_FLUSH_POLICY=manual` also sets the initial policy; a policy
+saved in Operator takes precedence over that environment variable.
+The maintenance policy also prevents ordinary embedding orchestration from
+immediately requesting another flush. Explicit maintenance still flushes. Strong reads can increase
 search latency; benchmark the complete workload before adopting this policy.
 
 ## Inventory and server settings
