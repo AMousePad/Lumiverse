@@ -12,6 +12,9 @@ mod linux_runtime;
 mod linux_smoke;
 mod notifications;
 mod profile;
+#[cfg(test)]
+#[path = "../release_config.rs"]
+mod release_config;
 mod remote_instance;
 mod runner;
 mod system_audio;

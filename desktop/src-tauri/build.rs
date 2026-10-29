@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+mod release_config;
+
 // Keep native compilation and direct Cargo builds at the same minimum as
 // bundle.macOS.minimumSystemVersion in tauri.conf.json. Tauri only supplies the
 // deployment target itself when invoked through its CLI or for release builds.
@@ -58,14 +60,30 @@ fn stamp_build_revision() {
     }
 }
 
+fn validate_release_config() {
+    println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
+    println!("cargo:rerun-if-changed=release_config.rs");
+    if tauri_build::is_dev() {
+        return;
+    }
+    // Match Tauri's config loading: base + platform config, then the CLI's
+    // merged --config overrides. Private builders carry the public key here.
+    let target = tauri_utils::platform::Target::from_triple(&std::env::var("TARGET").unwrap());
+    let (mut config, paths) =
+        tauri_utils::config::parse::read_from(target, &std::env::current_dir().unwrap())
+            .expect("failed to read desktop release configuration");
+    for path in paths {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    if let Ok(overrides) = std::env::var("TAURI_CONFIG") {
+        let overrides = serde_json::from_str(&overrides).expect("invalid TAURI_CONFIG");
+        json_patch::merge(&mut config, &overrides);
+    }
+    release_config::validate(&config).expect("invalid desktop release configuration");
+}
+
 fn main() {
-    println!("cargo:rerun-if-env-changed=LUMIVERSE_UPDATER_PUBLIC_KEY");
-    println!(
-        "cargo:rustc-env=LUMIVERSE_UPDATER_PUBLIC_KEY={}",
-        std::env::var("LUMIVERSE_UPDATER_PUBLIC_KEY")
-            .unwrap_or_default()
-            .trim()
-    );
+    validate_release_config();
     println!(
         "cargo:rustc-env=LUMIVERSE_DESKTOP_TARGET={}",
         std::env::var("TARGET").unwrap()
