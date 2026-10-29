@@ -7,6 +7,8 @@ import type {
   Message,
   PaginatedResult,
   RecentChat,
+  SttConnectionProfile,
+  TtsConnectionProfile,
   UpdateConnectionProfileInput,
   WorldBook,
   WorldBookEntry,
@@ -121,6 +123,8 @@ export interface FrontendDomainDependencies {
     }): Promise<void>
     /** Embedding profiles are not in the store; they come from GET /embeddings/config. */
     embeddingConfig(): Promise<Pick<EmbeddingConfigWithProfiles, 'connectionProfiles' | 'primaryProfileId'>>
+    /** Load speech profiles on demand; isolated widget stores are not prehydrated. */
+    speechProfiles(kind: 'tts' | 'stt'): Promise<Array<TtsConnectionProfile | SttConnectionProfile>>
   }
   chats: {
     listForCharacter(characterId: string): Promise<ChatSummary[]>
@@ -182,17 +186,15 @@ function summarize(kind: ConnectionKind, rows: readonly SummarySource[], activeI
 /** `active` marks the profile the host itself uses for the kind when no connection id is given. */
 async function listConnectionsOfKind(
   kind: ConnectionKind,
-  state: AppStore,
-  embeddingConfig: FrontendDomainDependencies['connections']['embeddingConfig'],
+  dependencies: FrontendDomainDependencies,
 ): Promise<ConnectionSummary[]> {
+  const state = dependencies.store.getState()
   switch (kind) {
     case 'llm': return summarize(kind, state.profiles, state.activeProfileId)
     case 'image': return summarize(kind, state.imageGenProfiles, state.activeImageGenConnectionId)
-    case 'tts': return summarize(kind, state.ttsProfiles, resolveTtsConnectionId(state.voiceSettings, state.ttsProfiles))
-    case 'stt': return summarize(kind, state.sttProfiles, state.voiceSettings.sttConnectionId)
     case 'decision': return summarize(kind, state.decisionProfiles, state.decisionProfiles.find((profile) => profile.is_default)?.id ?? null)
     case 'embedding': {
-      const config = await embeddingConfig()
+      const config = await dependencies.connections.embeddingConfig()
       return summarize(kind, config.connectionProfiles ?? [], config.primaryProfileId ?? null)
     }
     default: throw new Error(`CONNECTION_KIND_INVALID: ${String(kind)}`)
@@ -349,7 +351,17 @@ export function createFrontendDomainApi(
 
   const listOfKind = async (kind: ConnectionKind) => {
     assertUsable()
-    const rows = await listConnectionsOfKind(kind, dependencies.store.getState(), dependencies.connections.embeddingConfig)
+    if (kind === 'tts' || kind === 'stt') {
+      const profiles = await dependencies.connections.speechProfiles(kind)
+      assertUsable()
+      const state = dependencies.store.getState()
+      // Playback also resolves profiles from this window's store. Hydrate it
+      // only after confirming this extension/account is still active.
+      if (kind === 'tts') state.setTtsProfiles(profiles as TtsConnectionProfile[])
+      else state.setSttProfiles(profiles as SttConnectionProfile[])
+      return summarize(kind, profiles, kind === 'tts' ? resolveTtsConnectionId(state.voiceSettings, profiles) : state.voiceSettings.sttConnectionId)
+    }
+    const rows = await listConnectionsOfKind(kind, dependencies)
     assertUsable()
     return rows
   }

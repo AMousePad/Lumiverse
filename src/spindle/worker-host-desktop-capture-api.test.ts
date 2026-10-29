@@ -32,6 +32,48 @@ function fixture() {
 }
 
 describe("direct worker desktop capture", () => {
+  test("regranting permission cannot revive a pending approval-status query", async () => {
+    const setup = fixture();
+    const native = setup.broker.register("alice", { name: "Native", platform: "macos", approvalStatus: true, capabilities: { image: true, video: false, replay: false } });
+    let revision = "grant-before";
+    setup.context.grantRevision = () => revision;
+    setup.api.handle({ type: "desktop_capture_approval_status", requestId: "status", input: { deviceId: native.device.id, connectionId: "connection", kind: "image" } });
+    await setup.settle();
+    const command = setup.broker.poll("alice", native.device.id, native.transportToken)[0];
+    revision = "grant-after";
+    setup.broker.completeInspection("alice", native.device.id, native.transportToken, { requestId: command.requestId, approval: "remembered", source: "ready" });
+    await setup.settle();
+    expect(setup.posted.at(-1)).toMatchObject({ requestId: "status", error: "CAPTURE_REVOKED" });
+  });
+  test("approval status is read-only and enforces the same permissions and destination ownership", async () => {
+    const setup = fixture();
+    const input = { deviceId: setup.client.device.id, connectionId: "connection", kind: "image" as const };
+    setup.api.handle({ type: "desktop_capture_approval_status", requestId: "status", input });
+    await setup.settle();
+    expect(setup.posted.at(-1)).toMatchObject({ requestId: "status", result: { approval: "unknown", source: "unknown" } });
+    expect(setup.broker.poll("alice", setup.client.device.id, setup.client.transportToken)).toEqual([]);
+    setup.grants.delete("generation");
+    setup.api.handle({ type: "desktop_capture_approval_status", requestId: "denied", input });
+    await setup.settle();
+    expect(setup.posted.at(-1).error).toContain("generation");
+  });
+  test("native approval scopes change after permission regrant without changing asset destination binding", async () => {
+    const revisions: string[] = [];
+    for (const grant of ["capture-row-a:generation-row-a", "capture-row-b:generation-row-a", "capture-row-a:generation-row-b"]) {
+      const setup = fixture();
+      setup.context.grantRevision = () => grant;
+      setup.api.handle({ type: "desktop_capture_request", requestId: "request", input: setup.input });
+      await setup.settle();
+      const command = setup.broker.poll("alice", setup.client.device.id, setup.client.transportToken)[0];
+      expect(command.type).toBe("capture");
+      if (command.type !== "capture") throw new Error("Missing capture command");
+      expect(command.destination.revision).toBe(setup.destination.revision);
+      expect(command.extension.approvalRevision).toMatch(/^[a-f0-9]{64}$/);
+      revisions.push(command.extension.approvalRevision!);
+    }
+    expect(new Set(revisions).size).toBe(3);
+  });
+
   test("capture permissions are never part of the automatic grant tier", () => {
     expect(PRIVILEGED_PERMISSIONS.has("screen_capture")).toBe(true);
     expect(PRIVILEGED_PERMISSIONS.has("screen_recording")).toBe(true);

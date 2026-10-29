@@ -24,6 +24,11 @@ if ((ctx.host.capabilities['connection-kinds-v1'] ?? 0) >= 1) {
 `model`, `active`, and `voice` (TTS only). Summaries never contain API keys,
 endpoint URLs, headers, metadata, or provider parameters.
 
+Speech profile lists load on demand through the host, including in native widget
+windows that have no preloaded connection cache. An empty array means no saved
+profiles were returned; a loading failure rejects the promise. Extensions can
+reload on reconnect, focus, or an explicit refresh without periodic polling.
+
 `active` marks the profile Lumiverse itself uses for that kind when no
 connection id is given:
 

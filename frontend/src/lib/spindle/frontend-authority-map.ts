@@ -63,7 +63,7 @@ const SETTINGS_TAB_IDS = [
   'productivity', 'account', 'display', 'chat', 'extensions', 'guided', 'quickReplies', 'extensionPools',
   'webSearch', 'embeddings', 'memoryCortex', 'inference', 'notifications', 'voice', 'mcpServers',
   'advanced', 'lumihub', 'illarin', 'dataPortability', 'diagnostics', 'streamDeck', 'ssoProviders', 'operator',
-  'tokenizers', 'users', 'migration',
+  'tokenizers', 'users', 'migration', 'keyBindings',
 ] as const
 
 const CORE_ACTION_ROWS: readonly AuthorityRow[] = [

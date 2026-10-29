@@ -1,5 +1,6 @@
 import type { NavigateFunction } from 'react-router'
 import type { ComponentType } from 'react'
+import type { KeybindingTrigger } from './desktop-keybindings'
 import {
   Plus, RotateCw, CornerDownLeft, Trash2, Edit3, Copy,
   Eye, EyeOff, Columns, FolderOpen, ClipboardCopy, Upload, Search,
@@ -28,7 +29,7 @@ export interface Command {
   keywords: string[]
   group: CommandGroup
   scope?: CommandScope
-  run: (navigate: NavigateFunction) => void | Promise<void>
+  run: (navigate: NavigateFunction, trigger?: KeybindingTrigger) => void | Promise<void>
 }
 
 export const GROUP_ORDER: CommandGroup[] = ['actions', 'panels', 'settings', 'extensions']

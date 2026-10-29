@@ -14,6 +14,7 @@ import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/p
 import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
+import type { ExtensionCommandState } from '@/store/slices/spindle-placement'
 import type { DecisionConnectionProfile } from '@/types/api'
 import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
 import { createRegexRefreshScheduler } from './regex-refresh'
@@ -1411,7 +1412,7 @@ export function useWebSocket() {
         }
       }),
 
-      wsClient.on(EventType.CONNECTED, (payload: { role?: string }) => {
+      wsClient.on(EventType.CONNECTED, (payload: { role?: string; extensionCommands?: ExtensionCommandState[] }) => {
         // The client emits CONNECTED twice per connection: once locally from
         // onopen with an empty payload, and once when the backend's CONNECTED
         // message arrives (carrying the user role). Only the second one means
@@ -1421,6 +1422,8 @@ export function useWebSocket() {
           // Local onopen: hold provider_changed until the snapshot resync.
           providers?.beginReconnectResync()
         } else {
+          // Replace stale registrations missed while disconnected, including removals.
+          if (Array.isArray(payload.extensionCommands)) store.setState({ extensionCommands: payload.extensionCommands })
           store.getState().reconcileRole(payload.role)
           store.getState().setWsAuthSynced(true)
           // Immediately verify round-trip so the overlay can dismiss without

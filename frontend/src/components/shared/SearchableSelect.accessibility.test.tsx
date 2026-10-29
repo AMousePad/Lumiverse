@@ -172,3 +172,44 @@ describe('SearchableSelect screen reader and keyboard behavior', () => {
     expect(document.querySelector('[role="listbox"]')).toBeNull()
   })
 })
+
+
+test('loads once near the scroll boundary and retains a keyboard-accessible retry button', async () => {
+  let loads = 0
+  await renderPicker({ hasMore: true, loadMoreOnScroll: true, onLoadMore: () => { loads++ } })
+  const list = document.querySelector('[role="listbox"]')! as HTMLElement
+  Object.defineProperties(list, { clientHeight: { value: 200 }, scrollHeight: { value: 600 }, scrollTop: { value: 300, writable: true } })
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  expect(loads).toBe(0)
+  list.scrollTop = 350
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  expect(loads).toBe(1)
+  const more = Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Load more')!
+  expect(more.disabled).toBe(false)
+  act(() => more.click())
+  expect(loads).toBe(2)
+})
+
+test('incremental select does not automatically load while busy', async () => {
+  let loads = 0
+  await renderPicker({ hasMore: true, loading: true, loadMoreOnScroll: true, onLoadMore: () => { loads++ } })
+  const list = document.querySelector('[role="listbox"]')!
+  Object.defineProperties(list, { clientHeight: { value: 200 }, scrollHeight: { value: 200 }, scrollTop: { value: 0 } })
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  expect(loads).toBe(0)
+  expect(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Loading…')?.disabled).toBe(true)
+})
+
+
+test('scroll pagination is opt-in for existing picker consumers', async () => {
+  let loads = 0
+  await renderPicker({ hasMore: true, onLoadMore: () => { loads++ } })
+  const list = document.querySelector('[role="listbox"]')!
+  Object.defineProperties(list, { clientHeight: { value: 200 }, scrollHeight: { value: 200 }, scrollTop: { value: 0 } })
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  expect(loads).toBe(0)
+  const more = Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Load more')!
+  act(() => more.click())
+  expect(loads).toBe(1)
+})

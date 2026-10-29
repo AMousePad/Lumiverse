@@ -56,6 +56,7 @@ import styles from './App.module.css'
 import { acknowledgePendingConnectionsDeepLink } from '@/lib/uiProductivityDefaults'
 import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-extension-availability'
 import { installTauriSystemAudioSource } from '@/lib/spindle/system-audio-tauri'
+import { useDesktopKeybindings } from '@/hooks/useDesktopKeybindings'
 import { createDesktopDownloadFeedback, type DesktopDownloadEvent } from '@/lib/desktop-download-feedback'
 import { toast } from '@/lib/toast'
 import { useIOSDuoLayout } from '@/hooks/useIOSDuoLayout'
@@ -94,6 +95,7 @@ function Application() {
   useIOSLiveActivities(useStore(s => s.isAuthenticated ? s.user?.id ?? null : s.isAuthLoading ? undefined : null))
   useDocumentTitle()
   useBadging()
+  useDesktopKeybindings()
   useTTSAutoPlay()
   useAutoSummarization()
   useBoundPresetSelection()

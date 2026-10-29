@@ -942,6 +942,7 @@ pub fn show_frontend(
             // a resize event on the desktop runtimes, so re-query all native
             // flags after either transition instead of guessing from web APIs.
             WindowEvent::Focused(_) => {
+                crate::keybindings::frontend_focus_changed(&close_app);
                 emit_frontend_presence(&close_app, &close_window);
             }
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
@@ -957,6 +958,7 @@ pub fn show_frontend(
             }
             WindowEvent::Destroyed => {
                 crate::system_audio::frontend_gone(&close_app);
+                crate::keybindings::frontend_gone(&close_app);
                 #[cfg(target_os = "linux")]
                 if let Err(error) =
                     crate::wayland_background_effect::clear_background_effects(&close_window)

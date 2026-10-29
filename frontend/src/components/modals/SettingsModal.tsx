@@ -74,6 +74,7 @@ import McpServerSettings from '@/components/settings/mcp-servers/McpServerSettin
 import DataPortability from '@/components/settings/DataPortability'
 import IllarinSettings from '@/components/settings/IllarinSettings'
 import StreamDeckSettings from '@/components/settings/StreamDeckSettings'
+import DesktopKeybindingsSettings from '@/components/settings/DesktopKeybindingsSettings'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import EmbeddingConnectionPicker from '@/components/shared/EmbeddingConnectionPicker'
 import ConnectionSelect from '@/components/shared/ConnectionSelect'
@@ -294,6 +295,8 @@ function SettingsView({ view }: { view: string }) {
 
   let coreContent: ReactNode | null = null
   switch (view) {
+    case 'keyBindings':
+      coreContent = <DesktopKeybindingsSettings />; break
     case 'account':
       coreContent = <AccountSettings />; break
     case 'display':

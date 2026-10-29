@@ -35,6 +35,77 @@ function fixture() {
 }
 
 describe("native desktop capture broker", () => {
+  test("late upload cleanup from an old lease cannot block or unlock a replacement lease", async () => {
+    const setup = fixture();
+    const descriptor = { name: "Native", platform: "macos", deviceKey: "b".repeat(64), capabilities: { image: true, video: false, replay: false } };
+    const old = setup.broker.register("alice", descriptor);
+    const oldCapture = setup.broker.request(setup.owner, { ...setup.input, deviceId: old.device.id }, setup.destination, () => true);
+    void oldCapture.catch(() => {});
+    const oldCommand = setup.broker.poll("alice", old.device.id, old.transportToken)[0];
+    let finishOld!: (reply: unknown) => void;
+    const oldUpload = setup.broker.receive("alice", old.device.id, old.transportToken, () => new Promise(resolve => { finishOld = resolve; }));
+    void oldUpload.catch(() => {});
+    const next = setup.broker.register("alice", descriptor);
+    setup.advance(5001);
+    const capture = setup.broker.request(setup.owner, { ...setup.input, deviceId: next.device.id }, setup.destination, () => true);
+    void capture.catch(() => {});
+    const command = setup.broker.poll("alice", next.device.id, next.transportToken)[0];
+    let finishNew!: (reply: unknown) => void;
+    const upload = setup.broker.receive("alice", next.device.id, next.transportToken, () => new Promise(resolve => { finishNew = resolve; }));
+    finishOld(setup.reply(oldCommand.requestId));
+    await expect(oldUpload).rejects.toThrow("INVALID_DEVICE_LEASE");
+    await expect(setup.broker.receive("alice", next.device.id, next.transportToken, async () => ({}))).rejects.toThrow("CAPTURE_BUSY");
+    finishNew(setup.reply(command.requestId));
+    await upload;
+    expect((await capture).kind).toBe("image");
+    await expect(oldCapture).rejects.toThrow("DESKTOP_DISCONNECTED");
+  });
+  test("persistent identity survives reconnects while leases and interrupted work are replaced", async () => {
+    const setup = fixture();
+    const descriptor = { name: "Native", platform: "macos", deviceKey: "a".repeat(64), approvalStatus: true, capabilities: { image: true, video: true, replay: false } };
+    const first = setup.broker.register("alice", descriptor);
+    const input = { ...setup.input, deviceId: first.device.id };
+    const pending = setup.broker.request(setup.owner, input, setup.destination, () => true);
+    void pending.catch(() => {});
+    setup.broker.poll("alice", first.device.id, first.transportToken);
+    const second = setup.broker.register("alice", descriptor);
+    await expect(pending).rejects.toThrow("DESKTOP_DISCONNECTED");
+    expect(second.device.id).toBe(first.device.id);
+    expect(second.device.stableIdentity).toBe(true);
+    expect(second.transportToken).not.toBe(first.transportToken);
+    expect(second.device).not.toHaveProperty("deviceKey");
+    expect(() => setup.broker.poll("alice", first.device.id, first.transportToken)).toThrow("INVALID_DEVICE_LEASE");
+    expect(setup.broker.poll("alice", second.device.id, second.transportToken)).toEqual([]);
+    expect(setup.broker.register("bob", descriptor).device.id).not.toBe(second.device.id);
+  });
+
+  test("approval discovery returns only scoped native metadata and rechecks authorization", async () => {
+    const setup = fixture();
+    const native = setup.broker.register("alice", { name: "Native", platform: "macos", approvalStatus: true, capabilities: { image: true, video: false, replay: false } });
+    const input = { deviceId: native.device.id, connectionId: "connection", kind: "image" as const };
+    let authorized = true;
+    const first = setup.broker.inspect(setup.owner, input, setup.destination, () => authorized);
+    const command = setup.broker.poll("alice", native.device.id, native.transportToken)[0];
+    expect(command.type).toBe("approval_status");
+    expect(command).not.toHaveProperty("purpose");
+    expect(command).not.toHaveProperty("maxBytes");
+    expect(() => setup.broker.completeInspection("bob", native.device.id, native.transportToken, { requestId: command.requestId, approval: "remembered", source: "ready" })).toThrow("INVALID_DEVICE_LEASE");
+    setup.broker.completeInspection("alice", native.device.id, native.transportToken, { requestId: command.requestId, approval: "remembered", source: "ready", secretSource: "must not escape" });
+    expect(await first).toEqual({ deviceId: native.device.id, kind: "image", approval: "remembered", source: "ready", checkedAt: 1000 });
+    const next = setup.broker.inspect(setup.owner, input, setup.destination, () => authorized);
+    void next.catch(() => {});
+    const second = setup.broker.poll("alice", native.device.id, native.transportToken)[0];
+    authorized = false;
+    setup.broker.completeInspection("alice", native.device.id, native.transportToken, { requestId: second.requestId, approval: "remembered", source: "ready" });
+    await expect(next).rejects.toThrow("CAPTURE_REVOKED");
+  });
+
+  test("old clients report unknown approval without receiving an unsupported command", async () => {
+    const setup = fixture();
+    const status = await setup.broker.inspect(setup.owner, { deviceId: setup.client.device.id, connectionId: "connection", kind: "image" }, setup.destination, () => true);
+    expect(status.approval).toBe("unknown");
+    expect(setup.poll()).toEqual([]);
+  });
   test("uses private user/device leases and delivers commands only once", () => {
     const setup = fixture();
     expect(setup.broker.listDevices("bob")).toEqual([]);
@@ -51,7 +122,7 @@ describe("native desktop capture broker", () => {
     const promise = setup.request();
     const command = setup.poll()[0];
     expect(command).toMatchObject({ type: "capture", extension: { id: "extension" }, destination: { model: "vision" } });
-    expect(command).not.toHaveProperty("destination.revision");
+    expect(command).toHaveProperty("destination.revision", setup.destination.revision);
     await setup.complete(command.requestId);
     const asset = await promise;
     expect(asset).not.toHaveProperty("data");

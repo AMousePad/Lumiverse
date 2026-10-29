@@ -1141,6 +1141,7 @@ export class WorkerHost {
       postResponse: (message) => this.postToWorker(message),
     });
     this.desktopCaptureApi = new WorkerHostDesktopCaptureApi({
+      grantRevision: (permission) => managerSvc.getDesktopCaptureGrantRevision(this.manifest.identifier, permission),
       extensionId, identifier: manifest.identifier, name: manifest.name,
       declaredPermissions: manifest.permissions ?? [],
       hasPermission: (permission) => this.hasPermission(permission),
@@ -1369,6 +1370,7 @@ export class WorkerHost {
         lumiverseVersion: await getBackendVersion(),
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
+          "character-search-v1": 1,
           "message-preset-context-v1": 1,
           "chat-swipe-variables-v1": 1,
           "generation-message-sessions-v1": 1,
@@ -1379,6 +1381,7 @@ export class WorkerHost {
           "frontend-runtime-capabilities-v1": 1,
           "frontend-session-origin-v1": 1,
           "frontend-session-routing-v1": 1,
+          "command-session-routing-v1": 1,
           "runtime-state-v1": 1,
           "required-context-handlers-v1": 1,
           "required-interceptors-v1": 1,
@@ -1387,6 +1390,7 @@ export class WorkerHost {
           "decision-images-v1": 1,
           "embeddings-v1": 1,
           "desktop-capture-worker-v1": 1,
+          "desktop-capture-approval-status-v1": 1,
         }),
         extensionInstallationId: this.extensionId,
       },
@@ -1959,6 +1963,7 @@ export class WorkerHost {
         this.handlePermissionsGetGranted(msg.requestId);
         break;
       case "desktop_capture_devices":
+      case "desktop_capture_approval_status":
       case "desktop_capture_request":
       case "desktop_capture_release":
         this.desktopCaptureApi.handle(msg);
@@ -2141,7 +2146,7 @@ export class WorkerHost {
         break;
       // ─── Characters (gated: "characters") ─────────────────────────────
       case "characters_list":
-        this.contentApi.handleCharactersList(msg.requestId, msg.limit, msg.offset, msg.userId);
+        this.contentApi.handleCharactersList(msg.requestId, msg.limit, msg.offset, msg.userId, (msg as typeof msg & { search?: string }).search);
         break;
       case "characters_get":
         this.contentApi.handleCharactersGet(msg.requestId, msg.characterId, msg.userId);
@@ -5050,8 +5055,8 @@ export class WorkerHost {
 
   // ─── Toast (free tier) ───────────────────────────────────────────────
 
-  invokeCommand(commandId: string, context: SpindleCommandContextDTO, userId: string): void {
-    this.interactionApi.invokeCommand(commandId, context, userId);
+  invokeCommand(commandId: string, context: SpindleCommandContextDTO, userId: string, frontendSessionId?: string): void {
+    this.interactionApi.invokeCommand(commandId, context, userId, frontendSessionId);
   }
 
   getRegisteredCommands(): SpindleCommandDTO[] {

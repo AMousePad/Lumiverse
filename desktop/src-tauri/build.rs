@@ -1,6 +1,11 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+// Keep native compilation and direct Cargo builds at the same minimum as
+// bundle.macOS.minimumSystemVersion in tauri.conf.json. Tauri only supplies the
+// deployment target itself when invoked through its CLI or for release builds.
+const MACOS_MINIMUM_SYSTEM_VERSION: &str = "13.0";
+
 fn git_output(args: &[&str]) -> Option<String> {
     Command::new("git")
         .args(args)
@@ -70,8 +75,10 @@ fn main() {
     println!("cargo:rerun-if-changed=src/system_audio/coreaudio.m");
     println!("cargo:rerun-if-changed=src/popup_close.m");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET={MACOS_MINIMUM_SYSTEM_VERSION}");
         let mut capture = cc::Build::new();
         capture
+            .env("MACOSX_DEPLOYMENT_TARGET", MACOS_MINIMUM_SYSTEM_VERSION)
             .file("src/capture/macos.m")
             .file("src/system_audio/coreaudio.m")
             .file("src/popup_close.m")
@@ -121,8 +128,20 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "desktop_capture_connect",
+            "desktop_keybindings_show",
+            "desktop_keybindings_get",
+            "desktop_keybindings_save",
+            "desktop_keybindings_publish",
+            "desktop_keybindings_trigger",
+            "desktop_keybindings_frontend_get",
+            "desktop_keybindings_frontend_save",
+            "desktop_keybindings_global_permission",
+            "desktop_keybindings_editing",
             "desktop_capture_disconnect",
             "desktop_capture_status",
+            "desktop_capture_request_setup",
+            "desktop_capture_setup_finished",
+            "desktop_capture_reset_approvals",
             "bundled_server_available",
             "bundled_server_start",
             "bundled_server_stop",

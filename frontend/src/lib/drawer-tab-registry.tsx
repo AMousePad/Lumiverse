@@ -11,6 +11,7 @@ import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
 import i18n from '@/i18n'
 import type { Command, CommandScope } from '@/lib/commands'
+import { hasEnabledCommandExtensionId } from './spindle/frontend-extension-availability'
 import type { DrawerTabState, ExtensionCommandState } from '@/store/slices/spindle-placement'
 import { CORE_DRAWER_TAB_IDS } from './core-drawer-tab-ids'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
@@ -601,9 +602,9 @@ export function extensionCommandsToCommands(entries: ExtensionCommandState[]): C
         keywords: ['extension', entry.extensionName, ...(cmd.keywords ?? [])],
         group: 'extensions',
         scope: cmd.scope as CommandScope | undefined,
-        run: () => {
+        run: (_navigate, trigger) => {
           const state = useStore.getState()
-          if (!hasEnabledFrontendExtensionId(state.extensions, entry.extensionId)) return
+          if (!hasEnabledCommandExtensionId(state.extensions, entry.extensionId)) return
           wsClient.send({
             type: 'SPINDLE_COMMAND_INVOKE',
             extensionId: entry.extensionId,
@@ -613,6 +614,7 @@ export function extensionCommandsToCommands(entries: ExtensionCommandState[]): C
               chatId: state.activeChatId ?? undefined,
               characterId: state.activeCharacterId ?? undefined,
               isGroupChat: state.isGroupChat ?? false,
+              ...(trigger ? { trigger } : {}),
             },
           })
         },

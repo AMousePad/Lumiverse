@@ -29,6 +29,7 @@ export default defineConfig({
         linuxSmoke: fileURLToPath(new URL("./linux-smoke.html", import.meta.url)),
         linuxSettings: fileURLToPath(new URL("./linux-settings.html", import.meta.url)),
         main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        keybindings: fileURLToPath(new URL("./keybindings.html", import.meta.url)),
         customUrl: fileURLToPath(new URL("./custom-url.html", import.meta.url)),
         serverSetup: fileURLToPath(new URL("./server-setup.html", import.meta.url)),
       },

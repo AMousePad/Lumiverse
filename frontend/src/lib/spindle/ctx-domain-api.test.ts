@@ -7,6 +7,8 @@ import type {
   Message,
   PaginatedResult,
   RecentChat,
+  SttConnectionProfile,
+  TtsConnectionProfile,
   WorldBook,
   WorldBookEntry,
 } from '@/types/api'
@@ -58,10 +60,12 @@ function createHarness() {
     imageGenProfiles: [{ id: 'image-1', name: 'NovelAI', provider: 'novelai', api_url: 'https://image.example', model: 'nai-diffusion-4', is_default: false, has_api_key: true, default_parameters: { seed: 1 }, metadata: {} }],
     activeImageGenConnectionId: 'image-1' as string | null,
     ttsProfiles: [
-      { id: 'tts-1', name: 'Narrator', provider: 'openai_tts', api_url: '', model: 'tts-1', voice: 'alloy', is_default: false, has_api_key: true, default_parameters: {}, metadata: {} },
-      { id: 'tts-2', name: 'ElevenLabs', provider: 'elevenlabs', api_url: '', model: 'eleven_v3', voice: 'Rachel', is_default: true, has_api_key: true, default_parameters: {}, metadata: {} },
+      { id: 'tts-1', name: 'Narrator', provider: 'openai_tts', api_url: '', model: 'tts-1', voice: 'alloy', is_default: false, has_api_key: true, default_parameters: {}, metadata: {}, created_at: 1, updated_at: 1 },
+      { id: 'tts-2', name: 'ElevenLabs', provider: 'elevenlabs', api_url: '', model: 'eleven_v3', voice: 'Rachel', is_default: true, has_api_key: true, default_parameters: {}, metadata: {}, created_at: 1, updated_at: 1 },
     ],
-    sttProfiles: [{ id: 'stt-1', name: 'Whisper', provider: 'openai_stt', api_url: '', model: 'whisper-1', is_default: true, has_api_key: true, default_parameters: {}, metadata: {} }],
+    sttProfiles: [{ id: 'stt-1', name: 'Whisper', provider: 'openai_stt', api_url: '', model: 'whisper-1', is_default: true, has_api_key: true, default_parameters: {}, metadata: {}, created_at: 1, updated_at: 1 }],
+    setTtsProfiles(profiles: TtsConnectionProfile[]) { state.ttsProfiles = profiles },
+    setSttProfiles(profiles: SttConnectionProfile[]) { state.sttProfiles = profiles },
     decisionProfiles: [{ id: 'decision-1', name: 'Jev', provider: 'typesafe', api_url: '', model: 'jev-latest', is_default: true, has_api_key: true, default_parameters: {}, metadata: {} }],
     voiceSettings: { ttsConnectionId: null as string | null, sttConnectionId: null as string | null },
     messages: [message('message-1', 'hello')],
@@ -149,6 +153,10 @@ function createHarness() {
       }
     },
     connections: {
+      async speechProfiles(kind) {
+        calls.push(`speech-profiles:${kind}`)
+        return kind === 'tts' ? state.ttsProfiles : state.sttProfiles
+      },
       async models(id) {
         calls.push(`models:${id}`)
         return { models: ['gpt-test'], provider: 'openai' }
@@ -280,6 +288,44 @@ describe('H10 domain API bridge', () => {
     await expect(domain.connections.list({ kind: 'music' as never })).rejects.toThrow('CONNECTION_KIND_INVALID')
     harness.setActive(false)
     await expect(domain.connections.list({ kind: 'tts' })).rejects.toThrow('STALE_GENERATION')
+  })
+
+  test('speech connection reads load saved profiles even in a cold widget store', async () => {
+    const harness = createHarness()
+    const state = harness.state()
+    const saved = { tts: [...state.ttsProfiles], stt: [...state.sttProfiles] }
+    const kinds: string[] = []
+    Object.assign(harness.dependencies.connections, { speechProfiles: async (kind: 'tts' | 'stt') => {
+      kinds.push(kind)
+      return saved[kind].map(row => ({ ...row, api_key: 'SECRET', api_url: 'https://private.example', metadata: { private: true } }))
+    } })
+    state.ttsProfiles = []; state.sttProfiles = []
+    const domain = createFrontendDomainApi(harness.dependencies)
+    expect((await domain.connections.list({ kind: 'tts' })).map(row => row.id)).toEqual(['tts-1', 'tts-2'])
+    expect((await domain.connections.list({ kind: 'stt' })).map(row => row.id)).toEqual(['stt-1'])
+    expect(harness.state().ttsProfiles.map(row => row.id)).toEqual(['tts-1', 'tts-2'])
+    expect(harness.state().sttProfiles.map(row => row.id)).toEqual(['stt-1'])
+    expect(await domain.connections.getActive('tts')).toEqual({ activeProfileId: 'tts-2', provider: 'elevenlabs', model: 'eleven_v3' })
+    expect(JSON.stringify(await domain.connections.list({ kind: 'tts' }))).not.toContain('SECRET')
+    expect(JSON.stringify(await domain.connections.list({ kind: 'stt' }))).not.toContain('private.example')
+    expect(kinds).toEqual(['tts', 'stt', 'tts', 'tts', 'stt'])
+  })
+
+  test('a stale speech discovery cannot hydrate the next account or hide transport failures', async () => {
+    const harness = createHarness()
+    const saved = [...harness.state().ttsProfiles]
+    harness.state().ttsProfiles = []
+    let resolve!: (profiles: TtsConnectionProfile[]) => void
+    harness.dependencies.connections.speechProfiles = () => new Promise(done => { resolve = done })
+    const domain = createFrontendDomainApi(harness.dependencies)
+    const pending = domain.connections.list({ kind: 'tts' })
+    harness.setActive(false); resolve(saved)
+    await expect(pending).rejects.toThrow('STALE_GENERATION')
+    expect(harness.state().ttsProfiles).toEqual([])
+
+    harness.setActive(true)
+    harness.dependencies.connections.speechProfiles = async () => { throw new Error('PROFILE_LOAD_FAILED') }
+    await expect(domain.connections.list({ kind: 'stt' })).rejects.toThrow('PROFILE_LOAD_FAILED')
   })
 
   test('recent chat reads stay free, bounded, and query-shaped', async () => {

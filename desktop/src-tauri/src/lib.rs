@@ -7,6 +7,7 @@ mod discord_rpc;
 mod external_launch;
 mod frontend;
 mod host_environment;
+mod keybindings;
 mod linux_runtime;
 mod linux_smoke;
 mod notifications;
@@ -217,6 +218,7 @@ pub fn run() {
         .manage(profile)
         .manage(discord_rpc::DiscordRpcState::default())
         .manage(capture::DesktopCaptureState::default())
+        .manage(keybindings::KeybindingsState::default())
         .manage(system_audio::SystemAudioState::default())
         .on_page_load(|webview, payload| {
             // A reloaded or navigated frontend can no longer receive frames from a session its old page started.
@@ -224,9 +226,19 @@ pub fn run() {
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
             {
                 system_audio::frontend_gone(webview.app_handle());
+                keybindings::frontend_gone(webview.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
+            keybindings::desktop_keybindings_show,
+            keybindings::desktop_keybindings_get,
+            keybindings::desktop_keybindings_save,
+            keybindings::desktop_keybindings_publish,
+            keybindings::desktop_keybindings_trigger,
+            keybindings::desktop_keybindings_frontend_get,
+            keybindings::desktop_keybindings_frontend_save,
+            keybindings::desktop_keybindings_global_permission,
+            keybindings::desktop_keybindings_editing,
             profile::desktop_profile_info,
             external_launch::open_external_url,
             external_launch::reveal_desktop_artifact,
@@ -299,6 +311,9 @@ pub fn run() {
             capture::desktop_capture_connect,
             capture::desktop_capture_disconnect,
             capture::desktop_capture_status,
+            capture::desktop_capture_request_setup,
+            capture::desktop_capture_setup_finished,
+            capture::desktop_capture_reset_approvals,
             system_audio::desktop_system_audio_status,
             system_audio::desktop_system_audio_set_enabled,
             system_audio::desktop_system_audio_start,
@@ -325,6 +340,18 @@ pub fn run() {
         .setup(|app| {
             profile::initialize(app.handle())?;
             desktop_updates::restore_resume(app.handle())?;
+            if let Err(error) = app.handle().plugin(
+                tauri_plugin_global_shortcut::Builder::new()
+                    .with_handler(|app, shortcut, event| {
+                        keybindings::global_event(app, shortcut, event.state());
+                    })
+                    .build(),
+            ) {
+                eprintln!("[keybindings] Global shortcuts unavailable: {error}");
+            }
+            if let Err(error) = keybindings::initialize(app.handle()) {
+                eprintln!("[keybindings] Could not restore shortcuts: {error}");
+            }
             #[cfg(target_os = "macos")]
             set_macos_app_icon();
             // Keep normal macOS application/menu integration; the frontend

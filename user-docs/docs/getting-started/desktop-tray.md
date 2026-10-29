@@ -180,3 +180,34 @@ Official AppImages include their GStreamer audio plugins. Installing host
 plugins does not repair an older incomplete bundle; download a current build.
 Distro-native packages and raw binaries need their own matching GTK/WebKitGTK
 and GStreamer base/good runtime packages.
+
+## Share screenshots and clips with extensions
+
+On macOS and Windows, enable **Let Extensions Capture the Screen** in the root
+tray menu beside system audio. You can also select **Set Up Screen Capture** in
+an extension's permissions to enable the same toggle. Desktop asks you to
+authorize the selected Lumiverse instance if needed. The toggle stays on across
+restarts until you turn it off.
+The extension also needs its screen capture or screen recording permission.
+
+When the extension requests a screenshot or clip, choose a display or window in
+native source selection. Selecting it starts capture immediately, with no Capture & Send
+window or extra Send button. Desktop remembers that source for future requests from this
+extension to the same destination until capture is turned off. Images and video have
+separate approval. On macOS, remembering a source requires screen recording
+permission; audio-only permission does not include your screen. macOS asks for
+missing permission directly.
+
+A remembered macOS display can restore after restarting Desktop. macOS window
+choices and Windows capture items need a fresh choice after Desktop restarts;
+closing the source can also require a fresh choice. Desktop never substitutes a
+different source automatically.
+
+Uncheck **Let Extensions Capture the Screen** to stop capture and forget saved
+sources and approvals. Canceling a capture keeps the toggle and saved permissions
+on. On macOS, use **Cancel This Capture** in the capture indicator to discard just
+the current request. When you turn capture off, it stays off after restarting
+Desktop. Enable it again when you want to share; the next request asks for a new source choice.
+
+Screen capture on Linux is not available yet. Capture does not include system
+audio or microphone audio, and no background recording buffer is maintained.

@@ -9,6 +9,7 @@ import type {
   DecisionResult,
   SpindleEmbeddingsAPI,
   SpindleManifest,
+  SpindleCommandContextDTO,
   WorkerToHost,
   HostToWorker,
   LlmMessageDTO,
@@ -120,7 +121,7 @@ import type { DryRunResultDTO, GetBreakdownWorkerMessage, SavedBreakdownDTO } fr
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
 import type { CharacterGalleryItemDTO, CharacterGalleryWorkerMessage, ConnectionModelDTO, ConnectionModelsWorkerMessage } from "./gallery-models-contract";
 import type { ActivationPatternsMessage, ActivationPatternsOptions, ActivationPatternsResult } from "./activation-patterns-contract";
-import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef } from "./desktop-capture-contract";
+import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef, DesktopCaptureApprovalStatus } from "./desktop-capture-contract";
 import { deserializeWorkerResponseError } from "./worker-response-error";
 import { deriveCharacterOverlay } from "../utils/color-engine";
 import {
@@ -645,7 +646,8 @@ type RuntimeWorkerToHost =
 type RuntimeHostToWorker =
   | { type: 'context_handler_abort'; requestId: string; reason: string }
   | { type: 'frontend_message'; payload: unknown; userId: string; frontendSessionId?: string }
-  | HostToWorker
+  | Exclude<HostToWorker, { type: 'command_invoked' }>
+  | { type: 'command_invoked'; commandId: string; context: SpindleCommandContextDTO; userId: string; frontendSessionId?: string }
   | {
       type: "rpc_pool_request";
       requestId: string;
@@ -1168,7 +1170,7 @@ let oauthCallbackHandler:
   | null = null;
 const frontendMessageHandlers = new Set<(payload: unknown, userId: string, frontendSessionId?: string) => void>();
 const frontendRuntimeCapabilityRefCounts = new Map<"message_tag_interceptor", number>();
-const commandInvokedHandlers = new Set<(commandId: string, context: any) => void | Promise<void>>();
+const commandInvokedHandlers = new Set<(commandId: string, context: any, origin?: { userId: string; frontendSessionId?: string }) => void | Promise<void>>();
 const permissionDeniedHandlers = new Set<(detail: PermissionDeniedDetail) => void>();
 const permissionChangedHandlers = new Set<(detail: PermissionChangedDetail) => void>();
 const frontendProcessLifecycleHandlers = new Set<(event: FrontendProcessLifecycleEvent) => void>();
@@ -1687,6 +1689,9 @@ const spindleApi: RuntimeSpindleAPI = {
     capture: {
       async listDevices(options) {
         return await request({ type: "desktop_capture_devices", requestId: crypto.randomUUID(), userId: options?.userId }) as DesktopCaptureDevice[];
+      },
+      async getApprovalStatus(input) {
+        return await request({ type: "desktop_capture_approval_status", requestId: crypto.randomUUID(), input }) as DesktopCaptureApprovalStatus;
       },
       async request(input) {
         assertMutationAllowed("spindle.desktop.capture.request()");
@@ -3046,7 +3051,7 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   characters: {
-    async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: CharacterDTO[]; total: number }> {
+    async list(options?: { limit?: number; offset?: number; search?: string; userId?: string }): Promise<{ data: CharacterDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "characters_list",
@@ -3054,6 +3059,7 @@ const spindleApi: RuntimeSpindleAPI = {
         limit: options?.limit,
         offset: options?.offset,
         userId: options?.userId,
+        ...{ search: options?.search },
       });
       return result as { data: CharacterDTO[]; total: number };
     },
@@ -4619,7 +4625,7 @@ const spindleApi: RuntimeSpindleAPI = {
       assertMutationAllowed("spindle.commands.unregister()");
       post({ type: "commands_unregister", commandIds: commandIds ?? [] } as any);
     },
-    onInvoked(handler: (commandId: string, context: any) => void | Promise<void>) {
+    onInvoked(handler: (commandId: string, context: any, origin?: { userId: string; frontendSessionId?: string }) => void | Promise<void>) {
       commandInvokedHandlers.add(handler);
       return () => {
         commandInvokedHandlers.delete(handler);
@@ -5257,7 +5263,9 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     case "command_invoked": {
       for (const handler of commandInvokedHandlers) {
         try {
-          handler(msg.commandId, msg.context);
+          Promise.resolve(handler(msg.commandId, msg.context, { userId: msg.userId, frontendSessionId: msg.frontendSessionId })).catch((err: any) => {
+            post({ type: "log", level: "error", message: `Command handler error (${msg.commandId}): ${err?.message ?? err}` } as any);
+          });
         } catch (err: any) {
           post({
             type: "log",

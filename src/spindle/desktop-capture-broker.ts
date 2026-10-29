@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import sharp from "sharp";
 import type {
   CapturedMediaRef,
@@ -7,6 +7,8 @@ import type {
   DesktopCaptureDevice,
   DesktopCaptureReply,
   DesktopCaptureRequest,
+  DesktopCaptureApprovalQuery,
+  DesktopCaptureApprovalStatus,
 } from "./desktop-capture-contract";
 import type { LlmMessage, LlmMessagePart } from "../llm/types";
 
@@ -30,6 +32,7 @@ export class DesktopCaptureError extends Error {
 
 export interface DesktopCaptureOwner {
   runtimeId: string;
+  approvalRevision?: string;
   extensionId: string;
   identifier: string;
   name: string;
@@ -65,9 +68,16 @@ type Asset = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+type Inspection = {
+  owner: DesktopCaptureOwner; deviceId: string; kind: DesktopCaptureApprovalQuery["kind"];
+  authorized: () => boolean; timer: ReturnType<typeof setTimeout>;
+  resolve: (status: DesktopCaptureApprovalStatus) => void; reject: (error: Error) => void;
+};
+
 export class DesktopCaptureBroker {
   private readonly devices = new Map<string, Device>();
   private readonly pending = new Map<string, PendingCapture>();
+  private readonly inspections = new Map<string, Inspection>();
   private readonly assets = new Map<string, Asset>();
   private readonly lastRequest = new Map<string, number>();
   private retainedBytes = 0;
@@ -90,13 +100,20 @@ export class DesktopCaptureBroker {
       || (value.capabilities.replay && !value.capabilities.video)) {
       throw new DesktopCaptureError("INVALID_DEVICE");
     }
+    if (value.deviceKey !== undefined && (typeof value.deviceKey !== "string" || !/^[a-f0-9]{64}$/.test(value.deviceKey))) throw new DesktopCaptureError("INVALID_DEVICE");
+    if (value.approvalStatus !== undefined && typeof value.approvalStatus !== "boolean") throw new DesktopCaptureError("INVALID_DEVICE");
+    const hash = value.deviceKey ? createHash("sha256").update(JSON.stringify([userId, value.deviceKey])).digest("hex") : null;
+    const id = hash ? `${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}` : crypto.randomUUID();
+    // Replacement rotates the secret lease and cancels old work; stable identity cannot revive it.
+    if (this.devices.get(id)?.userId === userId) this.disconnect(id);
     if (this.devices.size >= 32 || [...this.devices.values()].filter((device) => device.userId === userId).length >= 4) {
       throw new DesktopCaptureError("DEVICE_LIMIT", 429);
     }
-    const id = crypto.randomUUID();
     const token = crypto.randomUUID() + crypto.randomUUID();
     const info: DesktopCaptureDevice = {
       id, name: value.name.trim(), platform: value.platform,
+      ...(hash ? { stableIdentity: true } : {}),
+      ...(value.approvalStatus ? { approvalStatusSupported: true } : {}),
       capabilities: { image: value.capabilities.image, video: value.capabilities.video, replay: value.capabilities.replay },
       expiresAt: this.now() + DESKTOP_CAPTURE_LIMITS.deviceLeaseMs,
     };
@@ -138,6 +155,44 @@ export class DesktopCaptureBroker {
       .map((device) => structuredClone(device.info));
   }
 
+  inspect(owner: DesktopCaptureOwner, input: DesktopCaptureApprovalQuery, destination: DesktopCaptureDestination, authorized: () => boolean): Promise<DesktopCaptureApprovalStatus> {
+    if (!input || !["image", "video"].includes(input.kind) || input.connectionId !== destination.connectionId) throw new DesktopCaptureError("INVALID_CAPTURE_REQUEST");
+    if (!authorized()) throw new DesktopCaptureError("CAPTURE_PERMISSION_REVOKED", 403);
+    const device = this.devices.get(input.deviceId);
+    if (!device || device.userId !== owner.userId || device.info.expiresAt <= this.now()) throw new DesktopCaptureError("DESKTOP_UNAVAILABLE", 404);
+    if (!device.info.approvalStatusSupported) return Promise.resolve({ deviceId: input.deviceId, kind: input.kind, approval: "unknown", source: "unknown", checkedAt: this.now() });
+    if (this.inspections.size >= 32 || device.queue.length >= 16 || [...this.inspections.values()].some(query => query.owner.runtimeId === owner.runtimeId && query.owner.userId === owner.userId)) throw new DesktopCaptureError("CAPTURE_BUSY", 429);
+    const requestId = crypto.randomUUID();
+    const command: DesktopCaptureCommand = { type: "approval_status", requestId,
+      extension: { id: owner.extensionId, identifier: owner.identifier, name: owner.name, ...(owner.approvalRevision ? { approvalRevision: owner.approvalRevision } : {}) },
+      kind: input.kind, destination: { ...destination }, expiresAt: this.now() + 10_000 };
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => this.cancelInspection(requestId, "CAPTURE_TIMEOUT"), 10_000); timer.unref();
+      this.inspections.set(requestId, { owner: { ...owner }, deviceId: input.deviceId, kind: input.kind, authorized, timer, resolve, reject });
+      device.queue.push(command);
+    });
+  }
+
+  completeInspection(userId: string, deviceId: string, token: string, input: unknown): void {
+    this.authenticate(userId, deviceId, token);
+    const value = input as Record<string, unknown> | null;
+    if (!value || typeof value.requestId !== "string" || !["required", "remembered", "paused", "unavailable"].includes(value.approval as string)
+      || !["ready", "missing", "permission_required", "unknown"].includes(value.source as string)) throw new DesktopCaptureError("INVALID_CAPTURE_STATUS");
+    const pending = this.inspections.get(value.requestId);
+    if (!pending || pending.deviceId !== deviceId || pending.owner.userId !== userId) throw new DesktopCaptureError("CAPTURE_STATUS_EXPIRED", 410);
+    if (!pending.authorized()) { this.cancelInspection(value.requestId, "CAPTURE_REVOKED"); return; }
+    clearTimeout(pending.timer); this.inspections.delete(value.requestId);
+    pending.resolve({ deviceId, kind: pending.kind, approval: value.approval as DesktopCaptureApprovalStatus["approval"], source: value.source as DesktopCaptureApprovalStatus["source"], checkedAt: this.now() });
+  }
+
+  private cancelInspection(requestId: string, code: string): void {
+    const pending = this.inspections.get(requestId); if (!pending) return;
+    clearTimeout(pending.timer); this.inspections.delete(requestId);
+    const device = this.devices.get(pending.deviceId);
+    if (device) device.queue = device.queue.filter(command => command.requestId !== requestId);
+    pending.reject(new DesktopCaptureError(code));
+  }
+
   request(owner: DesktopCaptureOwner, input: DesktopCaptureRequest, destination: DesktopCaptureDestination,
     authorized: () => boolean): Promise<CapturedMediaRef> {
     if (!input || typeof input !== "object" || typeof input.purpose !== "string"
@@ -175,10 +230,9 @@ export class DesktopCaptureBroker {
     this.lastRequest.set(cooldownKey, this.now());
     const requestId = crypto.randomUUID();
     const timeoutMs = this.options.requestTimeoutMs ?? DESKTOP_CAPTURE_LIMITS.requestTimeoutMs;
-    const { revision: _revision, ...publicDestination } = destination;
     const command: DesktopCaptureCommand = {
-      type: "capture", requestId, extension: { id: owner.extensionId, identifier: owner.identifier, name: owner.name },
-      purpose: input.purpose.trim(), kind: input.kind, destination: publicDestination,
+      type: "capture", requestId, extension: { id: owner.extensionId, identifier: owner.identifier, name: owner.name, ...(owner.approvalRevision ? { approvalRevision: owner.approvalRevision } : {}) },
+      purpose: input.purpose.trim(), kind: input.kind, destination: { ...destination },
       ...(input.kind === "video" ? { mode: input.mode, durationSeconds: input.durationSeconds } : {}),
       maxBytes: input.kind === "image" ? DESKTOP_CAPTURE_LIMITS.imageBytes : DESKTOP_CAPTURE_LIMITS.videoBytes,
       maxPixels: DESKTOP_CAPTURE_LIMITS.maxPixels, expiresAt: this.now() + timeoutMs,
@@ -205,7 +259,7 @@ export class DesktopCaptureBroker {
     this.incomingTransportBytes += maxBytes;
     try { await this.complete(userId, deviceId, token, await read(maxBytes, controller.signal)); }
     finally {
-      this.receivingDevices.delete(deviceId);
+      if (this.receivingDevices.get(deviceId) === controller) this.receivingDevices.delete(deviceId);
       this.incomingTransportBytes -= maxBytes;
     }
   }
@@ -321,6 +375,7 @@ export class DesktopCaptureBroker {
   }
 
   revokeRuntime(runtimeId: string): void {
+    for (const [id, query] of this.inspections) if (query.owner.runtimeId === runtimeId) this.cancelInspection(id, "CAPTURE_REVOKED");
     for (const [id, pending] of this.pending) if (pending.owner.runtimeId === runtimeId) this.cancel(id, "CAPTURE_REVOKED");
     for (const [id, asset] of this.assets) if (asset.owner.runtimeId === runtimeId) this.deleteAsset(id);
   }
@@ -354,7 +409,9 @@ export class DesktopCaptureBroker {
     if (!device) return;
     clearTimeout(device.timer);
     this.devices.delete(deviceId);
+    for (const [id, query] of this.inspections) if (query.deviceId === deviceId) this.cancelInspection(id, "DESKTOP_DISCONNECTED");
     this.receivingDevices.get(deviceId)?.abort();
+    this.receivingDevices.delete(deviceId);
     for (const [id, pending] of this.pending) if (pending.deviceId === deviceId) this.cancel(id, "DESKTOP_DISCONNECTED");
     for (const [id, asset] of this.assets) if (asset.deviceId === deviceId) this.deleteAsset(id);
   }

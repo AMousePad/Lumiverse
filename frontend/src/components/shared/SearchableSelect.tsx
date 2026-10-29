@@ -69,6 +69,8 @@ type CommonProps = {
   loading?: boolean
   hasMore?: boolean
   onLoadMore?: () => void
+  /** Load the next page near the bottom of the options, retaining the accessible button. */
+  loadMoreOnScroll?: boolean
   loadingMessage?: string
   loadMoreLabel?: string
   emptyMessage?: string
@@ -112,6 +114,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     loading = false,
     hasMore = false,
     onLoadMore,
+    loadMoreOnScroll = false,
     loadingMessage = t('loading', { defaultValue: 'Loading…' }),
     loadMoreLabel = t('loadMore', { defaultValue: 'Load more' }),
     emptyMessage = t('emptyMessage'),
@@ -144,6 +147,18 @@ export default function SearchableSelect(props: SearchableSelectProps) {
   const searchRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   useEffect(() => onSearchChange?.(search), [onSearchChange, search])
+  const requestedPage = useRef<string | null>(null)
+  const pageKey = JSON.stringify([search, options.map(option => option.value)])
+  const loadNearEnd = useCallback(() => {
+    const list = listRef.current
+    if (!open || disabled || !loadMoreOnScroll || !hasMore || loading || !onLoadMore || !list || list.clientHeight <= 0) return
+    if (list.scrollHeight - list.scrollTop - list.clientHeight > 64) return
+    if (requestedPage.current === pageKey) return
+    requestedPage.current = pageKey
+    onLoadMore()
+  }, [open, disabled, loadMoreOnScroll, hasMore, loading, onLoadMore, pageKey])
+  useEffect(() => { loadNearEnd() }, [loadNearEnd])
+
   const isPortalOwnerActive = useCallback(() => {
     if (!portal || !portalOwnerId) return true
     const popover = popoverRef.current
@@ -590,6 +605,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
         ref={listRef}
         id={listId}
         className={styles.optionList}
+        onScroll={loadNearEnd}
         role="listbox"
         aria-label={pickerName}
         aria-multiselectable={isMulti || undefined}

@@ -12,6 +12,7 @@ export interface WorkerHostDesktopCaptureContext {
   extensionId: string;
   identifier: string;
   name: string;
+  grantRevision?: (permission: "screen_capture" | "screen_recording") => string;
   declaredPermissions: readonly string[];
   hasPermission: (permission: CapturePermission) => boolean;
   authorize: (permissions: CapturePermission[]) => () => boolean;
@@ -94,14 +95,19 @@ export class WorkerHostDesktopCaptureApi {
       this.requirePermission("generation");
       const owner = this.resolveOwner(input.userId);
       const destination = this.destination(owner.userId, input.connectionId);
+      const grantRevision = this.context.grantRevision?.(permission);
+      owner.approvalRevision = grantRevision ? createHash("sha256").update(grantRevision).digest("hex") : undefined;
       this.requireMediaSupport(destination, input.kind);
       const permissionCheck = this.context.authorize([permission, "generation"]);
       const authorized = () => {
         if (owner.runtimeId !== this.runtimeId || !permissionCheck()) return false;
+        const currentGrant = this.context.grantRevision?.(permission);
+        if (owner.approvalRevision !== (currentGrant ? createHash("sha256").update(currentGrant).digest("hex") : undefined)) return false;
         try { return this.destination(owner.userId, input.connectionId).revision === destination.revision; }
         catch { return false; }
       };
-      return this.broker.request(owner, input, destination, authorized);
+      if (message.type === "desktop_capture_approval_status") return this.broker.inspect(owner, input, destination, authorized);
+      return this.broker.request(owner, message.input, destination, authorized);
     }).then((result) => this.context.postResponse({ type: "response", requestId: message.requestId, result }))
       .catch((error: unknown) => this.context.postResponse({ type: "response", requestId: message.requestId,
         error: error instanceof Error ? error.message : "CAPTURE_FAILED" }));

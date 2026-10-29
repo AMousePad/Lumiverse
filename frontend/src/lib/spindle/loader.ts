@@ -24,6 +24,8 @@ import type {
   Message,
   PaginatedResult,
   RecentChat,
+  SttConnectionProfile,
+  TtsConnectionProfile,
   UpdateConnectionProfileInput,
   WorldBook,
   WorldBookEntry,
@@ -97,6 +99,8 @@ import { charactersApi } from '@/api/characters'
 import * as chatsApiModule from '@/api/chats'
 import * as connectionsApiModule from '@/api/connections'
 import * as embeddingsApiModule from '@/api/embeddings'
+import * as ttsConnectionsApiModule from '@/api/tts-connections'
+import * as sttConnectionsApiModule from '@/api/stt-connections'
 import * as worldBooksApiModule from '@/api/world-books'
 import * as tokenizersApiModule from '@/api/tokenizers'
 import { settingsApi } from '@/api/settings'
@@ -343,7 +347,8 @@ type FrontendExtensionHost = {
   surfaces: HostSurfaceAPI
 }
 
-type FrontendExtensionContextBase = Omit<SpindleFrontendContext, 'ui' | 'messages' | 'dom'> & {
+type FrontendExtensionContextBase = Omit<SpindleFrontendContext, 'ui' | 'messages' | 'dom' | 'components'> & {
+  components: ReturnType<typeof createComponentsHelper>
   readonly frontendSessionId: string
   host: FrontendExtensionHost
   readonly client: SpindleClientAPI
@@ -1231,6 +1236,15 @@ async function doLoadFrontendExtension(
         ?? (async (_id: string, _input: UpdateConnectionProfileInput): Promise<ConnectionProfile> => ({ } as ConnectionProfile)),
       embeddingConfig: embeddingsApiModule.embeddingsApi?.getConfig
         ?? (async () => ({ connectionProfiles: [], primaryProfileId: null })),
+      async speechProfiles(kind: 'tts' | 'stt') {
+        const api = kind === 'tts' ? ttsConnectionsApiModule.ttsConnectionsApi : sttConnectionsApiModule.sttConnectionsApi
+        const profiles: Array<TtsConnectionProfile | SttConnectionProfile> = []
+        while (true) {
+          const page = await api.list({ limit: 100, offset: profiles.length })
+          profiles.push(...page.data)
+          if (!page.data.length || profiles.length >= page.total) return profiles
+        }
+      },
     }
     const runtimeWorldBooksApi = {
       list: worldBooksApiModule.worldBooksApi?.list
@@ -1300,6 +1314,7 @@ async function doLoadFrontendExtension(
         models: runtimeConnectionsApi.models,
         update: runtimeConnectionsApi.update,
         embeddingConfig: runtimeConnectionsApi.embeddingConfig,
+        speechProfiles: runtimeConnectionsApi.speechProfiles,
       },
       chats: {
         listForCharacter: runtimeChatsApi.listCharacterChats,
@@ -1411,6 +1426,8 @@ async function doLoadFrontendExtension(
       descriptorVersion: 1 as const,
       lumiverseVersion: LUMIVERSE_VERSION,
       capabilities: Object.freeze({ ...SPINDLE_HOST_CAPABILITIES, ...THEME_AUTHORING_HOST_CAPABILITIES, ...SPINDLE_STT_HOST_CAPABILITIES, ...SPINDLE_SYSTEM_AUDIO_HOST_CAPABILITIES,
+        'desktop-keybindings-editor-v1': 1,
+        'shared-select-pagination-v1': 1,
         "message-preset-context-v1": 1,
         ...SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES,
         ...CLIENT_HOST_CAPABILITIES,

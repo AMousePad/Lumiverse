@@ -11,6 +11,8 @@ import { getExtensionSettingsTabRegistrations, joinExtensionSettingsTabs } from 
 import { hasEnabledFrontendExtension, hasEnabledFrontendExtensionId } from '@/lib/spindle/frontend-extension-availability'
 import { translateSettingsField, translateSettingsSectionTitle } from '@/lib/i18n/resolveLabel'
 import type { Command, CommandScope } from '@/lib/commands'
+import { hasTauriDesktopBridge } from '@/lib/desktopWebView'
+import { isDesktopFloatingWidgetWindow } from '@/lib/desktop-floating-widget'
 
 /**
  * A searchable, scroll-to-able section within a settings tab. The `key` is combined
@@ -87,6 +89,12 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
       { key: 'chatHeads', titleKey: 'display.chatHeads.title', titleFallback: 'Chat Heads', keywords: ['chat heads', 'heads', 'floating avatar', 'completion sound', 'opacity', 'size', 'direction'] },
       { key: 'landing', titleKey: 'display.landing.title', titleFallback: 'Pagination', keywords: ['landing', 'pagination', 'recent chats', 'chats displayed', 'layout', 'page size'] },
     ],
+    component: INLINE_SENTINEL,
+  },
+  {
+    id: 'keyBindings', shortName: 'Key Bindings', tabName: 'Key Bindings',
+    tabDescription: 'Configure desktop, application and Spindle shortcuts', tabIcon: Keyboard,
+    keywords: ['keyboard', 'keybindings', 'hotkeys', 'shortcuts', 'global', 'desktop', 'spindle'],
     component: INLINE_SENTINEL,
   },
   {
@@ -367,6 +375,7 @@ export function getVisibleSettingsTabs(userRole?: string, productivityTabPositio
   const isAdmin = isOwner || userRole === 'admin'
 
   const visibleCoreTabs = SETTINGS_TABS.filter((tab) => {
+    if (tab.id === 'keyBindings' && (!hasTauriDesktopBridge() || isDesktopFloatingWidgetWindow())) return false
     if (!tab.role) return true
     if (tab.role === 'owner') return isOwner
     if (tab.role === 'admin') return isAdmin

@@ -11,6 +11,8 @@ test("backend worker exposes desktop capture RPC without a frontend capture brid
     spindle.onFrontendMessage(async (payload) => {
       try {
         const devices = await spindle.desktop.capture.listDevices({ userId: payload.userId });
+        const status = await spindle.desktop.capture.getApprovalStatus({ deviceId: devices[0].id, connectionId: 'connection', kind: 'image', userId: payload.userId });
+        if (status.approval !== 'remembered') throw new Error('approval discovery failed');
         const asset = await spindle.desktop.capture.request({
           deviceId: devices[0].id, connectionId: 'connection', purpose: 'Review selected content',
           kind: 'image', userId: payload.userId,
@@ -34,6 +36,8 @@ test("backend worker exposes desktop capture RPC without a frontend capture brid
         child.send({ type: "response", requestId: message.requestId, result: [{ id: "device", name: "Native" }] });
       } else if (message.type === "desktop_capture_request") {
         child.send({ type: "response", requestId: message.requestId, result: asset });
+      } else if (message.type === "desktop_capture_approval_status") {
+        child.send({ type: "response", requestId: message.requestId, result: { deviceId: 'device', kind: 'image', approval: 'remembered', source: 'ready', checkedAt: Date.now() } });
       } else if (message.type === "desktop_capture_release") {
         child.send({ type: "response", requestId: message.requestId });
       }
@@ -61,6 +65,7 @@ test("backend worker exposes desktop capture RPC without a frontend capture brid
     worker.send({ type: "frontend_message", userId: "alice", payload: { userId: "alice" } });
     expect(await waitFor((message) => message.type === "frontend_message" && message.payload.captureTest)).toMatchObject({ payload: { captureTest: "done", asset } });
     expect(received.find((message) => message.type === "desktop_capture_devices")).toMatchObject({ userId: "alice" });
+    expect(received.find((message) => message.type === "desktop_capture_approval_status")).toMatchObject({ input: { deviceId: "device", connectionId: "connection", kind: "image", userId: "alice" } });
     expect(received.find((message) => message.type === "desktop_capture_request")).toMatchObject({ input: { deviceId: "device", connectionId: "connection", userId: "alice", kind: "image" } });
     expect(received.find((message) => message.type === "desktop_capture_release")).toMatchObject({ assetId: "asset", userId: "alice" });
   } finally {

@@ -181,7 +181,7 @@ export class WorkerHostContentApi {
   private enforceScopedUser(userId: string | null | undefined): void { this.context.enforceScopedUser(userId); }
   private postToWorker(message: { type: "response"; requestId: string; result?: unknown; error?: string }): void { this.context.postResponse(message); }
 
-  private toCharacterDTO(c: any): CharacterDTO {
+  private toCharacterDTO(c: any): CharacterDTO & { avatar_url: string | null } {
     return {
       id: c.id,
       name: c.name,
@@ -197,6 +197,7 @@ export class WorkerHostContentApi {
       alternate_greetings: Array.isArray(c.alternate_greetings) ? c.alternate_greetings : [],
       creator: c.creator || "",
       image_id: c.image_id || null,
+      avatar_url: c.image_id && c.user_id ? imagesSvc.getImage(c.user_id, c.image_id, { specificity: "sm" })?.url ?? null : null,
       world_book_ids: getCharacterWorldBookIds(c.extensions),
       extensions: c.extensions || {},
       created_at: c.created_at,
@@ -221,7 +222,7 @@ export class WorkerHostContentApi {
     return out;
   }
 
-  handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string): void {
+  handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string, search?: string): void {
     try {
       if (!this.hasPermission("characters")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
@@ -230,15 +231,20 @@ export class WorkerHostContentApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const result = charactersSvc.listCharacters(resolvedUserId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-      });
+      if (search !== undefined && (typeof search !== "string" || search.length > 200)) throw new Error("search must be a string of at most 200 characters");
+      const pagination = { limit: Math.min(Math.max(Math.trunc(limit || 50), 1), 200), offset: Math.max(Math.trunc(offset || 0), 0) };
+      const query = search?.trim();
+      const result = query
+        ? charactersSvc.listCharacterSummaries(resolvedUserId, pagination, { search: query })
+        : charactersSvc.listCharacters(resolvedUserId, pagination);
+      const data = query
+        ? result.data.map(c => charactersSvc.getCharacter(resolvedUserId, c.id)).filter(c => c !== null)
+        : result.data;
       this.postToWorker({
         type: "response",
         requestId,
         result: {
-          data: result.data.map((c) => this.toCharacterDTO(c)),
+          data: data.map((c) => this.toCharacterDTO(c)),
           total: result.total,
         },
       });
