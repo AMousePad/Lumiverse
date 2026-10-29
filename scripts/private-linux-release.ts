@@ -11,8 +11,9 @@ export const SOURCE_REPOSITORY = "prolix-oc/Lumiverse";
 export const BUILDER_REPOSITORY = "prolix-oc/Lumiverse-Builds";
 export const LINUX_TARGETS = { x64: "x86_64-unknown-linux-gnu", arm64: "aarch64-unknown-linux-gnu" } as const;
 export const WINDOWS_TARGETS = { x64: "x86_64-pc-windows-msvc", arm64: "aarch64-pc-windows-msvc" } as const;
-export type PrivateBuilder = "linux" | "windows";
-export const PRIVATE_BUILDERS = ["linux", "windows"] as const;
+export const MACOS_TARGET = "x86_64-apple-darwin";
+export type PrivateBuilder = "linux" | "windows" | "macos";
+export const PRIVATE_BUILDERS = ["linux", "windows", "macos"] as const;
 const workflowPath = (builder: PrivateBuilder) => `.github/workflows/${builder}-release.yml`;
 export function hostedReleasePlatforms(channel: string) {
   if (channel !== "nightly" && channel !== "stable") throw new Error("Unsupported release channel");
@@ -24,10 +25,10 @@ export function hostedReleasePlatforms(channel: string) {
     { os: "windows-2022", platform: "windows-x86_64", target: "x86_64-pc-windows-msvc", bundles: "nsis" },
     { os: "windows-11-arm", platform: "windows-aarch64", target: "aarch64-pc-windows-msvc", bundles: "nsis" },
   ];
-  return platforms.filter(p => !p.platform.startsWith("windows-") && (channel === "stable" || !p.platform.startsWith("linux-")));
+  return platforms.filter(p => p.platform !== "darwin-x86_64" && !p.platform.startsWith("windows-") && (channel === "stable" || !p.platform.startsWith("linux-")));
 }
 export interface LinuxReleaseRequest extends ReleaseBuild {
-  format: 1 | 2; repository: string; run: string; attempt: string; publicKey: string;
+  format: 1 | 2 | 3; repository: string; run: string; attempt: string; publicKey: string;
   builders?: PrivateBuilder[];
 }
 export const requestedBuilders = (request: LinuxReleaseRequest): PrivateBuilder[] => request.format === 1 ? ["linux"] : request.builders!;
@@ -40,10 +41,11 @@ interface Artifact { id: number; name: string; size_in_bytes: number; expired: b
 export class NoReleaseRequestError extends Error {}
 export function validateRequest(value: unknown): LinuxReleaseRequest {
   const request = value as LinuxReleaseRequest;
-  if (!request || ![1, 2].includes(request.format) || request.repository !== SOURCE_REPOSITORY
+  if (!request || ![1, 2, 3].includes(request.format) || request.repository !== SOURCE_REPOSITORY
     || !["nightly", "stable"].includes(request.channel)
     || (request.format === 1 && (request.channel !== "nightly" || request.builders !== undefined))
     || (request.format === 2 && JSON.stringify(request.builders) !== JSON.stringify(request.channel === "nightly" ? ["linux", "windows"] : ["windows"]))
+    || (request.format === 3 && JSON.stringify(request.builders) !== JSON.stringify(request.channel === "nightly" ? ["linux", "windows", "macos"] : ["windows", "macos"]))
     || !/^[1-9]\d*$/.test(request.run) || !/^[1-9]\d*$/.test(request.attempt)
     || (request.channel === "nightly"
       ? !/^\d+\.\d+\.\d+-nightly\.\d{8}\.[1-9]\d*$/.test(request.version) || request.version.split(".").at(-1) !== request.run
@@ -64,7 +66,7 @@ export function validateParent(run: Run, request: LinuxReleaseRequest) {
     throw new Error("Release request does not belong to a trusted desktop workflow run");
   }
 }
-export const builderRunName = (request: LinuxReleaseRequest, builder: PrivateBuilder = "linux") => `${builder === "linux" ? "Linux" : "Windows"} release ${request.run}.${request.attempt}`;
+export const builderRunName = (request: LinuxReleaseRequest, builder: PrivateBuilder = "linux") => `${{ linux: "Linux", windows: "Windows", macos: "macOS" }[builder]} release ${request.run}.${request.attempt}`;
 export const outputArtifactName = (request: LinuxReleaseRequest, builder: PrivateBuilder = "linux") => `${builder}-release-${request.run}-${request.attempt}`;
 export const qualificationArtifactName = (request: LinuxReleaseRequest) => `windows-qualification-${request.run}-${request.attempt}`;
 export class BridgeAPI {
@@ -236,9 +238,52 @@ export function verifyWindowsQualification(file: string, request: LinuxReleaseRe
     || qualification.serverSha256 !== payload.serverSha256 || qualification.installerSha256 !== payload.installerSha256
     || qualification.serverSmokePassed !== true) throw new Error("Native Windows ARM64 qualification mismatch");
 }
+export function verifyMacOSPayload(root: string, request: LinuxReleaseRequest, builder: PrivateRunIdentity) {
+  const directory = join(root, "x64");
+  const metadata = JSON.parse(readFileSync(join(directory, "release.json"), "utf8"));
+  verifyProvenance(metadata, request, "macOS");
+  if (metadata.arch !== "x64" || metadata.target !== MACOS_TARGET || metadata.builderRun !== builder.run
+    || !/^[1-9]\d*$/.test(metadata.builderAttempt) || Number(metadata.builderAttempt) > Number(builder.attempt)) {
+    throw new Error("macOS artifact build identity mismatch");
+  }
+  const build = JSON.parse(readFileSync(join(directory, "build.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(join(directory, "server-manifest.json"), "utf8"));
+  if (build.source !== request.sha || build.version !== request.version || build.architecture !== "x64"
+    || build.target !== MACOS_TARGET || build.bunVersion !== "1.4.4" || build.signed !== false
+    || build.serverSmokePassed !== true || manifest.platform !== "darwin" || manifest.arch !== "x64"
+    || manifest.bunVersion !== "1.4.4" || !/^[a-f0-9]{64}$/.test(manifest.sha256) || build.serverSha256 !== manifest.sha256) {
+    throw new Error("macOS server provenance mismatch");
+  }
+  const checked = (name: string, expected: string) => {
+    const path = join(directory, name);
+    if (!lstatSync(path).isFile()) throw new Error(`macOS ${name} must be a regular file`);
+    const bytes = readFileSync(path);
+    if (!/^[a-f0-9]{64}$/.test(expected) || createHash("sha256").update(bytes).digest("hex") !== expected) throw new Error(`macOS ${name} checksum mismatch`);
+    return { path, bytes };
+  };
+  const server = checked("lumiverse-server-darwin-x64", manifest.sha256).bytes;
+  if (server.length < 32 || server.readUInt32LE(0) !== 0xfeedfacf || server.readUInt32LE(4) !== 0x01000007
+    || server.readUInt32LE(12) !== 2) throw new Error("macOS server is not an Intel Mach-O executable");
+  const archive = checked("Lumiverse.app.tar.gz", build.archiveSha256).path;
+  const dmg = checked("Lumiverse.dmg", build.dmgSha256).path;
+  const native = join(directory, "lancedb");
+  for (const name of ["lancedb.darwin-x64.node", "manifest.json", "LICENSE"]) {
+    if (!lstatSync(join(native, name)).isFile()) throw new Error("Native LanceDB handoff must contain regular files");
+  }
+  return { archive, dmg, native };
+}
+
+// The source checkout owns its own LanceDB policy (main and staging can differ).
+// Validate it in a child without credentials before accepting a private handoff.
+export function verifyMacOSNative(source: string, directory: string) {
+  const environment = Object.fromEntries(["PATH", "SystemRoot", "WINDIR", "PATHEXT", "COMSPEC", "TEMP", "TMP"].flatMap(key => process.env[key] ? [[key, process.env[key]!]] : []));
+  const code = 'import {readIntelLanceDbArtifact} from "./scripts/lancedb-macos-native.ts"; import {readFileSync} from "node:fs"; const pkg=JSON.parse(readFileSync("package.json","utf8")); readIntelLanceDbArtifact(process.argv.at(-1),pkg.dependencies["@lancedb/lancedb"]);';
+  const result = Bun.spawnSync([process.execPath, "--no-env-file", "-e", code, directory], { cwd: source, env: environment, stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error("Private macOS LanceDB handoff failed the source build policy");
+}
 export async function resolvePrivateBuilds(api: BridgeAPI, request: LinuxReleaseRequest) {
   const results = await Promise.all(requestedBuilders(request).map(async builder => ({ builder, result: await resolveBuilderRun(api, request, builder) })));
-  const values: Record<string, string> = { ready: results.every(({ result }) => result.ready === "true") ? "true" : "false", linux_ready: "false", windows_ready: "false" };
+  const values: Record<string, string> = { ready: results.every(({ result }) => result.ready === "true") ? "true" : "false", linux_ready: "false", windows_ready: "false", macos_ready: "false" };
   for (const { builder, result } of results) {
     values[`${builder}_ready`] = result.ready;
     if (result.builder_run) values[`${builder}_run`] = result.builder_run;
@@ -253,11 +298,11 @@ async function main() {
   if (mode === "matrix") {
     output({ platforms: JSON.stringify(hostedReleasePlatforms(process.env.DESKTOP_CHANNEL!)) });
   } else if (mode === "request") {
-    const request = validateRequest({ format: 2, repository: process.env.GITHUB_REPOSITORY,
+    const request = validateRequest({ format: 3, repository: process.env.GITHUB_REPOSITORY,
       run: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT,
       channel: process.env.DESKTOP_CHANNEL, version: process.env.DESKTOP_VERSION, tag: process.env.DESKTOP_TAG,
       sha: process.env.DESKTOP_SHA, fingerprint: process.env.DESKTOP_SOURCE, publicKey: process.env.LUMIVERSE_UPDATER_PUBLIC_KEY?.trim(),
-      builders: process.env.DESKTOP_CHANNEL === "nightly" ? ["linux", "windows"] : ["windows"] });
+      builders: process.env.DESKTOP_CHANNEL === "nightly" ? ["linux", "windows", "macos"] : ["windows", "macos"] });
     writeFileSync(requestFile, JSON.stringify(request, null, 2) + "\n");
   } else if (mode === "dispatch") {
     const builder = process.env.PRIVATE_BUILDER as PrivateBuilder;
@@ -283,7 +328,8 @@ async function main() {
     }
     writeFileSync(requestFile, JSON.stringify(request, null, 2) + "\n");
     output({ source: request.sha, artifact: outputArtifactName(request), linux_artifact: outputArtifactName(request),
-      windows_artifact: outputArtifactName(request, "windows"), windows_qualification: qualificationArtifactName(request), public_key: request.publicKey });
+      windows_artifact: outputArtifactName(request, "windows"), windows_qualification: qualificationArtifactName(request),
+      macos_artifact: outputArtifactName(request, "macos"), public_key: request.publicKey });
     if (mode === "resolve") {
       if (request.publicKey !== process.env.LUMIVERSE_UPDATER_PUBLIC_KEY?.trim()) throw new Error("Release public key has changed");
       const release = await new ReleaseAPI(SOURCE_REPOSITORY, process.env.GITHUB_TOKEN!).release(request.tag);
@@ -304,7 +350,17 @@ async function main() {
     verifySource(source, request);
     if (mode === "verify-source") return;
     const files: Array<{ file: string; target: string; folder: string }> = [];
+    let macosNative: string | undefined;
     for (const builder of requestedBuilders(request)) {
+      if (builder === "macos") {
+        const identity = { run: process.env.PRIVATE_MACOS_RUN!, attempt: process.env.PRIVATE_MACOS_ATTEMPT! };
+        if (!/^[1-9]\d*$/.test(identity.run) || !/^[1-9]\d*$/.test(identity.attempt)) throw new Error("Missing private macOS build identity");
+        const payload = verifyMacOSPayload(resolve(process.env.MACOS_ARTIFACT_DIRECTORY || "macos-artifacts"), request, identity);
+        verifyMacOSNative(source, payload.native);
+        files.push({ file: payload.archive, target: MACOS_TARGET, folder: "macos" }, { file: payload.dmg, target: MACOS_TARGET, folder: "dmg" });
+        macosNative = payload.native;
+        continue;
+      }
       for (const arch of ["x64", "arm64"] as const) {
         if (builder === "linux") {
           files.push({ file: verifyPayload(resolve(process.env.LINUX_ARTIFACT_DIRECTORY || "linux-artifacts"), request, arch), target: LINUX_TARGETS[arch], folder: "appimage" });
@@ -321,6 +377,11 @@ async function main() {
     for (const { file, target, folder } of files) {
       const destination = join(source, "desktop/src-tauri/target", target, "release/bundle", folder);
       mkdirSync(destination, { recursive: true }); copyFileSync(file, join(destination, basename(file)));
+    }
+    if (macosNative) {
+      const destination = join(source, "dist/native/lancedb-darwin-x64");
+      mkdirSync(destination, { recursive: true });
+      for (const name of ["lancedb.darwin-x64.node", "manifest.json", "LICENSE"]) copyFileSync(join(macosNative, name), join(destination, name));
     }
     if (process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV,
       Object.entries({ DESKTOP_CHANNEL: request.channel, DESKTOP_VERSION: request.version, DESKTOP_TAG: request.tag, DESKTOP_SHA: request.sha, DESKTOP_SOURCE: request.fingerprint }).map(([k, v]) => `${k}=${v}\n`).join(""));
@@ -344,7 +405,7 @@ async function main() {
   } else if (mode === "notify") {
     const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, "utf8"));
     const run = event.workflow_run as Run;
-    const match = /^(Linux|Windows) release ([1-9]\d*)\.([1-9]\d*)$/.exec(run.display_title);
+    const match = /^(Linux|Windows|macOS) release ([1-9]\d*)\.([1-9]\d*)$/.exec(run.display_title);
     const builder = match?.[1].toLowerCase() as PrivateBuilder;
     if (!match || run.event !== "workflow_dispatch" || run.head_branch !== "main" || run.path !== workflowPath(builder)
       || run.repository.full_name !== BUILDER_REPOSITORY || run.head_repository.full_name !== BUILDER_REPOSITORY) throw new Error("Invalid completed build identity");
