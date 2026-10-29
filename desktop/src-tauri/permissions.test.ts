@@ -572,7 +572,7 @@ describe("native capture boundary", () => {
     expect(native).toContain("SetHardwareAccelerationEnabled(true)");
     expect(readSource("capture/mod.rs")).toContain("Windows may fall back to software H.264.");
     expect(native).toContain("profile.SetAudio(None::<&AudioEncodingProperties>)");
-    expect(native).toContain("output.SetBitrate(4_000_000)");
+    expect(native).toContain("output.SetBitrate(8_000_000)");
     expect(native).toContain("MediaStreamSample::CreateFromDirect3D11Surface");
     expect(native).toContain("playback.AudioTracks()?.Size()? != 0");
     expect(native).toContain("session.NaturalVideoWidth()? != self.width");
