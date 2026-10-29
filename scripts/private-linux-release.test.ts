@@ -275,13 +275,17 @@ function macOSPayload(macRequest: LinuxReleaseRequest = { ...desktopRequest, for
   nativeBytes.writeUInt32LE(3, 8); nativeBytes.writeUInt32LE(6, 12); nativeBytes.writeUInt32LE(1, 16);
   nativeBytes.writeUInt32LE(0x32, 32); nativeBytes.writeUInt32LE(24, 36); nativeBytes.writeUInt32LE(1, 40); nativeBytes.writeUInt32LE(13 << 16, 44);
   const hash = (data: Uint8Array | string) => createHash("sha256").update(data).digest("hex");
-  writeFileSync(join(directory, "lumiverse-server-darwin-x64"), server);
-  writeFileSync(join(directory, "Lumiverse.app.tar.gz"), "application archive");
+  const app = join(root, "Lumiverse Desktop.app/Contents/MacOS"); mkdirSync(app, { recursive: true });
+  writeFileSync(join(app, "lumiverse-server"), server);
+  const archive = join(directory, "Lumiverse.app.tar.gz");
+  const tar = Bun.spawnSync(["tar", "-czf", archive, "Lumiverse Desktop.app"], { cwd: root, stderr: "pipe" });
+  if (tar.exitCode !== 0) throw new Error(tar.stderr.toString());
   writeFileSync(join(directory, "Lumiverse.dmg"), "installer");
   writeFileSync(join(directory, "release.json"), JSON.stringify({ ...macRequest, arch: "x64", target: MACOS_TARGET, builderRun: identity.run, builderAttempt: identity.attempt }));
   writeFileSync(join(directory, "server-manifest.json"), JSON.stringify({ platform: "darwin", arch: "x64", bunVersion: "1.4.4", sha256: hash(server) }));
   writeFileSync(join(directory, "build.json"), JSON.stringify({ source: macRequest.sha, version: macRequest.version, architecture: "x64", target: MACOS_TARGET,
-    bunVersion: "1.4.4", signed: false, serverSmokePassed: true, serverSha256: hash(server), archiveSha256: hash("application archive"), dmgSha256: hash("installer") }));
+    bunVersion: "1.4.4", signed: false, serverSmokePassed: true, serverSha256: hash(server), archiveSha256: hash(readFileSync(archive)), dmgSha256: hash("installer"),
+    applicationName: "Lumiverse Desktop.app", bundledServerSha256: hash(server), nativeSha256: hash(nativeBytes), nativePublished: false }));
   writeFileSync(join(native, "lancedb.darwin-x64.node"), nativeBytes);
   writeFileSync(join(native, "LICENSE"), "license");
   writeFileSync(join(native, "manifest.json"), JSON.stringify({ ...INTEL_LANCEDB, format: 1, buildId: intelLanceDbBuildId(), sha256: hash(nativeBytes) }));
@@ -298,6 +302,17 @@ test("macOS handoff binds native server, installer and updater bytes to the requ
   expect(() => verifyMacOSPayload(f.root, f.macRequest, identity)).toThrow("checksum");
   writeFileSync(join(f.native, "lancedb.darwin-x64.node"), "changed");
   expect(() => verifyMacOSNative(join(import.meta.dir, ".."), f.native)).toThrow("source build policy");
+});
+test("macOS handoff verifies the server inside the app even when the archive checksum is updated", () => {
+  const f = macOSPayload();
+  writeFileSync(join(f.root, "Lumiverse Desktop.app/Contents/MacOS/lumiverse-server"), "modified server");
+  const archive = join(f.directory, "Lumiverse.app.tar.gz");
+  const tar = Bun.spawnSync(["tar", "-czf", archive, "Lumiverse Desktop.app"], { cwd: f.root, stderr: "pipe" });
+  if (tar.exitCode !== 0) throw new Error(tar.stderr.toString());
+  const buildFile = join(f.directory, "build.json"), build = JSON.parse(readFileSync(buildFile, "utf8"));
+  build.archiveSha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
+  writeFileSync(buildFile, JSON.stringify(build));
+  expect(() => verifyMacOSPayload(f.root, f.macRequest, identity)).toThrow("Bundled macOS server integrity");
 });
 test("main verifies staging using the immutable source policy without passing credentials or loading dotenv", async () => {
   const source = mkdtempSync(join(tmpdir(), "lumiverse-staging-policy-")); temporary.push(source);
@@ -359,9 +374,15 @@ test("version 3 stages Intel macOS only after all private payloads and native po
   expect(existsSync(join(source, "desktop/src-tauri/target"))).toBe(false);
   writeFileSync(binary, original);
   const result = stage(); expect(result.stderr.toString()).toBe(""); expect(result.exitCode).toBe(0);
-  expect(readFileSync(join(source, `desktop/src-tauri/target/${MACOS_TARGET}/release/bundle/macos/Lumiverse.app.tar.gz`), "utf8")).toBe("application archive");
+  expect(readFileSync(join(source, `desktop/src-tauri/target/${MACOS_TARGET}/release/bundle/macos/Lumiverse.app.tar.gz`))).toEqual(readFileSync(join(mac.directory, "Lumiverse.app.tar.gz")));
   expect(readFileSync(join(source, `desktop/src-tauri/target/${MACOS_TARGET}/release/bundle/dmg/Lumiverse.dmg`), "utf8")).toBe("installer");
   expect(readFileSync(join(source, "dist/native/lancedb-darwin-x64/lancedb.darwin-x64.node"))).toEqual(original);
+  const buildFile = join(mac.directory, "build.json"), build = JSON.parse(readFileSync(buildFile, "utf8"));
+  writeFileSync(buildFile, JSON.stringify({ ...build, nativePublished: true }));
+  rmSync(mac.native, { recursive: true });
+  expect(stage().exitCode).toBe(0);
+  writeFileSync(join(source, "dist/native/lancedb-darwin-x64/lancedb.darwin-x64.node"), "corrupted");
+  expect(stage().exitCode).toBe(1);
 }, 60_000);
 
 test("the release CLI creates stable Windows requests and stages nothing until native qualification passes", () => {

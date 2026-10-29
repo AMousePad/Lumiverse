@@ -93,6 +93,10 @@ jobs:
           ref: ${{ steps.resolve.outputs.source }}
           path: source
           persist-credentials: false
+      - name: Reuse the published Intel LanceDB dependency when available
+        if: steps.resolve.outputs.ready == 'true' && steps.resolve.outputs.macos_ready == 'true'
+        working-directory: source
+        run: bun --no-env-file scripts/lancedb-macos-release.ts download --allow-missing
       - name: Verify checksums, source, version, architecture and runtime provenance
         if: steps.resolve.outputs.ready == 'true'
         env:
