@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { zipSync, strToU8 } from "fflate";
 import { ReleaseAPI, sourceFingerprint as controllerFingerprint } from "./desktop-release";
-import { BridgeAPI, BUILDER_REPOSITORY, SOURCE_REPOSITORY, LINUX_TARGETS, WINDOWS_TARGETS, NoReleaseRequestError, builderRunName, cleanupPublishedBuildArtifacts, hostedReleasePlatforms, readRequest, requestedBuilders, resolveBuilderRun, resolvePrivateBuilds, validateParent, validateRequest, verifyPayload, verifySource, verifyWindowsPayload, verifyWindowsQualification, type LinuxReleaseRequest } from "./private-linux-release";
+import { BridgeAPI, BUILDER_REPOSITORY, SOURCE_REPOSITORY, LINUX_TARGETS, WINDOWS_TARGETS, MACOS_TARGET, NoReleaseRequestError, builderRunName, cleanupPublishedBuildArtifacts, hostedReleasePlatforms, readRequest, requestedBuilders, resolveBuilderRun, resolvePrivateBuilds, validateParent, validateRequest, verifyMacOSPayload, verifyMacOSNative, verifyPayload, verifySource, verifyWindowsPayload, verifyWindowsQualification, type LinuxReleaseRequest } from "./private-linux-release";
+import { INTEL_LANCEDB, intelLanceDbBuildId } from "./lancedb-macos-native";
 
 const request: LinuxReleaseRequest = { format: 1, repository: SOURCE_REPOSITORY, channel: "nightly", run: "1234", attempt: "2",
   version: "0.3.2-nightly.20261016.1234", tag: "desktop-v0.3.2-nightly.20261016.1234",
@@ -64,9 +65,9 @@ test.each([
     .rejects.toThrow("until the matching signed release");
 });
 
-test("Windows releases use the private VM in both channels; stable Linux stays hosted", () => {
-  expect(hostedReleasePlatforms("nightly").map(p => p.platform)).toEqual(["darwin-aarch64", "darwin-x86_64"]);
-  expect(hostedReleasePlatforms("stable").map(p => p.platform)).toEqual(["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "linux-aarch64"]);
+test("Intel macOS and Windows releases use private VMs; stable Linux stays hosted", () => {
+  expect(hostedReleasePlatforms("nightly").map(p => p.platform)).toEqual(["darwin-aarch64"]);
+  expect(hostedReleasePlatforms("stable").map(p => p.platform)).toEqual(["darwin-aarch64", "linux-x86_64", "linux-aarch64"]);
   expect(() => hostedReleasePlatforms("pull_request")).toThrow();
 });
 test("release requests reject mismatched versions, identities, keys and shell input", () => {
@@ -148,6 +149,16 @@ test("payload verification rejects symlinks and checksum paths outside the artif
 
 const desktopRequest: LinuxReleaseRequest = { ...request, format: 2, builders: ["linux", "windows"] };
 const identity = { run: "99", attempt: "3" };
+test("version 3 requests include macOS while older in-flight requests remain valid", () => {
+  const nightly: LinuxReleaseRequest = { ...request, format: 3, builders: ["linux", "windows", "macos"] };
+  const stable: LinuxReleaseRequest = { ...nightly, channel: "stable", version: "0.3.1", tag: "desktop-v0.3.1", builders: ["windows", "macos"] };
+  expect(validateRequest(nightly)).toEqual(nightly);
+  expect(validateRequest(stable)).toEqual(stable);
+  expect(validateRequest(desktopRequest)).toEqual(desktopRequest);
+  expect(() => validateRequest({ ...nightly, builders: ["linux", "windows"] })).toThrow();
+  expect(() => validateRequest({ ...stable, builders: ["macos"] })).toThrow();
+  expect(builderRunName(nightly, "macos")).toBe("macOS release 1234.2");
+});
 test("new requests specify all private builders and support trusted stable releases", () => {
   expect(requestedBuilders(validateRequest(desktopRequest))).toEqual(["linux", "windows"]);
   expect(requestedBuilders(request)).toEqual(["linux"]);
@@ -181,6 +192,23 @@ test("the release joins both builders in either order and fails when either buil
   await expect(resolvePrivateBuilds(api, desktopRequest)).rejects.toThrow("Private windows build");
   runs.windows.conclusion = "success";
   expect(await resolvePrivateBuilds(api, { ...desktopRequest, channel: "stable", builders: ["windows"] })).toMatchObject({ ready: "true", linux_ready: "false", windows_ready: "true" });
+});
+test("version 3 completion waits for the correct Intel macOS build and rejects a failed run", async () => {
+  const requested: LinuxReleaseRequest = { ...desktopRequest, format: 3, builders: ["linux", "windows", "macos"] };
+  const runs = Object.fromEntries((["linux", "windows", "macos"] as const).map((builder, index) => [builder, {
+    ...run, id: 100 + index, run_attempt: 2, display_title: builderRunName(requested, builder), status: "completed", conclusion: "success",
+    head_branch: "main", path: `.github/workflows/${builder}-release.yml`, repository: { full_name: BUILDER_REPOSITORY }, head_repository: { full_name: BUILDER_REPOSITORY },
+  }]));
+  const api = new BridgeAPI("test-token", BUILDER_REPOSITORY, (async (input: RequestInfo | URL) => {
+    const match = /workflows\/(linux|windows|macos)-release\.yml/.exec(String(input));
+    return Response.json({ workflow_runs: [runs[match![1]!]] });
+  }) as typeof fetch);
+  runs.macos.status = "in_progress";
+  expect((await resolvePrivateBuilds(api, requested)).ready).toBe("false");
+  runs.macos.status = "completed";
+  expect(await resolvePrivateBuilds(api, requested)).toMatchObject({ ready: "true", macos_ready: "true", macos_run: "102", macos_attempt: "2" });
+  runs.macos.conclusion = "failure";
+  await expect(resolvePrivateBuilds(api, requested)).rejects.toThrow("Private macos build");
 });
 function windowsPayload(arch: "x64" | "arm64" = "arm64", releaseRequest = desktopRequest, root?: string) {
   root ||= mkdtempSync(join(tmpdir(), "lumiverse-windows-release-"));
@@ -238,6 +266,54 @@ test("Windows artifact downloads cannot substitute symlinks or checksum paths ou
     expect(() => verifyWindowsPayload(f.root, desktopRequest, "arm64", identity)).toThrow("regular file");
   }
 });
+
+function macOSPayload(macRequest: LinuxReleaseRequest = { ...desktopRequest, format: 3, builders: ["linux", "windows", "macos"] }) {
+  const root = mkdtempSync(join(tmpdir(), "lumiverse-macos-release-")); temporary.push(root);
+  const directory = join(root, "x64"), native = join(directory, "lancedb"); mkdirSync(native, { recursive: true });
+  const server = Buffer.alloc(32); server.writeUInt32LE(0xfeedfacf, 0); server.writeUInt32LE(0x01000007, 4); server.writeUInt32LE(2, 12);
+  const nativeBytes = Buffer.alloc(56); nativeBytes.writeUInt32LE(0xfeedfacf, 0); nativeBytes.writeUInt32LE(0x01000007, 4);
+  nativeBytes.writeUInt32LE(3, 8); nativeBytes.writeUInt32LE(6, 12); nativeBytes.writeUInt32LE(1, 16);
+  nativeBytes.writeUInt32LE(0x32, 32); nativeBytes.writeUInt32LE(24, 36); nativeBytes.writeUInt32LE(1, 40); nativeBytes.writeUInt32LE(13 << 16, 44);
+  const hash = (data: Uint8Array | string) => createHash("sha256").update(data).digest("hex");
+  const app = join(root, "Lumiverse Desktop.app/Contents/MacOS"); mkdirSync(app, { recursive: true });
+  writeFileSync(join(app, "lumiverse-server"), server);
+  const archive = join(directory, "Lumiverse.app.tar.gz");
+  const tar = Bun.spawnSync(["tar", "-czf", archive, "Lumiverse Desktop.app"], { cwd: root, stderr: "pipe" });
+  if (tar.exitCode !== 0) throw new Error(tar.stderr.toString());
+  writeFileSync(join(directory, "Lumiverse.dmg"), "installer");
+  writeFileSync(join(directory, "release.json"), JSON.stringify({ ...macRequest, arch: "x64", target: MACOS_TARGET, builderRun: identity.run, builderAttempt: identity.attempt }));
+  writeFileSync(join(directory, "server-manifest.json"), JSON.stringify({ platform: "darwin", arch: "x64", bunVersion: "1.4.4", sha256: hash(server) }));
+  writeFileSync(join(directory, "build.json"), JSON.stringify({ source: macRequest.sha, version: macRequest.version, architecture: "x64", target: MACOS_TARGET,
+    bunVersion: "1.4.4", signed: false, serverSmokePassed: true, serverSha256: hash(server), archiveSha256: hash(readFileSync(archive)), dmgSha256: hash("installer"),
+    applicationName: "Lumiverse Desktop.app", bundledServerSha256: hash(server), nativeSha256: hash(nativeBytes), nativePublished: false }));
+  writeFileSync(join(native, "lancedb.darwin-x64.node"), nativeBytes);
+  writeFileSync(join(native, "LICENSE"), "license");
+  writeFileSync(join(native, "manifest.json"), JSON.stringify({ ...INTEL_LANCEDB, format: 1, buildId: intelLanceDbBuildId(), sha256: hash(nativeBytes) }));
+  return { root, directory, native, macRequest };
+}
+test("macOS handoff binds native server, installer and updater bytes to the requested run", () => {
+  const f = macOSPayload();
+  const payload = verifyMacOSPayload(f.root, f.macRequest, identity);
+  expect(payload.archive).toBe(join(f.directory, "Lumiverse.app.tar.gz"));
+  verifyMacOSNative(join(import.meta.dir, ".."), f.native);
+  expect(() => verifyMacOSPayload(f.root, { ...f.macRequest, sha: "d".repeat(40) }, identity)).toThrow("provenance");
+  expect(() => verifyMacOSPayload(f.root, f.macRequest, { ...identity, attempt: "2" })).toThrow("identity");
+  writeFileSync(payload.dmg, "changed");
+  expect(() => verifyMacOSPayload(f.root, f.macRequest, identity)).toThrow("checksum");
+  writeFileSync(join(f.native, "lancedb.darwin-x64.node"), "changed");
+  expect(() => verifyMacOSNative(join(import.meta.dir, ".."), f.native)).toThrow("source build policy");
+});
+test("macOS handoff verifies the server inside the app even when the archive checksum is updated", () => {
+  const f = macOSPayload();
+  writeFileSync(join(f.root, "Lumiverse Desktop.app/Contents/MacOS/lumiverse-server"), "modified server");
+  const archive = join(f.directory, "Lumiverse.app.tar.gz");
+  const tar = Bun.spawnSync(["tar", "-czf", archive, "Lumiverse Desktop.app"], { cwd: f.root, stderr: "pipe" });
+  if (tar.exitCode !== 0) throw new Error(tar.stderr.toString());
+  const buildFile = join(f.directory, "build.json"), build = JSON.parse(readFileSync(buildFile, "utf8"));
+  build.archiveSha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
+  writeFileSync(buildFile, JSON.stringify(build));
+  expect(() => verifyMacOSPayload(f.root, f.macRequest, identity)).toThrow("Bundled macOS server integrity");
+});
 test("main verifies staging using the immutable source policy without passing credentials or loading dotenv", async () => {
   const source = mkdtempSync(join(tmpdir(), "lumiverse-staging-policy-")); temporary.push(source);
   mkdirSync(join(source, "scripts"));
@@ -268,6 +344,47 @@ test("main verifies staging using the immutable source policy without passing cr
   }
 }, 60_000);
 
+test("version 3 stages Intel macOS only after all private payloads and native policy verify", () => {
+  const source = mkdtempSync(join(tmpdir(), "lumiverse-macos-stage-")); temporary.push(source);
+  mkdirSync(join(source, "scripts"));
+  writeFileSync(join(source, "scripts/desktop-release.ts"), `export function sourceFingerprint() { return "${request.fingerprint}"; }`);
+  writeFileSync(join(source, "scripts/lancedb-macos-native.ts"), readFileSync(join(import.meta.dir, "lancedb-macos-native.ts")));
+  writeFileSync(join(source, "package.json"), JSON.stringify({ dependencies: { "@lancedb/lancedb": INTEL_LANCEDB.version } }));
+  const git = (...args: string[]) => {
+    const child = Bun.spawnSync(["git", "-c", "user.name=Release Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", ...args],
+      { cwd: source, env: { ...process.env, GIT_CONFIG_GLOBAL: join(source, "no-global-config"), GIT_CONFIG_NOSYSTEM: "1" }, stdout: "pipe", stderr: "pipe" });
+    if (child.exitCode) throw new Error(child.stderr.toString());
+    return child.stdout.toString().trim();
+  };
+  git("init"); git("add", "."); git("commit", "-m", "Immutable source fixture");
+  const stable: LinuxReleaseRequest = { ...desktopRequest, format: 3, channel: "stable", version: "0.3.1", tag: "desktop-v0.3.1",
+    sha: git("rev-parse", "HEAD"), builders: ["windows", "macos"] };
+  const requestFile = join(source, "request.json"); writeFileSync(requestFile, JSON.stringify(stable));
+  const x64 = windowsPayload("x64", stable), arm64 = windowsPayload("arm64", stable, x64.root), mac = macOSPayload(stable);
+  const qualification = join(source, "qualification.json");
+  writeFileSync(qualification, JSON.stringify({ ...stable, arch: "arm64", builderRun: identity.run, builderAttempt: identity.attempt,
+    qualificationAttempt: identity.attempt, installerSha256: arm64.installerSha256, serverSha256: arm64.serverSha256, serverSmokePassed: true }));
+  const env = { ...process.env, LINUX_RELEASE_REQUEST: requestFile, SOURCE_DIRECTORY: source, GITHUB_ENV: join(source, "release.env"),
+    PRIVATE_WINDOWS_RUN: identity.run, PRIVATE_WINDOWS_ATTEMPT: identity.attempt, WINDOWS_ARTIFACT_DIRECTORY: x64.root, WINDOWS_QUALIFICATION: qualification,
+    PRIVATE_MACOS_RUN: identity.run, PRIVATE_MACOS_ATTEMPT: identity.attempt, MACOS_ARTIFACT_DIRECTORY: mac.root };
+  const stage = () => Bun.spawnSync([process.execPath, "--no-env-file", join(import.meta.dir, "private-linux-release.ts"), "stage"], { cwd: source, env, stdout: "pipe", stderr: "pipe" });
+  const binary = join(mac.native, "lancedb.darwin-x64.node");
+  const original = readFileSync(binary); writeFileSync(binary, "corrupted");
+  expect(stage().exitCode).toBe(1);
+  expect(existsSync(join(source, "desktop/src-tauri/target"))).toBe(false);
+  writeFileSync(binary, original);
+  const result = stage(); expect(result.stderr.toString()).toBe(""); expect(result.exitCode).toBe(0);
+  expect(readFileSync(join(source, `desktop/src-tauri/target/${MACOS_TARGET}/release/bundle/macos/Lumiverse.app.tar.gz`))).toEqual(readFileSync(join(mac.directory, "Lumiverse.app.tar.gz")));
+  expect(readFileSync(join(source, `desktop/src-tauri/target/${MACOS_TARGET}/release/bundle/dmg/Lumiverse.dmg`), "utf8")).toBe("installer");
+  expect(readFileSync(join(source, "dist/native/lancedb-darwin-x64/lancedb.darwin-x64.node"))).toEqual(original);
+  const buildFile = join(mac.directory, "build.json"), build = JSON.parse(readFileSync(buildFile, "utf8"));
+  writeFileSync(buildFile, JSON.stringify({ ...build, nativePublished: true }));
+  rmSync(mac.native, { recursive: true });
+  expect(stage().exitCode).toBe(0);
+  writeFileSync(join(source, "dist/native/lancedb-darwin-x64/lancedb.darwin-x64.node"), "corrupted");
+  expect(stage().exitCode).toBe(1);
+}, 60_000);
+
 test("the release CLI creates stable Windows requests and stages nothing until native qualification passes", () => {
   const source = mkdtempSync(join(tmpdir(), "lumiverse-windows-stage-")); temporary.push(source);
   mkdirSync(join(source, "scripts"));
@@ -287,8 +404,11 @@ test("the release CLI creates stable Windows requests and stages nothing until n
     GITHUB_ENV: join(source, "release.env"), WINDOWS_ARTIFACT_DIRECTORY: "", WINDOWS_QUALIFICATION: join(source, "qualification.json") };
   const cli = (mode: string) => Bun.spawnSync([process.execPath, "--no-env-file", join(import.meta.dir, "private-linux-release.ts"), mode], { cwd: source, env, stdout: "pipe", stderr: "pipe" });
   expect(cli("request").exitCode).toBe(0);
-  const stable = validateRequest(JSON.parse(readFileSync(requestFile, "utf8")));
-  expect(stable).toMatchObject({ format: 2, channel: "stable", builders: ["windows"] });
+  const newStable = validateRequest(JSON.parse(readFileSync(requestFile, "utf8")));
+  expect(newStable).toMatchObject({ format: 3, channel: "stable", builders: ["windows", "macos"] });
+  // Also preserve completion of in-flight version 2 requests.
+  const stable: LinuxReleaseRequest = { ...newStable, format: 2, builders: ["windows"] };
+  writeFileSync(requestFile, JSON.stringify(stable));
   const x64 = windowsPayload("x64", stable), arm64 = windowsPayload("arm64", stable, x64.root);
   env.WINDOWS_ARTIFACT_DIRECTORY = x64.root;
   const refused = cli("stage"); expect(refused.exitCode).toBe(1);

@@ -77,6 +77,15 @@ jobs:
           name: ${{ steps.resolve.outputs.windows_qualification }}
           github-token: ${{ secrets.LINUX_RELEASE_BRIDGE_TOKEN }}
           path: windows-qualification
+      - name: Download the successful private Intel macOS build
+        if: steps.resolve.outputs.ready == 'true' && steps.resolve.outputs.macos_ready == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          repository: prolix-oc/Lumiverse-Builds
+          run-id: ${{ steps.resolve.outputs.macos_run }}
+          name: ${{ steps.resolve.outputs.macos_artifact }}
+          github-token: ${{ secrets.LINUX_RELEASE_BRIDGE_TOKEN }}
+          path: macos-artifacts
       - name: Check out the exact release source
         if: steps.resolve.outputs.ready == 'true'
         uses: actions/checkout@v7
@@ -84,12 +93,26 @@ jobs:
           ref: ${{ steps.resolve.outputs.source }}
           path: source
           persist-credentials: false
+      - name: Reuse the published Intel LanceDB dependency when available
+        if: steps.resolve.outputs.ready == 'true' && steps.resolve.outputs.macos_ready == 'true'
+        working-directory: source
+        run: bun --no-env-file scripts/lancedb-macos-release.ts download --allow-missing
       - name: Verify checksums, source, version, architecture and runtime provenance
         if: steps.resolve.outputs.ready == 'true'
         env:
           PRIVATE_WINDOWS_RUN: ${{ steps.resolve.outputs.windows_run }}
           PRIVATE_WINDOWS_ATTEMPT: ${{ steps.resolve.outputs.windows_attempt }}
+          PRIVATE_MACOS_RUN: ${{ steps.resolve.outputs.macos_run }}
+          PRIVATE_MACOS_ATTEMPT: ${{ steps.resolve.outputs.macos_attempt }}
         run: bun scripts/private-linux-release.ts stage
+      - name: Publish or reuse the verified Intel LanceDB dependency
+        if: steps.resolve.outputs.ready == 'true' && steps.resolve.outputs.macos_ready == 'true'
+        run: >-
+          bun --no-env-file -e 'import {publishIntelLanceDb} from "./source/scripts/lancedb-macos-release.ts";
+          import {ReleaseAPI} from "./source/scripts/desktop-release.ts";
+          await publishIntelLanceDb(new ReleaseAPI("prolix-oc/Lumiverse",process.env.GITHUB_TOKEN),
+          "source/dist/native/lancedb-darwin-x64",process.env.DESKTOP_SHA,
+          "Native checks ran on the private Intel macOS builder.");'
       - name: Install signing CLI dependencies
         if: steps.resolve.outputs.ready == 'true'
         run: bun install --cwd source/desktop --frozen-lockfile
@@ -103,11 +126,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           LINUX_READY: ${{ steps.resolve.outputs.linux_ready }}
           WINDOWS_READY: ${{ steps.resolve.outputs.windows_ready }}
+          MACOS_READY: ${{ steps.resolve.outputs.macos_ready }}
         run: |
           set -euo pipefail
           targets=()
           if [[ "$LINUX_READY" == true ]]; then targets+=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu); fi
           if [[ "$WINDOWS_READY" == true ]]; then targets+=(x86_64-pc-windows-msvc aarch64-pc-windows-msvc); fi
+          if [[ "$MACOS_READY" == true ]]; then targets+=(x86_64-apple-darwin); fi
           for target in "${targets[@]}"; do
             bundle="source/desktop/src-tauri/target/$target/release/bundle"
             case "$target" in
@@ -115,6 +140,7 @@ jobs:
               aarch64-unknown-linux-gnu) platform=linux-aarch64; folder=appimage; pattern='*.AppImage' ;;
               x86_64-pc-windows-msvc) platform=windows-x86_64; folder=nsis; pattern='*-setup.exe' ;;
               aarch64-pc-windows-msvc) platform=windows-aarch64; folder=nsis; pattern='*-setup.exe' ;;
+              x86_64-apple-darwin) platform=darwin-x86_64; folder=macos; pattern='*.app.tar.gz' ;;
               *) exit 1 ;;
             esac
             mapfile -d '' payloads < <(find "$bundle/$folder" -maxdepth 1 -type f -name "$pattern" -print0)

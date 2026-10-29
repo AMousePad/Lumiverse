@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { closeDatabase, initDatabase } from "../db/connection";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
 import { embeddingCache, computeCacheKey } from "./embedding-cache";
@@ -195,6 +196,30 @@ describe("embedding connection profiles", () => {
     expect((await embedTextsWithConnection(USER, ["shared text"])).embeddings).toEqual([[0.25, 0.75]]);
     expect((await embedTextsWithConnection(USER, ["shared text"], { inputType: "query" })).embeddings).toEqual([[0.75, 0.25]]);
     expect(inputTypes).toEqual(["passage", "query", "passage", "query"]);
+  });
+
+  test("batch embeddings recover from disk while preserving connection-scoped caches", async () => {
+    initDatabase(":memory:");
+    try {
+      configureNim("nvidia/nemotron-3.5-embed-1b");
+      const requests: string[][] = [];
+      spies.push(spyOn(globalThis, "fetch").mockImplementation(asFetchStub(async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        requests.push(body.input);
+        return Response.json({ data: body.input.map((text: string) => ({ embedding: [text.length, 0.5] })) });
+      })));
+
+      expect(await cachedEmbedTexts(USER, ["alpha", "beta"])).toEqual([[5, 0.5], [4, 0.5]]);
+      embeddingCache.clearMemory();
+      expect(await cachedEmbedTexts(USER, ["beta", "gamma"])).toEqual([[4, 0.5], [5, 0.5]]);
+      expect((await embedTextsWithConnection(USER, ["alpha", "beta"])).embeddings).toEqual([[5, 0.5], [4, 0.5]]);
+      embeddingCache.clearMemory();
+      expect((await embedTextsWithConnection(USER, ["beta", "gamma"])).embeddings).toEqual([[4, 0.5], [5, 0.5]]);
+      expect(requests).toEqual([["alpha", "beta"], ["gamma"], ["alpha", "beta"], ["gamma"]]);
+    } finally {
+      embeddingCache.clear();
+      closeDatabase();
+    }
   });
 
   test("OpenAI-compatible connections do not receive NIM input_type based on the model name", async () => {

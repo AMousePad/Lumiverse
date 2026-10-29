@@ -544,8 +544,12 @@ export default function OperatorPanel() {
   const vectorConfigManagedByEnv = vectorConfig?.managedByEnv === true
   const vectorMilvusCandidateMultiplier = vectorConfig?.milvusHybridSearch?.candidateMultiplier ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER
   const vectorMilvusCandidateCap = vectorConfig?.milvusHybridSearch?.candidateCap ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP
+  const vectorMilvusFlushPolicyChanged = vectorConfig?.provider === 'milvus'
+    && vectorDraft.provider === 'milvus'
+    && vectorDraft.milvusFlushPolicy !== (vectorConfig.milvus?.flushPolicy ?? 'per_write')
   const vectorRuntimeTuningChanged = !!vectorConfig && (
     vectorDraft.tuningProfile !== (vectorConfig.tuningProfile ?? 'balanced')
+    || vectorMilvusFlushPolicyChanged
     || (
       vectorDraft.provider === 'milvus'
       && (
@@ -858,6 +862,7 @@ export default function OperatorPanel() {
     try {
       const result = await embeddingsApi.updateVectorStoreConfig({
         tuningProfile: vectorDraft.tuningProfile,
+        ...(vectorMilvusFlushPolicyChanged ? { milvusFlushPolicy: vectorDraft.milvusFlushPolicy } : {}),
         ...(vectorDraft.provider === 'milvus'
           ? {
               milvusHybridSearch: {
@@ -868,8 +873,19 @@ export default function OperatorPanel() {
           : {}),
       })
       setVectorConfig(result)
-      vectorDraftDirty.current = false
-      setVectorDraft(vectorDraftFromConfig(result))
+      const savedDraft = vectorDraftFromConfig(result)
+      const nextDraft = {
+        ...vectorDraft,
+        tuningProfile: savedDraft.tuningProfile,
+        milvusHybridCandidateMultiplier: savedDraft.milvusHybridCandidateMultiplier,
+        milvusHybridCandidateCap: savedDraft.milvusHybridCandidateCap,
+        ...(result.provider === 'milvus' && vectorDraft.provider === 'milvus'
+          ? { milvusFlushPolicy: savedDraft.milvusFlushPolicy }
+          : {}),
+      }
+      vectorDraftDirty.current = JSON.stringify(nextDraft) !== JSON.stringify(savedDraft)
+        || !!qdrantApiKeyDraft || !!milvusPasswordDraft
+      setVectorDraft(nextDraft)
       await refreshVectorHealth()
       addToast({ type: 'success', message: 'Vector store runtime tuning saved.' })
     } catch (err) {
@@ -880,11 +896,11 @@ export default function OperatorPanel() {
     }
   }, [
     addToast,
+    milvusPasswordDraft,
+    qdrantApiKeyDraft,
     refreshVectorHealth,
-    vectorDraft.milvusHybridCandidateCap,
-    vectorDraft.milvusHybridCandidateMultiplier,
-    vectorDraft.provider,
-    vectorDraft.tuningProfile,
+    vectorDraft,
+    vectorMilvusFlushPolicyChanged,
   ])
 
   const handleVectorOptimize = useCallback(async () => {
@@ -3154,7 +3170,7 @@ export default function OperatorPanel() {
                       <select
                         className={styles.fieldInput}
                         value={vectorDraft.milvusFlushPolicy}
-                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        disabled={!!vectorConfigBusy}
                         onChange={(e) => updateVectorDraft((prev) => ({ ...prev, milvusFlushPolicy: e.target.value as 'per_write' | 'manual' }))}
                       >
                         <option value="per_write">Flush after each write</option>

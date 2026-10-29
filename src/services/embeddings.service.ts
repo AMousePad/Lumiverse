@@ -2685,11 +2685,13 @@ export async function cachedEmbedTexts(
     const uncachedTexts = uncachedIndices.map((i) => texts[i]);
     const vectors = await requestEmbeddings(userId, uncachedTexts, { ...options, inputType });
     if (options?.signal?.aborted) throw resolveAbortError(options.signal);
+    const cacheEntries: Array<{ key: string; vector: number[] }> = [];
     for (let j = 0; j < uncachedIndices.length; j++) {
       const idx = uncachedIndices[j];
       results[idx] = vectors[j];
-      embeddingCache.set(computeCacheKey(texts[idx], cacheFingerprint), vectors[j]);
+      cacheEntries.push({ key: computeCacheKey(texts[idx], cacheFingerprint), vector: vectors[j] });
     }
+    embeddingCache.setMany(cacheEntries);
   }
 
   return results as number[][];
@@ -3094,7 +3096,7 @@ export async function embedTextsWithConnection(
     throw new Error("Embedding provider returned invalid vectors");
   }
   const result = embeddings as number[][];
-  for (const index of missing) embeddingCache.set(keys[index], result[index]);
+  embeddingCache.setMany(missing.map((index) => ({ key: keys[index], vector: result[index] })));
   return { embeddings: result, connection_id: profile.id, model: driver.model, dimensions };
 }
 

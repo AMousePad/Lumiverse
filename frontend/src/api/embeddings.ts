@@ -440,6 +440,7 @@ export interface UpdateVectorStoreConfigInput {
   tuningProfile?: VectorStoreTuningProfile
   qdrant?: Partial<QdrantConnectionConfig>
   milvus?: Partial<MilvusConnectionConfig>
+  milvusFlushPolicy?: MilvusConnectionConfig['flushPolicy']
   milvusHybridSearch?: Partial<MilvusHybridSearchConfig>
   qdrant_api_key?: string | null
   milvus_password?: string | null
