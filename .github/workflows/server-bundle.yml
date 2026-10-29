@@ -118,6 +118,23 @@ jobs:
           LINUX_RELEASE_BRIDGE_TOKEN: ${{ secrets.LINUX_RELEASE_BRIDGE_TOKEN }}
         run: bun scripts/private-linux-release.ts dispatch
 
+  macos:
+    name: Queue private Intel macOS builder
+    needs: prepare
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Dispatch without waiting for Intel macOS compilation
+        env:
+          PRIVATE_BUILDER: macos
+          LINUX_RELEASE_BRIDGE_TOKEN: ${{ secrets.LINUX_RELEASE_BRIDGE_TOKEN }}
+        run: bun scripts/private-linux-release.ts dispatch
+
   build:
     name: Bundled desktop (${{ matrix.platform }})
     needs: prepare

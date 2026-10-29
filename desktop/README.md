@@ -445,7 +445,7 @@ bun run build:linux-appimage --local --jobs 12 \
 This writes `<output-directory>/<build-id>/` and requires Docker access. The
 `build:linux-remote` command remains an alias for the same builder.
 
-### Private Windows and nightly Linux release builds
+### Private Windows, Intel macOS and nightly Linux release builds
 
 The public nightly workflow sends an immutable build request to the private
 `Lumiverse-Builds` repository. Its self-hosted Linux runner builds x64 and
@@ -464,6 +464,11 @@ architectures and returns checksums and provenance. A short hosted Windows
 ARM64 job runs the exact cross-built server on native ARM64 and records the
 server/installer hashes and private build identity. No signing keys reach the VM.
 
+Intel macOS releases use the private `lumiverse-macos-vm` runner. It validates
+and reuses the matching published LanceDB addon, or compiles and tests it if no
+matching build exists. It returns the ad-hoc-signed application, DMG, server,
+native addon and checksummed provenance for hosted publication and updater signing.
+
 The completed private run wakes the public completion workflow. GitHub-hosted
 jobs verify source, runtime provenance, native ARM64 qualification and checksums, sign the finalized payloads,
 and independently verify their updater signatures. Signing keys remain in the
@@ -480,8 +485,8 @@ published installers remain available. GitHub bills artifact storage separately
 from cache storage, so clearing compiler caches does not resolve an artifact
 storage quota failure. Deletion stops further storage accrual but does not erase
 usage already accrued during the billing period.
-Hosted runners do not wait during private compilation. Stable Linux and macOS
-builds remain hosted, as do feature-branch diagnostic builds.
+Hosted runners do not wait during private compilation. Stable Linux and Apple
+Silicon macOS builds remain hosted, as do feature-branch diagnostic builds.
 
 The scheduler and completion workflow live on `main`; the nightly workflow
 explicitly checks out `staging` and passes its immutable SHA to every builder.
@@ -726,19 +731,22 @@ bun --no-env-file scripts/check-lancedb-macos.ts --artifact-dir dist/native/lanc
 bun run build:desktop-server
 ```
 
-Desktop CI downloads the published dependency and tests native database operations
-on `macos-15-intel`. It never recompiles LanceDB on a cache miss or download error.
-The **Intel LanceDB Native Dependency** workflow (`intel-lancedb.yml`) publishes
-the addon, checksum/build manifest, and upstream license as a versioned GitHub
-prerelease. These releases are retained independently of desktop nightlies.
+Desktop release CI reuses the published dependency or a verified cache and tests
+native database operations on the private Intel Mac. It compiles LanceDB only
+when the matching build is unavailable; download errors fail rather than cause
+an unnecessary rebuild. Hosted completion publishes the tested addon, manifest,
+and upstream license as a versioned GitHub prerelease. These releases are
+retained independently of desktop nightlies.
 
 After changing the pinned LanceDB version/source, Rust toolchain, CPU baseline,
 minimum macOS version, or release compilation profile, dispatch that dependency
-workflow before building desktop apps. Those settings determine the release tag;
+workflow on trusted `main` or `staging` to build the dependency independently of
+an app release. Those settings determine the release tag;
 application changes and native-test edits reuse the existing binary. Bump
 `INTEL_LANCEDB.buildRevision` for compilation changes not captured in those
 settings. The workflow reuses an existing release or verified build cache before
-compiling, and cannot replace a published binary with different bytes.
+compiling on the private runner, and cannot replace a published binary with
+different bytes. A release build can also produce a missing dependency itself.
 
 ```sh
 gh workflow run intel-lancedb.yml --repo prolix-oc/Lumiverse --ref main

@@ -1,6 +1,5 @@
 name: Intel LanceDB Native Dependency
 
-# Build once per source/toolchain/compilation policy, independently of app releases.
 on:
   workflow_dispatch:
     inputs:
@@ -12,31 +11,32 @@ on:
 
 permissions:
   contents: read
+
 concurrency:
   group: intel-lancedb-native-dependency
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Reuse or publish the pinned Intel addon
-    runs-on: macos-15-intel
-    timeout-minutes: 180
-    permissions:
-      contents: write
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  prepare:
+    name: Reuse or queue the pinned Intel addon
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
       - name: Test artifact validation and release recovery
-        run: bun --no-env-file test tests/lancedb-macos-native.test.ts scripts/lancedb-macos-release.test.ts
+        run: bun --no-env-file test tests/lancedb-macos-native.test.ts scripts/lancedb-macos-release.test.ts scripts/intel-lancedb-bridge.test.ts
       - name: Resolve the native build policy
         id: policy
         run: bun --no-env-file scripts/lancedb-macos-release.ts identity
       - name: Reuse an already published dependency
         id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun --no-env-file scripts/lancedb-macos-release.ts download --allow-missing
       - name: Restore a verified build before considering compilation
         if: steps.release.outputs.available != 'true'
@@ -48,27 +48,17 @@ jobs:
       - name: Require the selected migration cache
         if: inputs.seed_cache_key != '' && steps.release.outputs.available != 'true' && steps.cache.outputs.cache-hit != 'true'
         run: bun -e 'throw new Error("Migration cache not found on this branch. Dispatch on its owning branch; no rebuild was started.")'
-      - name: Install build prerequisites
-        if: steps.release.outputs.available != 'true' && steps.cache.outputs.cache-hit != 'true'
-        run: brew install protobuf cmake
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.release.outputs.available != 'true' && steps.cache.outputs.cache-hit != 'true'
+      - name: Retain the seed for native testing on the private runner
+        if: steps.release.outputs.available != 'true' && steps.cache.outputs.cache-hit == 'true'
+        uses: actions/upload-artifact@v7
         with:
-          toolchain: ${{ steps.policy.outputs.rust_toolchain }}
-          targets: ${{ steps.policy.outputs.target }}
-      - name: Build the pinned native dependency only when unavailable
-        if: steps.release.outputs.available != 'true' && steps.cache.outputs.cache-hit != 'true'
-        run: bun --no-env-file scripts/build-lancedb-macos.ts
-      - name: Install native test dependencies
-        run: bun install --frozen-lockfile
-      - name: Verify checksum, build policy, and native database operations
-        run: bun --no-env-file scripts/check-lancedb-macos.ts --artifact-dir dist/native/lancedb-darwin-x64
-      - name: Retain the tested addon for interrupted publication
-        if: steps.release.outputs.available != 'true' && steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
+          name: intel-lancedb-seed-${{ github.run_attempt }}
           path: dist/native/lancedb-darwin-x64
-          key: ${{ steps.policy.outputs.cache_key }}
-      - name: Publish the verified dependency without replacing existing binaries
+          if-no-files-found: error
+          retention-days: 1
+      - name: Queue the private Intel macOS runner
         if: steps.release.outputs.available != 'true'
-        run: bun --no-env-file scripts/lancedb-macos-release.ts publish
+        env:
+          LINUX_RELEASE_BRIDGE_TOKEN: ${{ secrets.LINUX_RELEASE_BRIDGE_TOKEN }}
+          NATIVE_SEED: ${{ steps.cache.outputs.cache-hit == 'true' }}
+        run: bun --no-env-file scripts/intel-lancedb-bridge.ts dispatch
