@@ -85,6 +85,7 @@
     "confirm": "Bestätigen"
   },
   "searchableSelect": {
+    "recentlyUsed": "Kürzlich verwendet",
     "selectedCount": "{{count}} ausgewählt",
     "placeholder": "Auswählen\u2026",
     "searchPlaceholder": "Suchen\u2026",

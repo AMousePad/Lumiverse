@@ -1,3 +1,5 @@
+import { saveConnectionFolder } from '@/hooks/useConnectionLibrary'
+import ConnectionFolderField, { useConnectionFolderDraft } from '@/components/panels/connection-manager/ConnectionFolderField'
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { decisionConnectionsApi } from '@/api/decision-connections'
@@ -13,12 +15,13 @@ import styles from '../ConnectionManager.module.css'
 interface Props {
   providers: DecisionProviderInfo[]
   profile?: DecisionConnectionProfile
-  onSave: (input: CreateDecisionConnectionInput) => void | Promise<void>
+  onSave: (input: CreateDecisionConnectionInput, folderId?: string) => void | Promise<void>
   onCancel: () => void
   onOAuthComplete?: (profile: DecisionConnectionProfile, created: boolean) => void
 }
 
 export default function DecisionConnectionForm({ providers, profile, onSave, onCancel, onOAuthComplete }: Props) {
+  const folder = useConnectionFolderDraft('decision', profile?.id)
   const { t } = useTranslation('panels')
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || providers[0]?.id || 'openrouter')
@@ -105,6 +108,7 @@ export default function DecisionConnectionForm({ providers, profile, onSave, onC
       setApiKey('')
       setClearKey(false)
       setOauthStatus(t('decisionConnectionForm.signInSaved'))
+      if (result.created) saveConnectionFolder('decision', result.profile.id, folder.value)
       onOAuthComplete?.(result.profile, result.created)
     } catch (err: any) {
       if (mounted.current) setError(err?.body?.error || err?.message || t('decisionConnectionForm.signInFailed'))
@@ -142,7 +146,7 @@ export default function DecisionConnectionForm({ providers, profile, onSave, onC
       await onSave({
         name: name.trim(), provider, api_key: clearKey ? '' : apiKey.trim() || undefined,
         api_url: apiUrl.trim(), model: model.trim(), is_default: isDefault,
-      })
+      }, folder.value)
     } catch (err: any) {
       setError(err?.body?.error || err?.message || t('decisionConnectionForm.saveFailed'))
     } finally { setSaving(false) }
@@ -154,6 +158,7 @@ export default function DecisionConnectionForm({ providers, profile, onSave, onC
         <FormField label={t('decisionConnectionForm.name')} required>
           <TextInput value={name} onChange={setName} placeholder={t('decisionConnectionForm.connectionName')} autoFocus={!profile} />
         </FormField>
+      <ConnectionFolderField kind="decision" {...folder} />
         <FormField label={t('decisionConnectionForm.provider')}>
           <Select value={provider} onChange={changeProvider} options={providerOptions} />
         </FormField>

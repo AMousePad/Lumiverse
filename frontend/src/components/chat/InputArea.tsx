@@ -47,7 +47,7 @@ import type { LoomPreset, PromptVariableValues } from '@/lib/loom/types'
 import AuthorsNotePanel from './AuthorsNotePanel'
 import ReasoningBlock from './ReasoningBlock'
 import { PromptVariablesModal } from '@/components/shared/PromptVariablesModal'
-import ProviderIcon from '@/components/shared/ProviderIcon'
+import ConnectionQuickPicker from '@/components/shared/ConnectionQuickPicker'
 import { databankApi } from '@/api/databank'
 import { resolveMacros } from '@/api/macros'
 import type { AutocompleteResult } from '@/api/databank'
@@ -3634,29 +3634,11 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
           {renderPopover === 'connections' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
-              {profiles.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noConnections')}</div>}
-              {profiles.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={clsx(styles.popRowBtn, activeProfileId === p.id && styles.popRowBtnActive)}
-                  onClick={() => {
-                    void acknowledgeConnectionProfileSelection({
-                      profileId: p.id,
-                      setActiveProfile,
-                      closePopover: () => setOpenPopover(null),
-                    })
-                  }}
-                >
-                  <span className={styles.personaMain}>
-                    <ProviderIcon kind="llm" provider={p.provider} size={22} />
-                    <span className={styles.personaNameGroup}>
-                      <span>{p.name}</span>
-                      <span className={styles.popMeta}>{p.provider}{p.model ? ` / ${p.model}` : ''}</span>
-                    </span>
-                  </span>
-                </button>
-              ))}
+              <ConnectionQuickPicker onSelect={profileId => {
+                void acknowledgeConnectionProfileSelection({
+                  profileId, setActiveProfile, closePopover: () => setOpenPopover(null),
+                })
+              }} />
               <button type="button" className={styles.popLink} onClick={() => {
                 setOpenPopover(null)
                 useStore.getState().openDrawer('connections')

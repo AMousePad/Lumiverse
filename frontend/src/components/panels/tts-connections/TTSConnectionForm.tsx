@@ -1,3 +1,4 @@
+import ConnectionFolderField, { useConnectionFolderDraft } from '@/components/panels/connection-manager/ConnectionFolderField'
 import { lazy, Suspense, useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FormField, TextInput, TextArea, Select, Button } from '@/components/shared/FormComponents'
@@ -21,11 +22,12 @@ const VoiceLibraryModal = lazy(() => import('@/components/modals/VoiceLibraryMod
 interface Props {
   providers: TtsProviderInfo[]
   profile?: TtsConnectionProfile
-  onSave: (input: CreateTtsConnectionInput) => void
+  onSave: (input: CreateTtsConnectionInput, folderId?: string) => void
   onCancel: () => void
 }
 
 export default function TTSConnectionForm({ providers, profile, onSave, onCancel }: Props) {
+  const folder = useConnectionFolderDraft('tts', profile?.id)
   const { t } = useTranslation('panels')
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || providers[0]?.id || 'openai_tts')
@@ -345,14 +347,15 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
                 ? defaultParameters
                 : undefined,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-    })
-  }, [name, provider, apiKey, apiUrl, model, voice, isDefault, isQwen, isGoogle, isOpenVox, defaultParameters, onSave, isVertex, vertexRegion, saFileName, profile?.metadata])
+    }, folder.value)
+  }, [name, provider, apiKey, apiUrl, model, voice, isDefault, isQwen, isGoogle, isOpenVox, defaultParameters, folder.value, onSave, isVertex, vertexRegion, saFileName, profile?.metadata])
 
   return (
     <div className={styles.form}>
       <FormField label={t('ttsConnectionForm.name')} required>
         <TextInput value={name} onChange={setName} placeholder={t('ttsConnectionForm.connectionName')} autoFocus={!profile} />
       </FormField>
+      <ConnectionFolderField kind="tts" {...folder} />
 
       <FormField label={t('ttsConnectionForm.provider')}>
         <Select value={provider} onChange={setProvider} options={providerOptions} />
