@@ -4,6 +4,7 @@ import type { ImageGenRequest, ImageGenResponse } from "../types";
 import { applyRawOverride } from "../types";
 import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 import { pollUntil, sourceImages, toDataUrl, trimBaseUrl } from "./shared";
+import { imageInputMechanism } from "../image-input";
 
 /**
  * fal.ai queue API (`POST https://queue.fal.run/{owner}/{app}`).
@@ -91,6 +92,9 @@ export class FalImageProvider implements ImageProvider {
     if (request.negativePrompt) body.negative_prompt = request.negativePrompt;
 
     const sources = sourceImages(params);
+    if (sources.length > 0 && !imageInputMechanism(this.name, model)) {
+      throw new Error(`fal.ai ${model} does not accept a source image. Choose an image-to-image endpoint.`);
+    }
     if (sources.length > 0) body.image_url = sources[0].data.startsWith("data:") ? sources[0].data : `data:${sources[0].mimeType || "image/png"};base64,${sources[0].data}`;
 
     const finalBody = applyRawOverride(body, params.rawRequestOverride);
@@ -141,7 +145,7 @@ export class FalImageProvider implements ImageProvider {
         headers: { Authorization: `Key ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ allowed_apps: ["fal-ai/flux/schnell"] }),
       });
-      if (res.status === 401 || res.status === 403) await throwProviderResponseError(this.displayName, "authentication", res);
+      if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return true;
     } catch (err) {
       if (err instanceof ProviderRequestError) throw err;

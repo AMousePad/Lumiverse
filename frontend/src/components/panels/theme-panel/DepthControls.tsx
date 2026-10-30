@@ -72,6 +72,33 @@ function commitFromInput(e: React.SyntheticEvent, commit: (v: number) => void) {
   commit(Number((e.target as HTMLInputElement).value))
 }
 
+/** Finish native pointer processing before a scale change can move the slider. */
+function useDeferredRangeCommit(commit: (value: number) => void) {
+  const frame = useRef<number | null>(null)
+  const commitRef = useRef(commit)
+
+  useEffect(() => { commitRef.current = commit }, [commit])
+  useEffect(() => () => {
+    if (frame.current !== null) window.cancelAnimationFrame(frame.current)
+  }, [])
+
+  return {
+    onPointerUp: (event: React.PointerEvent<HTMLInputElement>) => {
+      const input = event.currentTarget
+      if (frame.current !== null) window.cancelAnimationFrame(frame.current)
+      frame.current = window.requestAnimationFrame(() => {
+        frame.current = null
+        commitRef.current(Number(input.value))
+      })
+    },
+    onKeyUp: (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (frame.current !== null) window.cancelAnimationFrame(frame.current)
+      frame.current = null
+      commitFromInput(event, commitRef.current)
+    },
+  }
+}
+
 interface DeferredColorInputProps {
   value: string
   className?: string
@@ -139,6 +166,8 @@ export default function DepthControls({
   // theme recalculations on every step.
   const [localFontScale, setLocalFontScale] = useState(fontScale)
   const [localUiScale, setLocalUiScale] = useState(() => normalizeUiScale(uiScale))
+  const fontScaleCommit = useDeferredRangeCommit(onFontScaleChange)
+  const uiScaleCommit = useDeferredRangeCommit(onUiScaleChange)
   const resolvedDesktopBackground = parseDesktopBackground(desktopBackground?.color)
   const [surfaceRestartRequired, setSurfaceRestartRequired] = useState(false)
 
@@ -186,8 +215,7 @@ export default function DepthControls({
           step={0.05}
           value={localFontScale}
           onChange={(e) => setLocalFontScale(Number(e.target.value))}
-          onPointerUp={(e) => commitFromInput(e, onFontScaleChange)}
-          onKeyUp={(e) => commitFromInput(e, onFontScaleChange)}
+          {...fontScaleCommit}
           className={styles.slider}
           style={trackFill(localFontScale, 0.85, 2)}
         />
@@ -205,8 +233,7 @@ export default function DepthControls({
           step={0.05}
           value={localUiScale}
           onChange={(e) => setLocalUiScale(Number(e.target.value))}
-          onPointerUp={(e) => commitFromInput(e, onUiScaleChange)}
-          onKeyUp={(e) => commitFromInput(e, onUiScaleChange)}
+          {...uiScaleCommit}
           className={styles.slider}
           style={trackFill(localUiScale, MIN_UI_SCALE, MAX_UI_SCALE)}
         />

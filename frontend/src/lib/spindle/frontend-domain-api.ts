@@ -16,6 +16,7 @@ import type {
 import type { ActiveProfileSwitchReason, AppStore } from '@/types/store'
 import type { EmbeddingConfigWithProfiles } from '@/api/embeddings'
 import { resolveTtsConnectionId } from '@/lib/voiceResolution'
+import type { ConnectionOrganizationAPI } from '../../../../src/shared/connection-organization'
 import type {
   SpindleConnectionProfileKind as ConnectionKind,
   SpindleConnectionProfileSummary as ConnectionSummary,
@@ -35,6 +36,7 @@ export interface ConnectionActiveState {
 }
 
 export interface FrontendConnectionsAPI {
+  organization: ConnectionOrganizationAPI
   list(): ConnectionProfile[]
   list(options: { kind: ConnectionKind }): Promise<ConnectionSummary[]>
   getActive(): ConnectionActiveState
@@ -115,6 +117,7 @@ export interface FrontendDomainDependencies {
   requirePermission(permission: string, member: string): void
   onTeardown(handler: () => void): () => void
   connections: {
+    organization?: ConnectionOrganizationAPI
     models(id: string): Promise<ConnectionModelsResult>
     update(id: string, input: UpdateConnectionProfileInput): Promise<ConnectionProfile>
     acknowledgeActive?(request: {
@@ -324,6 +327,7 @@ export function createFrontendDomainApi(
   }
 
   const subscribers = new Set<(value: ConnectionActiveState) => void>()
+  const organizationWatches = new Set<() => void>()
   let storeUnsubscribe: (() => void) | undefined
   let lastActive = activeConnection(dependencies.store.getState())
 
@@ -388,6 +392,26 @@ export function createFrontendDomainApi(
   }
 
   const connections: FrontendConnectionsAPI = {
+    organization: {
+      async get(options) {
+        assertUsable()
+        if (!dependencies.connections.organization) throw new Error('Connection organization unavailable')
+        const snapshot = await dependencies.connections.organization.get(options)
+        assertUsable()
+        return clone(snapshot)
+      },
+      watch(options, handler, onError) {
+        assertUsable()
+        if (!dependencies.connections.organization) throw new Error('Connection organization unavailable')
+        const stop = dependencies.connections.organization.watch(options, snapshot => {
+          assertUsable()
+          handler(clone(snapshot))
+        }, error => { if (!disposed) { if (onError) onError(error); else console.error('[connection-organization]', error) } })
+        const unsubscribe = () => { stop(); organizationWatches.delete(unsubscribe) }
+        organizationWatches.add(unsubscribe)
+        return unsubscribe
+      },
+    },
     list,
     getActive,
 
@@ -562,6 +586,7 @@ export function createFrontendDomainApi(
     if (disposed) return
     disposed = true
     subscribers.clear()
+    for (const stop of organizationWatches) stop()
     stopConnectionSubscription()
   }
   dependencies.onTeardown(dispose)

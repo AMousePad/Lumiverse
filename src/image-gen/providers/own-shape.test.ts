@@ -537,6 +537,23 @@ describe("Civitai", () => {
     expect(body.steps[0].input.loras["urn:air:anima:lora:civitai:1@2"]).toBe(0.8);
   });
 
+  test("forwards the selected checkpoint and a reproducible seed", async () => {
+    fetchStub = stubFetch([
+      { json: { steps: [{ output: { images: [{ url: "https://civitai/img.png" }] } }] } },
+      { bytes: PNG_BYTES },
+    ]);
+    const provider = new CivitaiImageProvider();
+    const model = "urn:air:sdxl:checkpoint:civitai:101055@128078";
+    await provider.generate("key", "https://orchestration.civitai.com", req(model, { ecosystem: "sdxl", seed: 0 }));
+    expect(fetchStub.calls[0].body.steps[0].input).toMatchObject({ model, ecosystem: "sdxl", seed: 0 });
+  });
+
+  test("does not mistake an echoed input URL for generated output", async () => {
+    fetchStub = stubFetch([{ json: { status: "succeeded", steps: [{ input: { url: "https://input/not-output.png" }, output: { images: [] } }] } }]);
+    await expect(new CivitaiImageProvider().generate("key", "", req("anima"))).rejects.toThrow("no image data");
+    expect(fetchStub.calls).toHaveLength(1);
+  });
+
   test("rejects an invalid LoRA JSON value", async () => {
     fetchStub = stubFetch([{ json: {} }]);
     const provider = new CivitaiImageProvider();
@@ -612,5 +629,19 @@ describe("Venice native", () => {
     const provider = new VeniceImageProvider();
     await expect(provider.validateKey("key", "https://api.venice.ai/api/v1")).resolves.toBe(true);
     expect(fetchStub.calls[0].url).toBe("https://api.venice.ai/api/v1/api_keys/rate_limits");
+  });
+});
+
+describe("provider authentication failures", () => {
+  let fetchStub: ReturnType<typeof stubFetch>;
+  afterEach(() => fetchStub?.restore());
+  test.each([new FalImageProvider(), new IdeogramImageProvider(), new ReplicateImageProvider()])("%s does not report an upstream outage as successful validation", async (provider) => {
+    fetchStub = stubFetch([{ status: 503, json: { error: "unavailable" } }]);
+    await expect(provider.validateKey("key", "")).rejects.toThrow(/503/);
+  });
+  test("fal rejects a source image on a text-only preset before submitting a paid job", async () => {
+    fetchStub = stubFetch([{ json: {} }]);
+    await expect(new FalImageProvider().generate("key", "", req("fal-ai/flux/dev", { resolvedSourceImages: [{ data: "QUJD" }] }))).rejects.toThrow(/image-to-image/);
+    expect(fetchStub.calls).toHaveLength(0);
   });
 });

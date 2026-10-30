@@ -1,3 +1,5 @@
+import { connectionOrganizationApi } from '@/api/connection-organization'
+import { CONNECTION_ORGANIZATION_CAPABILITIES } from '../../../../src/shared/connection-organization'
 import { activeTab } from '@/lib/active-tab'
 import { CLIENT_HOST_CAPABILITIES, createFrontendClientAPI, type SpindleClientAPI } from './client-api'
 import { downloadExtensionFile } from './file-downloads'
@@ -1311,6 +1313,7 @@ async function doLoadFrontendExtension(
       },
       onTeardown,
       connections: {
+        organization: connectionOrganizationApi,
         models: runtimeConnectionsApi.models,
         update: runtimeConnectionsApi.update,
         embeddingConfig: runtimeConnectionsApi.embeddingConfig,
@@ -1429,7 +1432,7 @@ async function doLoadFrontendExtension(
         'desktop-keybindings-editor-v1': 1,
         'shared-select-pagination-v1': 1,
         "message-preset-context-v1": 1,
-        ...SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES,
+        ...SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES, ...CONNECTION_ORGANIZATION_CAPABILITIES,
         ...CLIENT_HOST_CAPABILITIES,
         ...SPINDLE_TTS_HOST_CAPABILITIES,
         'frontend-session-origin-v1': 1,

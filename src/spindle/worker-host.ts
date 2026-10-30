@@ -1,3 +1,6 @@
+import { ConnectionOrganizationHost } from './connection-organization-host';
+import type { OrganizationWorkerMessage, OrganizationHostMessage } from './connection-organization-contract';
+import { CONNECTION_ORGANIZATION_CAPABILITIES } from '../shared/connection-organization';
 import type {
   SpindleManifest,
   ChatGetMessagesOptionsDTO,
@@ -27,7 +30,7 @@ import type {
 import { WorkerHostFilesApi } from "./worker-host-files-api";
 import { PERMISSION_DENIED_PREFIX, SPINDLE_HOST_CAPABILITIES } from "lumiverse-spindle-types";
 import { WorkerHostDesktopCaptureApi } from "./worker-host-desktop-capture-api";
-import type { DryRunResultDTO, GetBreakdownWorkerMessage } from "./generation-contract";
+import type { DryRunResultDTO, GetBreakdownWorkerMessage, StreamDoneChunkDTO } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { getGitMetadata } from "../utils/git-metadata";
@@ -349,6 +352,7 @@ type RuntimeWorkerToHost =
   | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: BeginMessageGenerationInput }
   | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
+  | OrganizationWorkerMessage
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | CharacterGalleryWorkerMessage
@@ -663,6 +667,7 @@ type RuntimeWorkerToHost =
   | ProviderWorkerToHost;
 
 type RuntimeHostToWorker =
+  | OrganizationHostMessage
   | { type: 'context_handler_abort'; requestId: string; reason: string }
   | { type: 'frontend_message'; payload: unknown; userId: string; frontendSessionId?: string }
   | HostToWorker
@@ -985,6 +990,10 @@ function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
 }
 
 export class WorkerHost {
+  private organizationApi = new ConnectionOrganizationHost({
+    resolveUser: requested => { const id = this.resolveEffectiveUserId(requested); this.enforceScopedUser(id); return id; },
+    post: message => this.postToWorker(message),
+  });
   private runtime: RuntimeTransport | null = null;
   private eventUnsubscribers = new Map<string, () => void>();
   // Events queued before the worker subscribes (extension start replays);
@@ -1370,6 +1379,7 @@ export class WorkerHost {
         lumiverseVersion: await getBackendVersion(),
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
+          ...CONNECTION_ORGANIZATION_CAPABILITIES,
           "character-search-v1": 1,
           "message-preset-context-v1": 1,
           "chat-swipe-variables-v1": 1,
@@ -1488,6 +1498,7 @@ export class WorkerHost {
   }
 
   private cleanup(): void {
+    this.organizationApi.dispose();
     this.decisionsApi.dispose();
     this.embeddingsApi.dispose();
     void this.filesApi.dispose().catch(error => console.warn("[spindle-files] worker cleanup failed", error));
@@ -1991,6 +2002,11 @@ export class WorkerHost {
         } else {
           this.resolveRequest(msg.requestId, msg.result);
         }
+        break;
+      case 'connection_organization_get':
+      case 'connection_organization_watch':
+      case 'connection_organization_unwatch':
+        this.organizationApi.handle(msg);
         break;
       case "connections_list":
         this.handleConnectionsList(msg.requestId, msg.userId);
@@ -3552,6 +3568,9 @@ export class WorkerHost {
       }
       let finishReason = "stop";
       let toolCalls: import("../llm/types").ToolCallResult[] | undefined;
+      // Kept so the extension can send them back with its tool results.
+      let thinkingBlocks: StreamDoneChunkDTO["thinking_blocks"];
+      let reasoningDetails: StreamDoneChunkDTO["reasoning_details"];
       let usage: import("../llm/types").GenerationResponse["usage"];
 
       for await (const chunk of stream) {
@@ -3575,6 +3594,8 @@ export class WorkerHost {
         }
         if (chunk.finish_reason) finishReason = chunk.finish_reason;
         if (chunk.tool_calls) toolCalls = chunk.tool_calls;
+        if (chunk.thinking_blocks) thinkingBlocks = chunk.thinking_blocks;
+        if (chunk.reasoning_details) reasoningDetails = chunk.reasoning_details;
         if (chunk.usage) usage = chunk.usage;
       }
 
@@ -3588,17 +3609,20 @@ export class WorkerHost {
       }
 
       success = true;
+      const done: StreamDoneChunkDTO = {
+        type: "done",
+        content,
+        reasoning: reasoning || undefined,
+        finish_reason: finishReason,
+        tool_calls: toolCalls,
+        thinking_blocks: thinkingBlocks,
+        reasoning_details: reasoningDetails,
+        usage,
+      };
       this.postToWorker({
         type: "generation_stream_chunk",
         requestId,
-        chunk: {
-          type: "done",
-          content,
-          reasoning: reasoning || undefined,
-          finish_reason: finishReason,
-          tool_calls: toolCalls,
-          usage,
-        },
+        chunk: done,
       });
     } catch (err: any) {
       const aborted = abortController.signal.aborted || err?.name === "AbortError";

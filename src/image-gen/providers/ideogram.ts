@@ -246,8 +246,7 @@ export class IdeogramImageProvider implements ImageProvider {
         headers: { "Api-Key": apiKey },
         body: form,
       });
-      // 401/403 = bad key; any other status means the key authenticated.
-      if (res.status === 401 || res.status === 403) await throwProviderResponseError(this.displayName, "authentication", res);
+      if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return true;
     } catch (err) {
       if (err instanceof ProviderRequestError) throw err;

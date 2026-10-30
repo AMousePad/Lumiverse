@@ -219,6 +219,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "폴더를 삭제하기 전에 연결 편집을 저장하거나 취소하세요.",
+    "newFolder": "새 폴더",
+    "folder": "폴더",
+    "invalidFolderName": "1~64자의 고유한 폴더 이름을 입력하세요. 미분류는 예약된 이름입니다.",
+    "deleteFolderMessage": "“{{name}}” 폴더를 삭제할까요? 연결은 미분류로 이동합니다.",
+    "allFolders": "모든 폴더",
+    "filterFolder": "폴더별 연결 필터",
+    "search": "연결, 공급자, 모델, 폴더 검색…",
+    "noMatches": "일치하는 연결이 없습니다.",
     "embeddings": "임베딩 모델",
     "imageGeneration": "이미지 생성",
     "speechToText": "음성 인식(STT)",
@@ -960,7 +969,8 @@
     "targetWi": "WI",
     "targetCot": "CoT",
     "targetMemory": "기억",
-    "allOptions": "모든 옵션..."
+    "allOptions": "모든 옵션...",
+    "presetLoadFailed": "이 스와이프의 프리셋 정규식을 불러오지 못했습니다. 새로고침하여 다시 시도하세요."
   },
   "personaEditor": {
     "characterCount": "{{count}}자",
@@ -3995,7 +4005,16 @@
     "checking": "샘플 의사결정 실행 중…",
     "removeKey": "저장된 API 키 제거",
     "saveFailed": "의사결정 연결을 저장하지 못했습니다",
-    "unsupportedModel": "이 모델은 의사결정 연결에 사용할 수 없습니다."
+    "unsupportedModel": "이 모델은 의사결정 연결에 사용할 수 없습니다.",
+    "providerSignIn": "제공업체 로그인",
+    "signIn": "{{provider}}로 로그인",
+    "signingIn": "로그인 중…",
+    "signInHintCreate": "로그인하여 이 Decision 연결을 만들고 API 키를 저장하세요.",
+    "signInHintExisting": "로그인하여 이 Decision 연결의 새 API 키를 저장하세요.",
+    "signInDefaultUrl": "로그인하려면 제공업체의 기본 API URL을 사용하세요. 사용자 지정 URL을 사용하려면 API 키를 입력하세요.",
+    "signInSaveFirst": "로그인하기 전에 제공업체 및 API URL 변경 사항을 저장하세요.",
+    "signInSaved": "로그인했습니다. API 키가 저장되었습니다.",
+    "signInFailed": "로그인하지 못했습니다. 다시 시도하세요."
   },
   "multiplayerPanel": {
     "freeformWindowClosed": "입력 시간 종료",

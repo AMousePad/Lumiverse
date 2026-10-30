@@ -3,44 +3,15 @@ import "../../../../image-gen/index";
 import type {
   WeaverVisualProvider,
   WeaverVisualAsset,
-  WeaverVisualImageInputMechanism,
   WeaverVisualSourceImage,
 } from "../../../../types/weaver";
 import type { VisualProviderAdapter } from "../provider-adapter";
+import { imageInputMechanism } from "../../../../image-gen/image-input";
 
 type SimpleVisualProvider = Exclude<
   WeaverVisualProvider,
   "comfyui"
 >;
-
-const IMAGE_INPUT: Record<SimpleVisualProvider, WeaverVisualImageInputMechanism | null> = {
-  google_gemini: "edit",
-  nanogpt: "edit",
-  novelai: "reference",
-  openrouter: "edit",
-  sdapi: "init",
-  openai: "edit",
-  pollinations: null,
-  custom_openai: null,
-  together: "edit",
-  xai: "edit",
-  venice: null,
-  venice_compat: null,
-  recraft: null,
-  deepinfra: null,
-  ideogram: "edit",
-  fireworks: null,
-  stability: "edit",
-  bfl: "edit",
-  fal: "edit",
-  replicate: null,
-  leonardo: null,
-  runware: "init",
-  civitai: null,
-  civitai_chat: null,
-  huggingface: null,
-  swarmui: "init",
-};
 
 const NAI_REFERENCE_STRENGTH = 0.6;
 const INIT_DENOISE_DEFAULT = 0.5;
@@ -178,7 +149,6 @@ function buildProviderSpecificParameters(
       };
     case "venice":
     case "leonardo":
-    case "bfl":
     case "runware":
     case "civitai":
       return {
@@ -186,6 +156,9 @@ function buildProviderSpecificParameters(
         height: stateHeight,
         ...seed,
       };
+    case "bfl":
+      // Kontext and Ultra consume aspectRatio instead of width/height.
+      return { width: stateWidth, height: stateHeight, aspectRatio: asset.aspect_ratio, ...seed };
     case "fal":
       return {
         imageSize: falSizePreset(stateWidth, stateHeight),
@@ -214,11 +187,13 @@ function buildProviderSpecificParameters(
 
 function falSizePreset(width: number, height: number): string {
   const ratio = width / height;
-  if (ratio > 1.4) return "landscape_16_9";
-  if (ratio > 1.05) return "landscape_4_3";
-  if (ratio < 0.72) return "portrait_16_9";
-  if (ratio < 0.96) return "portrait_4_3";
-  return "square_hd";
+  const presets: Array<[string, number]> = [
+    ["square_hd", 1], ["landscape_4_3", 4 / 3], ["landscape_16_9", 16 / 9],
+    ["portrait_4_3", 3 / 4], ["portrait_16_9", 9 / 16],
+  ];
+  return presets.reduce((best, next) =>
+    Math.abs(Math.log(ratio / next[1])) < Math.abs(Math.log(ratio / best[1])) ? next : best,
+  )[0];
 }
 
 export function createSimpleProviderAdapter(
@@ -228,7 +203,7 @@ export function createSimpleProviderAdapter(
     provider,
     supportsWorkflowImport: false,
     supportsAdvancedMode: false,
-    imageInput: IMAGE_INPUT[provider],
+    imageInput: imageInputMechanism(provider),
     checkImageInput(connection) {
       if (provider === "novelai" && connection.model.startsWith("nai-diffusion-5")) {
         return {
@@ -245,7 +220,13 @@ export function createSimpleProviderAdapter(
           reason: "Stable Image Core does not accept a source image. Use the Ultra or SD3 model.",
         };
       }
-      return { supported: true, mechanism: IMAGE_INPUT[provider] };
+      if (provider === "ideogram" && !/^ideogram-(3|4)/.test(connection.model)) {
+        return { supported: false, mechanism: null, reason: "This Ideogram model does not accept a source image. Use Ideogram 3 or 4." };
+      }
+      if (!imageInputMechanism(provider, connection.model)) {
+        return { supported: false, mechanism: null, reason: "This image provider or model cannot take an image as input." };
+      }
+      return { supported: true, mechanism: imageInputMechanism(provider, connection.model) };
     },
     async validate(asset, connection) {
       const errors: string[] = [];
@@ -258,12 +239,15 @@ export function createSimpleProviderAdapter(
       if (!connection.model?.trim()) {
         errors.push("Connection model is required.");
       }
-      if (provider === "novelai" && connection.model.startsWith("nai-diffusion-5") && asset.source_image) {
-        errors.push("NovelAI V5 does not currently support Vibe Transfer or Precise Reference.");
+      const support = this.checkImageInput!(connection);
+      if (asset.source_image && !support.supported) {
+        errors.push(support.reason!);
       }
       return errors;
     },
     async build(asset, connection) {
+      const support = this.checkImageInput!(connection);
+      if (asset.source_image && !support.supported) throw new Error(support.reason);
       const supportedDefaults = filterSupportedParameters(
         provider,
         connection.default_parameters,

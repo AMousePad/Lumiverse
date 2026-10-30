@@ -172,7 +172,7 @@ Both default to `https://api.venice.ai/api/v1`.
 ### fal.ai
 
 1. API URL defaults to `https://queue.fal.run`; auth uses the `Key <key>` scheme.
-2. Models include `fal-ai/flux/schnell`, `fal-ai/flux/dev`, `fal-ai/flux-pro/v1.1`, and `fal-ai/stable-diffusion-v35-large`.
+2. Models include `fal-ai/flux/schnell`, `fal-ai/flux/dev`, `fal-ai/flux-pro/v1.1`, and `fal-ai/stable-diffusion-v35-large`. These presets are text-to-image endpoints. For source-image generation, enter an image-to-image endpoint such as `fal-ai/flux/dev/image-to-image`.
 3. Configure an `imageSize` preset, `numInferenceSteps`, `guidanceScale`, and `seed`. Lumiverse submits to the queue, polls status, then fetches the result.
 
 ### Replicate
@@ -198,7 +198,7 @@ Both default to `https://api.venice.ai/api/v1`.
 
 Two connections are available:
 
-- **Civitai** uses the native workflow API (`/v2/consumer/workflows`). Choose an ecosystem (`anima`, `sdxl`, `sd1`, `flux1`) and engine, and configure `cfgScale`, `steps`, `quantity`, a LoRA map (`{ "urn:air:...": strength }`), the queue `tier`, and `whatif` for a cost preview.
+- **Civitai** uses the native workflow API (`/v2/consumer/workflows`). Choose an ecosystem (`anima`, `sdxl`, `sd1`, `flux1`) and engine, and configure `cfgScale`, `steps`, `seed`, `quantity`, a LoRA map (`{ "urn:air:...": strength }`), the queue `tier`, and `whatif` for a cost preview. Anima uses its built-in model; for SD ecosystems select the checkpoint AIR URN and matching ecosystem.
 - **Civitai (Chat)** uses the chat-completions image path with `modalities: ["image", "text"]`. Configure an `aspectRatio`, `imageSize` (0.5K–4K), and `tier`. Models include hosted third-party image models and Civitai AIR URNs; there are no LoRAs or samplers on this path.
 
 Both default to `https://orchestration.civitai.com`.

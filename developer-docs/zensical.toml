@@ -84,6 +84,7 @@ nav = [
     { "UI Scaling" = "frontend-api/ui-scaling.md" },
     { "Shared Components" = "frontend-api/shared-components.md" },
     { "Connection Profiles" = "frontend-api/connections.md" },
+    { "Connection Organization" = "frontend-api/connection-organization.md" },
     { "Speech-to-text" = "frontend-api/speech-to-text.md" },
     { "Text-to-speech" = "frontend-api/text-to-speech.md" },
     { "System audio" = "frontend-api/system-audio.md" },

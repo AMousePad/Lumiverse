@@ -158,6 +158,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "Salva o annulla le modifiche alla connessione prima di eliminare la cartella.",
+    "newFolder": "Nuova cartella",
+    "folder": "Cartella",
+    "invalidFolderName": "Scegli un nome univoco di 1–64 caratteri. Senza categoria è riservato.",
+    "deleteFolderMessage": "Eliminare «{{name}}»? Le connessioni verranno spostate in Senza categoria.",
+    "allFolders": "Tutte le cartelle",
+    "filterFolder": "Filtra le connessioni per cartella",
+    "search": "Cerca connessioni, fornitori, modelli, cartelle…",
+    "noMatches": "Nessuna connessione corrispondente.",
     "imageGeneration": "Generazione immagini",
     "speechToText": "Da voce a testo",
     "textToSpeech": "Da testo a voce"

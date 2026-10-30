@@ -79,6 +79,14 @@ describe("OpenAI-compatible image providers", () => {
     expect(result.imageDataUrl).toBe(`data:image/png;base64,${Buffer.from("PNGDATA").toString("base64")}`);
   });
 
+  test.each(["black-forest-labs/FLUX.2-dev", "black-forest-labs/FLUX.1-kontext-pro"])("Together routes a single reference for %s", async (model) => {
+    fetchStub = stubFetch([{ json: { data: [{ b64_json: "QUJD" }] } }]);
+    await new TogetherImageProvider().generate("key", "", req(model, { resolvedSourceImages: [{ data: "QUJD", mimeType: "image/png" }] }));
+    const body = fetchStub.calls[0].body;
+    if (model.includes("kontext")) expect(body.image_url).toBe("data:image/png;base64,QUJD");
+    else expect(body.reference_images).toEqual(["data:image/png;base64,QUJD"]);
+  });
+
   test("Together tolerates a pasted /images/generations endpoint", async () => {
     fetchStub = stubFetch([{ json: { data: [{ b64_json: "aGVsbG8=" }] } }]);
     const provider = new TogetherImageProvider();

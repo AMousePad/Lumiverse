@@ -20,6 +20,12 @@ export function trimBaseUrl(url: string): string {
  */
 export async function toDataUrl(url: string, signal?: AbortSignal): Promise<string> {
   if (url.startsWith("data:")) return url;
+  // Bun's fetch also reads file:// URLs. Provider results must never select
+  // local files from the server hosting this connection.
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error("Provider image URLs must use HTTP or HTTPS");
+  }
   const res = await fetch(url, { signal });
   if (!res.ok) await throwProviderResponseError("Image", "image fetch", res);
   const bytes = Buffer.from(await res.arrayBuffer());

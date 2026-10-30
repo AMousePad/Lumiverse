@@ -48,6 +48,12 @@ dom.window.matchMedia = () => ({
 }) as any
 
 const t = (key: string, opts?: any) => opts?.file ? `${key}${opts.file}` : key
+// Folder save/cancel behavior is exercised with real managers in the browser test.
+mock.module('@/components/panels/connection-manager/ConnectionFolderField', () => ({
+  default: () => null,
+  useConnectionFolderDraft: () => ({ value: '', onChange: () => {} }),
+}))
+mock.module('@/hooks/useConnectionLibrary', () => ({ saveConnectionFolder: () => {} }))
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t }),
   Trans: ({ children }: { children?: unknown }) => children ?? null,

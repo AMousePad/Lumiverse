@@ -1,16 +1,18 @@
 // Real login, settings persistence and lazy locales, with isolated HTTP accounts.
-// Start Vite first; UI_LANGUAGE_URL defaults to http://127.0.0.1:5173.
+// Start Vite in unbundled mode first; UI_LANGUAGE_URL defaults to http://127.0.0.1:5173.
 import assert from 'node:assert/strict'
-import * as playwright from 'playwright'
+import { launchTestBrowser } from './browser-runtime.mjs'
 
 const base = process.env.UI_LANGUAGE_URL || 'http://127.0.0.1:5173'
 const fixture = await fetch(`${base}/tests/ui-language.fixture.html`).then(response => {
   assert.ok(response.ok, 'Vite must serve the language fixture')
   return response.text()
 })
+assert.match(fixture, /\/tests\/ui-language\.fixture\.tsx/, 'Start Vite in unbundled mode so it serves the language fixture')
 
 for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['chromium', 'firefox', 'webkit']) {
-  const browser = await playwright[engine].launch()
+  const launched = await launchTestBrowser(engine)
+  const { browser } = launched
   try {
     for (const width of [1280, 390]) {
       const accounts = new Map([['english', { uiLanguage: 'en' }], ['french', { uiLanguage: 'fr' }], ['legacy', {}]])
@@ -136,5 +138,5 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
         console.log(`${engine} ${width}px: login/recovery, reload, account persistence, second device, refresh and account isolation passed`)
       } finally { await Promise.all(contexts.map(context => context.close())) }
     }
-  } finally { await browser.close() }
+  } finally { await launched.close() }
 }

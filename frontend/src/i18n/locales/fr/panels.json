@@ -158,6 +158,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "Enregistrez ou annulez la modification de la connexion avant de supprimer son dossier.",
+    "newFolder": "Nouveau dossier",
+    "folder": "Dossier",
+    "invalidFolderName": "Choisissez un nom de dossier unique de 1 à 64 caractères. Sans catégorie est réservé.",
+    "deleteFolderMessage": "Supprimer « {{name}} » ? Ses connexions seront déplacées vers Sans catégorie.",
+    "allFolders": "Tous les dossiers",
+    "filterFolder": "Filtrer les connexions par dossier",
+    "search": "Rechercher des connexions, fournisseurs, modèles, dossiers…",
+    "noMatches": "Aucune connexion correspondante.",
     "imageGeneration": "Génération d'images",
     "speechToText": "Parole en texte",
     "textToSpeech": "Synthèse vocale"

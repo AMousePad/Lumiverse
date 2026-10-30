@@ -158,6 +158,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "删除文件夹前，请保存或取消连接编辑。",
+    "newFolder": "新建文件夹",
+    "folder": "文件夹",
+    "invalidFolderName": "请输入 1–64 个字符的唯一文件夹名称。“未分类”为保留名称。",
+    "deleteFolderMessage": "删除“{{name}}”？其中的连接将移至未分类。",
+    "allFolders": "所有文件夹",
+    "filterFolder": "按文件夹筛选连接",
+    "search": "搜索连接、提供商、模型、文件夹…",
+    "noMatches": "没有匹配的连接。",
     "imageGeneration": "图像生成",
     "speechToText": "语音转文字",
     "textToSpeech": "文字转语音"

@@ -1,3 +1,4 @@
+import { imageInputMechanism } from "../../../../src/image-gen/image-input"
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Image as ImageIcon, Trash2, Download, Upload } from 'lucide-react'
@@ -33,8 +34,6 @@ type RefImage = { data: string; mimeType?: string }
 const COMFY_CUSTOM_CONTROL_PREFIX = 'custom:'
 const DEFAULT_PROMPT_TIMEOUT_SECONDS = 60
 const DEFAULT_IMAGE_GEN_TIMEOUT_SECONDS = 300
-// Kept in sync with SOURCE_IMAGE_PROVIDERS in the backend image-gen service.
-const IMG2IMG_PROVIDERS = ['swarmui', 'comfyui', 'google_gemini', 'openrouter', 'openai', 'sdapi', 'xai', 'ideogram', 'bfl', 'fal', 'together', 'stability', 'runware']
 
 function toDataRef(file: File): Promise<RefImage> {
   return new Promise((resolve, reject) => {
@@ -369,7 +368,7 @@ export default function ImageGenPanel() {
 
   // Providers that accept image input: NovelAI/NanoGPT (style references) plus
   // the img2img providers, which reuse the same reference-image config surface.
-  const supportsImg2ImgSource = IMG2IMG_PROVIDERS.includes(providerName)
+  const supportsImg2ImgSource = imageInputMechanism(providerName, activeConnection?.model) !== null
   const supportsRefs = (providerName === 'novelai' && !isNovelAIV5) || providerName === 'nanogpt' || supportsImg2ImgSource
 
   const runGenerationCall = useCallback(async (input: {

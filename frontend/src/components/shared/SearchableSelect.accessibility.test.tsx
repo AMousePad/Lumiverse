@@ -76,6 +76,39 @@ function option(name: string) {
 }
 
 describe('SearchableSelect screen reader and keyboard behavior', () => {
+  test('recent shortcuts retain canonical options and have distinct keyboard positions', async () => {
+    await renderPicker({ recentValues: ['beta', 'missing', 'beta'] })
+    const recent = document.querySelector('[role="group"][aria-label="Recently Used"]')!
+    expect(recent.querySelectorAll('[role="option"]').length).toBe(1)
+    expect(document.querySelector('[role="group"][aria-label="Worlds"]')!.querySelectorAll('[role="option"]').length).toBe(3)
+    expect(document.activeElement === option('Beta')).toBe(true)
+    press(option('Beta'), 'ArrowDown')
+    expect(document.activeElement === option('Alpha')).toBe(true)
+    press(option('Alpha'), 'ArrowDown')
+    expect(document.activeElement?.textContent?.trim()).toBe('Beta')
+    expect(recent.contains(document.activeElement)).toBe(false)
+  })
+
+  test('honors saved folder order including Uncategorized and searches folder names', async () => {
+    await renderPicker({
+      forceSearch: true, groupOrder: ['', 'Zebra', 'Alpha'],
+      options: [
+        { value: 'a', label: 'First', group: 'Alpha' },
+        { value: 'z', label: 'Second', group: 'Zebra' },
+        { value: 'u', label: 'Third' },
+      ],
+    })
+    expect(Array.from(document.querySelectorAll('[role="group"]')).map(node => node.getAttribute('aria-label')))
+      .toEqual(['Uncategorized', 'Zebra', 'Alpha'])
+    const input = document.querySelector('input')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!.call(input, 'zebra')
+      input.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    })
+    expect(Array.from(document.querySelectorAll('[role="option"]')).map(node => node.textContent?.trim()))
+      .toEqual(['Second'])
+  })
+
   for (const portal of [false, true]) {
     test(`names the list, exposes groups, and moves option focus (portal=${portal})`, async () => {
       const trigger = await renderPicker({ portal })

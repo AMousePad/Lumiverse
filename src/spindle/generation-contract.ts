@@ -1,4 +1,8 @@
-import type { DryRunResultDTO as PublicDryRunResultDTO } from "lumiverse-spindle-types";
+import type {
+  DryRunResultDTO as PublicDryRunResultDTO,
+  LlmThinkingBlockDTO,
+  StreamChunkDTO,
+} from "lumiverse-spindle-types";
 import type { ContextClipStats } from "../llm/types";
 
 /** Host additions pending publication in lumiverse-spindle-types. */
@@ -7,6 +11,16 @@ export interface DryRunResultDTO extends PublicDryRunResultDTO {
   assistantPrefill?: string;
   chatHistoryTokens?: number;
   contextClipStats?: ContextClipStats;
+}
+
+/**
+ * Host additions pending publication in lumiverse-spindle-types: the terminal
+ * stream chunk carries the same reasoning blocks as GenerationResponseDTO, so a
+ * streamed tool call can be continued with them.
+ */
+export interface StreamDoneChunkDTO extends Extract<StreamChunkDTO, { type: "done" }> {
+  thinking_blocks?: LlmThinkingBlockDTO[];
+  reasoning_details?: Record<string, unknown>[];
 }
 
 export interface SavedBreakdownDTO {

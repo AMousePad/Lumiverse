@@ -276,7 +276,9 @@
     "failedSaveChatPersona": "이 채팅의 페르소나 저장에 실패했습니다",
     "noPresetForPromptVariables": "프롬프트 변수를 변경하기 전에 프리셋을 선택하십시오",
     "failedLoadPromptVariables": "프롬프트 변수 불러오기에 실패했습니다",
-    "failedSavePromptVariables": "프롬프트 변수 저장에 실패했습니다"
+    "failedSavePromptVariables": "프롬프트 변수 저장에 실패했습니다",
+    "roomMessageUnconfirmed": "채팅방에서 메시지를 확인하지 못했습니다. 초안은 보관되어 있습니다. 다시 시도하기 전에 채팅을 확인하세요.",
+    "messageDraftKept": "메시지를 확인하지 못했습니다 — 초안은 보관되어 있습니다"
   },
   "addGroupMember": {
     "title": "그룹 멤버 추가",

@@ -65,6 +65,7 @@ export const BUILT_IN_DRAWER_TABS: readonly SpindleUIDrawerTabEntry[] = [
 export const BUILT_IN_SETTINGS_TABS: readonly SpindleUISettingsTabEntry[] = [
   { id: "account", shortName: "Account", tabName: "Account Settings", tabDescription: "Manage your account details and password", keywords: ["account", "profile", "password", "credentials", "security", "me"] },
   { id: "display", shortName: "Display", tabName: "Display & Layout", tabDescription: "Panel width, sidebar position, and layout options", keywords: ["display", "layout", "sidebar", "drawer", "width", "panel", "position", "modal", "chat heads"] },
+  { id: "keyBindings", shortName: "Key Bindings", tabName: "Key Bindings", tabDescription: "Configure desktop, application and Spindle shortcuts", keywords: ["keyboard", "keybindings", "hotkeys", "shortcuts", "global", "desktop", "spindle"] },
   { id: "chat", shortName: "Chat", tabName: "Chat Behavior", tabDescription: "Message display mode, send key, and chat options", keywords: ["chat", "behavior", "enter to send", "bubble", "minimal", "immersive", "streaming", "message"] },
   { id: "extensions", shortName: "Extensions", tabName: "Extension Settings", tabDescription: "Manage Spindle extension configuration", keywords: ["extensions", "spindle", "plugins", "addons", "settings"] },
   { id: "guided", shortName: "Guided Gen", tabName: "Guided Generation", tabDescription: "Configure guided generation sequences and prompt biases", keywords: ["guided", "generation", "sequences", "bias", "prompt", "persistent"] },

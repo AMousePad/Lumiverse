@@ -87,6 +87,11 @@ export class CivitaiImageProvider implements ImageProvider {
         description: "Number of images to generate",
         group: "advanced",
       },
+      seed: {
+        type: "integer",
+        description: "Random seed for reproducibility (leave empty for random)",
+        group: "advanced",
+      },
       loras: {
         type: "string",
         description: 'JSON map of LoRA AIR URN to strength, e.g. {"urn:air:anima:lora:civitai:123456@789012": 0.8}',
@@ -129,6 +134,7 @@ export class CivitaiImageProvider implements ImageProvider {
 
   async generate(apiKey: string, apiUrl: string, request: ImageGenRequest): Promise<ImageGenResponse> {
     const params = request.parameters;
+    const model = request.model || "anima";
     const base = this.baseUrl(apiUrl);
     const headers = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
 
@@ -140,6 +146,9 @@ export class CivitaiImageProvider implements ImageProvider {
       width: params.width != null ? Number(params.width) : 1024,
       height: params.height != null ? Number(params.height) : 1024,
     };
+    // Anima ships its own model; SD checkpoints require the selected AIR URN.
+    if (model !== "anima") input.model = model;
+    if (params.seed != null && Number.isFinite(Number(params.seed))) input.seed = Number(params.seed);
     if (request.negativePrompt) input.negativePrompt = request.negativePrompt;
     if (params.cfgScale != null && Number.isFinite(Number(params.cfgScale))) input.cfgScale = Number(params.cfgScale);
     if (params.steps != null && Number.isFinite(Number(params.steps))) input.steps = Number(params.steps);
@@ -193,7 +202,7 @@ export class CivitaiImageProvider implements ImageProvider {
 
     const url = firstImageUrl(workflow);
     if (!url) throw new Error("Civitai returned no image data");
-    return { imageDataUrl: await toDataUrl(url, request.signal), model: request.model, provider: this.name };
+    return { imageDataUrl: await toDataUrl(url, request.signal), model, provider: this.name };
   }
 
   async validateKey(apiKey: string, _apiUrl: string): Promise<boolean> {
@@ -227,20 +236,14 @@ function parseLoras(raw: unknown): Record<string, number> | undefined {
   return undefined;
 }
 
-function collectImages(node: any, out: string[]): void {
-  if (!node || typeof node !== "object") return;
-  if (Array.isArray(node)) {
-    for (const item of node) collectImages(item, out);
-    return;
-  }
-  if (typeof node.url === "string" && /^https?:/.test(node.url)) out.push(node.url);
-  for (const value of Object.values(node)) collectImages(value, out);
-}
-
 function firstImageUrl(workflow: any): string | undefined {
-  const out: string[] = [];
-  collectImages(workflow, out);
-  return out[0];
+  // Read generated output only: workflows can also echo URLs in their inputs.
+  for (const step of workflow?.steps ?? []) {
+    for (const image of step?.output?.images ?? []) {
+      if (typeof image?.url === "string" && /^https?:/.test(image.url)) return image.url;
+    }
+  }
+  return undefined;
 }
 
 function hasImages(workflow: any): boolean {

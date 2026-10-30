@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { build } from '../../frontend/node_modules/esbuild/lib/main.js'
 import * as playwright from 'playwright'
+import { launchTestBrowser } from './browser-runtime.mjs'
 
 const bundle = await build({
   absWorkingDir: fileURLToPath(new URL('../../', import.meta.url)),
@@ -23,7 +24,7 @@ const js = bundle.outputFiles.find(f => f.path.endsWith('.js')).text
 const css = bundle.outputFiles.find(f => f.path.endsWith('.css')).text
 const server = createServer((req, res) => {
   res.setHeader('Content-Type', req.url === '/fixture.js' ? 'text/javascript' : 'text/html')
-  res.end(req.url === '/fixture.js' ? js : `<html><head><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
+  res.end(req.url === '/fixture.js' ? js : `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const url = `http://127.0.0.1:${server.address().port}`
@@ -37,8 +38,9 @@ const openDevice = async page => {
 }
 
 try {
-  for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ['chromium', 'webkit']) {
-    const browser = await playwright[name].launch({ headless: true })
+  for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ['chromium', 'firefox', 'webkit']) {
+    const launched = await launchTestBrowser(name)
+    const { browser } = launched
     try {
       for (const mobile of [false, true]) {
         const context = await browser.newContext(mobile
@@ -65,6 +67,7 @@ try {
           await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
           await settle(page)
           assert.equal(await scale(page), 1)
+          assert.equal(Number(await slider.inputValue()), 1, 'released slider value matches the committed scale')
           await slider.focus()
           for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowLeft')
           await settle(page)
@@ -134,6 +137,6 @@ try {
         await context.close()
         console.log(`${name}/${mobile ? 'iPhone' : 'desktop'}: passed`)
       }
-    } finally { await browser.close() }
+    } finally { await launched.close() }
   }
 } finally { await new Promise(resolve => server.close(resolve)) }

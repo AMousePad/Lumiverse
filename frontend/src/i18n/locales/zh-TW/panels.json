@@ -158,6 +158,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "刪除資料夾前，請儲存或取消連線編輯。",
+    "newFolder": "新增資料夾",
+    "folder": "資料夾",
+    "invalidFolderName": "請輸入 1–64 個字元的唯一資料夾名稱。「未分類」為保留名稱。",
+    "deleteFolderMessage": "刪除「{{name}}」？其中的連線將移至未分類。",
+    "allFolders": "所有資料夾",
+    "filterFolder": "依資料夾篩選連線",
+    "search": "搜尋連線、供應商、模型、資料夾…",
+    "noMatches": "沒有符合的連線。",
     "imageGeneration": "圖像生成",
     "speechToText": "語音轉文字",
     "textToSpeech": "文字轉語音"

@@ -91,8 +91,10 @@ export class TogetherImageProvider extends OpenAiCompatibleImageProvider {
     // (FLUX.2, Gemini) or `image_url` (FLUX.1 Kontext). Both endpoints live on
     // `/images/generations`, so there is no multipart edit path to route to.
     const sources = sourceImages(params);
-    if (sources.length === 1) extra.image_url = asDataUrl(sources[0]);
-    else if (sources.length > 1) extra.reference_images = sources.map((src) => asDataUrl(src));
+    if (sources.length > 0) {
+      if (/kontext/i.test(request.model)) extra.image_url = asDataUrl(sources[0]);
+      else extra.reference_images = sources.map((src) => asDataUrl(src));
+    }
     return extra;
   }
 

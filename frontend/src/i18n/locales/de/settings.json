@@ -530,7 +530,21 @@
     "preventDroppedMessageWarningHint": "Keine Warn-Toasts mehr anzeigen, wenn ältere Chatnachrichten aus dem Generierungskontext fallen.",
     "swipeTitle": "Swipe-Navigation",
     "swipeHelper": "Navigieren Sie durch Nachrichten-Swipes per Touch-Gesten (mobil) oder Pfeiltasten (Desktop). Halten Sie Umschalt gedrückt und fahren Sie über eine Nachricht, um sie gezielt auszuwählen.",
-    "swipeGestures": "Swipe-Gesten & Tastenkürzel aktivieren"
+    "swipeGestures": "Swipe-Gesten & Tastenkürzel aktivieren",
+    "inlineImages": {
+      "title": "Inline-Bilder",
+      "size": "Größe der Inline-Bilder",
+      "hint": "Wähle, für welche Bildtypen diese Einstellungen gelten, einschließlich Bildern in Begrüßungen und HTML-Abschnitten. Prozentwerte skalieren Bilder relativ zur Nachrichtenbreite und behalten ihre Proportionen bei. Standard behält die bisherige Größe bei.",
+      "default": "Standard",
+      "applyTo": "Anwenden auf",
+      "markdown": "Markdown- / Asset-Bilder",
+      "html": "HTML- / XML-Bilder",
+      "attachments": "Anhänge",
+      "alignment": "Bildausrichtung",
+      "left": "Links",
+      "center": "Zentriert",
+      "right": "Rechts"
+    }
   },
   "extensions": {
     "title": "Erweiterungseinstellungen",
@@ -820,7 +834,11 @@
     "importFailed": "Import fehlgeschlagen",
     "exportPrepareFailed": "Exportvorbereitung fehlgeschlagen",
     "exportAnchorMissing": "Intern: Download-Anker fehlt",
-    "exportTableSuffix": " ({{processed}})"
+    "exportTableSuffix": " ({{processed}})",
+    "extracting": "Archiv wird entpackt… {{done}} / {{total}} GiB",
+    "importInterrupted": "Der lokale Server wurde beendet, bevor der Import abgeschlossen war.",
+    "resumeImport": "Import fortsetzen",
+    "resumeHint": "Setze den Import mit dem gespeicherten Archiv fort. Bereits wiederhergestellte Daten bleiben erhalten. Bei verschlüsselten Backups wird möglicherweise erneut nach dem Entschlüsselungsticket gefragt."
   },
   "advanced": {
     "title": "Erweitert",
@@ -1310,7 +1328,15 @@
     "rebuildBatchesInFlight": "{{count}} Stapel in Bearbeitung",
     "rebuildBatchesInFlight_other": "{{count}} Stapel in Bearbeitung",
     "rebuildLastRequest": "letzte Anfrage vor {{seconds}} s",
-    "rebuildLastResponse": "letzte Antwort {{seconds}} s"
+    "rebuildLastResponse": "letzte Antwort {{seconds}} s",
+    "arbitrationTitle": "Kandidatenprüfung",
+    "decisionConnection": "Decision-Verbindung",
+    "useConnectionDefault": "Verbindungsstandard verwenden",
+    "arbitrationConfidence": "Mindestkonfidenz",
+    "arbitrationInputLimit": "Eingabelimit des Prüfmodells (Tokens)",
+    "arbitrationInputLimitHint": "Passe den Wert an das auf deinem Decision-Server konfigurierte Eingabefenster an. Der Standardwert beträgt 16.384 Tokens. Anfragen reservieren einen Puffer und teilen Kandidaten in kleinere Gruppen auf, ohne die Passage oder Belege zu kürzen. Passt ein einzelner Kandidat nicht hinein, bleibt der Abschnitt ausstehend.",
+    "arbitrationTimeout": "Zeitlimit für die Prüfung (Sekunden)",
+    "arbitrationHint": "Die Decision-Prüfung verwendet eine separate Decision-Verbindung und kann auch heuristische Extraktionen prüfen. Bei geringer Konfidenz wird ein Kandidat zurückgestellt; fehlgeschlagene oder unvollständige Prüfungen lassen den Abschnitt für einen erneuten Versuch ausstehend. KI-Extraktion und Zusammenfassungen verwenden weiterhin den Sidecar."
   },
   "operator": {
     "serverControls": "Serversteuerung",

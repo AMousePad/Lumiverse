@@ -133,8 +133,7 @@ export class ReplicateImageProvider implements ImageProvider {
       const res = await fetch("https://api.replicate.com/v1/account", {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
-      if (res.ok) return true;
-      if (res.status === 401 || res.status === 403) await throwProviderResponseError(this.displayName, "authentication", res);
+      if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return true;
     } catch (err) {
       if (err instanceof ProviderRequestError) throw err;
