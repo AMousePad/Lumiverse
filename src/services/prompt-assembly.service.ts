@@ -4370,12 +4370,6 @@ export async function assemblePrompt(
   stripEmptyTextParts(result);
   profiler.addPhase("post-assembly-injections", performance.now() - phaseStartedAt);
 
-  // ---- Collapse all messages into a single user message (if enabled) ----
-  const advSettings: AdvancedSettings | undefined = prompts.advancedSettings;
-  if (advSettings?.collapseMessages) {
-    collapseToSingleUserMessage(result);
-  }
-
   // ---- Build parameters from sampler overrides + advanced settings + reasoning + custom body ----
   const parameters = buildParameters(
     samplerOverrides,
@@ -4570,6 +4564,7 @@ export async function assemblePrompt(
       ? { resolvedPreset: { id: preset.id, name: preset.name, metadata: preset.metadata } }
       : {}),
     trimIncompleteWords: prompts.advancedSettings?.trimIncompleteWords === true,
+    collapseMessages: prompts.advancedSettings?.collapseMessages === true,
     assistantPrefill,
     assistantReasoningPrefill,
     activatedWorldInfo:
@@ -7175,7 +7170,7 @@ function applyCompletionSettings(
  *
  * Mutates the `result` array in place.
  */
-function collapseToSingleUserMessage(result: LlmMessage[]): void {
+export function collapseToSingleUserMessage(result: LlmMessage[]): void {
   if (result.length <= 1) return;
 
   const textChunks: string[] = [];
