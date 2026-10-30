@@ -26,6 +26,21 @@ describe("getToolChoiceParams", () => {
 });
 
 describe("parseToolCallResults", () => {
+  test("resolves trusted labels before validating names across all entity categories", () => {
+    const names = ["Still in Love", "New Eridu", "Dawnbreaker", "Azure Guard", "Black Tide Incident", "Silver Oath"];
+    const types = ["character", "location", "item", "faction", "event", "concept"];
+    const labels = names.map((name) => `${name} | A Very Long Descriptive Display Title`);
+    const result = parseToolCallResults([
+      { name: "extract_entities", args: { entities: [...labels.map((name, i) => ({ name, type: types[i] })),
+        { name: "Unknown | A Very Long Descriptive Display Title", type: "character" }] } },
+      { name: "extract_relationships", args: { relationships: [{ source: labels[0], target: labels[1], type: "located_in", label: "arrived", sentiment: 0 }] } },
+      { name: "extract_font_colors", args: { color_attributions: [{ hex_color: "#abc", character_name: labels[0], usage_type: "speech" }] } },
+    ], { knownEntities: names.map((name, i) => ({ name, type: types[i]!, aliases: [labels[i]!] })) });
+    expect(result.entitiesPresent.map((entity) => entity.name)).toEqual(names);
+    expect(result.relationshipsShown[0]).toMatchObject({ source: names[0], target: names[1], type: "located_in" });
+    expect(result.fontColors[0]?.characterName).toBe(names[0]);
+  });
+
   test("normalizes actual font colors and rejects invalid colors or usage types", () => {
     const result = parseToolCallResults([{ name: "extract_font_colors", args: { color_attributions: [
       { hex_color: "#abc", character_name: "Melina", usage_type: "thought" },

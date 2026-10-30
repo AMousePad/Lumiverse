@@ -102,11 +102,36 @@ test("facts attach to explicit names and aliases with word boundaries", () => {
   expect(result.get("Tovin")).toEqual(["Mara saved Tovin."]);
 });
 
+test("review retains unambiguous short-name identity hints without persisting unreviewed aliases", () => {
+  const plan = buildCortexArbitrationPlan({ passage: "Pulchra entered New Eridu.", knownEntities: [],
+    characterNames: ["Pulchra Fellini"], gradeExisting: false, graph: {
+      entities: [{ name: "Pulchra Fellini", type: "character", aliases: [], confidence: 1 }],
+      relationships: [], aliases: [],
+    } });
+  const [batch] = buildArbitrationBatches(plan.input);
+  expect((batch!.state as any).canonicals[0]).toMatchObject({ name: "Pulchra Fellini", nameParts: ["Pulchra", "Fellini"] });
+  expect(batch!.questions.e0!.instructions).toContain("A single clear mention is sufficient");
+  expect(batch!.questions.e0!.instructions).toContain("nameParts");
+  const kept = plan.apply([{ id: "e0", action: "keep" }]);
+  expect(kept.graph.entities[0]!.aliases).toEqual([]);
+  expect(kept.graph.aliases).toEqual([]);
+});
+
+test("short-name identity hints exclude ambiguous parts and other entity names", () => {
+  const plan = buildCortexArbitrationPlan({ passage: "Mara met Voss.", knownEntities: [],
+    characterNames: ["Mara Voss", "Mara Vale", "Voss"], gradeExisting: false,
+    graph: { entities: [], relationships: [], aliases: [] } });
+  const first = plan.input.canonicals.find((c) => c.name === "Mara Voss")!;
+  expect((first as any).nameParts ?? []).toEqual([]);
+  expect((plan.input.canonicals.find((c) => c.name === "Mara Vale") as any).nameParts).toEqual(["Vale"]);
+});
+
 test("new alias proposals cannot become canonical hints before review", () => {
-  const plan = buildCortexArbitrationPlan({ passage: "Red met Mara.", knownEntities: [], characterNames: [], gradeExisting: false,
+  const plan = buildCortexArbitrationPlan({ passage: "Mara introduced herself as Red.", knownEntities: [], characterNames: [], gradeExisting: false,
     canonicalAliases: new Map([["M", "Mara"]]), graph: {
       entities: [{ name: "Mara", type: "character", aliases: ["Invented"], confidence: 0.9 },
-        { name: "Red", type: "concept", aliases: [], confidence: 0.5, provisional: true }], aliases: [], relationships: [],
+        { name: "Red", type: "concept", aliases: [], confidence: 0.5, provisional: true }],
+      aliases: [{ alias: "Red", canonicalName: "Mara", evidence: "Mara introduced herself as Red." }], relationships: [],
     } });
   expect(plan.input.canonicals[0]?.aliases).toEqual(["M"]);
   const result = plan.apply(plan.input.candidates.map((c) => c.id === "e1"
@@ -127,7 +152,7 @@ test("ambiguous accepted aliases cannot redirect a relationship endpoint", () =>
 
 test("color claims are reviewed independently and follow only accepted character identities", () => {
   const plan = buildCortexArbitrationPlan({ passage: '*<font color="#abc">Red thought of home.</font>*',
-    knownEntities: [], characterNames: ["Mara"], gradeExisting: false, graph: {
+    knownEntities: [], characterNames: ["Mara"], canonicalAliases: new Map([["Red", "Mara"]]), gradeExisting: false, graph: {
       entities: [{ name: "Red", type: "character", aliases: [], confidence: 0.8 }], relationships: [], aliases: [],
       colors: [{ hexColor: "#aabbcc", entityName: "Red", usageType: "thought", confidence: 0.8, evidence: ['*<font color="#abc">Red thought of home.</font>*'] }],
     } });
@@ -140,4 +165,35 @@ test("color claims are reviewed independently and follow only accepted character
   }
   expect(plan.apply([{ id: "e0", action: "reject" }, { id: "f0", action: "keep" }]).graph.colors).toEqual([]);
   expect(() => plan.apply([verdicts[0]!])).toThrow("Incomplete");
+});
+
+test("each review question directly states its subject and uses distinct outcomes", () => {
+  const [batch] = buildArbitrationBatches({ passage: "Mara met Tovin.", canonicals: [], candidates: [
+    { id: "e0", kind: "entity", name: "Mara", type: "character" },
+    { id: "r0", kind: "relationship", source: "Mara", target: "Tovin", type: "mentor" },
+    { id: "a0", kind: "alias", source: "Red", target: "Mara" },
+  ] });
+  expect(batch!.questions.e0!.instructions).toStartWith('Does the passage mention or refer to "Mara"');
+  expect(batch!.questions.r0!.instructions).toStartWith('Does the passage support "Mara" as mentor of "Tovin"');
+  expect(batch!.questions.a0!.instructions).toStartWith('Does "Red" refer to "Mara"');
+  const entityQuestion = batch!.questions.e0!;
+  if (entityQuestion.type !== "choice") throw new Error("Expected a Choice question");
+  expect(entityQuestion.criteria.reject).toContain("no reference");
+  expect(entityQuestion.criteria.defer).toContain("ambiguous");
+  expect(String(batch!.questions.e0!.instructions).length).toBeLessThan(1400);
+  expect(String(batch!.questions.r0!.instructions)).not.toContain("For lover");
+});
+
+test("co-presence alone does not turn unrelated entities into identity choices", () => {
+  const names = ["Darran", "Mara", "Tovin", "New Eridu", "Triple Tiara", "Arima Kinen"];
+  const plan = buildCortexArbitrationPlan({ passage: names.join(" met "), characterNames: ["Darran", "Mara"],
+    knownEntities: [], gradeExisting: false, graph: {
+      entities: names.map((name) => ({ name, type: "concept", confidence: 0.9, aliases: [] })),
+      relationships: [], aliases: [],
+    } });
+  const [batch] = buildArbitrationBatches(plan.input);
+  for (const question of Object.values(batch!.questions)) {
+    if (question.type !== "choice") throw new Error("Expected a Choice question");
+    expect(Object.keys(question.criteria)).toEqual(["keep", "reject", "defer"]);
+  }
 });

@@ -12,6 +12,33 @@ import type { SidecarExtractionResult, SidecarFontColor, DiscoveredAlias, Emotio
 import { normalizeFontColor, type ThoughtDelimiters } from "./font-attribution";
 import { buildConversationHint, type CortexParticipant } from "./conversation-context";
 import { scoreChunkHeuristic } from "./salience-heuristic";
+import { buildCortexIdentityContext } from "./identity-context";
+
+interface ExtractionIdentityOptions {
+  characterNames?: string[];
+  participants?: CortexParticipant[];
+  knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
+  descriptionAliases?: Array<{ alias: string; canonicalName: string }>;
+}
+
+/** Resolve trusted identity labels before structural validation can discard a
+ * long/decorated author label and its otherwise valid relationship endpoint. */
+function normalizeExtractionNames(raw: any, options?: ExtractionIdentityOptions) {
+  const identity = buildCortexIdentityContext(options?.characterNames ?? [], options?.knownEntities ?? [],
+    new Map(options?.descriptionAliases?.map(({ alias, canonicalName }) => [alias, canonicalName])), options?.participants);
+  const rows = (value: any, fields: string[]) => Array.isArray(value) ? value.map((entry: any) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const copy = { ...entry };
+    for (const field of fields) if (typeof copy[field] === "string") copy[field] = identity.canonicalize(copy[field]);
+    return copy;
+  }) : value;
+  return { ...raw,
+    entities_present: rows(raw.entities_present, ["name"]), entities: rows(raw.entities, ["name"]),
+    relationships_shown: rows(raw.relationships_shown, ["source", "target"]), relationships: rows(raw.relationships, ["source", "target"]),
+    status_changes: rows(raw.status_changes, ["entity"]), color_attributions: rows(raw.color_attributions, ["character_name"]),
+    discovered_aliases: rows(raw.discovered_aliases, ["canonical_name"]),
+  };
+}
 
 // ─── Tool-Based Structured Extraction ──────────────────────────
 // Native tool/function calling — every provider supports this natively.
@@ -49,76 +76,31 @@ const EXTRACTION_GLOBAL_RULES = `GLOBAL RULES
 
 // Entity, alias, relationship, scoring and font color rules, shared verbatim by
 // both extraction paths so behavior stays identical regardless of batching.
-const EXTRACTION_RULES = `ENTITY RULES
-An entity is a proper name for a SPECIFIC, RECURRING character, place, item, faction, event, or named concept the story will refer back to. Throwaway descriptive labels, running gags, and one-off riffs are NOT entities, even when title-cased.
+const EXTRACTION_RULES = `ENTITIES AND IDENTITY
+- Extract specific named characters, locations, items, factions, events and concepts. A single clear mention is sufficient, including direct address or a reference to someone absent. Recurrence, importance and relationships are not prerequisites.
+- Preserve the complete proper name, including lowercase connecting words, punctuation and accents. Do not split a name into title-cased fragments or attach a card subtitle to it.
+- Use supplied canonical names for established identities. Card display labels and supplied aliases identify that same entity; they are not additional entities. For a new identity use its exact proper name from the passage.
+- Exclude generic objects/descriptions, prose fragments, vocalizations, meta/system references and HUD scaffolding. An ordinary word can be a legitimate fictional name: judge its use, not a word blacklist.
+- Resolve participant references from message prefixes and conversation_participants. I/me/my follows the current viewpoint unless someone else is explicitly attributed. You/your refers to the unique opposite-role participant in a direct exchange unless local evidence addresses someone else. Do not guess in groups or treat every character in a message as its author.
+- Report a supported nickname or shortened reference in discovered_aliases with its canonical_name and evidence; never also emit it as a separate entity. Supplied canonical_aliases are identity mappings. Superficial similarity alone does not establish a new alias.
 
-Do NOT extract any of the following, regardless of capitalization:
-- Common words capitalized only because of sentence-start, formatting, or emphasis (including ALL-CAPS shouting).
-- Verbs, adjectives, adverbs, interjections, or sentence fragments.
-- Onomatopoeia and non-word vocalizations — clusters that represent a sound rather than name a thing or person.
-- Verb phrases (a transitive verb followed by its object), even when title-cased — these describe an action, not a recurring named entity.
-- Compound descriptive phrases whose HEAD word is a common English noun and the remainder is generic — these are running labels or jokes (modifier + common-noun head + optional generic given name), not separate entities. If you mentally remove the head common noun and the result is still a recognizable canonical name, treat the whole phrase as a nickname/alias of that canonical, not a new entity.
-- Common-noun objects even when title-cased, unless the passage explicitly elevates them with a proper title (e.g. naming a specific weapon, vessel, or artifact).
-- External real-world games, brands, apps, platforms, social networks, or trademarks, unless the story's setting itself IS that thing.
-- Meta-references used by every roleplay system: User, You, AI, Player, Narrator, Character, Assistant, System, Bot, Human, NPC, OOC.
-- Pronouns and pronoun-only references.
-- Tracker/header scaffolding such as timestamps, weather labels, status readouts, HUD labels, emoji wrappers, or repeated metadata blocks (unless they contain a real proper name that recurs outside the scaffold).
+RELATIONSHIPS
+- Resolve endpoints including message prefixes, supplied aliases, and unambiguous pronouns. Include both resolved endpoints in entities_present even when names are absent from the body.
+- Record concrete connections stated or demonstrated by dialogue/actions: commitments, training/mentorship, family, cooperation, hostility and romantic interest. A single supported development counts; no long history or formal declaration is required.
+- A love interest is a relationship even before a formal partnership. Use lover for supported romantic interest, courtship, romantic kissing, confessions or partners, with a precise label. Do not invent reciprocity, exclusivity, marriage or sex. Room-sharing, co-presence and routine conversation alone are insufficient.
+- Negated, hypothetical, mocking and third-party affection do not establish romance for this pair. Words inside proper names or card titles are not relationship evidence.
+- Direction is source relative to target: parent = parent to child; child = child to parent; mentor = teacher/trainer to student; serves = subordinate to superior; owns = owner to possession; member_of = member to group; located_in = entity to place; fears = fearful entity to target. A student is not a child.
 
-Prefer "no entity" over "wrong entity". When in doubt, omit.
+FACTS AND IMPORTANCE
+- key_facts are self-contained, concrete statements supported by the passage. Write the relevant canonical entity names explicitly instead of unresolved I/you/she/he references. Resolve these only when passage viewpoint and identity metadata make the subject clear.
+- Include durable developments such as agreements, promises, training commitments, confessions, discoveries, arrivals, departures and status changes. An uneventful passage can still contain a useful fact. Do not replace facts with themes, emotional impressions or personality judgments.
+- Score importance from 0 to 10 by lasting consequence, not prose intensity. Treat facts, relationships and importance as separate judgments; low importance alone does not mean there are no facts or relationships.
 
-KNOWN ENTITY RULE
-When known entities are supplied with aliases, ALWAYS use the canonical name in output, never the alias. For truly new entities, use the exact proper name from the passage.
-Configured participants referenced through unambiguous I/you narration are named entities even when their proper names appear only in message prefixes or identity metadata. Emit their canonical names, not pronouns.
-
-CANONICAL ALIAS RULE
-When a <canonical_aliases> block is present in the user message, treat it as authoritative — it comes from character/persona definitions, not heuristic guessing.
-- If the passage uses an alias from the left side, emit the canonical name on the right side everywhere (extract_entities, extract_relationships, status_changes, color_attributions).
-- Never emit an entity whose name is one of the aliases on the left side.
-
-ALIAS RULE
-A nickname, diminutive, affectionate variant, descriptive riff, or shortened/extended form of a known character's name is an ALIAS, not a new entity. Report it via discovered_aliases pointing at the canonical name; do NOT also create a separate entity for it.
-
-Sufficient evidence for a discovered_alias is ANY ONE of:
-- Explicit declaration patterns: "call me X", "known as X", "X, nicknamed Y", "X (Y)".
-- A short form clearly derived from a known canonical (shares its root, initial syllables, or stem) used to refer to that character in context.
-- A compound nickname that CONTAINS a recognizable diminutive or part of a known canonical's name. Modifiers, adjectives, jokes, or descriptors prefixed/appended onto a recognizable shortened form do NOT create a new entity — the whole phrase is one alias of the canonical character.
-- A first-name-only or last-name-only reference that unambiguously resolves to a known full-name canonical in the chat.
-- Possessive or addressed forms ("my X", "hey X", "X's …") where the recipient is unambiguously a known character.
-
-When you detect an alias:
-1. Do NOT include the alias as its own entry in entities_present.
-2. DO include it in discovered_aliases with canonical_name = the known canonical, alias = the surface form, and brief evidence from the passage.
-
-Do NOT report aliases on superficial similarity alone (no shared substring, no shared role, no addressing, no clear in-passage referent). When unsure, omit.
-
-RELATIONSHIP RULES
-- Output canonical proper names for both endpoints. Resolve references from the passage, including message prefixes, supplied aliases, and unambiguous pronouns; the two names need not be spelled out in the same sentence.
-- In first-person narration, I/me/my refers to the current [CHARACTER | Name] or [USER | Name] viewpoint unless explicit attribution identifies another speaker/thinker. Use conversation_participants identity metadata to resolve you/your to the unique opposite-role participant in a direct exchange unless local evidence addresses someone else. Do not guess in group scenes or assign every nearby name to it. A message author may also write other characters.
-- Include both resolved endpoints in entities_present, even when one appears only through a prefix, alias or unambiguous pronoun. Do not emit pronouns as entity names.
-- Record connections supported by concrete statements, actions or dialogue. Relationships need not be enduring, exclusive or formally declared.
-- Use lover for supported romantic interest or affection, including love interests, courtship, romantic kissing, confessions and established partners. A love interest is a relationship even before a formal partnership. Use a precise label such as romantic interest or dating; do not invent reciprocity, exclusivity, marriage, sex or a history. Room-sharing alone is insufficient. Negated, hypothetical, mocking or third-party affection is not evidence for this pair.
-- Direction describes the source relative to the target: parent = parent to child; child = child to parent; mentor = teacher to student; serves = subordinate to superior; owns = owner to possession; member_of = member to group; located_in = entity to place; fears = fearful entity to feared entity. Do not reverse these roles or turn a student into a child.
-- Do NOT create a relationship just because two named entities appear in the same scene, speak once, stand near each other, or are mentioned together.
-- Do NOT infer hidden history, likely alliances, family ties, or romance unless the passage itself supports it.
-- Return no relationship for routine transient interactions without a relationship signal. A romantic confession or clearly romantic action is itself a relationship signal; do not omit it merely because it occurs in one passage.
-
-SCORING RULES
-- Importance is about lasting narrative consequence, not prose intensity.
-- Score high for durable changes: deaths, betrayals, discoveries, promises, arrivals, departures, confessions, transformations, status shifts, major gains/losses.
-- Score low for filler, routine banter, scene dressing, repeated habits, or atmospheric prose with no lasting consequence.
-- key_facts must be concrete, verifiable statements traceable to the passage. Prefer durable developments over filler.
-- Do NOT put impressions, themes, personality judgments, or unsupported interpretations in key_facts.
-
-FONT COLOR RULES
-- Only report colors that are actually present in HTML color tags in the passage.
-- Inspect BOTH the colored text and wrappers around the color tag: *<font color="#abc">text</font>* and <font color="#abc">*text*</font> use the same thought/italic channel. The same applies to _..._, <i>, <em>, and any configured thought markers supplied with the passage.
-- Determine usage before ownership: a thought/italic wrapper takes precedence over quotation marks inside it. *"I should leave"* is thought, not speech. Quotes outside a thought wrapper indicate speech. Plain descriptive/action prose is narration; bold emphasis alone is not a thought marker.
-- Map each observed color AND usage to its actual speaker/thinker, using explicit dialogue/thought attribution, local viewpoint, and the current message's [CHARACTER | Name] or [USER | Name] prefix. One message author can write several characters.
-- A standalone first-person thought paragraph continues the established first-person viewpoint of its current message, including My/my/MY references. Other characters appearing in separate paragraphs do not change that viewpoint. Explicit attribution to a different thinker takes precedence.
-- A character addressed or mentioned inside someone else's speech/thought is not necessarily its owner. Do not attribute "Kael, help me" to Kael just because his name appears.
-- A character can use the same color for speech and thought: report both usage types when both are present. Do not assume a color belongs exclusively to one character or that an earlier color claim is evidence for this passage.
-- Normalize short hex, named colors and rgb values to #rrggbb. Never invent a color absent from the markup.
-- If the owner of a color is unclear, omit that attribution instead of guessing.`;
+FONT COLORS
+- Report only colors present in HTML color markup. Normalize short hex, named colors and rgb to #rrggbb.
+- Determine usage first: a thought/italic wrapper takes precedence over quotation marks, inside or outside the color tag. *...*, _..._, <i>, <em> and configured markers indicate thought; otherwise quoted dialogue is speech and descriptive/action prose is narration.
+- A standalone first-person thought paragraph continues the established message viewpoint, including My/my/MY. Explicit attribution to another thinker wins. One author can write multiple characters.
+- Attribute each color/usage to its speaker or thinker using local evidence. An addressed name, previous mapping or shared color does not prove ownership. A color can have both speech and thought: report both usage types when supported. Omit uncertain owners; never invent a color.`;
 
 const EXTRACTION_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
 
@@ -381,6 +363,7 @@ export function getToolChoiceParams(provider: string): Record<string, any> {
  */
 export function parseToolCallResults(
   toolCalls: Array<{ name: string; args: Record<string, unknown> }>,
+  options?: ExtractionIdentityOptions,
 ): SidecarExtractionResult {
   let importance = 5;
   let emotionalTags: string[] = [];
@@ -396,7 +379,7 @@ export function parseToolCallResults(
     // Sidecar providers are external and occasionally return sparse tool-call
     // arrays. Ignore malformed entries rather than failing the whole passage.
     if (!call || typeof call.name !== "string" || !call.args || typeof call.args !== "object") continue;
-    const args = call.args as any;
+    const args = normalizeExtractionNames(call.args, options);
     switch (call.name) {
       case "score_salience":
         importance = typeof args.importance === "number" ? args.importance : 5;
@@ -593,12 +576,10 @@ function validateExtractionTools(calls: Array<{ name: string; args: Record<strin
 // Validate a parsed JSON extraction object into a SidecarExtractionResult.
 function buildResultFromJsonObject(
   json: any,
-  options?: {
-    characterNames?: string[];
-    knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
-  },
+  options?: ExtractionIdentityOptions,
 ): SidecarExtractionResult {
   validateExtractionObject(json);
+  json = normalizeExtractionNames(json, options);
   const entities = validateEntities(json.entities_present).filter(
     (e) => !ENTITY_BLOCKLIST.has(e.name.toLowerCase().trim()),
   );
@@ -706,7 +687,7 @@ export async function extractWithSidecar(
     // Tool calls: parse structured results from tool_calls
     if (response.tool_calls && response.tool_calls.length > 0) {
       validateExtractionTools(response.tool_calls);
-      let result = parseToolCallResults(response.tool_calls);
+      let result = parseToolCallResults(response.tool_calls, options);
       // Resolve any remaining aliases to canonical names (safety net if LLM used alias)
       if (options?.knownEntities?.length) {
         result = resolveAliasesInResult(result, options.knownEntities);

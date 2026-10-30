@@ -16,6 +16,7 @@
  */
 
 import { getDb } from "../../db/connection";
+import { buildCortexIdentityContext } from "./identity-context";
 import { arbitrateCortexCandidates, CORTEX_ARBITRATION_VERSION } from "./arbitration";
 import { buildCortexArbitrationPlan, attributeFactsToEntities, type CortexGraphPlan, type CortexCleanupAction } from "./arbitration-plan";
 import {
@@ -1531,6 +1532,8 @@ export async function processChunk(
     const participants = getStoredConversationParticipants(data.chatId);
 
     const knownEntities = entityGraph.getActiveEntities(data.chatId);
+    const identity = buildCortexIdentityContext(characterNames, knownEntities, descriptionAliases, participants);
+    const identityAliases = identity.aliases;
     const entityIdByName = new Map<string, string>();
     for (const e of knownEntities) {
       entityIdByName.set(e.name.toLowerCase(), e.id);
@@ -1545,13 +1548,13 @@ export async function processChunk(
     // resolve correctly even before they're persisted.
     const allowedColorNames = new Set<string>();
     for (const n of characterNames) allowedColorNames.add(n.toLowerCase());
-    if (descriptionAliases) {
-      for (const [alias] of descriptionAliases.entries()) allowedColorNames.add(alias.toLowerCase());
-    }
     for (const e of knownEntities) {
       if (e.entityType !== "character") continue;
       allowedColorNames.add(e.name.toLowerCase());
       for (const alias of e.aliases) allowedColorNames.add(alias.toLowerCase());
+    }
+    for (const [alias, name] of identityAliases) {
+      if (allowedColorNames.has(name.toLowerCase())) allowedColorNames.add(alias);
     }
     const isAllowedColorName = (name: string): boolean => allowedColorNames.has(name.trim().toLowerCase());
 
@@ -1595,9 +1598,7 @@ export async function processChunk(
           entityWhitelist: config.entityWhitelist,
           minConfidence: config.entityPruning.minConfidence,
           entityExtractionFilters: config.entityExtractionFilters,
-          descriptionAliases: descriptionAliases
-            ? [...descriptionAliases.entries()].map(([alias, canonicalName]) => ({ alias, canonicalName }))
-            : undefined,
+          descriptionAliases: [...identityAliases].map(([alias, canonicalName]) => ({ alias, canonicalName })),
         })
       : null;
     if (heuristicPromise) {
@@ -1648,7 +1649,7 @@ export async function processChunk(
             participants,
             knownEntities: entityContext,
             thoughtDelimiters,
-            descriptionAliases: buildSidecarAliasList(descriptionAliases, knownEntities),
+            descriptionAliases: buildSidecarAliasList(identityAliases, knownEntities),
             samplingParameters: buildSidecarSamplingParameters(config.sidecar, {
               model: target.model,
             }),
@@ -1732,7 +1733,7 @@ export async function processChunk(
         score: extraction.score,
         source: "sidecar",
         emotionalTags: extraction.emotionalTags,
-        statusChanges: extraction.statusChanges,
+        statusChanges: extraction.statusChanges.map((change) => ({ ...change, entity: identity.canonicalize(change.entity) })),
         narrativeFlags: extraction.narrativeFlags,
         hasDialogue: /[""\u201C]/.test(proseContent),
         hasAction: /\*[^*]{10,}\*/.test(proseContent),
@@ -1765,14 +1766,7 @@ export async function processChunk(
     let graphPlan: CortexGraphPlan = { entities: [], relationships: [], aliases: [] };
     let cleanupActions: CortexCleanupAction[] = [];
     if (config.entityTracking && config.entityExtractionMode !== "off") {
-      const canonicalNames = new Map<string, string>();
-      for (const name of characterNames) canonicalNames.set(name.toLowerCase(), name);
-      for (const entity of knownEntities) {
-        canonicalNames.set(entity.name.toLowerCase(), entity.name);
-        for (const alias of entity.aliases) canonicalNames.set(alias.toLowerCase(), entity.name);
-      }
-      for (const [alias, canonical] of descriptionAliases ?? []) canonicalNames.set(alias.toLowerCase(), canonical);
-      const canonicalize = (name: string) => canonicalNames.get(name.toLowerCase()) ?? name;
+      const canonicalize = identity.canonicalize;
       const colorProposals = mergeColorAttributions(proseContent, fontResult.attributions, sidecarFontColors, thoughtDelimiters, canonicalize)
         .filter((color) => isAllowedColorName(color.entityName!));
       const provisionalEntities: import("./types").ExtractedEntity[] = sidecarActive ? extractNPsFromChunk(cleanContent)
@@ -1806,7 +1800,7 @@ export async function processChunk(
         return targets?.size === 1 ? [...targets][0]! : name;
       };
       const participantRelationships = extractParticipantRelationships(proseContent, characterNames,
-        [...(descriptionAliases ?? [])].map(([alias, canonicalName]) => ({ alias, canonicalName })),
+        [...(identityAliases ?? [])].map(([alias, canonicalName]) => ({ alias, canonicalName })),
         [...knownEntities.filter((entity) => entity.entityType === "character").flatMap((entity) => [entity.name, ...entity.aliases]),
           ...sidecarEntities.filter((entity) => entity.type === "character").map((entity) => entity.name)], participants);
       const relationships = mergeRelationships([...(heuristicResult?.relationships ?? []), ...participantRelationships], sidecarRelationships)
@@ -1814,7 +1808,7 @@ export async function processChunk(
       const knownReferences = new Map([
         ...characterNames.map((name) => [name.toLowerCase(), { name, type: "character" }] as const),
         ...resolveConversationParticipants(proseContent, characterNames,
-          [...(descriptionAliases ?? [])].map(([alias, canonicalName]) => ({ alias, canonicalName })), participants)
+          [...(identityAliases ?? [])].map(([alias, canonicalName]) => ({ alias, canonicalName })), participants)
           .map(({ name }) => [name.toLowerCase(), { name, type: "character" }] as const),
         ...knownEntities.map((entity) => [entity.name.toLowerCase(), { name: entity.name, type: entity.entityType }] as const),
       ]);
@@ -1847,7 +1841,7 @@ export async function processChunk(
           for (const entity of reviewEntities) evidence.set(entity.id, (excerpts.all(entity.id) as Array<{ excerpt: string }>).map((row) => row.excerpt));
         }
         const plan = buildCortexArbitrationPlan({ passage: proseContent, graph: graphPlan,
-          knownEntities: reviewEntities, characterNames, participants, canonicalAliases: descriptionAliases, existingEvidence: evidence,
+          knownEntities: reviewEntities, characterNames, participants, canonicalAliases: identityAliases, existingEvidence: evidence,
           gradeExisting: config.sidecarReliability.gradesExistingRecords });
         const result = await arbitrateCortexCandidates({ userId: data.userId, config, input: plan.input, signal });
         const applied = plan.apply(result.verdicts);
@@ -1856,11 +1850,32 @@ export async function processChunk(
         timings.sidecarMs += result.durationMs;
         const relationshipIds = new Set(plan.input.candidates.filter((candidate) => candidate.kind === "relationship").map((candidate) => candidate.id));
         const relationshipVerdicts = result.verdicts.filter((verdict) => relationshipIds.has(verdict.id));
+        const entityIds = new Set(plan.input.candidates.filter((candidate) => candidate.kind === "entity").map((candidate) => candidate.id));
+        const entityVerdicts = result.verdicts.filter((verdict) => entityIds.has(verdict.id));
         console.info(`[memory-cortex] arbitration backend=${config.arbitration.backend} candidates=${result.verdicts.length} models=${result.models.join(",")} ms=${Math.round(result.durationMs)}`
+          + ` entities_sidecar=${sidecarEntities.length} entities_proposed=${entityIds.size}`
+          + ` entities_kept=${entityVerdicts.filter((verdict) => verdict.action === "keep").length}`
+          + ` entities_resolved=${entityVerdicts.filter((verdict) => verdict.action === "resolve").length}`
+          + ` entities_rejected=${entityVerdicts.filter((verdict) => verdict.action === "reject").length}`
+          + ` entities_deferred=${entityVerdicts.filter((verdict) => verdict.action === "defer").length} entities_applied=${graphPlan.entities.length}`
           + ` relationships_sidecar=${sidecarRelationships.length} relationships_participant=${participantRelationships.length}`
           + ` relationships_proposed=${relationshipIds.size} relationships_kept=${relationshipVerdicts.filter((verdict) => verdict.action === "keep").length}`
           + ` relationships_rejected=${relationshipVerdicts.filter((verdict) => verdict.action === "reject").length}`
           + ` relationships_deferred=${relationshipVerdicts.filter((verdict) => verdict.action === "defer").length} relationships_applied=${graphPlan.relationships.length}`);
+        if (entityVerdicts.some((verdict) => verdict.action === "defer")) {
+          console.info(`[memory-cortex] entity_review chunk=${data.chunkId} threshold=${config.arbitration.minConfidence} verdicts=${JSON.stringify(entityVerdicts.map((verdict) => ({
+            id: verdict.id, action: verdict.action,
+            model_choice: verdict.deferralReason === "invalid_answer" ? undefined : verdict.modelChoice ?? verdict.action,
+            confidence: verdict.confidence, probability: verdict.probability, deferred_by: verdict.deferralReason,
+          })))}`);
+        }
+        if (relationshipVerdicts.length) {
+          console.info(`[memory-cortex] relationship_review chunk=${data.chunkId} threshold=${config.arbitration.minConfidence} verdicts=${JSON.stringify(relationshipVerdicts.map((verdict) => ({
+            id: verdict.id, action: verdict.action,
+            model_choice: verdict.deferralReason === "invalid_answer" ? undefined : verdict.modelChoice ?? verdict.action,
+            confidence: verdict.confidence, probability: verdict.probability, deferred_by: verdict.deferralReason,
+          })))}`);
+        }
       }
     }
     signal?.throwIfAborted();
@@ -2010,15 +2025,22 @@ export async function processChunk(
         };
         const approvedNames = new Set(mergedEntities.map((entity) => entity.name.toLowerCase()));
         const attributed = attributeFactsToEntities(sidecarFacts, mergedEntities.map((entity) => ({
-          name: entity.name, aliases: [...entity.aliases, ...allDiscoveredAliases.filter((alias) => alias.canonicalName === entity.name).map((alias) => alias.alias)],
+          name: entity.name, aliases: [...entity.aliases, ...[...identityAliases].filter(([, name]) => name.toLowerCase() === entity.name.toLowerCase()).map(([alias]) => alias), ...allDiscoveredAliases.filter((alias) => alias.canonicalName === entity.name).map((alias) => alias.alias)],
         })));
+        let appliedFactLinks = 0;
         if (chunkImportance >= factThreshold) {
           for (const [name, facts] of attributed) {
             const entity = entityGraph.findEntityByName(data.chatId, name);
             if (!entity || entity.userEditedAt) continue;
             recordFacts(entity, facts, chunkImportance);
+            appliedFactLinks += facts.length;
           }
         }
+        const attributedFacts = new Set([...attributed.values()].flat());
+        console.info(`[memory-cortex] fact_attribution chunk=${data.chunkId} proposed=${sidecarFacts.length}`
+          + ` matched=${attributedFacts.size} unmatched=${sidecarFacts.filter((fact) => !attributedFacts.has(fact)).length}`
+          + ` importance=${chunkImportance} threshold=${factThreshold}`
+          + ` applied_links=${appliedFactLinks}`);
 
         if (salienceResult.statusChanges.length > 0) {
           for (const change of salienceResult.statusChanges) {
@@ -2430,6 +2452,7 @@ export async function rebuildCortex(
                 descriptionAliases: buildSidecarAliasList(
                   descriptionAliases,
                   entityGraph.getActiveEntities(chatId),
+                  participants,
                 ),
                 samplingParameters: buildSidecarSamplingParameters(config.sidecar),
                 tokenCounter: rebuildTokenCounter,
@@ -2973,9 +2996,8 @@ function findPrefixMatch(np: string, characterNames: string[]): string | null {
  * pass the merged map to processChunk as `descriptionAliases`.
  */
 // ─── Bot Name Filler ──────────────────────────────────────────
-// Words that appear in sloppy bot-card names as genre tags, meta labels,
-// or scenario descriptors. Used by normalizeCharacterName to distinguish
-// the real character name from the surrounding noise.
+// Words used by card labels and scenario segments. Only discard a whole
+// delimited metadata segment: these words can also be part of a real name.
 
 const BOT_NAME_FILLER = new Set([
   // Meta / platform tags
@@ -2991,21 +3013,22 @@ const BOT_NAME_FILLER = new Set([
   "chance", "interrogation", "confrontation", "conversation", "introduction",
   // Interjections / filler words
   "ah", "oh", "hey", "hi", "yo", "welcome",
-  // Articles / prepositions (short ones caught by length, but include for safety)
+  // Articles / prepositions used in metadata-only segments
   "the", "a", "an", "of", "in", "at", "to", "for", "with", "by", "and", "or",
 ]);
 
 /**
- * Normalize a sloppy character card name to extract the real character name.
+ * Remove explicit card decorations while preserving the complete name.
  *
  * Handles common bot-card naming patterns:
  *   - Tag prefixes: "LIVE:", "NSFW:", "OC:", "[WIP]"
- *   - Structural separators: |, _, —, –, :, /
+ *   - Structural separators: spaced hyphen, |, _, —, –, :, /
  *   - Decorative Unicode: emoji, CJK brackets, symbols
- *   - Scenario suffixes: "A Chance Interrogation", "Episode 3", "Modern AU"
+ *   - Delimited scenario suffixes: "| A Chance Interrogation", "— Modern AU"
  *
- * Returns the extracted proper name, or the original trimmed name if
- * no clear proper noun sequence is found.
+ * Prefer the first non-metadata segment. Do not infer a person's identity by
+ * selecting title-cased words: "Still in Love", particles, lowercase names
+ * and names containing genre words must survive intact.
  */
 export function normalizeCharacterName(rawName: string): string {
   // 1. Strip emoji and decorative Unicode
@@ -3013,64 +3036,20 @@ export function normalizeCharacterName(rawName: string): string {
   try {
     cleaned = cleaned.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, "");
   } catch { /* regex unicode support varies */ }
-  cleaned = cleaned.replace(/[\u{300}-\u{36F}]/gu, ""); // combining diacritical marks that aren't part of names
   cleaned = cleaned.replace(/[「」『』【】〖〗★☆✨~♡♥●○◆◇■□▪▫▲△▶◀♪♫§†‡※•·]/g, "");
 
   // 2. Strip bracketed tags: [OC], (NSFW), {WIP}, etc.
   cleaned = cleaned.replace(/[\[({]\s*(?:OC|NSFW|SFW|WIP|BETA|AU|CANON|NEW|UPDATED?|REMAKE|V\d+(?:\.\d+)?)\s*[\])}]/gi, "");
 
   // 3. Split on structural separators
-  const segments = cleaned.split(/[|_—–:\/\\]/).map((s) => s.trim()).filter((s) => s.length >= 2);
+  const segments = cleaned.split(/\s+-\s+|[|_—–:\/\\]/).map((s) => s.trim().replace(/\s+/g, " ")).filter(Boolean);
 
-  // 4. From each segment, extract runs of title-cased non-filler words
-  const candidates: { text: string; wordCount: number; index: number }[] = [];
-  let candidateIndex = 0;
-
-  for (const segment of segments) {
-    const words = segment.split(/[\s,]+/).filter(Boolean);
-    let current: string[] = [];
-
-    const flush = () => {
-      if (current.length >= 1 && current.length <= 5) {
-        candidates.push({ text: current.join(" "), wordCount: current.length, index: candidateIndex++ });
-      }
-      current = [];
-    };
-
-    for (const word of words) {
-      const clean = word.replace(/[.,;:!?"'()\[\]{}]+/g, "").trim();
-      if (!clean || clean.length < 2) { flush(); continue; }
-
-      // Must be title-cased (uppercase + lowercase) and not a filler word
-      if (/^[A-Z][a-z]/.test(clean) && !BOT_NAME_FILLER.has(clean.toLowerCase())) {
-        current.push(clean);
-      } else {
-        flush();
-      }
-    }
-    flush();
-  }
-
-  if (candidates.length === 0) return rawName.trim();
-
-  // 5. Pick the best candidate
-  // Priority: 2-3 word names > other multi-word > single word > fallback
-  // Tiebreaker: earlier position in the string (real name usually comes first)
-  candidates.sort((a, b) => {
-    const aMulti = a.wordCount >= 2 ? 1 : 0;
-    const bMulti = b.wordCount >= 2 ? 1 : 0;
-    if (aMulti !== bMulti) return bMulti - aMulti;
-    // Among multi-word, prefer 2-3 words (typical name length)
-    if (aMulti && bMulti) {
-      const aIdeal = a.wordCount >= 2 && a.wordCount <= 3 ? 1 : 0;
-      const bIdeal = b.wordCount >= 2 && b.wordCount <= 3 ? 1 : 0;
-      if (aIdeal !== bIdeal) return bIdeal - aIdeal;
-    }
-    // Earlier position wins (stable tiebreaker)
-    return a.index - b.index;
-  });
-
-  return candidates[0].text;
+  // 4. Reject standalone labels, never individual words inside a name. When
+  // every segment looks like metadata, preserve the first as the identity.
+  return segments.find((segment) => !segment.split(/[\s,]+/).every((word) => {
+    const key = word.toLowerCase().replace(/[.,;:!?"'()\[\]{}]+/g, "");
+    return BOT_NAME_FILLER.has(key) || /^v?\d+(?:\.\d+)*$/i.test(key);
+  })) ?? segments[0] ?? rawName.trim();
 }
 
 export function extractDescriptionAliases(
@@ -3168,12 +3147,9 @@ function addAlias(map: Map<string, string>, alias: string, canonical: string): v
 /**
  * Build the alias list passed to the sidecar's <canonical_aliases> block.
  *
- * Merges two sources:
- *   1. Persisted entity-graph aliases (includes prior user-curated edits and
- *      learned aliases from earlier rebuild passes). These survive rebuilds via
- *      memory_entities.user_edited_at and the entity row's `aliases` JSON.
- *   2. Description aliases from character/persona/world-book definitions —
- *      take priority on key collision since they're the canonical authority.
+ * Uses the shared identity vocabulary: established graph aliases, definition
+ * aliases and stored participant display labels. Ambiguous mappings and aliases
+ * colliding with another canonical name are excluded.
  *
  * Resulting list is what the sidecar sees as authoritative alias→canonical
  * mappings for the current chat.
@@ -3181,19 +3157,9 @@ function addAlias(map: Map<string, string>, alias: string, canonical: string): v
 export function buildSidecarAliasList(
   descriptionAliases: Map<string, string> | undefined,
   knownEntities: Array<{ name: string; aliases: string[] }>,
+  participants: CortexParticipant[] = [],
 ): Array<{ alias: string; canonicalName: string }> {
-  const merged = new Map<string, string>();
-  for (const e of knownEntities) {
-    for (const alias of e.aliases) {
-      const lower = alias.toLowerCase();
-      if (!merged.has(lower)) merged.set(lower, e.name);
-    }
-  }
-  if (descriptionAliases) {
-    for (const [alias, canonical] of descriptionAliases.entries()) {
-      merged.set(alias.toLowerCase(), canonical);
-    }
-  }
+  const merged = buildCortexIdentityContext([], knownEntities, descriptionAliases, participants).aliases;
   return [...merged.entries()].map(([alias, canonicalName]) => ({ alias, canonicalName }));
 }
 

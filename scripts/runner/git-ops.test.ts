@@ -403,11 +403,12 @@ test("Termux repair paths install the same native bindings as the frontend lock 
   ));
 
   for (const [engine, binding] of [
+    ["oxc-transform-react", "@oxc-transform-react/binding-android-arm64"],
     ["rolldown", "@rolldown/binding-android-arm64"],
     ["lightningcss", "lightningcss-android-arm64"],
   ]) {
     const version = manifest.optionalDependencies[binding];
-    expect(version).toBe(manifest.overrides[engine]);
+    expect(version).toBe(manifest.overrides[engine] ?? manifest.devDependencies[engine]);
     for (const source of repairSources) {
       expect(source).toContain(`"${binding}@${version}"`);
     }

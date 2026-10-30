@@ -66,6 +66,9 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   resolve: {
+    // Shared source lives outside frontend/; resolve its Spindle runtime from
+    // this application's dependencies even when the backend copy is older.
+    dedupe: ['lumiverse-spindle-types'],
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),
     },

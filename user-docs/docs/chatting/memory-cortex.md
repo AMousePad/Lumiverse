@@ -74,9 +74,15 @@ In **Advanced → Candidate review**, enable **Review memory candidates** and ex
 
 The model override is optional; leaving it empty uses the explicitly selected connection's saved default without filling in the override. Decision review also works with heuristic extraction and importance scoring. AI extraction, fact curation and summaries still use the generative sidecar. Existing generative reviewer settings are disabled and cleared; existing Decision reviewer selections are preserved.
 
+A clear first appearance qualifies for entity tracking; a character or other named entity does not need repeated mentions, a major event or a relationship. Review receives unambiguous first/last-name hints for configured and established characters so a short reference can support their full canonical name. These hints do not automatically create saved aliases. After updating from older review rules, rebuild Cortex for affected chats to recover omitted entities; enabled warmup also detects the changed review version.
+
 **Minimum confidence** defaults to 0.8. Both the chosen answer's probability and its confidence must meet the threshold; otherwise that candidate is deferred. This is a retention threshold, not a measured guarantee of accuracy. **Review timeout** is capped at 30 seconds per request; **Requests per minute** limits Decision request starts (0 disables throttling).
 
 A failed or incomplete review saves no new graph or salience results for that chunk and leaves it pending for a later warmup or rebuild. A complete review can defer individual candidates; those candidates are omitted while the chunk completes. Review failures do not fall back to unreviewed persistence. Failed or uncertain review of a dormant relationship leaves it dormant with pending evidence.
+
+When entity candidates are deferred, the backend logs an `entity_review` line with the configured threshold, candidate IDs, original choices, confidence and selected probabilities. `deferred_by` distinguishes an explicit model deferral (`model`), a host threshold deferral (`threshold`), and an unusable answer (`invalid_answer`). This line excludes character names and passage text.
+
+`relationship_review` reports the same review details for proposed relationships. `fact_attribution` reports validated fact proposals, matched/unmatched subjects, the passage's importance and configured threshold, and applied entity/fact links. A single fact can attach to multiple named subjects. These diagnostics contain counts and IDs rather than passage text. They help distinguish an empty extraction from rejected or deferred relationships and facts omitted by subject matching or importance filtering.
 
 If a Decision response contains an individually invalid answer, Cortex keeps the valid answers and retries only the invalid questions once, using the same connection and confidence threshold. Answers that remain invalid are explicitly deferred: new candidates are omitted, and existing records are preserved while the chunk completes. Logs include the affected candidate ID and, for invalid probability totals, the sum and option count. Missing/foreign answer IDs, invalid response metadata, authentication failures and caller cancellation still stop ingestion. Probabilities are never automatically normalized.
 
@@ -92,6 +98,8 @@ Passage-wide facts now attach only to approved entities explicitly named in each
 | **Colors** | Character color attributions and confidence; supplies `{{characterColors}}` |
 | **Stats** | Total/vectorized chunks, entities, relationships, consolidations, salience. Click cards to inspect records. Also contains the per-chat Cortex toggle. |
 | **Links** | Attach vaults/interlinks and manage the Vault Library |
+
+Cortex preserves complete character and persona names, including names such as “Still in Love,” lowercase particles, accents and apostrophes. It removes explicit card decorations and separate metadata segments such as `LIVE:`, `| Modern AU` or a subtitle introduced by a spaced hyphen. The stored author label identifies the same participant across extraction, review, relationship endpoints and fact attribution; it is not a second entity. Rebuild an affected chat after updating to replace automatically generated records with shortened names or attached card subtitles.
 
 Stored records are not this generation's retrieved context. Seeing entities here does not mean every entity will appear in `{{entities}}`.
 

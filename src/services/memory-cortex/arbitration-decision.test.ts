@@ -5,7 +5,7 @@ import * as secrets from "../secrets.service";
 import { ProviderRequestError } from "../../utils/provider-errors";
 import { arbitrateCortexCandidates, type CortexArbitrationInput } from "./arbitration";
 import { DEFAULT_CORTEX_CONFIG, normalizeCortexConfig, putCortexConfig } from "./config";
-import { processChunk, rebuildCortex } from "./index";
+import { normalizeCharacterName, processChunk, rebuildCortex } from "./index";
 import { runHeuristicAnalysis } from "./heuristic-analysis";
 import * as graph from "./entity-graph";
 
@@ -148,6 +148,146 @@ test("valid Decision answers need only one provider request", async () => {
   expect(requests).toHaveLength(1);
 });
 
+for (const mode of ["live", "rebuild"] as const) {
+  test(`${mode} preserves Still in Love's full participant identity and trainer relationship`, async () => {
+    const chatId = `complete-character-name-${mode}`;
+    const chunkId = `${chatId}-chunk`;
+    const characterName = "Still in Love";
+    const cardName = "Still in Love - Veil of Reason and Instinct";
+    const characterNames = [normalizeCharacterName(cardName), normalizeCharacterName("Darran")];
+    const passage = "Darran agreed to be Still's trainer.";
+    const db = getDb();
+    putCortexConfig(userId, { ...config, entityExtractionMode: "sidecar", salienceScoringMode: "sidecar",
+      sidecar: { ...config.sidecar, connectionProfileId: "sidecar", chunkBatchSize: 2, rebuildConcurrency: 1 },
+      queryGeneration: { primary: { connectionProfileId: "sidecar", model: null }, secondary: null },
+      sidecarReliability: { ...config.sidecarReliability, gradesExistingRecords: false },
+    });
+    db.query("INSERT INTO chats (id, user_id) VALUES (?, ?)").run(chatId, userId);
+    db.query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, 0, 0, ?, ?)")
+      .run(`${chatId}-author`, chatId, cardName, passage);
+    db.query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, 1, 1, 'Darran', 'Agreed.')")
+      .run(`${chatId}-user`, chatId);
+    db.query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 20, 1, 1, 1)")
+      .run(chunkId, chatId, `${chatId}-author`, `${chatId}-author`, JSON.stringify([`${chatId}-author`]), passage);
+    if (mode === "rebuild") {
+      db.query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 20, 1, 2, 1)")
+        .run(`${chunkId}-2`, chatId, `${chatId}-author`, `${chatId}-author`, JSON.stringify([`${chatId}-author`]), passage);
+      // Rebuilds must replace the clipped identity left by the old cleaner.
+      graph.upsertEntity(chatId, { name: "Still", type: "character", aliases: [], confidence: 1 }, chunkId, 1);
+    }
+    provider((body) => {
+      expect(body.state.participants).toContainEqual({ name: characterName, role: "character" });
+      expect(body.state.canonicals.some((canonical: any) => canonical.name === "Still")).toBe(false);
+      expect(body.state.candidates.filter((candidate: any) => candidate.kind === "entity").map((candidate: any) => candidate.name)).not.toContain(cardName);
+      const value = response(body);
+      for (const [id, answer] of Object.entries(value.answers)) {
+        const candidate = body.state.candidates.find((entry: any) => entry.id === id);
+        answer.choice = (candidate.kind === "entity" && ![characterName, "Darran"].includes(candidate.name))
+          || (candidate.kind === "relationship" && candidate.type !== "mentor") ? "reject" : "keep";
+        const keys = Object.keys(answer.probabilities);
+        answer.probabilities = Object.fromEntries(keys.map((key) => [key, key === answer.choice ? 0.98 : 0.02 / (keys.length - 1)]));
+      }
+      return Response.json(value);
+    });
+    const fact = "Darran agreed to be Still in Love's trainer.";
+    const extraction = { importance: 6, emotional_tones: [], narrative_flags: [], key_facts: [fact, "Unrelated arrived in the harbor."],
+      // Models sometimes copy the author label despite the canonical-name hint.
+      entities_present: [{ name: cardName, type: "character" }, { name: "Darran", type: "character" }],
+      relationships_shown: [{ source: "Darran", target: cardName, type: "mentor", label: "trainer", sentiment: 0.5 }],
+      discovered_aliases: [{ canonical_name: characterName, alias: "Still", evidence: passage }],
+      status_changes: [], color_attributions: [],
+    };
+    const generate = async (request: any) => {
+      expect(request.messages[1].content).toContain(`${cardName.toLowerCase()} → ${characterName}`);
+      expect(request.messages[0].content).toContain("Write the relevant canonical entity names explicitly");
+      return { content: JSON.stringify(mode === "rebuild" ? { results: [0, 1].map((index) => ({ index, ...extraction })) } : extraction) };
+    };
+    const lines: string[] = [];
+    const info = spyOn(console, "info").mockImplementation((message) => { lines.push(String(message)); });
+    try {
+      if (mode === "rebuild") await rebuildCortex(userId, chatId, characterNames, generate, "sidecar");
+      else await processChunk({ chunkId, chatId, userId, characterId: null, content: passage,
+        messageIds: [`${chatId}-author`], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, characterNames, generate, "sidecar", undefined, undefined, true);
+    } finally { info.mockRestore(); }
+    const factLog = lines.find((line) => line.startsWith("[memory-cortex] fact_attribution"))!;
+    expect(factLog).toContain("proposed=2 matched=1 unmatched=1 importance=6 threshold=3 applied_links=2");
+    expect(factLog).not.toContain(characterName);
+    const relationshipLog = lines.find((line) => line.startsWith("[memory-cortex] relationship_review"))!;
+    expect(relationshipLog).toContain('"action":"keep"');
+    expect(relationshipLog).not.toContain(characterName);
+    expect(requests.length).toBeGreaterThan(0);
+    const entities = graph.getEntities(chatId);
+    expect(entities.map((entity) => entity.name).sort()).toEqual(["Darran", characterName]);
+    const character = entities.find((entity) => entity.name === characterName)!;
+    expect(character.aliases).toContain("Still");
+    expect(graph.findEntityByName(chatId, "Still")?.id).toBe(character.id);
+    expect(character.facts.map(graph.stripFactTags)).toContain(fact);
+    expect(character.facts.join(" ")).not.toContain("Unrelated arrived");
+    expect(graph.getRelationsIncludingInactive(chatId)).toEqual([expect.objectContaining({
+      sourceEntityId: graph.findEntityByName(chatId, "Darran")!.id,
+      targetEntityId: character.id, relationType: "mentor",
+    })]);
+  });
+}
+
+for (const mode of ["live", "rebuild"] as const) {
+  test(`${mode} sidecar ingestion retains characters by short name alongside every entity category`, async () => {
+    const chatId = `entity-identity-${mode}`;
+    const db = getDb();
+    putCortexConfig(userId, { ...config, entityExtractionMode: "sidecar", salienceScoringMode: "sidecar",
+      sidecar: { ...config.sidecar, connectionProfileId: "sidecar", chunkBatchSize: 2, rebuildConcurrency: 1 },
+      queryGeneration: { primary: { connectionProfileId: "sidecar", model: null }, secondary: null },
+      sidecarReliability: { ...config.sidecarReliability, gradesExistingRecords: false },
+    });
+    const passage = "Pulchra carried Dawnbreaker through New Eridu. Azure Guard honored the Silver Oath after the Black Tide Incident.";
+    const extracted = [
+      { name: "Pulchra", type: "character" }, { name: "Dawnbreaker", type: "item" },
+      { name: "New Eridu", type: "location" }, { name: "Azure Guard", type: "faction" },
+      { name: "Silver Oath", type: "concept" }, { name: "Black Tide Incident", type: "event" },
+    ];
+    db.query("INSERT INTO chats (id, user_id) VALUES (?, ?)").run(chatId, userId);
+    const chunkCount = mode === "rebuild" ? 2 : 1;
+    for (let i = 0; i < chunkCount; i++) {
+      db.query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES (?, ?, 'm1', 'm1', '[]', ?, 40, 1, ?, 1)")
+        .run(`${chatId}-${i}`, chatId, passage, i + 1);
+    }
+    provider((body) => {
+      const value = response(body);
+      const canonical = body.state.canonicals.find((c: any) => c.name === "Pulchra Fellini");
+      expect(canonical?.nameParts).toContain("Pulchra");
+      for (const [id, answer] of Object.entries(value.answers)) {
+        const candidate = body.state.candidates.find((c: any) => c.id === id);
+        expect(body.questions[id].instructions).toContain("A single clear mention is sufficient");
+        answer.choice = candidate.name === "Pulchra" ? `resolve_${canonical.id}`
+          : candidate.kind === "entity" && ["Pulchra Fellini", ...extracted.map((e) => e.name)].includes(candidate.name) ? "keep" : "reject";
+        const keys = Object.keys(answer.probabilities);
+        answer.probabilities = Object.fromEntries(keys.map((key) => [key, key === answer.choice ? 0.98 : 0.02 / (keys.length - 1)]));
+      }
+      return Response.json(value);
+    });
+    const extraction = { importance: 6, emotional_tones: [], narrative_flags: [], key_facts: [],
+      entities_present: extracted, relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] };
+    let sidecarCalls = 0;
+    const generate = async (request: any) => {
+      sidecarCalls++;
+      expect(request.messages[0].content).toContain("A single clear mention is sufficient");
+      return { content: JSON.stringify(mode === "live" ? extraction
+        : { results: [0, 1].map((index) => ({ index, ...extraction })) }) };
+    };
+    if (mode === "rebuild") await rebuildCortex(userId, chatId, ["Pulchra Fellini"], generate, "sidecar");
+    else await processChunk({ chunkId: `${chatId}-0`, chatId, userId, characterId: null, content: passage,
+      messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, ["Pulchra Fellini"], generate, "sidecar", undefined, undefined, true);
+    expect(sidecarCalls).toBe(1);
+    const entities = graph.getEntities(chatId);
+    expect(entities).toHaveLength(6);
+    const character = entities.find((entity) => entity.name === "Pulchra Fellini")!;
+    expect(character).toMatchObject({ entityType: "character", confidence: "confirmed" });
+    expect(db.query("SELECT chunk_id FROM memory_mentions WHERE entity_id = ?").all(character.id)).toHaveLength(chunkCount);
+    expect(entities.map((entity) => entity.entityType).sort()).toEqual(["character", "concept", "event", "faction", "item", "location"]);
+    expect(db.query("SELECT id FROM chat_chunks WHERE chat_id = ? AND cortex_warmup_signature IS NULL").all(chatId)).toEqual([]);
+  });
+}
+
 test("a local server context rejection splits questions and their state without losing evidence", async () => {
   const detailed: CortexArbitrationInput = { ...input, canonicals: [
     { id: "c0", name: "Mara", aliases: ["Red"] }, { id: "c1", name: "Tovin", aliases: ["Blue"] },
@@ -199,14 +339,59 @@ test("persistent invalid probabilities defer only that candidate without inventi
   provider((body) => Response.json(response(body, (id) => id === "x3")));
   const result = await evaluate();
   expect(result.verdicts[0]).toMatchObject({ id: "e0", action: "keep", probability: 0.98 });
-  expect(result.verdicts[1]).toEqual({ id: "x3", action: "defer" });
+  expect(result.verdicts[1]).toEqual({ id: "x3", action: "defer", deferralReason: "invalid_answer" });
   expect(requests).toHaveLength(2);
 });
 
 test("an entirely invalid batch is deferred after one bounded retry", async () => {
   provider((body) => Response.json(response(body, () => true)));
-  expect((await evaluate()).verdicts).toEqual([{ id: "e0", action: "defer" }, { id: "x3", action: "defer" }]);
+  expect((await evaluate()).verdicts).toEqual([{ id: "e0", action: "defer", deferralReason: "invalid_answer" }, { id: "x3", action: "defer", deferralReason: "invalid_answer" }]);
   expect(requests).toHaveLength(2);
+});
+
+test("deferral diagnostics distinguish model uncertainty from the host confidence gate", async () => {
+  provider((body) => {
+    const value = response(body);
+    value.answers.e0.confidence = 0.76;
+    value.answers.e0.probabilities = { keep: 0.84, reject: 0.1, defer: 0.06 };
+    value.answers.x3.choice = "defer";
+    value.answers.x3.probabilities = { keep: 0.01, reject: 0.01, defer: 0.98 };
+    return Response.json(value);
+  });
+  expect((await evaluate()).verdicts).toEqual([
+    { id: "e0", action: "defer", modelChoice: "keep", confidence: 0.76, probability: 0.84, deferralReason: "threshold" },
+    { id: "x3", action: "defer", modelChoice: "defer", confidence: 0.98, probability: 0.98, deferralReason: "model" },
+  ]);
+});
+
+test("entity deferral logs expose scores and gate reasons without passage text or names", async () => {
+  const chatId = "deferred-entity-chat";
+  const chunkId = "deferred-entity-chunk";
+  const passage = "Mara returned home.";
+  const db = getDb();
+  putCortexConfig(userId, config);
+  db.query("INSERT INTO chats (id, user_id) VALUES (?, ?)").run(chatId, userId);
+  db.query("INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at) VALUES (?, ?, 'm1', 'm1', '[]', ?, 20, 1, 1, 1)").run(chunkId, chatId, passage);
+  const heuristic = runHeuristicAnalysis({ cleanContent: passage, knownEntities: [], characterNames: ["Mara"], entityWhitelist: [], minConfidence: 0.5, entityExtractionFilters: config.entityExtractionFilters });
+  provider((body) => {
+    const value = response(body);
+    for (const answer of Object.values(value.answers)) answer.confidence = 0.76;
+    return Response.json(value);
+  });
+  const lines: string[] = [];
+  const info = spyOn(console, "info").mockImplementation((message) => { lines.push(String(message)); });
+  try {
+    await processChunk({ chunkId, chatId, userId, characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 },
+      ["Mara"], undefined, undefined, undefined, heuristic, true);
+  } finally { info.mockRestore(); }
+  const line = lines.find((entry) => entry.startsWith("[memory-cortex] entity_review"))!;
+  expect(line).toContain(`chunk=${chunkId} threshold=0.8`);
+  expect(JSON.parse(line.split("verdicts=")[1]!)).toEqual([
+    { id: "e0", action: "defer", model_choice: "keep", confidence: 0.76, probability: 0.98, deferred_by: "threshold" },
+  ]);
+  expect(line).not.toContain("Mara");
+  expect(line).not.toContain("returned home");
+  expect(graph.getEntities(chatId)).toEqual([]);
 });
 
 test("recovered answers still must meet the confidence and selected-probability thresholds", async () => {
