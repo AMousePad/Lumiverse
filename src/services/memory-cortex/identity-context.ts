@@ -1,4 +1,5 @@
 import type { CortexParticipant } from "./conversation-context";
+import { normalizeCharacterName } from "./character-names";
 
 /** One identity vocabulary for extraction, review, graph endpoints and facts.
  * Display labels identify a participant; they are not additional entities.
@@ -10,15 +11,16 @@ export function buildCortexIdentityContext(
   participants: CortexParticipant[] = [],
 ) {
   const key = (name: string) => name.trim().toLowerCase();
+  const sharedLabels = new Set(participants.flatMap((p) => p.authorLabel ? [key(p.authorLabel), key(normalizeCharacterName(p.authorLabel))] : []));
   const names = new Map<string, string>();
   for (const name of [...knownEntities.map((entity) => entity.name), ...characterNames, ...participants.map((p) => p.name)]) {
-    names.set(key(name), name);
+    if (!sharedLabels.has(key(name))) names.set(key(name), name);
   }
   const targets = new Map<string, Set<string>>();
   const add = (alias: string, canonical: string) => {
     const aliasKey = key(alias);
     const target = names.get(key(canonical)) ?? canonical;
-    if (!aliasKey || aliasKey === key(target)) return;
+    if (!aliasKey || aliasKey === key(target) || sharedLabels.has(aliasKey) || sharedLabels.has(key(target))) return;
     const owners = targets.get(aliasKey) ?? new Set<string>();
     owners.add(target);
     targets.set(aliasKey, owners);
@@ -30,5 +32,5 @@ export function buildCortexIdentityContext(
   for (const [alias, owners] of targets) {
     if (owners.size === 1 && !names.has(alias)) aliases.set(alias, [...owners][0]!);
   }
-  return { aliases, canonicalize: (name: string) => names.get(key(name)) ?? aliases.get(key(name)) ?? name.trim() };
+  return { aliases, isSharedLabel: (name: string) => sharedLabels.has(key(name)), canonicalize: (name: string) => names.get(key(name)) ?? aliases.get(key(name)) ?? name.trim() };
 }

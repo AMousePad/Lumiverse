@@ -181,6 +181,8 @@ export function flattenContentForDisplay(
 }
 
 export interface GenerationRequest {
+  /** Internal activity notification for streamed tool arguments; never serialized. */
+  onResponseActivity?: () => void;
   /** Internal observer of the finalized outbound body; never serialized to a provider. */
   onProviderRequest?: import("./request-observer").ProviderRequestObserver;
   messages: LlmMessage[];

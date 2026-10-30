@@ -106,7 +106,7 @@ export function validateDecisionParameters(provider: string, parameters: unknown
 }
 type DecisionProviderProfile = { provider: string; api_url?: string; model: string; default_parameters: Record<string, unknown> };
 
-async function requestProviderDecision(profile: DecisionProviderProfile, apiKey: string, input: DecisionEvaluationInput, signal?: AbortSignal): Promise<unknown> {
+async function requestProviderDecision(profile: DecisionProviderProfile, apiKey: string, input: DecisionEvaluationInput, signal?: AbortSignal, onDispatch?: () => void): Promise<unknown> {
   const provider = getProvider(profile.provider);
   const model = input.model?.trim() || profile.model.trim();
   if (!model) throw new DecisionValidationError("Select a Decision model for this connection");
@@ -114,6 +114,8 @@ async function requestProviderDecision(profile: DecisionProviderProfile, apiKey:
   const images = usesDecisionImages(input);
   if (images && profile.provider !== "typesafe") throw new DecisionValidationError("Images and Box questions need a TypeSafe Decision connection");
   const body = { ...validateDecisionParameters(profile.provider, profile.default_parameters), model, state: input.state, questions: input.questions, ...(input.assets ? { assets: input.assets } : {}) };
+  signal?.throwIfAborted();
+  onDispatch?.();
   return fetchProviderJson<unknown>(provider.name, "decision evaluation", decisionEvaluationUrl(profile), {
     method: "POST", headers: {
       Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json",
@@ -139,8 +141,8 @@ export async function evaluateProviderDecision(profile: DecisionProviderProfile,
 
 /** Internal Cortex path: return only individually validated answers, with
  * explicit issues for candidates that require retry or host-side deferral. */
-export async function evaluateProviderDecisionAnswers(profile: DecisionProviderProfile, apiKey: string, input: DecisionEvaluationInput, signal?: AbortSignal): Promise<DecisionAnswerReport> {
-  const value = await requestProviderDecision(profile, apiKey, input, signal);
+export async function evaluateProviderDecisionAnswers(profile: DecisionProviderProfile, apiKey: string, input: DecisionEvaluationInput, signal?: AbortSignal, onDispatch?: () => void): Promise<DecisionAnswerReport> {
+  const value = await requestProviderDecision(profile, apiKey, input, signal, onDispatch);
   try { return inspectDecisionAnswers(value, input.questions); }
   catch (error) { throw invalidDecisionResponse(profile, error); }
 }

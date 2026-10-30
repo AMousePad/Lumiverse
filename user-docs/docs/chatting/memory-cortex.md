@@ -47,6 +47,8 @@ Choosing a sidecar connection can switch extraction/scoring to sidecar mode and 
 
 **Consolidation** groups older chunks into scene summaries, then scene summaries into arcs when thresholds are reached. Without AI summaries it extracts source text; with a sidecar it can generate summaries. Inspect these under **Memory → Stats → Consolidations**. They do not update `{{loomSummary}}`.
 
+In **Settings → Memory Cortex → Advanced → Advanced settings**, enable consolidation and adjust **Chunks before consolidation**, **Chunks per scene summary**, and **Scene summaries per arc**. These count memory chunks and saved scene summaries, not chat messages. The defaults start consolidation at 40 unconsolidated chunks, summarize 10 chunks at a time, and combine 5 scenes into an arc. After ingestion or a rebuild, Cortex processes due batches and retries pending arcs; it keeps recent chunks below the trigger for later. Lower the trigger for earlier scenes. A chat with 36 messages may still be below the default trigger.
+
 **Prompt assembly reads usable cached Cortex results**, rather than waiting for a fresh query on every send. On a cold cache or an unusable result, it falls back to basic Chat Memory while Cortex work runs in the background. Basic Chat Memory also uses a cache, so a cold start can initially have no recall. Enabling Cortex does not guarantee entities or arcs in the very next prompt.
 
 ## Sidecar LLM
@@ -56,6 +58,8 @@ An embedding model creates search vectors. A **sidecar LLM** extracts or summari
 In **Settings → Memory Cortex**, choose a sidecar **Connection** and **Model**, then check extraction mode, salience mode, and **AI summaries**. The picker includes built-in LLM connections and providers from enabled [Spindle extensions](../extensions/index.md#extension-provided-ai-providers).
 
 The sidecar can assist with entities/facts, relationships, importance, color attribution, and consolidation. **Chunks per request** batches analysis; **Parallel requests** controls rebuild concurrency; **Requests per minute** throttles starts (0 disables throttling). **Max output tokens** must accommodate the batch's structured response and, for thinking models, reasoning tokens. Increase this limit or lower reasoning effort if a response ends with `finish_reason: "length"`. Consolidation uses this generation budget while requesting the shorter configured summary length. This makes additional model requests, including on rebuild; it is not necessarily one call per chunk.
+
+The chat's Cortex bar appears as soon as you request a rebuild, including time spent queued or preparing. It shows processed chunks, completed/queued batches, elapsed time, and each active batch's state. Sidecar generation streams internally: **Thinking** appears when the provider sends reasoning, and **Responding** when text or tool arguments arrive. **Reviewing** identifies candidate review through the Decision API, which the current integration reads as a single JSON result. A batch remains active through review and saving; receiving an extraction response alone does not complete it. Progress resumes from server snapshots when you reopen or reconnect to the chat. Streaming activity does not expose reasoning text in the bar or save incomplete extraction results.
 
 ### Failure Handling and Fallback Connections
 
@@ -76,15 +80,19 @@ The model override is optional; leaving it empty uses the explicitly selected co
 
 A clear first appearance qualifies for entity tracking; a character or other named entity does not need repeated mentions, a major event or a relationship. Review receives unambiguous first/last-name hints for configured and established characters so a short reference can support their full canonical name. These hints do not automatically create saved aliases. After updating from older review rules, rebuild Cortex for affected chats to recover omitted entities; enabled warmup also detects the changed review version.
 
+A multi-character card uses its shared display label for message routing. Explicitly coordinated names such as “Pulchra Fellini and Jane Doe” provide separate identity hints; the shared label is not an alias for either character. Extraction uses local names, narration, dialogue and viewpoint in any POV to assign facts and relationships. It leaves ambiguous attribution unresolved. Rebuild an affected chat to replace older combined entries from passage evidence.
+
 **Minimum confidence** defaults to 0.8. Both the chosen answer's probability and its confidence must meet the threshold; otherwise that candidate is deferred. This is a retention threshold, not a measured guarantee of accuracy. **Review timeout** is capped at 30 seconds per request; **Requests per minute** limits Decision request starts (0 disables throttling).
 
 A failed or incomplete review saves no new graph or salience results for that chunk and leaves it pending for a later warmup or rebuild. A complete review can defer individual candidates; those candidates are omitted while the chunk completes. Review failures do not fall back to unreviewed persistence. Failed or uncertain review of a dormant relationship leaves it dormant with pending evidence.
 
-When entity candidates are deferred, the backend logs an `entity_review` line with the configured threshold, candidate IDs, original choices, confidence and selected probabilities. `deferred_by` distinguishes an explicit model deferral (`model`), a host threshold deferral (`threshold`), and an unusable answer (`invalid_answer`). This line excludes character names and passage text.
+Normal logging uses one compact review summary per chunk, with warnings and errors always visible. To investigate extraction or review issues, set `LUMIVERSE_CORTEX_DEBUG=1` in the backend environment and restart. This enables request/response traces and detailed candidate/fact diagnostics.
+
+In debug mode, when entity candidates are deferred, the backend logs an `entity_review` line with the configured threshold, candidate IDs, original choices, confidence and selected probabilities. `deferred_by` distinguishes an explicit model deferral (`model`), a host threshold deferral (`threshold`), and an unusable answer (`invalid_answer`). This line excludes character names and passage text.
 
 `relationship_review` reports the same review details for proposed relationships. `fact_attribution` reports validated fact proposals, matched/unmatched subjects, the passage's importance and configured threshold, and applied entity/fact links. A single fact can attach to multiple named subjects. These diagnostics contain counts and IDs rather than passage text. They help distinguish an empty extraction from rejected or deferred relationships and facts omitted by subject matching or importance filtering.
 
-If a Decision response contains an individually invalid answer, Cortex keeps the valid answers and retries only the invalid questions once, using the same connection and confidence threshold. Answers that remain invalid are explicitly deferred: new candidates are omitted, and existing records are preserved while the chunk completes. Logs include the affected candidate ID and, for invalid probability totals, the sum and option count. Missing/foreign answer IDs, invalid response metadata, authentication failures and caller cancellation still stop ingestion. Probabilities are never automatically normalized.
+If a Decision response contains an individually invalid answer, Cortex keeps the valid answers and retries only the invalid questions once, using the same connection and confidence threshold. Answers that remain invalid are explicitly deferred: new candidates are omitted, and existing records are preserved while the chunk completes. Debug logs include the affected candidate ID and, for invalid probability totals, the sum and option count. Normal warnings report only how many answers need retry or deferral. Missing/foreign answer IDs, invalid response metadata, authentication failures and caller cancellation still stop ingestion. Probabilities are never automatically normalized.
 
 **Prune Graph** also reviews existing records against historical excerpts. Manually edited entities and their manually edited relationships are preserved. Inspect the results; model review can still make mistakes. Reviewer configuration changes invalidate prior chunk coverage so the next warmup can rebuild it; changing a connection's default model alone requires a manual rebuild.
 
@@ -94,7 +102,7 @@ Passage-wide facts now attach only to approved entities explicitly named in each
 
 | Tab | Contents and controls |
 |-----|-----------------------|
-| **Entities** | Names, types, descriptions, aliases, facts, status, mentions, emotional profiles. Edit mistakes or delete individually/in bulk. |
+| **Entities** | Names, types, descriptions, aliases, facts, status, mentions, emotional profiles. Each collapsed card shows its fact count. Edit mistakes or delete individually/in bulk. |
 | **Colors** | Character color attributions and confidence; supplies `{{characterColors}}` |
 | **Stats** | Total/vectorized chunks, entities, relationships, consolidations, salience. Click cards to inspect records. Also contains the per-chat Cortex toggle. |
 | **Links** | Attach vaults/interlinks and manage the Vault Library |

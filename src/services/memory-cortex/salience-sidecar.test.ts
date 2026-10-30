@@ -140,7 +140,7 @@ test("live and batch extraction receive the same thought-channel rules and confi
   for (const prompt of prompts) {
     expect(prompt.system).toContain("a thought/italic wrapper takes precedence over quotation marks");
     expect(prompt.system).toContain("report both usage types");
-    expect(prompt.system).toContain("standalone first-person thought paragraph continues");
+    expect(prompt.system).toContain("established narrative viewpoint in any POV");
     expect(prompt.system).toContain("including message prefixes, supplied aliases, and unambiguous pronouns");
     expect(prompt.system).toContain("Include both resolved endpoints in entities_present");
     expect(prompt.system).toContain("serves = subordinate to superior");
@@ -405,4 +405,25 @@ describe("sidecar failure diagnostics", () => {
       expect(text).toContain("socket closed");
     } finally { warn.mockRestore(); }
   });
+});
+
+test("shared labels never become an individual relationship, alias, status or color owner", () => {
+  const label = "Pulchra Fellini and Jane Doe";
+  const names = ["Pulchra Fellini", "Jane Doe"];
+  const result = parseToolCallResults([
+    { name: "extract_entities", args: { entities: [label, ...names].map((name) => ({ name, type: "character" })),
+      discovered_aliases: [{ canonical_name: label, alias: "Jane" }, { canonical_name: names[0], alias: label }],
+      status_changes: [{ entity: label, change: "arrived", detail: "arrived" }] } },
+    { name: "extract_relationships", args: { relationships: [
+      { source: label, target: "Darran", type: "ally", label: "cooperation", sentiment: 0.5 },
+      { source: names[0], target: names[1], type: "ally", label: "cooperation", sentiment: 0.5 },
+    ] } },
+    { name: "extract_font_colors", args: { color_attributions: [{ character_name: label, hex_color: "#abc", usage_type: "speech" }] } },
+  ], { characterNames: names, participants: names.map((name) => ({ name, role: "character", authorLabel: label })) });
+  expect(result.entitiesPresent.map((entity) => entity.name)).toEqual(names);
+  expect(result.relationshipsShown).toHaveLength(1);
+  expect(result.relationshipsShown[0]).toMatchObject({ source: names[0], target: names[1] });
+  expect(result.statusChanges).toEqual([]);
+  expect(result.fontColors).toEqual([]);
+  expect(result.discoveredAliases).toEqual([]);
 });

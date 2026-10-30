@@ -734,9 +734,9 @@ export function normalizeCortexConfig(
     },
     consolidation: {
       enabled: input.consolidation?.enabled ?? defaults.consolidation.enabled,
-      chunkThreshold: input.consolidation?.chunkThreshold ?? defaults.consolidation.chunkThreshold,
-      chunksPerConsolidation: input.consolidation?.chunksPerConsolidation ?? defaults.consolidation.chunksPerConsolidation,
-      arcThreshold: input.consolidation?.arcThreshold ?? defaults.consolidation.arcThreshold,
+      chunkThreshold: Math.floor(boundedNumber(input.consolidation?.chunkThreshold, 1, Number.MAX_SAFE_INTEGER, defaults.consolidation.chunkThreshold)),
+      chunksPerConsolidation: Math.floor(boundedNumber(input.consolidation?.chunksPerConsolidation, 1, Number.MAX_SAFE_INTEGER, defaults.consolidation.chunksPerConsolidation)),
+      arcThreshold: Math.floor(boundedNumber(input.consolidation?.arcThreshold, 1, Number.MAX_SAFE_INTEGER, defaults.consolidation.arcThreshold)),
       useSidecar: input.consolidation?.useSidecar ?? defaults.consolidation.useSidecar,
       maxTokensPerSummary: input.consolidation?.maxTokensPerSummary ?? defaults.consolidation.maxTokensPerSummary,
     },

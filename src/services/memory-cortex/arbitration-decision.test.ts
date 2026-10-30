@@ -10,6 +10,7 @@ import { runHeuristicAnalysis } from "./heuristic-analysis";
 import * as graph from "./entity-graph";
 
 const originalFetch = globalThis.fetch;
+const originalDebug = process.env.LUMIVERSE_CORTEX_DEBUG;
 const userId = "decision-recovery-user";
 const profileId = "decision-recovery-profile";
 const config = normalizeCortexConfig({ ...DEFAULT_CORTEX_CONFIG, enabled: true,
@@ -25,6 +26,7 @@ let secretSpy: ReturnType<typeof spyOn>;
 let requests: any[];
 
 beforeEach(async () => {
+  delete process.env.LUMIVERSE_CORTEX_DEBUG;
   closeDatabase(); initDatabase(":memory:");
   const db = getDb(); db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(new URL("../../db/baseline.sql", import.meta.url)).text());
@@ -32,7 +34,11 @@ beforeEach(async () => {
   secretSpy = spyOn(secrets, "getSecret").mockImplementation(async () => "fixture-key");
   requests = [];
 });
-afterEach(() => { globalThis.fetch = originalFetch; secretSpy.mockRestore(); closeDatabase(); });
+afterEach(() => {
+  if (originalDebug === undefined) delete process.env.LUMIVERSE_CORTEX_DEBUG;
+  else process.env.LUMIVERSE_CORTEX_DEBUG = originalDebug;
+  globalThis.fetch = originalFetch; secretSpy.mockRestore(); closeDatabase();
+});
 
 /** Local fetch fixture exercises the native adapter, service, and Cortex gate. */
 function provider(respond: (body: any, attempt: number, signal: AbortSignal) => Response | Promise<Response>) {
@@ -148,8 +154,9 @@ test("valid Decision answers need only one provider request", async () => {
   expect(requests).toHaveLength(1);
 });
 
-for (const mode of ["live", "rebuild"] as const) {
-  test(`${mode} preserves Still in Love's full participant identity and trainer relationship`, async () => {
+for (const [mode, debug] of [["live", false], ["live", true], ["rebuild", false], ["rebuild", true]] as const) {
+  test(`${mode} preserves Still in Love's full participant identity and trainer relationship (debug=${debug})`, async () => {
+    if (debug) process.env.LUMIVERSE_CORTEX_DEBUG = "1";
     const chatId = `complete-character-name-${mode}`;
     const chunkId = `${chatId}-chunk`;
     const characterName = "Still in Love";
@@ -209,12 +216,19 @@ for (const mode of ["live", "rebuild"] as const) {
       else await processChunk({ chunkId, chatId, userId, characterId: null, content: passage,
         messageIds: [`${chatId}-author`], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, characterNames, generate, "sidecar", undefined, undefined, true);
     } finally { info.mockRestore(); }
-    const factLog = lines.find((line) => line.startsWith("[memory-cortex] fact_attribution"))!;
-    expect(factLog).toContain("proposed=2 matched=1 unmatched=1 importance=6 threshold=3 applied_links=2");
-    expect(factLog).not.toContain(characterName);
-    const relationshipLog = lines.find((line) => line.startsWith("[memory-cortex] relationship_review"))!;
-    expect(relationshipLog).toContain('"action":"keep"');
-    expect(relationshipLog).not.toContain(characterName);
+    if (debug) {
+      const factLog = lines.find((line) => line.startsWith("[memory-cortex] fact_attribution"))!;
+      expect(factLog).toContain("proposed=2 matched=1 unmatched=1 importance=6 threshold=3 applied_links=2");
+      expect(factLog).not.toContain(characterName);
+      const relationshipLog = lines.find((line) => line.startsWith("[memory-cortex] relationship_review"))!;
+      expect(relationshipLog).toContain('"action":"keep"');
+      expect(relationshipLog).not.toContain(characterName);
+    } else {
+      const summaries = lines.filter((line) => line.startsWith("[memory-cortex] review "));
+      expect(summaries).toHaveLength(mode === "rebuild" ? 2 : 1);
+      expect(summaries.every((line) => line.length < 180 && /keep=\d+ resolve=\d+ reject=\d+ defer=\d+/.test(line))).toBe(true);
+      expect(lines.some((line) => /entity_review|relationship_review|fact_attribution|arbitration backend=| → | ← /.test(line))).toBe(false);
+    }
     expect(requests.length).toBeGreaterThan(0);
     const entities = graph.getEntities(chatId);
     expect(entities.map((entity) => entity.name).sort()).toEqual(["Darran", characterName]);
@@ -364,7 +378,8 @@ test("deferral diagnostics distinguish model uncertainty from the host confidenc
   ]);
 });
 
-test("entity deferral logs expose scores and gate reasons without passage text or names", async () => {
+for (const debug of [false, true]) test(`entity deferral details are opt-in (debug=${debug})`, async () => {
+  if (debug) process.env.LUMIVERSE_CORTEX_DEBUG = "1";
   const chatId = "deferred-entity-chat";
   const chunkId = "deferred-entity-chunk";
   const passage = "Mara returned home.";
@@ -384,13 +399,21 @@ test("entity deferral logs expose scores and gate reasons without passage text o
     await processChunk({ chunkId, chatId, userId, characterId: null, content: passage, messageIds: [], startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 },
       ["Mara"], undefined, undefined, undefined, heuristic, true);
   } finally { info.mockRestore(); }
-  const line = lines.find((entry) => entry.startsWith("[memory-cortex] entity_review"))!;
-  expect(line).toContain(`chunk=${chunkId} threshold=0.8`);
-  expect(JSON.parse(line.split("verdicts=")[1]!)).toEqual([
-    { id: "e0", action: "defer", model_choice: "keep", confidence: 0.76, probability: 0.98, deferred_by: "threshold" },
-  ]);
-  expect(line).not.toContain("Mara");
-  expect(line).not.toContain("returned home");
+  expect(lines.some((line) => line.startsWith("[memory-cortex] review ") && line.includes("defer=1"))).toBe(true);
+  if (debug) {
+    const line = lines.find((entry) => entry.startsWith("[memory-cortex] entity_review"))!;
+    expect(line).toContain(`chunk=${chunkId} threshold=0.8`);
+    expect(JSON.parse(line.split("verdicts=")[1]!)).toEqual([
+      { id: "e0", action: "defer", model_choice: "keep", confidence: 0.76, probability: 0.98, deferred_by: "threshold" },
+    ]);
+    expect(line).not.toContain("Mara");
+    expect(line).not.toContain("returned home");
+  } else {
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain("verdicts=");
+    expect(lines[0]).not.toContain("Mara");
+    expect(lines[0]).not.toContain("returned home");
+  }
   expect(graph.getEntities(chatId)).toEqual([]);
 });
 
@@ -483,3 +506,80 @@ test("an invalid cleanup answer preserves its record while the chunk completes n
   expect((db.query("SELECT cortex_warmup_signature FROM chat_chunks WHERE id = ?").get(chunkId) as any).cortex_warmup_signature).toBeTruthy();
   expect(requests).toHaveLength(2);
 });
+
+for (const mode of ["live", "rebuild"] as const) for (const pov of ["first", "second", "third"] as const) {
+  test(`${mode} separates characters sharing a card label in ${pov} person`, async () => {
+    const db = getDb();
+    const chatId = `shared-card-${mode}-${pov}`;
+    const label = "Pulchra Fellini and Jane Doe";
+    const names = ["Pulchra Fellini", "Jane Doe", "Darran"];
+    const fact = "Darran agreed to train Pulchra Fellini.";
+    const janeFact = "Jane Doe repaired the radio.";
+    const passage = pov === "first" ? '"I will train Pulchra Fellini," Darran said. "I repaired the radio," Jane Doe replied.'
+      : pov === "second" ? 'Darran turned to Pulchra Fellini. "I will train you." Jane Doe showed them the radio she had repaired.'
+      : 'Darran agreed to train Pulchra Fellini. Jane Doe repaired the radio.';
+    putCortexConfig(userId, { ...config, entityExtractionMode: "sidecar", salienceScoringMode: "sidecar",
+      sidecar: { ...config.sidecar, connectionProfileId: "sidecar", chunkBatchSize: 2, rebuildConcurrency: 1 },
+      queryGeneration: { primary: { connectionProfileId: "sidecar", model: null }, secondary: null },
+      sidecarReliability: { ...config.sidecarReliability, gradesExistingRecords: false },
+    });
+    db.query("INSERT INTO chats (id, user_id) VALUES (?, ?)").run(chatId, userId);
+    db.query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, 0, 0, ?, ?)")
+      .run(`${chatId}-author`, chatId, label, passage);
+    db.query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, 1, 1, 'Darran', 'Agreed.')")
+      .run(`${chatId}-user`, chatId);
+    const chunkId = `${chatId}-chunk`;
+    const count = mode === "live" ? 1 : 2;
+    for (let i = 0; i < count; i++) db.query(`INSERT INTO chat_chunks
+      (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 40, 1, ?, 1)`)
+      .run(i ? `${chunkId}-${i}` : chunkId, chatId, `${chatId}-author`, `${chatId}-author`, JSON.stringify([`${chatId}-author`]), passage, i + 1);
+    provider((body) => {
+      expect(body.state.canonicals.some((canonical: any) => canonical.name === label)).toBe(false);
+      expect(body.state.participants).toContainEqual({ name: "Pulchra Fellini", role: "character", authorLabel: label });
+      expect(body.state.participants).toContainEqual({ name: "Jane Doe", role: "character", authorLabel: label });
+      const value = response(body);
+      for (const [id, answer] of Object.entries(value.answers)) {
+        const candidate = body.state.candidates.find((entry: any) => entry.id === id);
+        if (candidate.kind === "relationship" && !(candidate.source === "Darran" && candidate.target === "Pulchra Fellini" && candidate.type === "mentor")) answer.choice = "reject";
+        if (candidate.kind === "entity" && !names.includes(candidate.name)) {
+          const canonical = body.state.canonicals.find((entry: any) => names.includes(entry.name) && entry.name.startsWith(candidate.name + " "));
+          answer.choice = canonical && candidate.canonicalIds?.includes(canonical.id) ? `resolve_${canonical.id}` : "reject";
+        }
+        const keys = Object.keys(answer.probabilities);
+        answer.probabilities = Object.fromEntries(keys.map((key) => [key, key === answer.choice ? 0.98 : 0.02 / (keys.length - 1)]));
+      }
+      return Response.json(value);
+    });
+    const extraction = async (request: any) => {
+      expect(request.messages[0].content).toContain("in any narrative POV");
+      expect(request.messages[1].content).toContain('"authorLabel":"' + label + '"');
+      const result = { importance: 5, emotional_tones: [], narrative_flags: [], key_facts: [fact, janeFact],
+        // Deliberately reproduce the model's combined-name mistake alongside
+        // independently named characters; the shared label must not persist.
+        entities_present: [...names.map((name) => ({ name, type: "character" })), { name: label, type: "character" }],
+        relationships_shown: [{ source: "Darran", target: "Pulchra Fellini", type: "mentor", label: "agreed to train", sentiment: 0.5 }],
+        status_changes: [], color_attributions: [], discovered_aliases: [{ canonical_name: label, alias: "Jane" }],
+      };
+      return { content: JSON.stringify(mode === "rebuild" ? { results: [0, 1].map((index) => ({ index, ...result })) } : result) };
+    };
+    if (mode === "rebuild") {
+      graph.upsertEntity(chatId, { name: label, type: "character", aliases: [], confidence: 1 }, chunkId, 1);
+      await rebuildCortex(userId, chatId, names, extraction, "sidecar");
+    } else {
+      await processChunk({ chunkId, chatId, userId, characterId: null, content: passage, messageIds: [`${chatId}-author`],
+        startMessageIndex: 0, endMessageIndex: 0, createdAt: 1 }, names, extraction, "sidecar", undefined, undefined, true);
+    }
+    expect(graph.getEntities(chatId).map((entity) => entity.name).sort()).toEqual([...names].sort());
+    const pulchra = graph.findEntityByName(chatId, "Pulchra Fellini")!;
+    const jane = graph.findEntityByName(chatId, "Jane Doe")!;
+    expect(pulchra.id).not.toBe(jane.id);
+    expect(pulchra.facts.map(graph.stripFactTags)).toContain(fact);
+    expect(pulchra.facts.map(graph.stripFactTags)).not.toContain(janeFact);
+    expect(jane.facts.map(graph.stripFactTags)).toContain(janeFact);
+    expect(jane.facts.map(graph.stripFactTags)).not.toContain(fact);
+    expect(graph.getRelationsIncludingInactive(chatId)).toEqual([expect.objectContaining({
+      sourceEntityId: graph.findEntityByName(chatId, "Darran")!.id, targetEntityId: pulchra.id, relationType: "mentor",
+    })]);
+  });
+}

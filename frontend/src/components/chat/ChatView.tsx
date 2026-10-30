@@ -5,7 +5,7 @@ import { ArrowUp, List, ListChecks, LoaderCircle, Pencil, UserRound, X } from 'l
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
 import { chatsApi, messagesApi } from '@/api/chats'
-import { memoryCortexApi, type CortexIngestionStatus } from '@/api/memory-cortex'
+import { memoryCortexApi, CORTEX_REQUEST_EVENT, type CortexIngestionStatus, type CortexActivitySnapshot } from '@/api/memory-cortex'
 import { generateApi } from '@/api/generate'
 import { loadoutsApi } from '@/api/loadouts'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
@@ -67,6 +67,7 @@ import {
   cortexErrorNoticeRemainingMs,
   hideDismissedCortexError,
   normalizeRebuildStatus,
+  mergeCortexActivity,
   type CortexRebuildStatus,
 } from './cortexNotice'
 
@@ -136,6 +137,9 @@ export default function ChatView() {
   const spindleVisibleAtRef = useRef<number | null>(null)
   const [ingestionStatus, setIngestionStatus] = useState<CortexIngestionStatus | null>(null)
   const [rebuildStatus, setRebuildStatus] = useState<CortexRebuildStatus | null>(null)
+  const [cortexActivity, setCortexActivity] = useState<CortexActivitySnapshot | null>(null)
+  const [cortexRequestedAt, setCortexRequestedAt] = useState<number | null>(null)
+  const [cortexNow, setCortexNow] = useState(Date.now())
   const [dismissedCortexErrorKey, setDismissedCortexErrorKey] = useState<string | null>(null)
   const [spindleNotice, setSpindleNotice] = useState<SpindleNotice | null>(null)
   const [chatFindOpen, setChatFindOpen] = useState(false)
@@ -421,7 +425,13 @@ export default function ChatView() {
     }, CHAT_CHROME_LEAVE_MS)
   }, [chatId, completeNavigateHome])
 
-  const cortexNotice = useMemo(() => buildCortexNotice(ingestionStatus, rebuildStatus, t), [ingestionStatus, rebuildStatus, t])
+  const cortexActive = !!cortexRequestedAt || !!cortexActivity?.runs.some((run) => run.status === 'processing')
+  useEffect(() => {
+    if (!cortexActive) return
+    const timer = window.setInterval(() => setCortexNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [cortexActive])
+  const cortexNotice = useMemo(() => buildCortexNotice(ingestionStatus, rebuildStatus, t, cortexActivity, cortexRequestedAt, cortexNow), [ingestionStatus, rebuildStatus, t, cortexActivity, cortexRequestedAt, cortexNow])
   const visibleCortexNotice = hideDismissedCortexError(cortexNotice, dismissedCortexErrorKey)
 
   useEffect(() => {
@@ -499,16 +509,47 @@ export default function ChatView() {
 
     setIngestionStatus(null)
     setRebuildStatus(null)
+    setCortexActivity(null)
+    setCortexRequestedAt(null)
     setDismissedCortexErrorKey(null)
     resetSpindleNotice()
+
+    let receivedIngestion = false
+    let receivedRebuild = false
+    let pendingCortexRequestId: string | null = null
+    const receiveActivity = (payload: CortexActivitySnapshot) => {
+      if (cancelled || !payload || payload.chatId !== chatId) return
+      setCortexActivity((current) => mergeCortexActivity(current, payload))
+      if (pendingCortexRequestId && payload.runs.some((run) => run.clientRequestId === pendingCortexRequestId)) setCortexRequestedAt(null)
+    }
+    const refreshActivity = () => { memoryCortexApi.getActivity(chatId).then(receiveActivity).catch(() => {}) }
+    const offActivity = wsClient.on(EventType.CORTEX_ACTIVITY, receiveActivity)
+    const offActivityReconnect = wsClient.on(EventType.CONNECTED, refreshActivity)
+    const onRequested = (event: Event) => {
+      const detail = (event as CustomEvent).detail
+      if (detail?.chatId !== chatId) return
+      if (detail.status === 'requested') {
+        pendingCortexRequestId = detail.id
+        setCortexRequestedAt(detail.requestedAt)
+        setCortexNow(Date.now())
+      } else if (detail.id !== pendingCortexRequestId) return
+      else if (detail.status === 'started') {
+        if (detail.activity) { receiveActivity(detail.activity); setCortexRequestedAt(null) }
+        else refreshActivity()
+      }
+      else setCortexRequestedAt(null)
+    }
+    window.addEventListener(CORTEX_REQUEST_EVENT, onRequested)
+    window.addEventListener('focus', refreshActivity)
+    refreshActivity()
 
     Promise.all([
       memoryCortexApi.getIngestionStatus(chatId).catch(() => null),
       memoryCortexApi.getRebuildStatus(chatId).catch(() => null),
     ]).then(([ingestion, rebuild]) => {
       if (cancelled) return
-      setIngestionStatus(ingestion)
-      setRebuildStatus(normalizeRebuildStatus(rebuild))
+      if (!receivedIngestion) setIngestionStatus(ingestion)
+      if (!receivedRebuild) setRebuildStatus(normalizeRebuildStatus(rebuild))
     })
 
     // This passive request may also queue ordinary LTCM embedding work. Do not
@@ -518,11 +559,13 @@ export default function ChatView() {
 
     const offIngestion = wsClient.on(EventType.CORTEX_INGESTION_PROGRESS, (payload: any) => {
       if (!payload || payload.chatId !== chatId) return
+      receivedIngestion = true
       setIngestionStatus(payload)
     })
 
     const offRebuild = wsClient.on(EventType.CORTEX_REBUILD_PROGRESS, (payload: any) => {
       if (!payload || payload.chatId !== chatId) return
+      receivedRebuild = true
       setRebuildStatus(normalizeRebuildStatus(payload))
     })
 
@@ -586,6 +629,10 @@ export default function ChatView() {
       resetSpindleNotice()
       offIngestion()
       offRebuild()
+      offActivity()
+      offActivityReconnect()
+      window.removeEventListener(CORTEX_REQUEST_EVENT, onRequested)
+      window.removeEventListener('focus', refreshActivity)
       offSpindle()
       offGenerationProgress()
       offGenerationEnd()
@@ -1228,12 +1275,22 @@ export default function ChatView() {
                 </div>
               )}
               {visibleCortexNotice && (
-                <div className={clsx(styles.cortexNotice, visibleCortexNotice.variant === 'error' && styles.cortexNoticeError)}>
+                <div className={clsx(styles.cortexNotice, visibleCortexNotice.batches?.length && styles.cortexNoticeWithBatches, visibleCortexNotice.variant === 'error' && styles.cortexNoticeError)}>
                   <span className={styles.cortexNoticeStatus} aria-hidden="true" />
                   <span className={styles.cortexNoticeTitle}>{visibleCortexNotice.title}</span>
                   <span className={styles.cortexNoticeSeparator} aria-hidden="true">•</span>
-                  <span className={styles.cortexNoticeDetail}>{visibleCortexNotice.detail}</span>
+                  <span className={styles.cortexNoticeDetail} title={[visibleCortexNotice.detail, visibleCortexNotice.elapsed].filter(Boolean).join(' · ')}>
+                    {visibleCortexNotice.detail}
+                    {visibleCortexNotice.elapsed && <span aria-hidden="true"> · {visibleCortexNotice.elapsed}</span>}
+                  </span>
                   <span className={styles.cortexNoticePercent}>{typeof visibleCortexNotice.percent === 'number' ? `${visibleCortexNotice.percent}%` : ''}</span>
+                  {!!visibleCortexNotice.batches?.length && (
+                    <div className={styles.cortexBatchList} aria-label={t('chatView.cortexActiveBatches')}>
+                      {visibleCortexNotice.batches.map((batch) => (
+                        <span key={batch.id} className={styles.cortexBatch} data-phase={batch.phase} title={batch.detail}>{batch.label}</span>
+                      ))}
+                    </div>
+                  )}
                   {visibleCortexNotice.variant === 'error' && visibleCortexNotice.errorKey && (
                     <button
                       type="button"

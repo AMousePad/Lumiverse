@@ -197,7 +197,10 @@ mock.module("@/components/shared/ConnectionSelect", () => ({
     ),
 }));
 mock.module("@/components/shared/NumericInput", () => ({
-  default: ({ value }: { value: number }) => createElement("input", { defaultValue: String(value) }),
+  default: ({ value, onChange, integer: _integer, commitOnBlur: _commit, ...props }: any) => createElement("input", {
+    ...props, type: "number", defaultValue: String(value),
+    onInput: (event: any) => onChange(event.currentTarget.valueAsNumber),
+  }),
 }));
 mock.module("@/components/shared/Toggle", () => ({
   Toggle: { Checkbox: ({ checked, disabled, label, hint, onChange }: {
@@ -320,6 +323,26 @@ describe("MemoryCortexSettings secondary fallback", () => {
     expect(select?.getAttribute("data-kind")).toBe("decision");
     await changeSelect(select!, "decision-conn");
     expect(patches.at(-1)).toMatchObject({ arbitration: { backend: "decision", connectionProfileId: "decision-conn", minConfidence: 0.8 } });
+  });
+
+  test("consolidation intervals are visible and persist independently with their units", async () => {
+    const h = await mount();
+    await click(h.querySelector('[aria-label="memoryCortex.enableConsolidation"]'));
+    for (const [field, initial, value] of [["chunkThreshold", 40, 12], ["chunksPerConsolidation", 10, 6], ["arcThreshold", 5, 3]] as const) {
+      const input = h.querySelector<HTMLInputElement>(`[data-testid="cortex-consolidation-${field}"]`)!;
+      expect(input).not.toBeNull();
+      expect(input.value).toBe(String(initial));
+      expect(input.min).toBe("1");
+      await act(async () => {
+        input.value = String(value);
+        input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    expect(persistedConfig.consolidation).toEqual({ ...config.consolidation,
+      enabled: true, chunkThreshold: 12, chunksPerConsolidation: 6, arcThreshold: 3,
+    });
+    expect(h.textContent).toContain("memoryCortex.consolidationIntervalHint");
   });
 
   test("candidate review cannot be enabled without a Decision connection", async () => {

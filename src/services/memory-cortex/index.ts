@@ -15,8 +15,12 @@
  *   The chat chunk creation pipeline calls scheduleProcessChunk() on new chunks.
  */
 
+import { CortexActivityTracker, withCortexActivity, withCortexBatch, updateCortexActivity, updateCortexBatchPhase } from "./activity";
+import { isCortexDebugEnabled } from "./diagnostics";
 import { getDb } from "../../db/connection";
 import { buildCortexIdentityContext } from "./identity-context";
+import { getCortexCharacterNames, normalizeCharacterName } from "./character-names";
+export { getCortexCharacterNames, normalizeCharacterName } from "./character-names";
 import { arbitrateCortexCandidates, CORTEX_ARBITRATION_VERSION } from "./arbitration";
 import { buildCortexArbitrationPlan, attributeFactsToEntities, type CortexGraphPlan, type CortexCleanupAction } from "./arbitration-plan";
 import {
@@ -733,6 +737,7 @@ function updateIngestionStatus(
   chatId: string,
   patch: Partial<CortexIngestionStatus>,
 ): CortexIngestionStatus {
+  if (patch.phase) updateCortexBatchPhase(patch.phase);
   const next = {
     ...getOrCreateIngestionStatus(chatId),
     ...patch,
@@ -1408,6 +1413,8 @@ export function scheduleProcessChunk(
     .get(data.chunkId, data.chatId) as { updated_at?: number } | null;
   const queuedRevision = queuedRow?.updated_at ?? null;
 
+  const activity = isCortexEnabledForStoredChat(data.userId, data.chatId, getCortexConfig(data.userId))
+    ? new CortexActivityTracker(data.userId, data.chatId, "ingestion") : null;
   return enqueueChatPipelineTask({
     chatId: data.chatId,
     kind: "cortex_ingest",
@@ -1433,20 +1440,31 @@ export function scheduleProcessChunk(
       }
       return { action: "run" } as const;
     },
-    run: (laneSignal) => processChunk(
-      data,
-      characterNames,
-      generateRawFn,
-      sidecarConnectionId,
-      descriptionAliases,
-      undefined,
-      false,
-      signal ? AbortSignal.any([signal, laneSignal]) : laneSignal,
-    ),
-  });
+    run: (laneSignal) => {
+      const run = () => processChunk(
+        data,
+        characterNames,
+        generateRawFn,
+        sidecarConnectionId,
+        descriptionAliases,
+        undefined,
+        false,
+        signal ? AbortSignal.any([signal, laneSignal]) : laneSignal,
+      );
+      return activity ? activity.run(run) : run();
+    },
+  }).then((result) => {
+    activity?.finish(result.status === "completed" ? "complete" : "cancelled");
+    return result;
+  }, (error) => { activity?.finish("error"); throw error; });
 }
 
-export async function processChunk(
+export async function processChunk(...args: Parameters<typeof processChunkImpl>): Promise<void> {
+  if (!isCortexEnabledForStoredChat(args[0].userId, args[0].chatId, getCortexConfig(args[0].userId))) return;
+  return withCortexActivity(args[0].userId, args[0].chatId, "ingestion", () => processChunkImpl(...args));
+}
+
+async function processChunkImpl(
   data: ChunkIngestionData,
   characterNames: string[],
   generateRawFn?: (opts: {
@@ -1824,14 +1842,14 @@ export async function processChunk(
           ...colorProposals.map((color) => ({ name: color.entityName!, type: "character" })),
         ]),
         cleanContent, config.entityExtractionFilters,
-      );
+      ).filter((entity) => !identity.isSharedLabel(entity.name));
       const allowedNames = new Set(entities.map((e) => e.name.toLowerCase()));
       const allowedEndpoint = (name: string) => allowedNames.has(name.toLowerCase()) || allowedNames.has(proposedEndpoint(name).toLowerCase());
       graphPlan = {
         entities,
         colors: colorProposals,
         relationships: relationships.filter((r) => allowedEndpoint(r.source) && allowedEndpoint(r.target) && r.source.toLowerCase() !== r.target.toLowerCase()) as any,
-        aliases,
+        aliases: aliases.filter((alias) => !identity.isSharedLabel(alias.alias) && !identity.isSharedLabel(alias.canonicalName)),
       };
       if (arbitrationActive) {
         const reviewEntities = config.sidecarReliability.gradesExistingRecords ? entityGraph.getEntities(data.chatId) : knownEntities;
@@ -1848,33 +1866,39 @@ export async function processChunk(
         graphPlan = applied.graph;
         cleanupActions = applied.cleanup;
         timings.sidecarMs += result.durationMs;
-        const relationshipIds = new Set(plan.input.candidates.filter((candidate) => candidate.kind === "relationship").map((candidate) => candidate.id));
-        const relationshipVerdicts = result.verdicts.filter((verdict) => relationshipIds.has(verdict.id));
-        const entityIds = new Set(plan.input.candidates.filter((candidate) => candidate.kind === "entity").map((candidate) => candidate.id));
-        const entityVerdicts = result.verdicts.filter((verdict) => entityIds.has(verdict.id));
-        console.info(`[memory-cortex] arbitration backend=${config.arbitration.backend} candidates=${result.verdicts.length} models=${result.models.join(",")} ms=${Math.round(result.durationMs)}`
-          + ` entities_sidecar=${sidecarEntities.length} entities_proposed=${entityIds.size}`
-          + ` entities_kept=${entityVerdicts.filter((verdict) => verdict.action === "keep").length}`
-          + ` entities_resolved=${entityVerdicts.filter((verdict) => verdict.action === "resolve").length}`
-          + ` entities_rejected=${entityVerdicts.filter((verdict) => verdict.action === "reject").length}`
-          + ` entities_deferred=${entityVerdicts.filter((verdict) => verdict.action === "defer").length} entities_applied=${graphPlan.entities.length}`
-          + ` relationships_sidecar=${sidecarRelationships.length} relationships_participant=${participantRelationships.length}`
-          + ` relationships_proposed=${relationshipIds.size} relationships_kept=${relationshipVerdicts.filter((verdict) => verdict.action === "keep").length}`
-          + ` relationships_rejected=${relationshipVerdicts.filter((verdict) => verdict.action === "reject").length}`
-          + ` relationships_deferred=${relationshipVerdicts.filter((verdict) => verdict.action === "defer").length} relationships_applied=${graphPlan.relationships.length}`);
-        if (entityVerdicts.some((verdict) => verdict.action === "defer")) {
-          console.info(`[memory-cortex] entity_review chunk=${data.chunkId} threshold=${config.arbitration.minConfidence} verdicts=${JSON.stringify(entityVerdicts.map((verdict) => ({
-            id: verdict.id, action: verdict.action,
-            model_choice: verdict.deferralReason === "invalid_answer" ? undefined : verdict.modelChoice ?? verdict.action,
-            confidence: verdict.confidence, probability: verdict.probability, deferred_by: verdict.deferralReason,
-          })))}`);
-        }
-        if (relationshipVerdicts.length) {
-          console.info(`[memory-cortex] relationship_review chunk=${data.chunkId} threshold=${config.arbitration.minConfidence} verdicts=${JSON.stringify(relationshipVerdicts.map((verdict) => ({
-            id: verdict.id, action: verdict.action,
-            model_choice: verdict.deferralReason === "invalid_answer" ? undefined : verdict.modelChoice ?? verdict.action,
-            confidence: verdict.confidence, probability: verdict.probability, deferred_by: verdict.deferralReason,
-          })))}`);
+        const counts = { keep: 0, resolve: 0, reject: 0, defer: 0 };
+        for (const verdict of result.verdicts) counts[verdict.action]++;
+        console.info(`[memory-cortex] review chunk=${data.chunkId.slice(0, 8)} candidates=${result.verdicts.length}`
+          + ` keep=${counts.keep} resolve=${counts.resolve} reject=${counts.reject} defer=${counts.defer} ms=${Math.round(result.durationMs)}`);
+        if (isCortexDebugEnabled()) {
+          const relationshipIds = new Set(plan.input.candidates.filter((candidate) => candidate.kind === "relationship").map((candidate) => candidate.id));
+          const relationshipVerdicts = result.verdicts.filter((verdict) => relationshipIds.has(verdict.id));
+          const entityIds = new Set(plan.input.candidates.filter((candidate) => candidate.kind === "entity").map((candidate) => candidate.id));
+          const entityVerdicts = result.verdicts.filter((verdict) => entityIds.has(verdict.id));
+          console.info(`[memory-cortex] arbitration backend=${config.arbitration.backend} candidates=${result.verdicts.length} models=${result.models.join(",")} ms=${Math.round(result.durationMs)}`
+            + ` entities_sidecar=${sidecarEntities.length} entities_proposed=${entityIds.size}`
+            + ` entities_kept=${entityVerdicts.filter((verdict) => verdict.action === "keep").length}`
+            + ` entities_resolved=${entityVerdicts.filter((verdict) => verdict.action === "resolve").length}`
+            + ` entities_rejected=${entityVerdicts.filter((verdict) => verdict.action === "reject").length}`
+            + ` entities_deferred=${entityVerdicts.filter((verdict) => verdict.action === "defer").length} entities_applied=${graphPlan.entities.length}`
+            + ` relationships_sidecar=${sidecarRelationships.length} relationships_participant=${participantRelationships.length}`
+            + ` relationships_proposed=${relationshipIds.size} relationships_kept=${relationshipVerdicts.filter((verdict) => verdict.action === "keep").length}`
+            + ` relationships_rejected=${relationshipVerdicts.filter((verdict) => verdict.action === "reject").length}`
+            + ` relationships_deferred=${relationshipVerdicts.filter((verdict) => verdict.action === "defer").length} relationships_applied=${graphPlan.relationships.length}`);
+          if (entityVerdicts.some((verdict) => verdict.action === "defer")) {
+            console.info(`[memory-cortex] entity_review chunk=${data.chunkId} threshold=${config.arbitration.minConfidence} verdicts=${JSON.stringify(entityVerdicts.map((verdict) => ({
+              id: verdict.id, action: verdict.action,
+              model_choice: verdict.deferralReason === "invalid_answer" ? undefined : verdict.modelChoice ?? verdict.action,
+              confidence: verdict.confidence, probability: verdict.probability, deferred_by: verdict.deferralReason,
+            })))}`);
+          }
+          if (relationshipVerdicts.length) {
+            console.info(`[memory-cortex] relationship_review chunk=${data.chunkId} threshold=${config.arbitration.minConfidence} verdicts=${JSON.stringify(relationshipVerdicts.map((verdict) => ({
+              id: verdict.id, action: verdict.action,
+              model_choice: verdict.deferralReason === "invalid_answer" ? undefined : verdict.modelChoice ?? verdict.action,
+              confidence: verdict.confidence, probability: verdict.probability, deferred_by: verdict.deferralReason,
+            })))}`);
+          }
         }
       }
     }
@@ -2036,11 +2060,13 @@ export async function processChunk(
             appliedFactLinks += facts.length;
           }
         }
-        const attributedFacts = new Set([...attributed.values()].flat());
-        console.info(`[memory-cortex] fact_attribution chunk=${data.chunkId} proposed=${sidecarFacts.length}`
-          + ` matched=${attributedFacts.size} unmatched=${sidecarFacts.filter((fact) => !attributedFacts.has(fact)).length}`
-          + ` importance=${chunkImportance} threshold=${factThreshold}`
-          + ` applied_links=${appliedFactLinks}`);
+        if (isCortexDebugEnabled()) {
+          const attributedFacts = new Set([...attributed.values()].flat());
+          console.info(`[memory-cortex] fact_attribution chunk=${data.chunkId} proposed=${sidecarFacts.length}`
+            + ` matched=${attributedFacts.size} unmatched=${sidecarFacts.filter((fact) => !attributedFacts.has(fact)).length}`
+            + ` importance=${chunkImportance} threshold=${factThreshold}`
+            + ` applied_links=${appliedFactLinks}`);
+        }
 
         if (salienceResult.statusChanges.length > 0) {
           for (const change of salienceResult.statusChanges) {
@@ -2162,9 +2188,11 @@ export async function processChunk(
   // ── Consolidation Check ──
 
   if (config.consolidation.enabled && !skipConsolidation) {
-    // Run async — don't block the ingestion pipeline
-    consolidation
-      .maybeConsolidate(
+    updateCortexActivity({ phase: "consolidating" });
+    // Keep consolidation in this chat's lane so rebuilds cannot clear its
+    // sources while a detached summary is still being generated.
+    await consolidation
+      .consolidateBacklog(
         data.userId,
         data.chatId,
         config.consolidation,
@@ -2173,6 +2201,7 @@ export async function processChunk(
         config.sidecarTimeoutMs,
         buildSidecarSamplingParameters(config.sidecar),
         config.nonProseScaffoldTags,
+        { signal },
       )
       .catch((err) => {
         console.warn("[memory-cortex] Consolidation failed:", err);
@@ -2235,7 +2264,14 @@ export function getRebuildStatus(chatId: string): RebuildState | null {
 const REBUILD_CONCURRENCY = 5;
 
 
-export async function rebuildCortex(
+export async function rebuildCortex(...args: Parameters<typeof rebuildCortexImpl>) {
+  if (!isCortexEnabledForStoredChat(args[0], args[1], getCortexConfig(args[0]))) {
+    return { chunksProcessed: 0, entitiesFound: 0, relationsFound: 0 };
+  }
+  return withCortexActivity(args[0], args[1], "rebuild", () => rebuildCortexImpl(...args));
+}
+
+async function rebuildCortexImpl(
   userId: string,
   chatId: string,
   characterNames: string[],
@@ -2344,7 +2380,10 @@ export async function rebuildCortex(
     startedAt: Date.now(),
   };
   activeRebuilds.set(chatId, state);
-  const emit = () => { if (onProgress) onProgress(state); };
+  const emit = () => {
+    updateCortexActivity({ completedChunks: state.current, totalChunks: state.total, phase: state.phase });
+    if (onProgress) onProgress(state);
+  };
   emit();
 
   try {
@@ -2378,21 +2417,23 @@ export async function rebuildCortex(
       // Each worker pulls up to chunkBatchSize chunks and resolves them in one
       // request. At most concurrency batch requests run at once.
       const chunkBatchSize = Math.max(1, config.sidecar?.chunkBatchSize ?? 5);
+      updateCortexActivity({ totalBatches: Math.ceil(chunks.length / chunkBatchSize) });
       let nextChunkIdx = 0;
       let completed = completedBeforeStart;
       const activeGenerateRawFn = generateRawFn!;
       const activeSidecarConnectionId = sidecarConnectionId!;
 
-      // Resolve a token counter once for the whole rebuild. The same counter
-      // is shared across all batches because they all use the same sidecar
-      // connection / model.
+      // Debug dispatch traces share one counter across batches. Avoid loading
+      // a model tokenizer when those diagnostics are disabled.
       let rebuildTokenCounter: ((text: string) => number) | undefined;
-      try {
-        const resolved = await resolveCounter(config.sidecar.model || "");
-        rebuildTokenCounter = resolved.count;
-        console.info(`[memory-cortex] Rebuild dispatch logging using tokenizer=${resolved.name}`);
-      } catch {
-        rebuildTokenCounter = undefined;
+      if (isCortexDebugEnabled()) {
+        try {
+          const resolved = await resolveCounter(config.sidecar.model || "");
+          rebuildTokenCounter = resolved.count;
+          console.info(`[memory-cortex] Rebuild dispatch logging using tokenizer=${resolved.name}`);
+        } catch {
+          rebuildTokenCounter = undefined;
+        }
       }
       let batchCounter = 0;
       const participants = getStoredConversationParticipants(chatId);
@@ -2413,99 +2454,105 @@ export async function rebuildCortex(
           nextChunkIdx = end;
 
           const batch = chunks.slice(start, end);
-          const batchInput = await Promise.all(batch.map(async (chunk, i) => ({
-            index: i,
-            // Strip non-prose content before the sidecar sees it — matching what
-            // the live processChunk path does. Without this, Spindle extension
-            // tags, HUD blocks, scaffold markup, and other XML-wrapped content
-            // would leak into the batch prompt and pollute extraction/salience.
-            // keepFontTags: true so the sidecar can still do color attribution.
-            content: stripNonProseTags(
-              await regexScriptsSvc.applyMemoryIngestionRegex(userId,
-                hydrateChunkContentFromMessages(safeJsonArray(chunk.message_ids), chunk.content), { characterId, chatId }),
-              {
-                keepFontTags: true,
-                preserveFontInnerTags: getThoughtMarkerHtmlTags(config.thoughtMarkers),
-                extraScaffoldTags: config.nonProseScaffoldTags,
-              },
-            ),
-          })));
-
           const batchIdx = ++batchCounter;
-          const requestStart = Date.now();
-          state.inFlightBatches += 1;
-          state.lastProviderRequestAt = requestStart;
-          state.phase = "awaiting_provider";
-          emit();
+          await withCortexBatch(batchIdx, batch.length, async () => {
+            const batchInput = await Promise.all(batch.map(async (chunk, i) => ({
+              index: i,
+              // Strip non-prose content before the sidecar sees it — matching what
+              // the live processChunk path does. Without this, Spindle extension
+              // tags, HUD blocks, scaffold markup, and other XML-wrapped content
+              // would leak into the batch prompt and pollute extraction/salience.
+              // keepFontTags: true so the sidecar can still do color attribution.
+              content: stripNonProseTags(
+                await regexScriptsSvc.applyMemoryIngestionRegex(userId,
+                  hydrateChunkContentFromMessages(safeJsonArray(chunk.message_ids), chunk.content), { characterId, chatId }),
+                {
+                  keepFontTags: true,
+                  preserveFontInnerTags: getThoughtMarkerHtmlTags(config.thoughtMarkers),
+                  extraScaffoldTags: config.nonProseScaffoldTags,
+                },
+              ),
+            })));
 
-          let sidecarResults: Array<import("./types").SidecarExtractionResult | null>;
-          try {
-            sidecarResults = await extractBatchWithSidecar(
-              batchInput,
-              activeGenerateRawFn,
-              activeSidecarConnectionId,
-              {
-                characterNames,
-                participants,
-                thoughtDelimiters: config.thoughtMarkers,
-                knownEntities: entityGraph.getActiveEntities(chatId).map((e) => ({ name: e.name, type: e.entityType, aliases: e.aliases })),
-                descriptionAliases: buildSidecarAliasList(
-                  descriptionAliases,
-                  entityGraph.getActiveEntities(chatId),
-                  participants,
-                ),
-                samplingParameters: buildSidecarSamplingParameters(config.sidecar),
-                tokenCounter: rebuildTokenCounter,
-                logTag: `rebuild:batch-${batchIdx} chat=${chatId.slice(0, 8)}`,
-              },
-            );
-          } catch (err: any) {
-            console.warn(`[memory-cortex] rebuild:batch-${batchIdx} threw, all chunks falling back to heuristic:`, err?.message ?? err);
-            sidecarResults = new Array(batch.length).fill(null);
-          } finally {
-            state.inFlightBatches = Math.max(0, state.inFlightBatches - 1);
-            state.lastProviderResponseMs = Date.now() - requestStart;
-            // Other concurrent workers may still be awaiting the provider, so
-            // only flip back to "ingesting" if nothing else is in flight.
-            state.phase = state.inFlightBatches > 0 ? "awaiting_provider" : "ingesting";
+            const requestStart = Date.now();
+            state.inFlightBatches += 1;
+            state.lastProviderRequestAt = requestStart;
+            state.phase = "awaiting_provider";
             emit();
-          }
 
-          for (let i = 0; i < batch.length; i++) {
-            // Bail before persisting this batch if a superseding rebuild has
-            // preempted us — its clearDerivedCortexData + reprocess owns the
-            // chat now, so writing here would just be overwritten work.
-            if (signal?.aborted) return;
-            const chunk = batch[i];
+            let sidecarResults: Array<import("./types").SidecarExtractionResult | null>;
             try {
-              const sidecarResult = sidecarResults[i];
-              if (sidecarResult) {
-                await processChunkWithPrecomputedSidecar(
-                  chunk, chatId, userId, characterId, characterNames, sidecarResult, descriptionAliases,
-                  activeGenerateRawFn, activeSidecarConnectionId, signal,
-                );
-              } else {
-                if (config.sidecarReliability.fallback === "skip") {
-                  tickProgress();
-                  continue;
-                }
-                await processChunkFromRaw(chunk, chatId, userId, characterId, characterNames, activeGenerateRawFn, activeSidecarConnectionId, descriptionAliases, true, signal, true);
-              }
-            } catch (error) {
-              // A failed quality gate must never downgrade to an unreviewed ingest.
-              throw error;
+              sidecarResults = await extractBatchWithSidecar(
+                batchInput,
+                activeGenerateRawFn,
+                activeSidecarConnectionId,
+                {
+                  characterNames,
+                  participants,
+                  thoughtDelimiters: config.thoughtMarkers,
+                  knownEntities: entityGraph.getActiveEntities(chatId).map((e) => ({ name: e.name, type: e.entityType, aliases: e.aliases })),
+                  descriptionAliases: buildSidecarAliasList(
+                    descriptionAliases,
+                    entityGraph.getActiveEntities(chatId),
+                    participants,
+                  ),
+                  samplingParameters: buildSidecarSamplingParameters(config.sidecar),
+                  tokenCounter: rebuildTokenCounter,
+                  logTag: `rebuild:batch-${batchIdx} chat=${chatId.slice(0, 8)}`,
+                },
+              );
+            } catch (err: any) {
+              console.warn(`[memory-cortex] rebuild:batch-${batchIdx} threw, all chunks falling back to heuristic:`, err?.message ?? err);
+              sidecarResults = new Array(batch.length).fill(null);
+            } finally {
+              state.inFlightBatches = Math.max(0, state.inFlightBatches - 1);
+              state.lastProviderResponseMs = Date.now() - requestStart;
+              // Other concurrent workers may still be awaiting the provider, so
+              // only flip back to "ingesting" if nothing else is in flight.
+              state.phase = state.inFlightBatches > 0 ? "awaiting_provider" : "ingesting";
+              emit();
             }
-            tickProgress();
-          }
+
+            for (let i = 0; i < batch.length; i++) {
+              // Bail before persisting this batch if a superseding rebuild has
+              // preempted us — its clearDerivedCortexData + reprocess owns the
+              // chat now, so writing here would just be overwritten work.
+              if (signal?.aborted) return;
+              const chunk = batch[i];
+              try {
+                const sidecarResult = sidecarResults[i];
+                if (sidecarResult) {
+                  await processChunkWithPrecomputedSidecar(
+                    chunk, chatId, userId, characterId, characterNames, sidecarResult, descriptionAliases,
+                    activeGenerateRawFn, activeSidecarConnectionId, signal,
+                  );
+                } else {
+                  if (config.sidecarReliability.fallback === "skip") {
+                    tickProgress();
+                    continue;
+                  }
+                  await processChunkFromRaw(chunk, chatId, userId, characterId, characterNames, activeGenerateRawFn, activeSidecarConnectionId, descriptionAliases, true, signal, true);
+                }
+              } catch (error) {
+                // A failed quality gate must never downgrade to an unreviewed ingest.
+                throw error;
+              }
+              tickProgress();
+            }
+          }, signal);
         }
       }
 
       // concurrency workers, each pulls batches
       const workers = Array.from({ length: Math.min(concurrency, chunks.length) }, () => processNextBatch());
-      await Promise.all(workers);
+      // Keep the run active until every worker has unwound, including when
+      // another batch fails review. No sibling may outlive the progress run.
+      const outcomes = await Promise.allSettled(workers);
+      const failed = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
     }
 
-    if (config.consolidation.enabled && config.consolidation.useSidecar && sidecarAvailable) {
+    if (config.consolidation.enabled) {
       state.phase = "consolidating";
       emit();
       const created = await consolidation.consolidateBacklog(
@@ -2934,7 +2981,11 @@ function safeJsonArray(raw: string | null | undefined): string[] {
 function getStoredConversationParticipants(chatId: string): CortexParticipant[] {
   const rows = getDb().query("SELECT DISTINCT name, is_user FROM messages WHERE chat_id = ? AND trim(name) != ''")
     .all(chatId) as Array<{ name: string; is_user: number }>;
-  return rows.map((row) => ({ name: normalizeCharacterName(row.name), role: row.is_user ? "user" : "character", aliases: [row.name] }));
+  return rows.flatMap((row): CortexParticipant[] => {
+    const names = row.is_user ? [normalizeCharacterName(row.name)] : getCortexCharacterNames(row.name);
+    return names.map((name) => ({ name, role: row.is_user ? "user" : "character",
+      ...(names.length > 1 ? { authorLabel: row.name } : { aliases: [row.name] }) }));
+  });
 }
 
 function hydrateChunkContentFromMessages(messageIds: string[], fallbackContent: string): string {
@@ -2995,63 +3046,6 @@ function findPrefixMatch(np: string, characterNames: string[]): string | null {
  * Usage: call once per character/persona during chunk processing setup,
  * pass the merged map to processChunk as `descriptionAliases`.
  */
-// ─── Bot Name Filler ──────────────────────────────────────────
-// Words used by card labels and scenario segments. Only discard a whole
-// delimited metadata segment: these words can also be part of a real name.
-
-const BOT_NAME_FILLER = new Set([
-  // Meta / platform tags
-  "live", "new", "old", "reloaded", "remake", "rework", "updated", "original",
-  "alternate", "version", "edition", "nsfw", "sfw", "oc", "wip", "beta", "au", "canon",
-  // Narrative structure
-  "episode", "chapter", "part", "scenario", "adventure", "story", "encounter",
-  "meeting", "date", "quest", "tale", "journey", "arc", "prologue", "epilogue",
-  // Genre tags
-  "modern", "fantasy", "romance", "action", "horror", "mystery", "drama",
-  "comedy", "thriller", "historical", "futuristic", "dystopian", "supernatural",
-  // Common descriptive filler
-  "chance", "interrogation", "confrontation", "conversation", "introduction",
-  // Interjections / filler words
-  "ah", "oh", "hey", "hi", "yo", "welcome",
-  // Articles / prepositions used in metadata-only segments
-  "the", "a", "an", "of", "in", "at", "to", "for", "with", "by", "and", "or",
-]);
-
-/**
- * Remove explicit card decorations while preserving the complete name.
- *
- * Handles common bot-card naming patterns:
- *   - Tag prefixes: "LIVE:", "NSFW:", "OC:", "[WIP]"
- *   - Structural separators: spaced hyphen, |, _, —, –, :, /
- *   - Decorative Unicode: emoji, CJK brackets, symbols
- *   - Delimited scenario suffixes: "| A Chance Interrogation", "— Modern AU"
- *
- * Prefer the first non-metadata segment. Do not infer a person's identity by
- * selecting title-cased words: "Still in Love", particles, lowercase names
- * and names containing genre words must survive intact.
- */
-export function normalizeCharacterName(rawName: string): string {
-  // 1. Strip emoji and decorative Unicode
-  let cleaned = rawName;
-  try {
-    cleaned = cleaned.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, "");
-  } catch { /* regex unicode support varies */ }
-  cleaned = cleaned.replace(/[「」『』【】〖〗★☆✨~♡♥●○◆◇■□▪▫▲△▶◀♪♫§†‡※•·]/g, "");
-
-  // 2. Strip bracketed tags: [OC], (NSFW), {WIP}, etc.
-  cleaned = cleaned.replace(/[\[({]\s*(?:OC|NSFW|SFW|WIP|BETA|AU|CANON|NEW|UPDATED?|REMAKE|V\d+(?:\.\d+)?)\s*[\])}]/gi, "");
-
-  // 3. Split on structural separators
-  const segments = cleaned.split(/\s+-\s+|[|_—–:\/\\]/).map((s) => s.trim().replace(/\s+/g, " ")).filter(Boolean);
-
-  // 4. Reject standalone labels, never individual words inside a name. When
-  // every segment looks like metadata, preserve the first as the identity.
-  return segments.find((segment) => !segment.split(/[\s,]+/).every((word) => {
-    const key = word.toLowerCase().replace(/[.,;:!?"'()\[\]{}]+/g, "");
-    return BOT_NAME_FILLER.has(key) || /^v?\d+(?:\.\d+)*$/i.test(key);
-  })) ?? segments[0] ?? rawName.trim();
-}
-
 export function extractDescriptionAliases(
   canonicalName: string,
   ...descriptions: (string | null | undefined)[]

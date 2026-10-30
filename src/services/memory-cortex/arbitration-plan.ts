@@ -1,4 +1,5 @@
 import { isPlausibleAlias } from "./alias-validation";
+import { normalizeCharacterName } from "./character-names";
 import { validateArbitrationVerdicts } from "./arbitration";
 import type { ArbitrationCanonical, ArbitrationCandidate, ArbitrationVerdict, CortexArbitrationInput } from "./arbitration";
 import type { DiscoveredAlias, ExtractedEntity, ExtractedRelationship, MemoryEntity } from "./types";
@@ -36,16 +37,18 @@ export function buildCortexArbitrationPlan(options: {
       if (isPlausibleAlias(alias, entity.name) && !graph.aliases.some((a) => a.alias === alias && a.canonicalName === entity.name)) graph.aliases.push({ alias, canonicalName: entity.name });
     }
   }
+  const sharedLabels = new Set((options.participants ?? []).flatMap((p) => p.authorLabel
+    ? [p.authorLabel.toLowerCase(), normalizeCharacterName(p.authorLabel).toLowerCase()] : []));
   const canonicals: ArbitrationCanonical[] = [];
   const canonicalEntityIds = new Map<string, string>();
   const seen = new Set<string>();
   for (const entity of [...knownEntities, ...options.characterNames.map((name) => ({ name, aliases: [], id: undefined })),
     ...graph.entities.filter((e) => !e.provisional).map((e) => ({ name: e.name, aliases: [] as string[], id: undefined }))]) {
-    if (seen.has(entity.name.toLowerCase())) continue;
+    if (seen.has(entity.name.toLowerCase()) || sharedLabels.has(entity.name.toLowerCase())) continue;
     seen.add(entity.name.toLowerCase());
     const id = `c${canonicals.length}`;
     const aliases = [...entity.aliases, ...[...(options.canonicalAliases ?? [])].filter(([, name]) => name.toLowerCase() === entity.name.toLowerCase()).map(([alias]) => alias)];
-    canonicals.push({ id, name: entity.name, aliases: [...new Set(aliases)] });
+    canonicals.push({ id, name: entity.name, aliases: [...new Set(aliases)].filter((alias) => !sharedLabels.has(alias.toLowerCase())) });
     if (entity.id) canonicalEntityIds.set(id, entity.id);
   }
   // Extraction already expands first/last-name references to full character

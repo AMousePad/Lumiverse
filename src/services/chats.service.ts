@@ -4467,11 +4467,11 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       if (chat) {
         const character = chat.character_id ? (await getCharacterAsync(userId, chat.character_id)) : null;
         if (character) {
-          // Normalize sloppy bot-card names to extract the real character name
-          const normalized = memoryCortex.normalizeCharacterName(character.name);
-          characterNames.push(normalized);
-          aliasMaps.push(memoryCortex.extractDescriptionAliases(
-            normalized, character.description, character.personality, character.scenario,
+          const names = memoryCortex.getCortexCharacterNames(character.name);
+          characterNames.push(...names);
+          // A shared description cannot supply aliases for just one member.
+          if (names.length === 1) aliasMaps.push(memoryCortex.extractDescriptionAliases(
+            names[0]!, character.description, character.personality, character.scenario,
           ));
         }
         // Group chat: add all character names + extract aliases
@@ -4479,11 +4479,9 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
           for (const cid of chat.metadata.character_ids as string[]) {
             const c = await getCharacterAsync(userId, cid);
             if (!c) continue;
-            const normalized = memoryCortex.normalizeCharacterName(c.name);
-            if (!characterNames.includes(normalized)) {
-              characterNames.push(normalized);
-              aliasMaps.push(memoryCortex.extractDescriptionAliases(normalized, c.description, c.personality));
-            }
+            const names = memoryCortex.getCortexCharacterNames(c.name);
+            for (const name of names) if (!characterNames.includes(name)) characterNames.push(name);
+            if (names.length === 1) aliasMaps.push(memoryCortex.extractDescriptionAliases(names[0]!, c.description, c.personality));
           }
         }
         // User's persona

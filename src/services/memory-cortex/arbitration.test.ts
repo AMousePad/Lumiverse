@@ -50,7 +50,7 @@ describe("Cortex arbitration contract", () => {
     expect(batch!.questions.r0!.instructions).toContain("A student is not a child relationship");
     expect(batch!.questions.r0!.instructions).not.toContain("For color candidates");
     expect(batch!.questions.f0!.instructions).toContain("Thought/italic wrappers");
-    expect(batch!.questions.f0!.instructions).toContain("My/my/MY");
+    expect(batch!.questions.f0!.instructions).toContain("established viewpoint, in any POV");
     expect(batch!.questions.f0!.instructions).not.toContain("For lover");
     expect(batch!.questions.x0!.instructions).toContain("Absence from this passage or low importance is never grounds for rejection");
   });

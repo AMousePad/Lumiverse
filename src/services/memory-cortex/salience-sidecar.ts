@@ -8,6 +8,7 @@
  * This is Tier 2 functionality: opt-in, async, never blocks generation.
  */
 
+import { isCortexDebugEnabled } from "./diagnostics";
 import type { SidecarExtractionResult, SidecarFontColor, DiscoveredAlias, EmotionalTag, NarrativeFlag, StatusChange, ExtractedEntity, ExtractedRelationship } from "./types";
 import { normalizeFontColor, type ThoughtDelimiters } from "./font-attribution";
 import { buildConversationHint, type CortexParticipant } from "./conversation-context";
@@ -26,17 +27,18 @@ interface ExtractionIdentityOptions {
 function normalizeExtractionNames(raw: any, options?: ExtractionIdentityOptions) {
   const identity = buildCortexIdentityContext(options?.characterNames ?? [], options?.knownEntities ?? [],
     new Map(options?.descriptionAliases?.map(({ alias, canonicalName }) => [alias, canonicalName])), options?.participants);
-  const rows = (value: any, fields: string[]) => Array.isArray(value) ? value.map((entry: any) => {
+  const rows = (value: any, fields: string[], identityFields = fields) => Array.isArray(value) ? value.map((entry: any) => {
     if (!entry || typeof entry !== "object") return entry;
     const copy = { ...entry };
     for (const field of fields) if (typeof copy[field] === "string") copy[field] = identity.canonicalize(copy[field]);
     return copy;
-  }) : value;
+  }).filter((entry: any) => !entry || typeof entry !== "object"
+    || !identityFields.some((field) => typeof entry[field] === "string" && identity.isSharedLabel(entry[field]))) : value;
   return { ...raw,
     entities_present: rows(raw.entities_present, ["name"]), entities: rows(raw.entities, ["name"]),
     relationships_shown: rows(raw.relationships_shown, ["source", "target"]), relationships: rows(raw.relationships, ["source", "target"]),
     status_changes: rows(raw.status_changes, ["entity"]), color_attributions: rows(raw.color_attributions, ["character_name"]),
-    discovered_aliases: rows(raw.discovered_aliases, ["canonical_name"]),
+    discovered_aliases: rows(raw.discovered_aliases, ["canonical_name"], ["canonical_name", "alias"]),
   };
 }
 
@@ -79,9 +81,10 @@ const EXTRACTION_GLOBAL_RULES = `GLOBAL RULES
 const EXTRACTION_RULES = `ENTITIES AND IDENTITY
 - Extract specific named characters, locations, items, factions, events and concepts. A single clear mention is sufficient, including direct address or a reference to someone absent. Recurrence, importance and relationships are not prerequisites.
 - Preserve the complete proper name, including lowercase connecting words, punctuation and accents. Do not split a name into title-cased fragments or attach a card subtitle to it.
+- A scenario card or shared author label can represent multiple characters. Extract each individually evidenced character separately; never combine them into one character or use the shared label as an alias. Attribute actions, dialogue, thoughts, facts and relationships from local evidence in any narrative POV. A shared label alone does not establish which member acted or spoke.
 - Use supplied canonical names for established identities. Card display labels and supplied aliases identify that same entity; they are not additional entities. For a new identity use its exact proper name from the passage.
 - Exclude generic objects/descriptions, prose fragments, vocalizations, meta/system references and HUD scaffolding. An ordinary word can be a legitimate fictional name: judge its use, not a word blacklist.
-- Resolve participant references from message prefixes and conversation_participants. I/me/my follows the current viewpoint unless someone else is explicitly attributed. You/your refers to the unique opposite-role participant in a direct exchange unless local evidence addresses someone else. Do not guess in groups or treat every character in a message as its author.
+- Resolve references from local names, narration, dialogue attribution and established viewpoint in any POV. Message prefixes and conversation_participants supply identity hints. Explicit speaker, thinker and addressee evidence takes precedence. Leave ambiguous references unresolved; never treat every character in a message as its author.
 - Report a supported nickname or shortened reference in discovered_aliases with its canonical_name and evidence; never also emit it as a separate entity. Supplied canonical_aliases are identity mappings. Superficial similarity alone does not establish a new alias.
 
 RELATIONSHIPS
@@ -99,7 +102,7 @@ FACTS AND IMPORTANCE
 FONT COLORS
 - Report only colors present in HTML color markup. Normalize short hex, named colors and rgb to #rrggbb.
 - Determine usage first: a thought/italic wrapper takes precedence over quotation marks, inside or outside the color tag. *...*, _..._, <i>, <em> and configured markers indicate thought; otherwise quoted dialogue is speech and descriptive/action prose is narration.
-- A standalone first-person thought paragraph continues the established message viewpoint, including My/my/MY. Explicit attribution to another thinker wins. One author can write multiple characters.
+- Identify the thinker from local attribution and established narrative viewpoint in any POV. Mentions of other characters do not by themselves change viewpoint. One author can write multiple characters; a shared label does not establish a thinker.
 - Attribute each color/usage to its speaker or thinker using local evidence. An addressed name, previous mapping or shared color does not prove ownership. A color can have both speech and thought: report both usage types when supported. Omit uncertain owners; never invent a color.`;
 
 const EXTRACTION_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
@@ -530,16 +533,16 @@ function resolveAliasesInResult(
 // ─── Extraction ────────────────────────────────────────────────
 
 // Known entity/character hint block shared by single and batch prompts.
-function buildEntityHint(options?: {
-  characterNames?: string[];
-  knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
-}): string {
+function buildEntityHint(options?: ExtractionIdentityOptions): string {
+  const identity = buildCortexIdentityContext(options?.characterNames ?? [], options?.knownEntities ?? [],
+    undefined, options?.participants);
   let hint = "";
   if (options?.knownEntities?.length) {
-    const lines = options.knownEntities
+    const lines = options.knownEntities.filter((entity) => !identity.isSharedLabel(entity.name))
       .slice(0, 50) // Cap to avoid prompt bloat
       .map((e) => {
-        const aliasStr = e.aliases.length > 0 ? ` (aka ${e.aliases.join(", ")})` : "";
+        const aliases = e.aliases.filter((alias) => !identity.isSharedLabel(alias));
+        const aliasStr = aliases.length > 0 ? ` (aka ${aliases.join(", ")})` : "";
         return `- ${e.name} [${e.type}]${aliasStr}`;
       });
     hint += `\n\n<known_entities>\nUse these canonical names when they match the passage. Never output an alias when a canonical name is listed here.\n${lines.join("\n")}\n</known_entities>`;
@@ -917,6 +920,7 @@ function logSidecarDispatch(
     tokenCounter?: (text: string) => number;
   },
 ): void {
+  if (!isCortexDebugEnabled()) return;
   const chars = opts.userContent.length;
   // Prefer real tokenizer when supplied; fall back to char/4 estimate. The
   // estimate is rough but better than silence — and matches what the rest of
@@ -935,6 +939,7 @@ function logSidecarResponse(
   tag: string,
   opts: { ms: number; responseSummary: string; parsed?: number; missing?: number },
 ): void {
+  if (!isCortexDebugEnabled()) return;
   const parts = [
     `[memory-cortex] ${tag} ← ${opts.ms}ms`,
     opts.responseSummary.trim(),
