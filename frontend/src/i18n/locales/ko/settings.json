@@ -533,7 +533,21 @@
     "preventDroppedMessageWarningHint": "이전 채팅 메시지가 생성 컨텍스트에서 제외될 때 경고 토스트 알림을 표시하지 않습니다.",
     "swipeTitle": "스와이프 탐색",
     "swipeHelper": "터치 제스처(모바일)나 방향키(데스크톱)로 메시지 스와이프를 탐색합니다. Shift 키를 누른 상태에서 커서를 올려 특정 메시지를 지정할 수 있습니다.",
-    "swipeGestures": "스와이프 제스처 및 키보드 단축키 활성화"
+    "swipeGestures": "스와이프 제스처 및 키보드 단축키 활성화",
+    "inlineImages": {
+      "title": "인라인 이미지",
+      "size": "인라인 이미지 크기",
+      "hint": "인사말과 HTML 영역의 이미지를 포함하여 이 설정을 적용할 이미지 유형을 선택하세요. 백분율은 이미지의 비율을 유지하면서 메시지 너비를 기준으로 크기를 조절합니다. 기본값은 기존 크기를 유지합니다.",
+      "default": "기본값",
+      "applyTo": "적용 대상",
+      "markdown": "Markdown / 에셋 이미지",
+      "html": "HTML / XML 이미지",
+      "attachments": "첨부 파일",
+      "alignment": "이미지 정렬",
+      "left": "왼쪽",
+      "center": "가운데",
+      "right": "오른쪽"
+    }
   },
   "extensions": {
     "title": "확장 기능 설정",
@@ -823,7 +837,11 @@
     "importFailed": "가져오기 실패",
     "exportPrepareFailed": "내보내기 준비 실패",
     "exportAnchorMissing": "내부 오류: 다운로드 앵커 누락",
-    "exportTableSuffix": " ({{processed}})"
+    "exportTableSuffix": " ({{processed}})",
+    "extracting": "압축 파일 추출 중… {{done}} / {{total}} GiB",
+    "importInterrupted": "가져오기가 완료되기 전에 로컬 서버가 중지되었습니다.",
+    "resumeImport": "가져오기 재개",
+    "resumeHint": "저장된 압축 파일을 사용하여 재개합니다. 이미 복원된 데이터는 유지됩니다. 암호화된 백업은 복호화 티켓을 다시 요청할 수 있습니다."
   },
   "advanced": {
     "title": "고급",
@@ -1313,7 +1331,15 @@
     "rebuildBatchesInFlight": "진행 중인 배치 {{count}}개",
     "rebuildBatchesInFlight_other": "진행 중인 배치 {{count}}개",
     "rebuildLastRequest": "마지막 요청 {{seconds}}초 전",
-    "rebuildLastResponse": "마지막 응답 {{seconds}}초"
+    "rebuildLastResponse": "마지막 응답 {{seconds}}초",
+    "arbitrationTitle": "후보 검토",
+    "decisionConnection": "Decision 연결",
+    "useConnectionDefault": "연결 기본값 사용",
+    "arbitrationConfidence": "최소 신뢰도",
+    "arbitrationInputLimit": "검토 모델 입력 한도(토큰)",
+    "arbitrationInputLimitHint": "Decision 서버에 설정된 입력 윈도 크기에 맞추세요. 기본값은 16,384토큰입니다. 요청은 여유 공간을 확보하고 지문이나 근거를 줄이지 않은 채 후보를 더 작은 배치로 나눕니다. 후보 하나가 한도에 들어가지 않으면 해당 청크는 대기 상태로 남습니다.",
+    "arbitrationTimeout": "검토 시간 제한(초)",
+    "arbitrationHint": "Decision 검토는 별도의 Decision 연결을 사용하며 휴리스틱 추출도 검토할 수 있습니다. 신뢰도가 낮으면 후보를 보류합니다. 검토가 실패하거나 완료되지 않으면 해당 청크는 재시도를 위해 대기 상태로 남습니다. AI 추출과 요약은 계속 사이드카를 사용합니다."
   },
   "operator": {
     "serverControls": "서버 제어",

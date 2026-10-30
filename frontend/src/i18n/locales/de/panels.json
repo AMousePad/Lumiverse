@@ -969,7 +969,8 @@
     "targetWi": "WI",
     "targetCot": "CoT",
     "targetMemory": "Gedächtnis",
-    "allOptions": "Alle Optionen..."
+    "allOptions": "Alle Optionen...",
+    "presetLoadFailed": "Die Preset-Regexe dieses Swipes konnten nicht geladen werden. Lade die Seite neu, um es erneut zu versuchen."
   },
   "personaEditor": {
     "characterCount": "{{count}} Zeichen",
@@ -4004,7 +4005,16 @@
     "checking": "Beispiel-Decision wird ausgeführt\u2026",
     "removeKey": "Gespeicherten API-Schlüssel entfernen",
     "saveFailed": "Decision-Verbindung konnte nicht gespeichert werden",
-    "unsupportedModel": "Dieses Modell ist für Decision-Verbindungen nicht verfügbar."
+    "unsupportedModel": "Dieses Modell ist für Decision-Verbindungen nicht verfügbar.",
+    "providerSignIn": "Anbieteranmeldung",
+    "signIn": "Bei {{provider}} anmelden",
+    "signingIn": "Anmeldung läuft…",
+    "signInHintCreate": "Melde dich an, um diese Decision-Verbindung zu erstellen und ihren API-Schlüssel zu speichern.",
+    "signInHintExisting": "Melde dich an, um einen neuen API-Schlüssel für diese Decision-Verbindung zu speichern.",
+    "signInDefaultUrl": "Verwende zur Anmeldung die Standard-API-URL des Anbieters. Gib für eine benutzerdefinierte URL einen API-Schlüssel ein.",
+    "signInSaveFirst": "Speichere die Änderungen am Anbieter und an der API-URL, bevor du dich anmeldest.",
+    "signInSaved": "Angemeldet. API-Schlüssel gespeichert.",
+    "signInFailed": "Anmeldung fehlgeschlagen. Bitte versuche es erneut."
   },
   "multiplayerPanel": {
     "freeformWindowClosed": "Fenster geschlossen",

@@ -276,7 +276,9 @@
     "failedSaveChatPersona": "Persona für diesen Chat konnte nicht gespeichert werden",
     "noPresetForPromptVariables": "Wähle ein Preset, bevor du Prompt-Variablen änderst",
     "failedLoadPromptVariables": "Prompt-Variablen konnten nicht geladen werden",
-    "failedSavePromptVariables": "Prompt-Variablen konnten nicht gespeichert werden"
+    "failedSavePromptVariables": "Prompt-Variablen konnten nicht gespeichert werden",
+    "roomMessageUnconfirmed": "Der Raum hat deine Nachricht nicht bestätigt. Dein Entwurf wurde behalten; prüfe den Chat, bevor du es erneut versuchst.",
+    "messageDraftKept": "Nachricht konnte nicht bestätigt werden — dein Entwurf wurde behalten"
   },
   "addGroupMember": {
     "title": "Gruppenmitglied hinzufügen",

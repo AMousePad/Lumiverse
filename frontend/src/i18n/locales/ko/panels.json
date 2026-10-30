@@ -969,7 +969,8 @@
     "targetWi": "WI",
     "targetCot": "CoT",
     "targetMemory": "기억",
-    "allOptions": "모든 옵션..."
+    "allOptions": "모든 옵션...",
+    "presetLoadFailed": "이 스와이프의 프리셋 정규식을 불러오지 못했습니다. 새로고침하여 다시 시도하세요."
   },
   "personaEditor": {
     "characterCount": "{{count}}자",
@@ -4004,7 +4005,16 @@
     "checking": "샘플 의사결정 실행 중…",
     "removeKey": "저장된 API 키 제거",
     "saveFailed": "의사결정 연결을 저장하지 못했습니다",
-    "unsupportedModel": "이 모델은 의사결정 연결에 사용할 수 없습니다."
+    "unsupportedModel": "이 모델은 의사결정 연결에 사용할 수 없습니다.",
+    "providerSignIn": "제공업체 로그인",
+    "signIn": "{{provider}}로 로그인",
+    "signingIn": "로그인 중…",
+    "signInHintCreate": "로그인하여 이 Decision 연결을 만들고 API 키를 저장하세요.",
+    "signInHintExisting": "로그인하여 이 Decision 연결의 새 API 키를 저장하세요.",
+    "signInDefaultUrl": "로그인하려면 제공업체의 기본 API URL을 사용하세요. 사용자 지정 URL을 사용하려면 API 키를 입력하세요.",
+    "signInSaveFirst": "로그인하기 전에 제공업체 및 API URL 변경 사항을 저장하세요.",
+    "signInSaved": "로그인했습니다. API 키가 저장되었습니다.",
+    "signInFailed": "로그인하지 못했습니다. 다시 시도하세요."
   },
   "multiplayerPanel": {
     "freeformWindowClosed": "입력 시간 종료",

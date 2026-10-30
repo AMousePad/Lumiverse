@@ -95,15 +95,20 @@ describe('P12 chat dock preservation contracts', () => {
     expect(source).toMatch(
       /import\s+\{[^}]*composeChatSafeZones[^}]*\}\s+from\s+["']@\/lib\/chatSurfaceLayout["']/s,
     )
-    expect(countMatches(source, /new\s+ResizeObserver\s*\(/g)).toBe(1)
+    // The textarea also observes width changes to rewrap drafts. Only the
+    // safe-zone publisher must share one observer for the composer and lore.
+    const safeZonePath = source.match(
+      /useLayoutEffect\(\(\) => \{\s*if \(hideForMobileEdit\) return[\s\S]*?\}, \[hideForMobileEdit\]\)/,
+    )?.[0] ?? ''
+    expect(countMatches(safeZonePath, /new\s+ResizeObserver\s*\(/g)).toBe(1)
     expect(source).toContain('composeChatSafeZones')
     expect(source).toMatch(/setProperty\(\s*["']--lcs-composer-safe-zone["']/)
     expect(source).toMatch(/setProperty\(\s*["']--lcs-input-safe-zone["']/)
     expect(source).toMatch(/composeChatSafeZones\(\s*composerHeight\s*,\s*loreHeight\s*,\s*bottomOffset\s*\)/)
 
-    expect(source).toContain('ro.observe(el)')
-    expect(source).toContain('ro.observe(loreMount)')
-    expect(source).toContain('ro.disconnect()')
+    expect(safeZonePath).toContain('ro.observe(el)')
+    expect(safeZonePath).toContain('ro.observe(loreMount)')
+    expect(safeZonePath).toContain('ro.disconnect()')
     expect(source).toMatch(/data-spindle-mount=["']chat_composer_above["']/)
     expect(source).toContain('--app-keyboard-inset-bottom')
     expect(source).toContain('renderedPxToLayoutPx(child.getBoundingClientRect().height)')
