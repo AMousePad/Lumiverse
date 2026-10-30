@@ -27,6 +27,9 @@ bun run diagnose
 
 ## Scripts
 
+- `node check-image-provider-settings.mjs`
+  Exercises the actual Generation Settings modal with controlled connections in Chromium, Firefox and WebKit at desktop/mobile widths. Covers all 18 new providers, model-specific source-image restrictions, reference addition/removal and runtime errors (144 provider/model/viewport/browser cases). No backend, credentials or paid provider calls.
+
 - `bun run check:vite-hmr`
   Runs the real app and native card in a temporary copy of frontend source, with mock API responses and actual file-watcher edits. Makes two edits each to login, the character card, and character/message-preview/world-book/productivity renderer modules using the standard Vite configuration and the unbundled fallback (72 edits total). Checks retained form/hook state, store identity, registration availability, updated callbacks and detached navigation, with no full reloads or runtime errors. Defaults to Chromium, Firefox and WebKit; `HMR_BROWSERS=firefox` and `HMR_MODES=default` narrow the matrix; `HMR_MODES=bundled` explicitly forces bundling. Install frontend dependencies first. Scratch copies and dependency caches under `frontend/.tmp/vite-hmr/` are removed after each mode. No backend, credentials or personal data.
 

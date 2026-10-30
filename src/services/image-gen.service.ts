@@ -22,6 +22,7 @@ import { evaluate as evaluateMacros, registry as macroRegistry } from "../macros
 import { resizeInsideToWebp } from "../utils/image-pipeline";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import { imageInputMechanism } from "../image-gen/image-input";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import { resolveImageProviderApiUrl } from "../image-gen/provider";
 import { getComfyUIObjectInfo, resolveComfyTarget } from "../image-gen/comfyui-discovery";
@@ -546,14 +547,7 @@ export async function generateSceneBackground(
     // Resolve img2img source images (init image) for providers that accept
     // image input. Reuses the reference-image config surface; SwarmUI/ComfyUI
     // consume the first image, Gemini/OpenRouter/SD API consume all of them.
-    if (
-      connection.provider === "swarmui" ||
-      connection.provider === "comfyui" ||
-      connection.provider === "google_gemini" ||
-      connection.provider === "openrouter" ||
-      connection.provider === "openai" ||
-      connection.provider === "sdapi"
-    ) {
+    if (connection.provider !== "novelai" && connection.provider !== "nanogpt" && imageInputMechanism(connection.provider, connection.model)) {
       const sources = await resolveSourceImages(userId, chatId, params);
       if (opts?.sourceImageId) {
         const image = await imagesSvc.getImageAsync(userId, opts.sourceImageId);
