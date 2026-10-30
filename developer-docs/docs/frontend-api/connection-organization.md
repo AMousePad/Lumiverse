@@ -1,11 +1,13 @@
 # Connection organization
 
 Use `connections.organization` to read folders, connection order, and recent
-selections for a connection picker.
+selections for a connection picker. Reads are free and return no credentials or
+endpoint URLs. Use `lumiverse-spindle-types` 0.6.75 or newer, and feature-detect
+`connection-organization-v1` on older hosts.
 
 ```ts
 const organization = ctx.connections.organization;
-if (organization) {
+if ((ctx.host.capabilities['connection-organization-v1'] ?? 0) >= 1 && organization) {
   const stop = organization.watch({ kind: "llm" }, snapshot => {
     // Render snapshot.folders using snapshot.connections.
   }, error => console.error(error.code));

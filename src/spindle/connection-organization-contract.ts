@@ -1,10 +1,7 @@
-import type { ConnectionOrganizationAPI, ConnectionOrganizationKind, ConnectionOrganizationSnapshot, ConnectionOrganizationError } from '../shared/connection-organization';
-export interface BackendOrganizationOptions { kind: ConnectionOrganizationKind; userId?: string }
-export interface BackendOrganizationAPI {
-  get(options: BackendOrganizationOptions): Promise<ConnectionOrganizationSnapshot>;
-  watch(options: BackendOrganizationOptions, handler: Parameters<ConnectionOrganizationAPI['watch']>[1],
-    onError?: (error: ConnectionOrganizationError) => void): () => void;
-}
+import type { SpindleBackendConnectionOrganizationOptions, SpindleConnectionOrganizationAPI } from 'lumiverse-spindle-types';
+import type { ConnectionOrganizationSnapshot } from '../shared/connection-organization';
+export type BackendOrganizationOptions = SpindleBackendConnectionOrganizationOptions;
+export type BackendOrganizationAPI = SpindleConnectionOrganizationAPI<BackendOrganizationOptions>;
 export type OrganizationWorkerMessage =
   | { type: 'connection_organization_get'; requestId: string; options: BackendOrganizationOptions }
   | { type: 'connection_organization_watch'; requestId: string; subscriptionId: string; options: BackendOrganizationOptions }

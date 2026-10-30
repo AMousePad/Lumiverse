@@ -13,16 +13,16 @@ export default function SortableFolderSection({
   reorderDisabled?: boolean
   receiving?: boolean
 }) {
-  const sortable = useScaledSortable({
+  const { setNodeRef, style, isDragging, attributes, listeners } = useScaledSortable({
     id: sortableFolderId(id),
     disabled: { draggable: disabled || reorderDisabled, droppable: disabled || hidden },
   })
   return (
-    <div ref={sortable.setNodeRef} style={sortable.style} hidden={hidden}
+    <div ref={setNodeRef} style={style} hidden={hidden}
       data-drop-target={receiving || undefined} data-sortable-folder={id}
-      className={`${styles.folder} ${sortable.isDragging ? styles.dragging : ''}`}>
+      className={`${styles.folder} ${isDragging ? styles.dragging : ''}`}>
       <FolderSection {...section} keepMounted
-        headerDragProps={{ ...sortable.attributes, ...sortable.listeners, 'aria-disabled': undefined,
+        headerDragProps={{ ...attributes, ...listeners, 'aria-disabled': undefined,
           style: { cursor: disabled || reorderDisabled ? undefined : 'grab', touchAction: 'none' } }} />
     </div>
   )

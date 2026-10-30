@@ -221,7 +221,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const [promptVariablesPreset, setPromptVariablesPreset] = useState<LoomPreset | null>(null)
   const [promptVariablesBinding, setPromptVariablesBinding] = useState<PromptVariableProfileTarget | null>(null)
   const promptVariablesBindingRef = useRef<PromptVariableProfileTarget | null>(null)
-  promptVariablesBindingRef.current = promptVariablesBinding
+  useLayoutEffect(() => { promptVariablesBindingRef.current = promptVariablesBinding }, [promptVariablesBinding])
   const [promptVariablesLoading, setPromptVariablesLoading] = useState(false)
   const [promptVariablesAvailability, setPromptVariablesAvailability] = useState<PromptVariablesAvailability | null>(null)
   const [memoryCortexInFlight, setMemoryCortexInFlight] = useState(false)

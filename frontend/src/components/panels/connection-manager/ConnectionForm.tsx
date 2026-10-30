@@ -887,7 +887,10 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
             // Clear the manual key input since OAuth set it
             setApiKey('')
           }}
-          onConnectionCreated={onOAuthCreated}
+          onConnectionCreated={created => {
+            saveConnectionFolder('llm', created.id, folder.value)
+            onOAuthCreated?.(created)
+          }}
         />
       )}
       {!isRoulette && <FormField label="">

@@ -188,25 +188,7 @@ export default function ConnectionItem({
       ].filter((entry): entry is typeof entry & { window: NonNullable<typeof entry.window> } => entry.window != null)
     : []
 
-  // Track whether the credits/usage bars have already animated in.
-  // The ref survives re-renders so the fadeIn class only plays once
-  // per activation cycle (profile toggled on → bar appears with animation,
-  // profile toggled off → ref resets, next activation animates again).
-  const creditsAnimatedRef = useRef(false)
-  if (showCredits && credits && !creditsAnimatedRef.current) {
-    creditsAnimatedRef.current = true
-  } else if (!showCredits && creditsAnimatedRef.current) {
-    creditsAnimatedRef.current = false
-  }
-
   const nanoGptShown = showNanoGptUsage && (nanoGptAccount || nanoGptError || nanoGptUsageLoading)
-  const nanoGptAnimatedRef = useRef(false)
-  if (nanoGptShown && !nanoGptAnimatedRef.current) {
-    nanoGptAnimatedRef.current = true
-  } else if (!nanoGptShown && nanoGptAnimatedRef.current) {
-    nanoGptAnimatedRef.current = false
-  }
-
 
   const { attributes, listeners, setNodeRef, style, isDragging, handleRef } = sortable
 
@@ -319,7 +301,7 @@ export default function ConnectionItem({
             </div>
           )}
           {isOpenRouter && profile.has_api_key && credits && (
-            <div key="credits" className={clsx(styles.creditsBar, !creditsAnimatedRef.current && styles.creditsBarAnimateIn, !(showCredits && credits) && styles.creditsHidden)}>
+            <div key="credits" className={clsx(styles.creditsBar, showCredits && styles.creditsBarAnimateIn, !(showCredits && credits) && styles.creditsHidden)}>
               <div className={styles.creditCell}>
                 <span className={styles.creditLabel}>{t('connectionItem.remaining')}</span>
                 <span className={styles.creditValue}>
@@ -371,7 +353,7 @@ export default function ConnectionItem({
               {nanoGptError && <div className={clsx(styles.testMessage, styles.testMessageFail)} role="alert">{nanoGptError}</div>}
               {nanoGptUsageRows.length > 0
               ? nanoGptUsageRows.map(({ key, label, window: win }, idx) => (
-                <div key={key} className={clsx(styles.creditsBar, styles.nanoGptUsageBar, idx === 0 && !nanoGptAnimatedRef.current && styles.creditsBarAnimateIn)}>
+                <div key={key} className={clsx(styles.creditsBar, styles.nanoGptUsageBar, idx === 0 && nanoGptShown && styles.creditsBarAnimateIn)}>
                   <div className={styles.creditCell}>
                     <span className={styles.creditLabel}>{label}</span>
                     <span className={styles.creditValue}>
@@ -391,7 +373,7 @@ export default function ConnectionItem({
                 </div>
               ))
               : nanoGptSubscriptionInactive && profile.metadata?.use_subscription_api ? (
-                <div key="nanoGpt-inactive" className={clsx(styles.creditsBar, styles.nanoGptUsageBar, !nanoGptAnimatedRef.current && styles.creditsBarAnimateIn)}>
+                <div key="nanoGpt-inactive" className={clsx(styles.creditsBar, styles.nanoGptUsageBar, nanoGptShown && styles.creditsBarAnimateIn)}>
                   <div className={styles.creditCell}>
                     <span className={styles.creditLabel}>{t('connectionItem.status')}</span>
                     <span className={styles.creditValue}>{t('connectionItem.inactive')}</span>

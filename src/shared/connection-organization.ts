@@ -1,11 +1,14 @@
-import type { SpindleConnectionProfileKind, SpindleConnectionProfileSummary } from 'lumiverse-spindle-types'
+import { SPINDLE_CONNECTION_ORGANIZATION_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
+import type { SpindleConnectionProfileKind, SpindleConnectionProfileSummary,
+  SpindleConnectionOrganizationErrorCode, SpindleConnectionOrganizationError,
+  SpindleConnectionOrganizationSnapshot, SpindleConnectionOrganizationOptions,
+  SpindleConnectionOrganizationAPI } from 'lumiverse-spindle-types'
 import { connectionFolderId, normalizeConnectionLibrary } from './connection-library'
 import { recentConnectionIds } from './connection-recents'
 
 export type ConnectionOrganizationKind = SpindleConnectionProfileKind
-export type ConnectionOrganizationErrorCode = 'CONNECTION_KIND_INVALID' | 'USER_CONTEXT_REQUIRED'
-  | 'CONNECTION_WATCH_LIMIT' | 'CONNECTION_ORGANIZATION_READ_FAILED'
-export type ConnectionOrganizationError = Error & { code: ConnectionOrganizationErrorCode }
+export type ConnectionOrganizationErrorCode = SpindleConnectionOrganizationErrorCode
+export type ConnectionOrganizationError = SpindleConnectionOrganizationError
 export function organizationError(error: unknown): Error & { code: ConnectionOrganizationErrorCode } {
   const value = error as { code?: string; message?: string; body?: { code?: string } } | undefined
   const candidate = value?.code ?? value?.body?.code ?? value?.message
@@ -13,22 +16,10 @@ export function organizationError(error: unknown): Error & { code: ConnectionOrg
     ? candidate : 'CONNECTION_ORGANIZATION_READ_FAILED') as ConnectionOrganizationErrorCode
   return Object.assign(new Error(code), { code })
 }
-export interface ConnectionOrganizationSnapshot {
-  kind: ConnectionOrganizationKind
-  /** Opaque equality token, not a sequence number. */
-  revision: string
-  connections: SpindleConnectionProfileSummary[]
-  folders: Array<{ id: string | null; name: string | null; connectionIds: string[] }>
-  recentConnectionIds: string[]
-}
-export interface ConnectionOrganizationOptions { kind: ConnectionOrganizationKind }
-export interface ConnectionOrganizationAPI {
-  get(options: ConnectionOrganizationOptions): Promise<ConnectionOrganizationSnapshot>
-  /** Delivers an initial snapshot and subsequent distinct snapshots. Errors do not terminate the watch. */
-  watch(options: ConnectionOrganizationOptions, handler: (snapshot: ConnectionOrganizationSnapshot) => void,
-    onError?: (error: ConnectionOrganizationError) => void): () => void
-}
-export const CONNECTION_ORGANIZATION_CAPABILITIES = Object.freeze({ 'connection-organization-v1': 1 })
+export type ConnectionOrganizationSnapshot = SpindleConnectionOrganizationSnapshot
+export type ConnectionOrganizationOptions = SpindleConnectionOrganizationOptions
+export type ConnectionOrganizationAPI = SpindleConnectionOrganizationAPI
+export const CONNECTION_ORGANIZATION_CAPABILITIES = SPINDLE_CONNECTION_ORGANIZATION_HOST_CAPABILITIES
 export function assertOrganizationKind(kind: unknown): asserts kind is ConnectionOrganizationKind {
   if (!['llm', 'image', 'tts', 'stt', 'embedding', 'decision'].includes(kind as string)) {
     throw Object.assign(new Error('Invalid connection kind'), { code: 'CONNECTION_KIND_INVALID' })

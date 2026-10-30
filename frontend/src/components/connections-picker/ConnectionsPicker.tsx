@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useConnectionLibrary } from '@/hooks/useConnectionLibrary'
 import FolderSection from '@/components/shared/FolderSection'
 import SearchableSelect from '@/components/shared/SearchableSelect'
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
@@ -173,11 +173,12 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   const cardRailRef = useRef<HTMLDivElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
   const initialVariantRef = useRef(settings.variant)
-  const variantRectsRef = useRef(loadVariantRects())
+  const [variantRects, setVariantRects] = useState(loadVariantRects)
+  const variantRectsRef = useRef(variantRects)
   const currentFrameRectRef = useRef(settings.rect)
   const selectedProfileIdRef = useRef(selectedProfileId)
   const modelsRequestRef = useRef(0)
-  selectedProfileIdRef.current = selectedProfileId
+  useLayoutEffect(() => { selectedProfileIdRef.current = selectedProfileId }, [selectedProfileId])
 
   const updateSettings = useCallback((patch: Partial<typeof settings>) => {
     setSetting('connectionsPickerSettings', { ...settings, ...patch })
@@ -218,6 +219,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   const rememberVariantRect = useCallback((variant: ConnectionsPickerVariant, rect: SurfaceRectPrefs) => {
     const nextRects = { ...variantRectsRef.current, [variant]: rect }
     variantRectsRef.current = nextRects
+    setVariantRects(nextRects)
     try {
       window.localStorage.setItem(CONNECTIONS_PICKER_RECTS_STORAGE_KEY, JSON.stringify(nextRects))
     } catch {
@@ -327,6 +329,29 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
       ? recentProfiles
       : filteredProfiles
   const providerTabShowsModels = providerTab.startsWith('tag:')
+
+  const rememberedFrameRect = variantRects[settings.variant] ?? settings.rect
+  let frameRect = rememberedFrameRect
+  if (open && settings.enabled && settings.variant === 'provider-tags' && anchorElement) {
+    const providerRect = {
+      ...rememberedFrameRect,
+      height: getProviderTagsPickerHeight(
+        rememberedFrameRect.height,
+        settings.showSearch && providerSearchOpen,
+        providerTabShowsModels,
+      ),
+    }
+    const anchorSurface = anchorElement.closest<HTMLElement>('[data-component="InputArea"]') ?? anchorElement
+    const anchorRect = anchorSurface.getBoundingClientRect()
+    frameRect = resolveAnchoredConnectionsPickerRect(
+      providerRect,
+      PICKER_BOUNDS['provider-tags'],
+      Math.max(document.documentElement.clientWidth, window.innerWidth || 0),
+      Math.max(document.documentElement.clientHeight, window.innerHeight || 0),
+      anchorRect,
+    )
+  }
+  useLayoutEffect(() => { currentFrameRectRef.current = frameRect }, [frameRect])
 
   useEffect(() => {
     if (providerTab === 'all') return
@@ -845,29 +870,6 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
         }
       : {}),
   } as CSSProperties
-
-  const rememberedFrameRect = variantRectsRef.current[settings.variant] ?? settings.rect
-  let frameRect = rememberedFrameRect
-  if (settings.variant === 'provider-tags' && anchorElement) {
-    const providerRect = {
-      ...rememberedFrameRect,
-      height: getProviderTagsPickerHeight(
-        rememberedFrameRect.height,
-        settings.showSearch && providerSearchOpen,
-        providerTabShowsModels,
-      ),
-    }
-    const anchorSurface = anchorElement.closest<HTMLElement>('[data-component="InputArea"]') ?? anchorElement
-    const anchorRect = anchorSurface.getBoundingClientRect()
-    frameRect = resolveAnchoredConnectionsPickerRect(
-      providerRect,
-      PICKER_BOUNDS['provider-tags'],
-      Math.max(document.documentElement.clientWidth, window.innerWidth || 0),
-      Math.max(document.documentElement.clientHeight, window.innerHeight || 0),
-      anchorRect,
-    )
-  }
-  currentFrameRectRef.current = frameRect
 
   const navigateProviderCards = (direction: -1 | 1) => {
     const rail = cardRailRef.current

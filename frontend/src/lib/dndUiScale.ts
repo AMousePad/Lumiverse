@@ -1,7 +1,7 @@
 import type { Transform } from '@dnd-kit/utilities'
 import { useSortable, type UseSortableArguments } from '@dnd-kit/sortable'
-import { DndContext as BaseDndContext, getClientRect, type DndContextProps, type Modifier } from '@dnd-kit/core'
-import { createContext, createElement, useCallback, useContext, useLayoutEffect, useReducer, useRef } from 'react'
+import { DndContext as BaseDndContext, getClientRect, useDndContext, type DndContextProps } from '@dnd-kit/core'
+import { createElement, useCallback, useLayoutEffect, useRef } from 'react'
 import { getUiScale } from './uiScale'
 
 const computedTransformIncludesZoom = new WeakMap<Document, boolean>()
@@ -57,39 +57,22 @@ const scaledMeasuring = {
   droppable: { measure: measureUiScaledRect },
 }
 
-interface DragGeometry {
-  transform: Transform
-  rect: { left: number; top: number } | null
-  overlay: boolean
-}
-
-const DragGeometryContext = createContext<{ current: DragGeometry | null } | null>(null)
-
 /** Shared sortable row geometry, used by lists and folder containers alike. */
 export function useScaledSortable(options: UseSortableArguments) {
-  const sortable = useSortable(options)
-  return { ...sortable, ...useScaledSortableStyle(sortable) }
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable(options)
+  return { attributes, listeners, isDragging, ...useScaledSortableStyle({ setNodeRef, transform, transition, isDragging }) }
 }
 
 /** Use with useScaledSortableStyle so measurement and painting share units. */
-export function DndContext({ measuring, modifiers, ...props }: DndContextProps) {
-  const geometry = useRef<DragGeometry | null>(null)
-  // Modifiers receive viewport deltas before dnd-kit adds its layout-pixel
-  // scroll adjustment. Capture the result after caller-supplied constraints.
-  const captureGeometry = useCallback<Modifier>(({ transform, activeNodeRect, overlayNodeRect }) => {
-    geometry.current = { transform, rect: activeNodeRect, overlay: !!overlayNodeRect }
-    return transform
-  }, [])
-
-  return createElement(DragGeometryContext.Provider, { value: geometry }, createElement(BaseDndContext, {
+export function DndContext({ measuring, ...props }: DndContextProps) {
+  return createElement(BaseDndContext, {
     ...props,
-    modifiers: [...(modifiers ?? []), captureGeometry],
     measuring: measuring ? {
       ...measuring,
       draggable: { ...scaledMeasuring.draggable, ...measuring.draggable },
       droppable: { ...scaledMeasuring.droppable, ...measuring.droppable },
     } : scaledMeasuring,
-  }))
+  })
 }
 
 /**
@@ -129,11 +112,10 @@ export function useScaledSortableStyle({
   isDragging,
 }: ScaledSortableArgs): {
   setNodeRef: (element: HTMLElement | null) => void
-  style: { transform: string | undefined; transition: string | undefined }
+  style: { transition: string | undefined }
 } {
   const nodeRef = useRef<HTMLElement | null>(null)
-  const geometry = useContext(DragGeometryContext)
-  const [, redraw] = useReducer(value => value + 1, 0)
+  const { active, dragOverlay: { rect: overlayRect } } = useDndContext()
 
   const ref = useCallback(
     (element: HTMLElement | null) => {
@@ -144,30 +126,37 @@ export function useScaledSortableStyle({
   )
 
   useLayoutEffect(() => {
-    if (!isDragging || !nodeRef.current) return
-    // A scroll can leave dnd-kit's transform unchanged (or reset its baseline).
-    // Repaint for scroll events even when the pointer is stationary.
-    const doc = nodeRef.current.ownerDocument
-    doc.addEventListener('scroll', redraw, { capture: true, passive: true })
-    return () => doc.removeEventListener('scroll', redraw, true)
-  }, [isDragging])
-
-  let viewportTransform = transform
-  const drag = geometry?.current
-  if (isDragging && nodeRef.current && drag?.rect && !drag.overlay) {
-    const current = measureUiScaledRect(nodeRef.current)
-    viewportTransform = {
-      ...drag.transform,
-      x: drag.transform.x + drag.rect.left - current.left,
-      y: drag.transform.y + drag.rect.top - current.top,
+    const node = nodeRef.current
+    if (!node) return
+    const updateTransform = () => {
+      let viewportTransform = transform
+      // dnd-kit updates this rect after committing its context. Reading it here
+      // keeps DOM measurement and mutable refs out of React's render phase.
+      const target = active?.rect.current.translated
+      if (isDragging && target && !overlayRect) {
+        const current = measureUiScaledRect(node)
+        viewportTransform = {
+          x: target.left - current.left,
+          y: target.top - current.top,
+          scaleX: 1, scaleY: 1,
+        }
+      }
+      node.style.transform = scaledTransform(viewportTransform) ?? ''
     }
-  }
+    // The parent DndContext commits its rect after the child layout effect.
+    // Update before the next paint once that rect is available.
+    const doc = node.ownerDocument
+    const view = doc.defaultView
+    const frame = view?.requestAnimationFrame?.(updateTransform)
+    if (frame === undefined) updateTransform()
+    const cancelFrame = () => { if (frame !== undefined) view?.cancelAnimationFrame(frame) }
+    if (!isDragging) return cancelFrame
+    doc.addEventListener('scroll', updateTransform, { capture: true, passive: true })
+    return () => {
+      cancelFrame()
+      doc.removeEventListener('scroll', updateTransform, true)
+    }
+  }, [active, isDragging, overlayRect, transform])
 
-  return {
-    setNodeRef: ref,
-    style: {
-      transform: scaledTransform(viewportTransform),
-      transition,
-    },
-  }
+  return { setNodeRef: ref, style: { transition } }
 }

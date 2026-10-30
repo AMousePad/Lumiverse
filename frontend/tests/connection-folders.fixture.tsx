@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { applyOrganizationEdits } from '../../src/shared/connection-organization-edits'
 import type { ConnectionLibraryKind } from '../src/lib/connectionLibrary'
 import EmbeddingConnectionPicker from '../src/components/shared/EmbeddingConnectionPicker'
 import ConnectionForm from '../src/components/panels/connection-manager/ConnectionForm'
@@ -12,6 +13,7 @@ import ConnectionCollection from '../src/components/panels/connection-manager/Co
 import { ConnectionSearchProvider } from '../src/components/panels/connection-manager/ConnectionSearch'
 import ConnectionSelect from '../src/components/shared/ConnectionSelect'
 import ConnectionQuickPicker from '../src/components/shared/ConnectionQuickPicker'
+import { ConnectionsPicker } from '../src/components/connections-picker/ConnectionsPicker'
 import { generateThemeVariables } from '../src/theme/engine'
 import { DEFAULT_THEME } from '../src/theme/presets'
 import i18n, { initI18n } from '../src/i18n'
@@ -26,6 +28,12 @@ window.fetch = async (input, init) => {
   const url = String(input)
   if (!url.includes('/api/v1/')) return originalFetch(input, init)
   const settings = JSON.parse(localStorage.getItem(storageKey) || '{}')
+  if (url.endsWith('/connections/organization/edit')) {
+    const updated = applyOrganizationEdits(settings, JSON.parse(String(init?.body)))
+    localStorage.setItem(storageKey, JSON.stringify(updated))
+    return Response.json(Object.fromEntries(['connectionLibraries', 'connectionsOrder', 'recentConnections'].map(key => [key, updated[key] ?? {}])))
+  }
+  if (/\/connections\/[^/]+\/models(?:\?.*)?$/.test(url)) return Response.json({ models: [], model_labels: {} })
   if (url.endsWith('/settings')) {
     if (init?.method === 'PUT') {
       Object.assign(settings, JSON.parse(String(init.body)))
@@ -53,6 +61,12 @@ await i18n.changeLanguage('en')
 Object.entries(generateThemeVariables(DEFAULT_THEME, 'dark')).forEach(([key, value]) => document.documentElement.style.setProperty(key, value))
 useStore.setState({ profiles, imageGenProfiles: profiles, sttProfiles: profiles, ttsProfiles: profiles, decisionProfiles: profiles })
 await useStore.getState().loadSettings()
+if (new URL(location.href).searchParams.get('picker') === 'full') {
+  useStore.setState(state => ({
+    extensions: [{ id: 'suite', identifier: 'lumiverse_suite', enabled: true, has_frontend: true }] as typeof state.extensions,
+    connectionsPickerSettings: { ...state.connectionsPickerSettings, enabled: true, variant: 'split' },
+  }))
+}
 
 function Row({ profile, placement }: { placement: ConnectionPlacement; profile: typeof profiles[number] }) {
   const [draft, setDraft] = useState('')
@@ -73,6 +87,9 @@ function Fixture() {
   const [selected, setSelected] = useState<string | null>(null)
   const [model, setModel] = useState<string | null>(null)
   const [saved, setSaved] = useState<CreateConnectionProfileInput | null>(null)
+  if (new URL(location.href).searchParams.get('picker') === 'full') {
+    return <ConnectionsPicker open onClose={() => {}} />
+  }
   if (new URL(location.href).searchParams.get('picker') === 'roulette') {
     return <main><ConnectionForm providers={[]} initialProvider="model_roulette" onSave={setSaved} onCancel={() => {}} />
       <output aria-label="Saved roulette">{JSON.stringify(saved)}</output></main>

@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Run with the repository's diagnostic Playwright install, or point
 // PLAYWRIGHT_MODULE at an existing playwright(-core)/index.mjs.
-const { chromium, firefox } = await import(process.env.PLAYWRIGHT_MODULE
+const { chromium, firefox, webkit } = await import(process.env.PLAYWRIGHT_MODULE
   ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright')
 const frontend = fileURLToPath(new URL('../', import.meta.url))
 const server = await createServer({
@@ -20,7 +20,7 @@ server.middlewares.use('/__connection-folders', async (_req, res) => {
   res.end(await server.transformIndexHtml('/__connection-folders', '<html><head><link rel="icon" href="data:,"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module" src="/tests/connection-folders.fixture.tsx"></script></body></html>'))
 })
 await server.listen()
-const browserType = process.env.CONNECTION_BROWSER === 'firefox' ? firefox : chromium
+const browserType = process.env.CONNECTION_BROWSER === 'webkit' ? webkit : process.env.CONNECTION_BROWSER === 'firefox' ? firefox : chromium
 const browser = await browserType.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_BROWSER_EXECUTABLE || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined })
 const mobile = process.env.CONNECTION_MOBILE === '1'
 const page = await browser.newPage(mobile ? { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true } : {})
@@ -173,6 +173,15 @@ try {
   await page.getByRole('button', { name: 'Create', exact: true }).click()
   assert.deepEqual(JSON.parse(await page.getByLabel('Saved roulette').textContent()).metadata.connection_roulette.connection_ids, ['a', 'b'])
   assert.deepEqual(await page.evaluate(() => window.connectionFixture.store.getState().recentConnections.llm), ['a', 'b'])
+  const fullUrl = new URL(page.url())
+  fullUrl.search = '?picker=full'
+  await page.goto(fullUrl.href)
+  await page.locator('[data-component="ConnectionsPicker"]').waitFor()
+  await page.getByTitle('Variant C').click()
+  await page.getByText('All Connections', { exact: true }).waitFor()
+  await page.getByTitle('Variant B').click()
+  await page.getByTitle('Variant A').click()
+  await page.getByTitle('Variant B').click()
   assert.deepEqual(errors, [])
   if (process.env.CONNECTION_SCREENSHOT) await page.screenshot({ path: process.env.CONNECTION_SCREENSHOT, fullPage: true })
   console.log('PASS: folder CRUD, draft preservation, pointer and keyboard order, cross-folder drag, search, picker order, recents, six connection kinds, type isolation, settings reload and active selection')

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Run with the repository's diagnostic Playwright install, or point
 // PLAYWRIGHT_MODULE at an existing playwright(-core)/index.mjs.
-const { chromium, firefox } = await import(process.env.PLAYWRIGHT_MODULE
+const { chromium, firefox, webkit } = await import(process.env.PLAYWRIGHT_MODULE
   ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright')
 const frontend = fileURLToPath(new URL('../', import.meta.url))
 const server = await createServer({
@@ -22,7 +22,7 @@ server.middlewares.use('/__connection-manager-layout', async (_req, res) => {
   res.end(await server.transformIndexHtml('/__connection-manager-layout', '<html><head><link rel="icon" href="data:,"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module" src="/tests/connection-manager-layout.fixture.tsx"></script></body></html>'))
 })
 await server.listen()
-const browserType = process.env.CONNECTION_BROWSER === 'firefox' ? firefox : chromium
+const browserType = process.env.CONNECTION_BROWSER === 'webkit' ? webkit : process.env.CONNECTION_BROWSER === 'firefox' ? firefox : chromium
 const browser = await browserType.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_BROWSER_EXECUTABLE || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined })
 const mobile = process.env.CONNECTION_MOBILE === '1'
 const page = await browser.newPage(mobile ? { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true } : { viewport: { width: 830, height: 1100 } })
@@ -227,6 +227,9 @@ try {
   await page.goto(`${url}?kind=llm`)
   await recent.locator(':scope > div').first().getByTitle('Edit', { exact: true }).click()
   await page.getByRole('button', { name: /^Hosted \d+$/ }).click()
+  // Keep the anchored menu in view so Playwright does not scroll and dismiss it.
+  await row.evaluate(node => node.scrollIntoView({ block: 'center' }))
+  await page.waitForTimeout(200)
   await row.getByTitle('More actions', { exact: true }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
