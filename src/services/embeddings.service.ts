@@ -1,4 +1,6 @@
 import { getDb } from "../db/connection";
+import { eventBus } from '../ws/bus';
+import { EventType } from '../ws/events';
 import type { EmbeddingConnectionDTO, EmbeddingsEmbedResult } from "lumiverse-spindle-types";
 import {
   withInferenceLease,
@@ -1859,7 +1861,7 @@ export async function previewEmbeddingModels(
 }
 
 /** Raw per-user embedding config (no inheritance resolution). */
-function readRawEmbeddingConfig(userId: string): EmbeddingConfig {
+function readRawEmbeddingConfig(userId: string, persistMigration = true): EmbeddingConfig {
   const setting = settingsSvc.getSetting(userId, EMBEDDING_SETTINGS_KEY);
   const cfg = normalizeConfig(setting?.value);
   const rawProfiles = Array.isArray((setting?.value as any)?.connectionProfiles)
@@ -1885,8 +1887,9 @@ function readRawEmbeddingConfig(userId: string): EmbeddingConfig {
     }
   }
 
-  if (!setting?.value || !storedBlobHasProfiles(setting.value) || profilesMissingNames || profilesNeedingProviderMigration) {
+  if (persistMigration && (!setting?.value || !storedBlobHasProfiles(setting.value) || profilesMissingNames || profilesNeedingProviderMigration)) {
     settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, persistableConfig(cfg), { suppressBroadcast: true });
+    eventBus.emit(EventType.CONNECTION_ORGANIZATION_CHANGED, { kind: 'embedding' });
   }
   return cfg;
 }
@@ -1967,12 +1970,12 @@ function mergeEmbeddingConfigUpdate(
  * Returns the userId whose settings + secret should drive embedding
  * operations, and whether inheritance is active for the caller.
  */
-function resolveEmbeddingUserContext(callerUserId: string): { userId: string; inherited: boolean } {
+function resolveEmbeddingUserContext(callerUserId: string, persistMigration = true): { userId: string; inherited: boolean } {
   const ownerId = getFirstUserId();
   if (!ownerId || ownerId === callerUserId) {
     return { userId: callerUserId, inherited: false };
   }
-  const ownerCfg = readRawEmbeddingConfig(ownerId);
+  const ownerCfg = readRawEmbeddingConfig(ownerId, persistMigration);
   if (ownerCfg.enabled) {
     return { userId: ownerId, inherited: true };
   }
@@ -2998,6 +3001,28 @@ export const EXTENSION_EMBED_MAX_TEXTS = 256;
 export const EXTENSION_EMBED_MAX_TEXT_CHARS = 8192;
 
 /** The effective user's embedding connections, without URLs or secrets. */
+/** Ensure legacy configurations use the same persistent IDs as the native manager. */
+export function prepareEmbeddingOrganization(userId: string): void {
+  // Use the existing legacy migration before opening the snapshot read transaction.
+  const context = resolveEmbeddingUserContext(userId);
+  readRawEmbeddingConfig(context.userId);
+}
+
+/** Read-only effective profile summaries; does not migrate or load credentials. */
+export function embeddingOrganizationProfiles(userId: string) {
+  const effectiveUser = resolveEmbeddingUserContext(userId, false).userId;
+  const stored = settingsSvc.getSetting(effectiveUser, EMBEDDING_SETTINGS_KEY)?.value as { connectionProfiles?: Array<{ id?: unknown }> } | undefined;
+  const savedIds = new Set((Array.isArray(stored?.connectionProfiles) ? stored.connectionProfiles : [])
+    .map(profile => profile?.id).filter(isUsableProfileId));
+  const cfg = readRawEmbeddingConfig(effectiveUser, false);
+  const primaryId = cfg.primaryProfileId ?? cfg.connectionProfiles?.[0]?.id;
+  return (cfg.connectionProfiles ?? []).filter(profile => savedIds.has(profile.id)).map(profile => ({
+    id: profile.id, kind: 'embedding' as const,
+    name: profile.name || embeddingProviderDisplayName(profile.provider),
+    provider: profile.provider, model: profile.model, active: profile.id === primaryId,
+  }));
+}
+
 export async function listEmbeddingConnections(userId: string): Promise<EmbeddingConnectionDTO[]> {
   const cfg = await getEmbeddingConfig(userId);
   return cfg.connectionProfiles.map((profile) => ({

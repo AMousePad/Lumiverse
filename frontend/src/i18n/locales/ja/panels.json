@@ -158,6 +158,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "フォルダーを削除する前に、接続の編集を保存またはキャンセルしてください。",
+    "newFolder": "新しいフォルダー",
+    "folder": "フォルダー",
+    "invalidFolderName": "1～64文字の重複しないフォルダー名を入力してください。「未分類」は予約済みです。",
+    "deleteFolderMessage": "「{{name}}」を削除しますか？接続は「未分類」に移動します。",
+    "allFolders": "すべてのフォルダー",
+    "filterFolder": "フォルダーで接続を絞り込む",
+    "search": "接続、プロバイダー、モデル、フォルダーを検索…",
+    "noMatches": "一致する接続がありません。",
     "imageGeneration": "画像の生成に失敗しました",
     "speechToText": "音声からテキストへの変換",
     "textToSpeech": "テキスト読み上げ"

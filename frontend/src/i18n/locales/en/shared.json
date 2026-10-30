@@ -119,6 +119,7 @@
     "confirm": "Confirm"
   },
   "searchableSelect": {
+    "recentlyUsed": "Recently Used",
     "selectedCount": "{{count}} selected",
     "placeholder": "Select…",
     "searchPlaceholder": "Search…",

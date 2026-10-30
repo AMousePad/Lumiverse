@@ -1,3 +1,5 @@
+import type { RecentConnections } from '@/lib/connectionRecents'
+import type { ConnectionLibraries } from '@/lib/connectionLibrary'
 import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, GroupedRecentChat, PaginatedResult, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
 import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, WeaverNarrationMode, WeaverPersonaRegister, WeaverPersonaPlan, PersonaDraft, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
 import type { ChatImageSize, ChatImageAlignment, ChatImageTargets } from '@/lib/chatImagePresentation'
@@ -850,6 +852,8 @@ export interface SettingsSlice {
   savedThemes: SavedTheme[]
   spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
+  recentConnections: RecentConnections
+  connectionLibraries: ConnectionLibraries
   connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts' | 'decision', string[]>
   quickToolbarSettings: QuickToolbarSettings
   connectionsPickerSettings: ConnectionsPickerSettings

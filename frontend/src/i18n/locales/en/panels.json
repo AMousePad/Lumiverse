@@ -219,6 +219,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "Save or cancel the connection edit before deleting its folder.",
+    "newFolder": "New Folder",
+    "folder": "Folder",
+    "invalidFolderName": "Choose a unique folder name of 1–64 characters. Uncategorized is reserved.",
+    "deleteFolderMessage": "Delete “{{name}}”? Its connections will move to Uncategorized.",
+    "allFolders": "All folders",
+    "filterFolder": "Filter connections by folder",
+    "search": "Search connections, providers, models, folders…",
+    "noMatches": "No matching connections.",
     "embeddings": "Embedding Models",
     "imageGeneration": "Image Generation",
     "speechToText": "Speech-to-Text",

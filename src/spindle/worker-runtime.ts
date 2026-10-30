@@ -1,3 +1,5 @@
+import { createOrganizationRuntime } from './connection-organization-runtime';
+import type { OrganizationWorkerMessage, OrganizationHostMessage, BackendOrganizationAPI } from './connection-organization-contract';
 /**
  * Worker runtime — runs inside each extension's Bun worker thread.
  * Receives "init" from the host, dynamically imports the extension,
@@ -321,6 +323,7 @@ type RuntimeWorkerToHost =
   | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: import("./message-generation").BeginMessageGenerationInput }
   | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
+  | OrganizationWorkerMessage
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | CharacterGalleryWorkerMessage
@@ -644,6 +647,7 @@ type RuntimeWorkerToHost =
     };
 
 type RuntimeHostToWorker =
+  | OrganizationHostMessage
   | { type: 'context_handler_abort'; requestId: string; reason: string }
   | { type: 'frontend_message'; payload: unknown; userId: string; frontendSessionId?: string }
   | Exclude<HostToWorker, { type: 'command_invoked' }>
@@ -777,6 +781,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
     getGallery(characterId: string, userId?: string): Promise<CharacterGalleryItemDTO[]>;
   };
   connections: SpindleAPI["connections"] & {
+    organization: BackendOrganizationAPI;
     getModels(connectionId: string, userId?: string): Promise<ConnectionModelDTO[]>;
   };
   generate: Omit<SpindleAPI["generate"], "dryRun"> & {
@@ -1608,6 +1613,8 @@ async function getChatMessages(
   const result = await request({ type: "chat_get_messages", requestId, chatId, options });
   return result as Array<ChatGetMessagesResultDTO<ChatGetMessagesOptionsDTO | undefined>>;
 }
+
+const organizationRuntime = createOrganizationRuntime({ request, send: post });
 
 const spindleApi: RuntimeSpindleAPI = {
   decisions: {
@@ -2527,6 +2534,7 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   connections: {
+    organization: organizationRuntime.api,
     async list(userId?: string): Promise<ConnectionProfileDTO[]> {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "connections_list", requestId, userId });
@@ -4679,6 +4687,7 @@ const spindleApi: RuntimeSpindleAPI = {
 async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
 
   switch (msg.type) {
+    case 'connection_organization_snapshot': organizationRuntime.receive(msg); break;
     case "init": {
       manifest = msg.manifest;
       storagePath = msg.storagePath;
@@ -5354,6 +5363,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "shutdown": {
+      organizationRuntime.dispose();
       // Signal the host so it doesn't have to wait for the 5s fallback
       // timeout in WorkerHost.stop(). Posting via the existing log channel
       // matches the __worker_ready__ pattern and avoids touching the

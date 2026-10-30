@@ -1,3 +1,6 @@
+import { ConnectionOrganizationHost } from './connection-organization-host';
+import type { OrganizationWorkerMessage, OrganizationHostMessage } from './connection-organization-contract';
+import { CONNECTION_ORGANIZATION_CAPABILITIES } from '../shared/connection-organization';
 import type {
   SpindleManifest,
   ChatGetMessagesOptionsDTO,
@@ -349,6 +352,7 @@ type RuntimeWorkerToHost =
   | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: BeginMessageGenerationInput }
   | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
+  | OrganizationWorkerMessage
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | CharacterGalleryWorkerMessage
@@ -663,6 +667,7 @@ type RuntimeWorkerToHost =
   | ProviderWorkerToHost;
 
 type RuntimeHostToWorker =
+  | OrganizationHostMessage
   | { type: 'context_handler_abort'; requestId: string; reason: string }
   | { type: 'frontend_message'; payload: unknown; userId: string; frontendSessionId?: string }
   | HostToWorker
@@ -985,6 +990,10 @@ function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
 }
 
 export class WorkerHost {
+  private organizationApi = new ConnectionOrganizationHost({
+    resolveUser: requested => { const id = this.resolveEffectiveUserId(requested); this.enforceScopedUser(id); return id; },
+    post: message => this.postToWorker(message),
+  });
   private runtime: RuntimeTransport | null = null;
   private eventUnsubscribers = new Map<string, () => void>();
   // Events queued before the worker subscribes (extension start replays);
@@ -1370,6 +1379,7 @@ export class WorkerHost {
         lumiverseVersion: await getBackendVersion(),
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
+          ...CONNECTION_ORGANIZATION_CAPABILITIES,
           "character-search-v1": 1,
           "message-preset-context-v1": 1,
           "chat-swipe-variables-v1": 1,
@@ -1488,6 +1498,7 @@ export class WorkerHost {
   }
 
   private cleanup(): void {
+    this.organizationApi.dispose();
     this.decisionsApi.dispose();
     this.embeddingsApi.dispose();
     void this.filesApi.dispose().catch(error => console.warn("[spindle-files] worker cleanup failed", error));
@@ -1991,6 +2002,11 @@ export class WorkerHost {
         } else {
           this.resolveRequest(msg.requestId, msg.result);
         }
+        break;
+      case 'connection_organization_get':
+      case 'connection_organization_watch':
+      case 'connection_organization_unwatch':
+        this.organizationApi.handle(msg);
         break;
       case "connections_list":
         this.handleConnectionsList(msg.requestId, msg.userId);

@@ -219,6 +219,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "폴더를 삭제하기 전에 연결 편집을 저장하거나 취소하세요.",
+    "newFolder": "새 폴더",
+    "folder": "폴더",
+    "invalidFolderName": "1~64자의 고유한 폴더 이름을 입력하세요. 미분류는 예약된 이름입니다.",
+    "deleteFolderMessage": "“{{name}}” 폴더를 삭제할까요? 연결은 미분류로 이동합니다.",
+    "allFolders": "모든 폴더",
+    "filterFolder": "폴더별 연결 필터",
+    "search": "연결, 공급자, 모델, 폴더 검색…",
+    "noMatches": "일치하는 연결이 없습니다.",
     "embeddings": "임베딩 모델",
     "imageGeneration": "이미지 생성",
     "speechToText": "음성 인식(STT)",

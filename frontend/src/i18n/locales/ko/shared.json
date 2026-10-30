@@ -85,6 +85,7 @@
     "confirm": "확인"
   },
   "searchableSelect": {
+    "recentlyUsed": "최근 사용",
     "selectedCount": "{{count}}개 선택됨",
     "placeholder": "선택…",
     "searchPlaceholder": "검색…",

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { ConnectionOrganizationSnapshot } from '../../../../src/shared/connection-organization'
 import type {
   Chat,
   ChatSummary,
@@ -547,4 +548,28 @@ describe('H10 domain API bridge', () => {
     expect(context.tokens).toBe(domain.tokens)
     for (const handler of [...harness.teardown]) handler()
   })
+})
+
+
+test('organization reads stay free, clone results, and dispose active watches', async () => {
+  const harness = createHarness()
+  const snapshot: ConnectionOrganizationSnapshot = { kind: 'llm', revision: 'one', connections: [], folders: [], recentConnectionIds: [] }
+  let stopCalls = 0
+  let notify!: (value: ConnectionOrganizationSnapshot) => void
+  harness.dependencies.connections.organization = {
+    get: async () => snapshot,
+    watch: (_options, handler) => { notify = handler; return () => { stopCalls++ } },
+  }
+  const domain = createFrontendDomainApi(harness.dependencies)
+  const value = await domain.connections.organization.get({ kind: 'llm' })
+  value.recentConnectionIds.push('consumer')
+  expect(snapshot.recentConnectionIds).toEqual([])
+  let calls = 0
+  domain.connections.organization.watch({ kind: 'llm' }, value => { calls++; value.recentConnectionIds.push('consumer') })
+  notify(snapshot)
+  expect(calls).toBe(1); expect(snapshot.recentConnectionIds).toEqual([])
+  expect(harness.calls.some(call => call.startsWith('permission:'))).toBe(false)
+  domain.dispose(); expect(stopCalls).toBe(1)
+  expect(() => domain.connections.organization.watch({ kind: 'llm' }, () => {})).toThrow('disposed')
+  await expect(domain.connections.organization.get({ kind: 'llm' })).rejects.toThrow('disposed')
 })

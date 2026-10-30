@@ -1,3 +1,6 @@
+import { createOrganizationWriter } from '@/lib/connection-organization-writes'
+import { get as getApi } from '@/api/client'
+import { ORGANIZATION_KEYS, organizationEdits, type OrganizationSettingKey } from '../../../../src/shared/connection-organization-edits'
 import type { StateCreator } from 'zustand'
 import type { AppStore, EnterToSendSettings, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings, SettingsWriteSource, ToastPosition } from '@/types/store'
 import { settingsApi } from '@/api/settings'
@@ -147,6 +150,8 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'pushNotificationPreferences',
   // Connection reorder persistence
   'connectionsOrder',
+  'connectionLibraries',
+  'recentConnections',
   'customCSS',
   'componentOverrides',
   // Saved theme library (My Themes)
@@ -301,6 +306,9 @@ export function setSettingsPersistenceScope(userId: string | null): void {
   setDeviceThemeControlsScope(userId)
 }
 
+let organizationWriter: ReturnType<typeof createOrganizationWriter> | undefined
+let organizationWriterGeneration = -1
+let deferredOrganizationReload = false
 let settingsSelectionAbort: AbortController | null = null
 const settingsLoadGeneration = createSettingsLoadGenerationGuard()
 
@@ -426,7 +434,9 @@ function readPendingSettings(): Record<string, any> | null {
     const raw = localStorage.getItem(bridgeStorageKey(PENDING_SETTINGS_KEY))
     if (!raw) return null
     const parsed = JSON.parse(raw)
-    return isPlainObject(parsed) ? parsed : null
+    if (!isPlainObject(parsed)) return null
+    for (const key of ORGANIZATION_KEYS) delete parsed[key]
+    return parsed
   } catch {
     return null
   }
@@ -524,7 +534,12 @@ export function clearPendingSettings(persisted: Record<string, unknown>): void {
   } catch {}
 }
 
-function mergeStoredSetting(defaultValue: any, storedValue: any): any {
+function mergeStoredSetting(defaultValue: any, storedValue: any, settingKey?: string): any {
+  // These maps are complete snapshots. Deep merging with the previous load
+  // resurrects removed assignments or histories after another tab saves them.
+  if (settingKey === 'connectionLibraries' || settingKey === 'recentConnections') {
+    return isPlainObject(storedValue) ? storedValue : {}
+  }
   if (!isPlainObject(defaultValue)) return storedValue
   if (!isPlainObject(storedValue)) return defaultValue
   const merged: Record<string, any> = { ...defaultValue }
@@ -594,6 +609,7 @@ export function flushSettings() {
 
 /** Immediately persist all dirty settings and wait for the server commit. */
 export function flushSettingsNow(): Promise<void> {
+  if (organizationWriter?.pending) return organizationWriter.flush().then(() => flushSettingsNow())
   if (flushTimer !== null) {
     clearTimeout(flushTimer)
     flushTimer = null
@@ -614,7 +630,7 @@ export function flushSettingsNow(): Promise<void> {
 
 /** True when a flush is in flight or dirty keys are pending. */
 export function hasUnsavedSettings(): boolean {
-  return dirtyKeys.size > 0 || flushInFlight || activeFlushPromise !== null
+  return !!organizationWriter?.pending || dirtyKeys.size > 0 || flushInFlight || activeFlushPromise !== null
 }
 
 export function consumeOwnSettingsUpdate(payload: unknown): boolean {
@@ -632,6 +648,7 @@ export function consumeOwnSettingsUpdate(payload: unknown): boolean {
 
 /** Whether a SETTINGS_UPDATED event requires a settings reload in this tab. */
 export function shouldReloadSettingsAfterUpdate(payload: unknown): boolean {
+  if (organizationWriter?.pending) deferredOrganizationReload = true
   const unsaved = hasUnsavedSettings()
   const ownUpdate = consumeOwnSettingsUpdate(payload)
   const reload = !unsaved && !ownUpdate
@@ -686,6 +703,9 @@ export function resetSettingsPersistence(): void {
       localStorage.removeItem(PENDING_IMAGE_GENERATION_PATCH_KEY)
     } catch {}
   }
+  organizationWriter?.dispose()
+  organizationWriter = undefined
+  deferredOrganizationReload = false
   persistenceGeneration += 1
   settingsLoadGeneration.begin()
   dirtyKeys.clear()
@@ -699,7 +719,24 @@ export function resetSettingsPersistence(): void {
 
 // Flush on page unload so slider drags / rapid changes are never lost
 if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', flushSettings)
+  window.addEventListener('beforeunload', event => {
+    // Organization intent is deliberately not saved in browser storage. Let the
+    // user wait for its server acknowledgement before leaving the page.
+    if (organizationWriter?.pending) { event.preventDefault(); event.returnValue = '' }
+    flushSettings()
+  })
+}
+
+function applyConnectionOrder(state: AppStore, order: ConnectionsOrder | undefined, isCurrent = () => true) {
+  if (!order) return
+  const args = deriveReorderArgs(order, { llm: state.profiles ?? [], imageGen: state.imageGenProfiles ?? [],
+    stt: state.sttProfiles ?? [], decision: state.decisionProfiles ?? [], tts: state.ttsProfiles ?? [] })
+  const apply = { llm: state.applyProfileOrder, imageGen: state.applyImageGenProfileOrder,
+    stt: state.applySttProfileOrder, decision: state.applyDecisionProfileOrder, tts: state.applyTtsProfileOrder }
+  for (const kind of Object.keys(apply) as Array<keyof typeof apply>) {
+    if (!isCurrent()) return
+    if (args[kind]) apply[kind]?.(args[kind])
+  }
 }
 
 export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> = (set, get) => ({
@@ -849,6 +886,8 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   },
   ...PRODUCTIVITY_DEFAULTS,
 
+  recentConnections: {},
+  connectionLibraries: {},
   connectionsOrder: normalizeConnectionsOrder(),
 
   hydrateStartupSettings: (settings: StartupSettings) => {
@@ -969,6 +1008,40 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     // winning the load-generation merge solely because its object identity
     // changed.
     if (!changed) return
+    if ((ORGANIZATION_KEYS as readonly string[]).includes(key as string)) {
+      if (!state.fullSettingsLoaded) return
+      const edits = organizationEdits(key as OrganizationSettingKey, previous, value)
+      if (!edits.length) return
+      if (!organizationWriter || organizationWriterGeneration !== persistenceGeneration) {
+        organizationWriter?.dispose()
+        organizationWriterGeneration = persistenceGeneration
+        const generation = persistenceGeneration
+        organizationWriter = createOrganizationWriter({
+          commit: values => {
+            if (generation !== persistenceGeneration) return
+            for (const organizationKey of ORGANIZATION_KEYS) localSettingRevisions.set(organizationKey, ++localSettingsRevision)
+            set(values as Partial<AppStore>)
+            applyConnectionOrder(get(), values.connectionsOrder as ConnectionsOrder)
+          },
+          failed: async () => {
+            if (generation !== persistenceGeneration) return
+            get().addToast({ type: 'error', message: 'Connection organization could not be saved. Reloading saved folders and order.' })
+            return getApi<Record<string, unknown>>('/connections/organization')
+          },
+          settled: () => {
+            if (generation !== persistenceGeneration || !deferredOrganizationReload) return
+            deferredOrganizationReload = false
+            void get().loadSettings()
+          },
+        })
+      }
+      // Organization operations bypass the whole-blob debounce and localStorage recovery bridge.
+      for (const organizationKey of ORGANIZATION_KEYS) dirtyKeys.delete(organizationKey)
+      localSettingRevisions.set(key as string, ++localSettingsRevision)
+      set({ [key]: value } as Partial<AppStore>)
+      organizationWriter.enqueue(edits)
+      return
+    }
     let unboundReasoningSettings: ReasoningSettings | undefined
     if (
       key === 'reasoningSettings'
@@ -1279,6 +1352,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   },
 
   loadSettings: async () => {
+    if (organizationWriter?.pending) deferredOrganizationReload = true
     const loadGeneration = settingsLoadGeneration.begin()
     const isCurrentLoad = () => settingsLoadGeneration.isCurrent(loadGeneration)
     settingsSelectionAbort?.abort()
@@ -1346,6 +1420,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         const canonicalKey = LEGACY_SETTINGS_KEY_RENAMES[row.key] ?? row.key
         if (
           !DATA_KEYS.has(canonicalKey)
+          || ((ORGANIZATION_KEYS as readonly string[]).includes(canonicalKey) && organizationWriter?.pending)
           || hasNewerLocalSetting(canonicalKey, localRevisionAtLoadStart)
           // Prefer a canonical setting row when both its legacy and current
           // names are present in the account.
@@ -1359,7 +1434,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         if (canonicalKey === 'quickToolbarSettings' && !pendingValuesMatch(storedValue, row.value)) {
           migratedProductivityKeys.add(canonicalKey)
         }
-        patch[canonicalKey] = mergeStoredSetting((defaults as any)[canonicalKey], storedValue)
+        patch[canonicalKey] = mergeStoredSetting((defaults as any)[canonicalKey], storedValue, canonicalKey)
         if (canonicalKey !== row.key) legacySettingsToPersist[canonicalKey] = patch[canonicalKey]
       }
 
@@ -1398,7 +1473,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           if (k === 'quickToolbarSettings' && !pendingValuesMatch(pendingValue, v)) {
             migratedProductivityKeys.add(k)
           }
-          patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], pendingValue)
+          patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], pendingValue, k)
         }
       }
 
@@ -1525,34 +1600,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // something in the panel — which is the visible divergence C3 found.
       if (patch.connectionsOrder) {
         if (!isCurrentLoad()) return
-        const order = patch.connectionsOrder as ConnectionsOrder
-        const args = deriveReorderArgs(order, {
-          llm: get().profiles,
-          imageGen: get().imageGenProfiles,
-          stt: get().sttProfiles,
-          decision: get().decisionProfiles,
-          tts: get().ttsProfiles,
-        })
-        if (args.llm) {
-          if (!isCurrentLoad()) return
-          get().applyProfileOrder(args.llm)
-        }
-        if (args.imageGen) {
-          if (!isCurrentLoad()) return
-          get().applyImageGenProfileOrder(args.imageGen)
-        }
-        if (args.stt) {
-          if (!isCurrentLoad()) return
-          get().applySttProfileOrder(args.stt)
-        }
-        if (args.decision) {
-          if (!isCurrentLoad()) return
-          get().applyDecisionProfileOrder(args.decision)
-        }
-        if (args.tts) {
-          if (!isCurrentLoad()) return
-          get().applyTtsProfileOrder(args.tts)
-        }
+        applyConnectionOrder(get(), patch.connectionsOrder as ConnectionsOrder, isCurrentLoad)
       }
       if (migratedCharacterFilterTab) {
         if (!isCurrentLoad()) return

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { connectionFolderId, connectionFolderName } from '@/lib/connectionLibrary'
+import { rememberConnection, useConnectionRecents } from '@/hooks/useConnectionRecents'
+import { useTranslation } from 'react-i18next'
+import { useConnectionLibrary } from '@/hooks/useConnectionLibrary'
+import FolderSection from '@/components/shared/FolderSection'
+import SearchableSelect from '@/components/shared/SearchableSelect'
+import { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
@@ -134,6 +140,12 @@ function loadVariantRects() {
 }
 
 function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPickerProps) {
+  const { t: ts } = useTranslation('shared')
+  const { t: tp } = useTranslation('panels')
+  const library = useConnectionLibrary('llm')
+  const recentIds = useConnectionRecents('llm')
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
+  const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({})
   const storedSettings = useStore((s) => s.connectionsPickerSettings)
   const settings = useMemo(() => ({
     ...DEFAULT_CONNECTIONS_PICKER_SETTINGS,
@@ -161,11 +173,12 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   const cardRailRef = useRef<HTMLDivElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
   const initialVariantRef = useRef(settings.variant)
-  const variantRectsRef = useRef(loadVariantRects())
+  const [variantRects, setVariantRects] = useState(loadVariantRects)
+  const variantRectsRef = useRef(variantRects)
   const currentFrameRectRef = useRef(settings.rect)
   const selectedProfileIdRef = useRef(selectedProfileId)
   const modelsRequestRef = useRef(0)
-  selectedProfileIdRef.current = selectedProfileId
+  useLayoutEffect(() => { selectedProfileIdRef.current = selectedProfileId }, [selectedProfileId])
 
   const updateSettings = useCallback((patch: Partial<typeof settings>) => {
     setSetting('connectionsPickerSettings', { ...settings, ...patch })
@@ -206,6 +219,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   const rememberVariantRect = useCallback((variant: ConnectionsPickerVariant, rect: SurfaceRectPrefs) => {
     const nextRects = { ...variantRectsRef.current, [variant]: rect }
     variantRectsRef.current = nextRects
+    setVariantRects(nextRects)
     try {
       window.localStorage.setItem(CONNECTIONS_PICKER_RECTS_STORAGE_KEY, JSON.stringify(nextRects))
     } catch {
@@ -292,11 +306,15 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   }, [settings.profileTags, settings.visibleTagIds])
 
   const filteredProfiles = useMemo(
-    () => filterConnectionProfiles(profiles, settings.profileTags, query, selectedTagId),
-    [profiles, query, selectedTagId, settings.profileTags],
+    () => filterConnectionProfiles(profiles, settings.profileTags, query, selectedTagId, id => connectionFolderName(library.library, id) || ts('searchableSelect.uncategorized'))
+      .filter(profile => selectedFolder === null || connectionFolderId(library.library, profile.id) === selectedFolder),
+    [profiles, query, selectedTagId, settings.profileTags, selectedFolder, library.library, ts],
   )
+  useEffect(() => {
+    if (selectedFolder && !library.library.folders.some(folder => folder.id === selectedFolder)) setSelectedFolder(null)
+  }, [library.library, selectedFolder])
   const favoriteProfiles = filteredProfiles.filter((profile) => settings.favoriteProfileIds.includes(profile.id))
-  const recentProfiles = settings.recentProfileIds
+  const recentProfiles = recentIds
     .map((id) => filteredProfiles.find((profile) => profile.id === id))
     .filter((profile): profile is ConnectionProfile => Boolean(profile))
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null
@@ -311,6 +329,29 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
       ? recentProfiles
       : filteredProfiles
   const providerTabShowsModels = providerTab.startsWith('tag:')
+
+  const rememberedFrameRect = variantRects[settings.variant] ?? settings.rect
+  let frameRect = rememberedFrameRect
+  if (open && settings.enabled && settings.variant === 'provider-tags' && anchorElement) {
+    const providerRect = {
+      ...rememberedFrameRect,
+      height: getProviderTagsPickerHeight(
+        rememberedFrameRect.height,
+        settings.showSearch && providerSearchOpen,
+        providerTabShowsModels,
+      ),
+    }
+    const anchorSurface = anchorElement.closest<HTMLElement>('[data-component="InputArea"]') ?? anchorElement
+    const anchorRect = anchorSurface.getBoundingClientRect()
+    frameRect = resolveAnchoredConnectionsPickerRect(
+      providerRect,
+      PICKER_BOUNDS['provider-tags'],
+      Math.max(document.documentElement.clientWidth, window.innerWidth || 0),
+      Math.max(document.documentElement.clientHeight, window.innerHeight || 0),
+      anchorRect,
+    )
+  }
+  useLayoutEffect(() => { currentFrameRectRef.current = frameRect }, [frameRect])
 
   useEffect(() => {
     if (providerTab === 'all') return
@@ -353,11 +394,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
 
   if (!open || !settings.enabled) return null
 
-  const rememberRecent = (profileId: string) => {
-    updateSettings({
-      recentProfileIds: [profileId, ...settings.recentProfileIds.filter((id) => id !== profileId)].slice(0, 8),
-    })
-  }
+  const rememberRecent = (id: string) => rememberConnection('llm', id)
 
   const selectProfile = (profile: ConnectionProfile) => {
     setSelectedProfileId(profile.id)
@@ -459,6 +496,16 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
       </div>
     )
   }
+
+  const renderGroupedProfiles = (items: ConnectionProfile[]) => library.folders.map(folder => {
+    const members = items.filter(profile => library.folderId(profile.id) === folder.id)
+    if (!members.length) return null
+    return <FolderSection key={folder.id} label={folder.name || ts('searchableSelect.uncategorized')} count={members.length}
+      collapsed={!query.trim() && !!collapsedFolders[folder.id]}
+      onToggle={() => setCollapsedFolders(value => ({ ...value, [folder.id]: !value[folder.id] }))}>
+      {members.map(renderProfile)}
+    </FolderSection>
+  })
 
   const renderProfileCard = (profile: ConnectionProfile) => {
     const active = profile.id === activeProfileId
@@ -824,29 +871,6 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
       : {}),
   } as CSSProperties
 
-  const rememberedFrameRect = variantRectsRef.current[settings.variant] ?? settings.rect
-  let frameRect = rememberedFrameRect
-  if (settings.variant === 'provider-tags' && anchorElement) {
-    const providerRect = {
-      ...rememberedFrameRect,
-      height: getProviderTagsPickerHeight(
-        rememberedFrameRect.height,
-        settings.showSearch && providerSearchOpen,
-        providerTabShowsModels,
-      ),
-    }
-    const anchorSurface = anchorElement.closest<HTMLElement>('[data-component="InputArea"]') ?? anchorElement
-    const anchorRect = anchorSurface.getBoundingClientRect()
-    frameRect = resolveAnchoredConnectionsPickerRect(
-      providerRect,
-      PICKER_BOUNDS['provider-tags'],
-      Math.max(document.documentElement.clientWidth, window.innerWidth || 0),
-      Math.max(document.documentElement.clientHeight, window.innerHeight || 0),
-      anchorRect,
-    )
-  }
-  currentFrameRectRef.current = frameRect
-
   const navigateProviderCards = (direction: -1 | 1) => {
     const rail = cardRailRef.current
     if (!rail) return
@@ -890,6 +914,15 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
       className={styles.frame}
     >
       <div ref={pickerRef} className={clsx(styles.picker, DENSITY_CLASS[settings.density])} style={frameStyle}>
+        {library.library.folders.length > 0 && <SearchableSelect
+          value={selectedFolder ?? '__all__'}
+          onChange={id => setSelectedFolder(id === '__all__' ? null : id)}
+          options={[
+            { value: '__all__', label: tp('connections.allFolders') },
+            ...library.folders.map(folder => ({ value: folder.id, label: folder.name || ts('searchableSelect.uncategorized') })),
+          ]}
+          ariaLabel={tp('connections.filterFolder')}
+        />}
         {settings.showSearch && settings.variant === 'provider-tags' && providerSearchOpen && (
           <label className={styles.searchBox}>
             <Search size={16} />
@@ -970,7 +1003,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
                   )}
                   <section>
                     <h3>Saved</h3>
-                    {savedProfiles.map(renderProfile)}
+                    {renderGroupedProfiles(savedProfiles)}
                     {savedProfiles.length === 0 && <div className={styles.empty}>No saved connections.</div>}
                   </section>
                   {settings.showRecent && recentProfiles.length > 0 && (
@@ -1023,7 +1056,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
               <div className={styles.profileColumn}>
                 <section>
                   <h3>All Connections</h3>
-                  {filteredProfiles.map(renderProfile)}
+                  {renderGroupedProfiles(filteredProfiles)}
                   {filteredProfiles.length === 0 && <div className={styles.empty}>No matching connections.</div>}
                 </section>
               </div>
