@@ -1,4 +1,5 @@
 import { open, readFile, rename } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 
 export function traceBytes(scalar) {
   if (scalar?.units !== 'bytes' || scalar.type !== 'scalar') return null;
@@ -18,10 +19,20 @@ export function extractGpuMemory(events, checkpoints = []) {
     bytes: traceBytes(e.args.dumps.allocators.gpu.attrs?.size),
   }));
   const measurements = checkpoints.map(checkpoint => {
-    const matching = records.filter(record => record.dumpGuid === guid(checkpoint.dumpGuid));
+    // Perfetto's JSON exporter replaces dump GUIDs with snapshot row IDs.
+    // Clock markers survive that conversion and bound one explicit request.
+    const clock = checkpoint.clockSync;
+    const markerTime = id => events.filter(e => e.name === 'clock_sync' && e.args?.sync_id === id && Number.isFinite(e.ts));
+    const start = clock ? markerTime(clock.start) : [];
+    const end = clock ? markerTime(clock.end) : [];
+    const bounded = start.length === 1 && end.length === 1 && start[0].ts <= end[0].ts;
+    const matching = clock
+      ? bounded ? records.filter(record => record.timestampUs >= start[0].ts && record.timestampUs <= end[0].ts) : []
+      : records.filter(record => record.dumpGuid === guid(checkpoint.dumpGuid));
     const valid = checkpoint.success !== false && matching.length === 1 && matching[0].bytes !== null;
     return { ...checkpoint, status: valid ? 'ok' : 'unavailable', bytes: valid ? matching[0].bytes : null,
-      ...(valid ? { pid: matching[0].pid } : { reason: checkpoint.reason || 'Missing, ambiguous or unsupported GPU allocator record' }) };
+      ...(valid ? { pid: matching[0].pid, correlation: clock ? 'trace-clock-window' : 'dump-guid' }
+        : { reason: checkpoint.reason || 'Missing, ambiguous or unsupported GPU allocator record' }) };
   });
   const before = measurements.find(m => m.label === 'before');
   const after = measurements.find(m => m.label === 'after');
@@ -32,11 +43,13 @@ export function extractGpuMemory(events, checkpoints = []) {
 }
 
 /** A trace is separate from lightweight sampling and never owns another recorder. */
-export async function startMemoryTrace(session, filePath, { maxBytes = 64 * 1024 * 1024, timeoutMs = 10000,
+export async function startMemoryTrace(session, filePath, { maxBytes = 128 * 1024 * 1024, timeoutMs = 10000,
   categories = ['devtools.timeline', 'blink.user_timing', 'disabled-by-default-memory-infra'] } = {}) {
   const send = (method, params = {}) => session.send(method, params, { timeout: timeoutMs });
   await send('Tracing.start', { transferMode: 'ReturnAsStream', bufferUsageReportingInterval: 1000,
-    traceConfig: { recordMode: 'recordUntilFull', traceBufferSizeInKb: 16384,
+    // Detailed allocator dumps for a real application can exceed 16 MiB even
+    // without timeline events. Keep the recorder bounded, with space for both.
+    traceConfig: { recordMode: 'recordUntilFull', traceBufferSizeInKb: 65536,
       // Broad cc/viz/gpu categories fill this bounded buffer within seconds on
       // real chats. GPU allocator dumps only need memory-infra.
       includedCategories: categories,
@@ -49,9 +62,13 @@ export async function startMemoryTrace(session, filePath, { maxBytes = 64 * 1024
   return {
     async checkpoint(label) {
       const start = performance.now();
+      const marker = `lumiverse-memory-${randomUUID()}`;
+      const clockSync = { start: `${marker}-start`, end: `${marker}-end` };
       try {
+        await send('Tracing.recordClockSyncMarker', { syncId: clockSync.start });
         const dump = await send('Tracing.requestMemoryDump', { deterministic: false, levelOfDetail: 'detailed' });
-        checkpoints.push({ label, dumpGuid: dump.dumpGuid, success: dump.success, collectionDurationMs: performance.now() - start,
+        await send('Tracing.recordClockSyncMarker', { syncId: clockSync.end });
+        checkpoints.push({ label, dumpGuid: dump.dumpGuid, clockSync, success: dump.success, collectionDurationMs: performance.now() - start,
           ...(!dump.success ? { reason: 'Chromium memory dump failed' } : {}) });
       } catch (error) { checkpoints.push({ label, success: false, reason: error.message, collectionDurationMs: performance.now() - start }); }
     },

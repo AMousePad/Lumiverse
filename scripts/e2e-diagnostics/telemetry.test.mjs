@@ -52,6 +52,23 @@ test('diagnostic options reject invalid intervals before launching a browser', (
   assert.throws(() => diagnosticConfig({ ...env, DIAG_BROWSER_CHANNEL: 'random' }), /DIAG_BROWSER_CHANNEL/);
 });
 
+test('GPU checkpoints use clock windows when Perfetto rewrites dump GUIDs', () => {
+  const size = value => ({ type: 'scalar', units: 'bytes', value });
+  const events = [{ name: 'process_name', pid: 42, args: { name: 'GPU Process' } },
+    { name: 'clock_sync', ts: 10, args: { sync_id: 'start' } },
+    { ph: 'v', id: '0x0', ts: 15, pid: 42, args: { dumps: { allocators: { gpu: { attrs: { size: size('1000') } } } } } },
+    { name: 'clock_sync', ts: 20, args: { sync_id: 'end' } },
+    // This ID happens to match the CDP GUID but belongs to another request.
+    { ph: 'v', id: '0xa', ts: 30, pid: 42, args: { dumps: { allocators: { gpu: { attrs: { size: size('2000') } } } } } }];
+  const checkpoint = { label: 'before', dumpGuid: '0xa', success: true, clockSync: { start: 'start', end: 'end' } };
+  const result = extractGpuMemory(events, [checkpoint]);
+  assert.equal(result.checkpoints[0].bytes, 4096);
+  assert.equal(result.checkpoints[0].correlation, 'trace-clock-window');
+  assert.equal(extractGpuMemory(events.filter(e => e.name !== 'clock_sync'), [checkpoint]).checkpoints[0].status, 'unavailable');
+  const ambiguous = [...events, { ...events[2], id: '0xb', ts: 16 }];
+  assert.equal(extractGpuMemory(ambiguous, [checkpoint]).checkpoints[0].status, 'unavailable');
+});
+
 test('trace exporter bounds output and releases streams/listeners after errors', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lumiverse-trace-limit-'));
   try {
@@ -217,7 +234,7 @@ test('diagnose runs against mock login/chat APIs and emits a real streamed GPU t
     assert.ok(report.telemetry.trace.gpuMemory.checkpoints.every(checkpoint => checkpoint.success));
     if (report.telemetry.trace.gpuMemory.records.length) {
       assert.ok(report.telemetry.trace.gpuMemory.checkpoints.every(checkpoint => checkpoint.status === 'ok'),
-        'actual GPU allocator records must correlate with requested dump GUIDs');
+        'actual GPU allocator records must correlate with requested checkpoints');
       assert.equal(typeof report.telemetry.trace.gpuMemory.deltaBytes, 'number');
     }
     const trace = JSON.parse(await readFile(join(outDir, 'performance-trace.json'), 'utf8'));

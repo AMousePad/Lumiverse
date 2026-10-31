@@ -201,9 +201,11 @@ DevTools or Perfetto. `telemetry.trace.gpuMemory.checkpoints` reports the GPU
 process's root allocator size without summing shared or nested allocations.
 These are browser-wide Chromium allocation bytes, not physical VRAM residency,
 GPU utilization or memory owned by one extension. Missing values are `null`.
+Clock markers bound each requested dump because Perfetto can rewrite dump IDs
+when exporting JSON. Missing or ambiguous checkpoint records remain unavailable.
 Memory dumps happen outside the browser collector's responsiveness window, but
 tracing itself adds overhead: compare runs using the same recording options.
-Traces have a 16 MiB recording buffer and a 64 MiB export limit; failures or data
+Traces have a 64 MiB recording buffer and a 128 MiB export limit; failures or data
 loss are reported, and an interrupted export may leave a `.partial` file. Raw
 traces can contain script URLs and other page metadata; review them before sharing.
 
