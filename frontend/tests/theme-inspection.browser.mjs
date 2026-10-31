@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
+import { launchTestBrowser } from '../../scripts/e2e-diagnostics/browser-runtime.mjs'
 import { createServer } from 'vite'
 import config from '../vite.config.ts'
 
-const playwright = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright')
 const frontend = fileURLToPath(new URL('../', import.meta.url))
 const server = await createServer({
   configFile: false, root: frontend, appType: 'custom', logLevel: 'warn',
@@ -17,8 +17,9 @@ server.middlewares.use('/__theme-inspection', async (_req, res) => {
 })
 await server.listen()
 try {
-  for (const name of ['chromium', 'firefox']) {
-    const browser = await playwright[name].launch({ headless: true })
+  for (const name of ['chromium', 'firefox', 'webkit']) {
+    const runtime = await launchTestBrowser(name)
+    const browser = runtime.browser
     try {
       for (const width of [1100, 390]) {
         const page = await browser.newPage({ viewport: { width, height: 844 }, hasTouch: width === 390 })
@@ -26,6 +27,12 @@ try {
         page.on('pageerror', error => errors.push(error.message))
         await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/__theme-inspection`)
         await page.waitForFunction(() => !!window.themeInspectionFixture)
+        const archive = await page.evaluate(() => window.themeInspectionFixture.roundTrip())
+        assert.equal(archive.pack.globalCSSEnabled, false)
+        assert.equal(archive.pack.assets[0].dataBase64, 'AAEC')
+        assert.match(archive.pack.bundleId, /^[a-f0-9-]{36}$/)
+        assert.equal(archive.restored.Test.enabled, false)
+        assert.equal(archive.pack.components.Test.enabled, true)
         const result = await page.evaluate(() => {
           const fixture = window.themeInspectionFixture
           const rejected = action => { try { action(); return null } catch (error) { return error.message } }
@@ -50,8 +57,8 @@ try {
         assert.equal(result.disposed, 'Disposed')
         assert.deepEqual(errors, [])
         await page.close()
-        console.log(`${name} ${width}: theme inspection bounds, styles and authority passed`)
+        console.log(`${name} ${width}: theme inspection, archives and TSX review rules passed`)
       }
-    } finally { await browser.close() }
+    } finally { await runtime.close() }
   }
 } finally { await server.close() }

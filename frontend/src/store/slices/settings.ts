@@ -10,6 +10,8 @@ import { BASE_URL } from '@/api/client'
 import { activeTab } from '@/lib/active-tab'
 import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/lib/loom/preset-selection-coordinator'
 import { generateUUID } from '@/lib/uuid'
+import { restoreThemePackComponents } from '@/lib/themePack'
+import { uploadThemePackAssets } from '@/lib/themePackAssets'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import { setDeviceThemeControlsScope } from '@/lib/deviceThemeControls'
 import { PRODUCTIVITY_DEFAULTS, migrateProductivitySetting } from '@/lib/uiProductivityDefaults'
@@ -1308,13 +1310,41 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       }
       get().setTheme(theme)
     } else {
-      get().applyThemePack({
-        ...entry.pack,
-        globalCSSEnabled: entry.authoringSnapshot?.globalEnabled ?? entry.pack.globalCSSEnabled,
-        name: entry.name,
-        theme: entry.pack.theme ? { ...entry.pack.theme, name: entry.name } : null,
+      const apply = (pack = entry.pack) => {
+        get().applyThemePack({
+          ...pack,
+          components: entry.authoringSnapshot
+            ? restoreThemePackComponents(pack.components, get().componentOverrides)
+            : pack.components,
+          globalCSSEnabled: entry.authoringSnapshot?.globalEnabled ?? pack.globalCSSEnabled,
+          name: entry.name,
+          theme: pack.theme ? { ...pack.theme, name: entry.name } : null,
+        })
+        if (entry.authoringSnapshot?.themeWasNull) get().setTheme(null)
+      }
+      if (!entry.authoringSnapshot || !entry.pack.assets.length) return apply()
+
+      const before = get()
+      const { theme, customCSS, componentOverrides } = before
+      const bundleId = generateUUID()
+      return uploadThemePackAssets(entry.pack.assets, bundleId, themeAssetsApi).then(async (uploaded) => {
+        try {
+          const current = get()
+          if (current.savedThemes.find((saved) => saved.id === id) !== entry
+            || current.theme !== theme || current.customCSS !== customCSS
+            || current.componentOverrides !== componentOverrides) {
+            throw new Error('Theme changed while restoring the backup. Try again.')
+          }
+          const pack = { ...entry.pack, bundleId }
+          const savedThemes = current.savedThemes.map((saved) => saved.id === id ? { ...entry, pack } : saved)
+          set({ savedThemes })
+          persistKey('savedThemes', savedThemes)
+          apply(pack)
+        } catch (error) {
+          await Promise.all(uploaded.map((asset) => themeAssetsApi.delete(asset.id).catch(() => {})))
+          throw error
+        }
       })
-      if (entry.authoringSnapshot?.themeWasNull) get().setTheme(null)
     }
   },
 

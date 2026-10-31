@@ -37,6 +37,92 @@ afterEach(() => {
 })
 
 describe('saved theme names', () => {
+  test('applying a backend backup restores embedded assets to a fresh bundle', async () => {
+    const store = createStore()
+    const pack = {
+      ...legacyPack(),
+      assets: [{ slug: 'assets/font.ttf', originalFilename: 'font.ttf', mimeType: 'font/ttf',
+        tags: ['font'], metadata: {}, dataBase64: 'AAEC' }],
+    }
+    store.savedThemes = [{
+      kind: 'pack', id: 'backup', name: 'Backup', createdAt: 1, pack,
+      authoringSnapshot: { version: 1, globalEnabled: true, themeWasNull: false },
+    }]
+    const upload = spyOn(themeAssetsApi, 'upload').mockResolvedValue({ id: 'restored' } as never)
+
+    await store.applySavedTheme('backup')
+
+    expect(upload).toHaveBeenCalledTimes(1)
+    const [file, options] = upload.mock.calls[0]
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([0, 1, 2]))
+    expect(options.slug).toBe('assets/font.ttf')
+    expect(options.bundleId).not.toBe(pack.bundleId)
+    expect(store.customCSS.bundleId).toBe(options.bundleId)
+    expect(store.savedThemes[0]).toMatchObject({ pack: { bundleId: options.bundleId } })
+  })
+
+  test('applying a backend backup keeps unreviewed TSX disabled', () => {
+    const store = createStore()
+    const tsx = 'export default () => <div />'
+    store.componentOverrides = {
+      Disabled: { css: '', tsx, enabled: false },
+      Reviewed: { css: '', tsx, enabled: true },
+      Changed: { css: '', tsx: 'export default () => <span />', enabled: true },
+    }
+    const components = Object.fromEntries(['Disabled', 'Reviewed', 'Changed', 'Removed'].map((id) => [
+      id, { css: '.root{}', tsx, enabled: true },
+    ]))
+    store.savedThemes = [{
+      kind: 'pack', id: 'backup', name: 'Backup', createdAt: 1,
+      pack: { ...legacyPack(), components },
+      authoringSnapshot: { version: 1, globalEnabled: false, themeWasNull: false },
+    }]
+
+    store.applySavedTheme('backup')
+
+    expect(store.componentOverrides.Reviewed.enabled).toBe(true)
+    for (const id of ['Disabled', 'Changed', 'Removed']) {
+      expect(store.componentOverrides[id].enabled).toBe(false)
+      expect(store.componentOverrides[id].tsx).toBe(tsx)
+    }
+    expect(components.Disabled.enabled).toBe(true)
+  })
+
+  test.each(['upload failure', 'newer edit', 'backup deletion'] as const)(
+    'a backup restore preserves current settings and cleans staged assets after %s', async (reason) => {
+      const store = createStore()
+      const asset = { slug: 'assets/font.ttf', originalFilename: 'font.ttf', mimeType: 'font/ttf',
+        tags: [], metadata: {}, dataBase64: 'AAEC' }
+      store.savedThemes = [{
+        kind: 'pack', id: 'backup', name: 'Backup', createdAt: 1,
+        pack: { ...legacyPack(), assets: [asset, { ...asset, slug: 'assets/second.ttf' }] },
+        authoringSnapshot: { version: 1, globalEnabled: true, themeWasNull: false },
+      }]
+      const before = store.customCSS
+      const pending = Promise.withResolvers<Awaited<ReturnType<typeof themeAssetsApi.upload>>>()
+      spyOn(themeAssetsApi, 'upload')
+        .mockResolvedValueOnce({ id: 'first' } as never)
+        .mockReturnValueOnce(pending.promise)
+      const remove = spyOn(themeAssetsApi, 'delete').mockResolvedValue(undefined)
+
+      const restoring = store.applySavedTheme('backup')
+      if (reason === 'upload failure') pending.reject(new Error('Upload failed'))
+      else {
+        if (reason === 'newer edit') store.customCSS = { ...before, css: 'body{color:blue}' }
+        else store.savedThemes = []
+        pending.resolve({ id: 'second' } as never)
+      }
+      await expect(Promise.resolve(restoring)).rejects.toThrow(
+        reason === 'upload failure' ? 'Upload failed' : 'Theme changed while restoring the backup',
+      )
+
+      expect(store.customCSS.css).toBe(reason === 'newer edit' ? 'body{color:blue}' : before.css)
+      expect(remove).toHaveBeenCalledWith('first')
+      if (reason !== 'upload failure') expect(remove).toHaveBeenCalledWith('second')
+      expect(store.savedThemes).toHaveLength(reason === 'backup deletion' ? 0 : 1)
+    },
+  )
+
   test('deleting a backup preserves assets owned by another saved theme', async () => {
     const store = createStore()
     const pack = legacyPack()

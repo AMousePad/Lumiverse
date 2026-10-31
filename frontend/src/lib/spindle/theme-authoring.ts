@@ -1,4 +1,5 @@
 import type { ThemeInspectionOptions, ThemeInspectionResult } from './theme-inspection'
+import { uploadThemePackAssets } from '@/lib/themePackAssets'
 import type { SpindleUploadFile } from 'lumiverse-spindle-types'
 import type { ThemeAsset } from '@/types/api'
 import { sanitizeCSS, validateCSS } from '@/lib/cssValidator'
@@ -184,12 +185,6 @@ async function blobToBase64(blob: Blob): Promise<string> {
   return btoa(binary)
 }
 
-function base64ToFile(asset: ThemePackAsset): File {
-  const binary = atob(asset.dataBase64)
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
-  return new File([bytes], asset.originalFilename, { type: asset.mimeType })
-}
-
 function prepareStylesheet(label: string, css: string, warnings?: string[]): string {
   const sanitized = sanitizeCSS(css)
   if (sanitized !== css) warnings?.push(`${label} contained unsafe external CSS constructs that were removed.`)
@@ -245,20 +240,7 @@ async function uploadPackAssets(
   bundleId: string,
   client: ThemeAssetClient,
 ): Promise<SpindleThemeAsset[]> {
-  const uploaded: ThemeAsset[] = []
-  try {
-    for (const asset of packAssets) {
-      uploaded.push(await client.upload(base64ToFile(asset), {
-        bundleId,
-        slug: asset.slug,
-        tags: asset.tags,
-        metadata: asset.metadata,
-      }))
-    }
-  } catch (error) {
-    await Promise.all(uploaded.map((asset) => client.delete(asset.id).catch(() => {})))
-    throw error
-  }
+  const uploaded = await uploadThemePackAssets(packAssets, bundleId, client)
   return uploaded.map((asset) => toPublicAsset(asset, client))
 }
 

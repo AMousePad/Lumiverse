@@ -4,6 +4,19 @@ interface CustomCSSSettings { css: string; enabled: boolean; revision: number; b
 import { generateUUID } from './uuid'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 
+/** Restoring a snapshot must not grant approval to inactive or changed TSX. */
+export function restoreThemePackComponents(
+  components: Record<string, ComponentOverride>,
+  current: Record<string, ComponentOverride>,
+): Record<string, ComponentOverride> {
+  return Object.fromEntries(Object.entries(components).map(([id, component]) => [id, {
+    ...component,
+    enabled: component.tsx && (component.tsx !== current[id]?.tsx || !current[id]?.enabled)
+      ? false
+      : component.enabled,
+  }]))
+}
+
 /** Portable theme pack — bundles all three override layers. */
 export interface ThemePackAsset {
   slug: string

@@ -447,7 +447,7 @@ Applying requires a fresh `expectedRevision`. The backend compares it again when
 
 Set `apply: false, saveToLibrary: true` to save without applying. `saveToLibrary: true` with an applied edit also saves the result in My Themes. Failed preparation removes the assets it created. Successful operations publish the ordinary settings-update event so connected clients synchronize.
 
-The authoring boundary validates CSS syntax and removes external imports and remote resource URLs. Browser support and selector matches still require visual inspection. It accepts CSS overrides only. Imports omit TSX, and restore cannot enable changed or previously disabled TSX without native-editor review.
+The authoring boundary validates CSS syntax and removes external imports and remote resource URLs. Browser support and selector matches still require visual inspection. It accepts CSS overrides only. Imports omit TSX, and restore cannot enable changed or previously disabled TSX without native-editor review. Applying a backend backup from the native theme library follows the same TSX review rules, restores embedded assets into a fresh bundle, and rejects if the theme or backup changes while assets are uploading.
 
 Saved theme state excludes device-local presentation controls and transient extension overlays. Those can change the rendered appearance without changing the saved-theme revision. The backend does not infer a browser's resolved system mode or claim to have visually verified a result.
 

@@ -11,6 +11,7 @@ import { prepareThemeDraft } from './theme-authoring-validation';
 import {
   createThemePack,
   normalizeThemePack,
+  restoreThemePackComponents,
   type ThemePack,
   type ThemePackAsset,
 } from '../utils/theme-pack';
@@ -427,13 +428,7 @@ export async function runThemeAuthoring(
     );
     const restored = await createPackAssets(userId, saved.pack, authorize);
     try {
-      const components = structuredClone(restored.pack.components);
-      for (const [id, component] of Object.entries(components))
-        if (
-          component.tsx &&
-          (component.tsx !== state.components[id]?.tsx || !state.components[id]?.enabled)
-        )
-          component.enabled = false;
+      const components = restoreThemePackComponents(restored.pack.components, state.components);
       const next: State = {
         ...state,
         theme: saved.authoringSnapshot!.themeWasNull ? null : restored.pack.theme,
