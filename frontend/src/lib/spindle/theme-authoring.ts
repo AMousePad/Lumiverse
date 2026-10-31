@@ -1,3 +1,4 @@
+import type { ThemeInspectionOptions, ThemeInspectionResult } from './theme-inspection'
 import type { SpindleUploadFile } from 'lumiverse-spindle-types'
 import type { ThemeAsset } from '@/types/api'
 import { sanitizeCSS, validateCSS } from '@/lib/cssValidator'
@@ -14,6 +15,7 @@ import {
 
 export const THEME_AUTHORING_HOST_CAPABILITIES = Object.freeze({
   'theme-assets-v1': 1,
+  'theme-inspection-v1': 1,
   'theme-packs-v1': 1,
   'theme-catalog-v1': 1,
   'theme-editor-navigation-v1': 1,
@@ -86,6 +88,7 @@ export type SpindleThemeEditorTarget = 'global' | 'assets' | 'component'
 export interface SpindleThemeEditorOptions { target?: SpindleThemeEditorTarget; componentId?: string }
 
 export interface SpindleThemeAuthoringAPI {
+  inspect(options: ThemeInspectionOptions): ThemeInspectionResult
   readonly assets: {
     getActiveBundleId(): string | null
     createBundle(): string
@@ -139,6 +142,7 @@ export interface ThemeComponentRegistryEntry {
 }
 
 export interface ThemeAuthoringDependencies {
+  inspect?(options: ThemeInspectionOptions): ThemeInspectionResult
   assertActive(): void
   requireAppManipulation(member: string): void
   assetClient: ThemeAssetClient
@@ -269,6 +273,11 @@ export function createThemeAuthoringAPI(dependencies: ThemeAuthoringDependencies
   const mutate = (member: string) => { active(); dependencies.requireAppManipulation(member) }
 
   return Object.freeze({
+    inspect(options) {
+      active(); dependencies.requireAppManipulation('ctx.theme.inspect')
+      if (!dependencies.inspect) throw new Error('Theme inspection is unavailable.')
+      return dependencies.inspect(options)
+    },
     assets: Object.freeze({
       getActiveBundleId() { active(); return dependencies.getStore().customCSS.bundleId },
       createBundle() { active(); return dependencies.createBundleId() },
