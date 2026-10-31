@@ -62,7 +62,8 @@ export async function fetchWithPreflightAbort(
         });
       } catch { /* Diagnostics must never fail generation or expose a raw fallback. */ }
     }
-    const res = observeProviderResponse(await fetch(input, { ...init, signal: controller.signal }), responseObserver, signal);
+    // Reasoning can pause the socket beyond Bun's default idle limit. Caller cancellation still owns the request lifetime.
+    const res = observeProviderResponse(await fetch(input, { timeout: false, ...init, signal: controller.signal }), responseObserver, signal);
     responseConnections.set(res, controller);
     return res;
   } catch (error) {
