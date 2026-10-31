@@ -526,6 +526,7 @@ export interface SavedThemeConfigEntry {
 }
 /** A user-saved theme made from a .lumitheme bundle import — preserves CSS, components, and assets. */
 export interface SavedThemePackEntry {
+  authoringSnapshot?: { version: 1; globalEnabled: boolean; themeWasNull: boolean }
   kind: 'pack'
   id: string
   name: string

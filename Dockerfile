@@ -41,6 +41,9 @@ COPY frontend/ ./
 COPY src/shared/ /app/src/shared/
 COPY src/image-gen/image-input.ts /app/src/image-gen/
 COPY src/utils/regex-action-signature.ts /app/src/utils/
+COPY src/utils/theme-config.ts /app/src/utils/
+COPY src/utils/theme-pack.ts /app/src/utils/
+COPY src/utils/uuid.ts /app/src/utils/
 RUN echo "frontend-refresh: ${FRONTEND_REFRESH}" && bun run build
 
 # ---------------------------------------------------------------------------

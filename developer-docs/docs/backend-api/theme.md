@@ -396,3 +396,57 @@ async function applyTimeTheme() {
 applyTimeTheme()
 setInterval(applyTimeTheme, 15 * 60 * 1000)
 ```
+
+## Persistent theme authoring
+
+`spindle.theme.authoring` edits the user's saved native theme through the backend. It continues without an open browser. Mutations require `app_manipulation`. Requests use the same user scoping as the other backend theme methods.
+
+Feature-detect `spindle.theme.authoring?.version === 1`. Call `request({ operation, args }, userId?)`. The SDK exports `ThemeAuthoringRequest` and `ThemeAuthoringOperations` for typed requests and results.
+
+```ts
+const api = spindle.theme.authoring
+const current = await api.request({ operation: 'state', args: {} }, userId)
+const result = await api.request({
+  operation: 'install',
+  args: {
+    draft: { name: 'Readable', globalCSS: 'body { line-height: 1.5; }' },
+    options: { expectedRevision: current.revision, mode: 'merge' },
+  },
+}, userId)
+```
+
+### Operations
+
+| Operation | Arguments | Result |
+|---|---|---|
+| `state` | `{}` | Saved configuration, default configuration, global CSS, component overrides, revision and backup IDs |
+| `validate` | `draft` | Validation warnings, without writes |
+| `install` | `draft`, optional `options` | Revision, backup ID, optional library entry ID and installed asset bundle ID |
+| `backup` | Optional `name` | Backup ID and revision |
+| `restore` | `backupId`, `expectedRevision` | Backup ID for the replaced state and resulting revision |
+| `export_current` | `{}` | Current theme as `.lumitheme` bytes |
+| `export_draft` | `draft` | Draft as `.lumitheme` bytes |
+| `import` | `bytes: Uint8Array` | Editable draft, newly uploaded assets and warnings. Does not apply the theme. |
+| `asset_create_bundle` | `{}` | A fresh bundle ID. Does not write data. |
+| `asset_list` | Optional `bundleId`, otherwise the active saved bundle | Asset metadata and CSS paths |
+| `asset_upload` | `bundleId`, `name`, `mimeType`, `bytes`; optional `slug`, `tags`, `metadata` | Asset metadata |
+| `asset_update` | `id`, `patch` containing `slug`, `tags` or `metadata` | Updated metadata |
+| `asset_delete` | `id` | Whether an asset was deleted |
+| `asset_optimize` | `id` | Metadata after WebP optimization |
+| `asset_download` | `id` | Asset bytes |
+
+Asset operations are scoped to the requesting user. Uploads support the native image, SVG and font formats, with a 50 MiB per-asset limit. Archive decoding uses the native codec and its limits: 200 MiB input, 50 MiB per entry, 250 MiB total expanded bytes and 500 entries.
+
+### Drafts and conflicts
+
+A draft accepts `name`, optional `author` and `description`, `theme`, `globalCSS`, `globalEnabled`, `components`, and `assetBundleId`. `theme` is a complete native theme configuration or `null`. Component entries are full CSS stylesheets with an optional `enabled` flag. A `null` entry removes that component override. Component IDs identify native or registered extension components; syntax validation does not establish whether a component is mounted.
+
+`options.mode` defaults to `merge`, preserving omitted styling, existing component TSX and assets. `replace` replaces CSS and component overrides. Omitting `assetBundleId` preserves assets during a merge; `null` clears them. Assets use the native relative CSS paths returned by upload.
+
+Applying requires a fresh `expectedRevision`. The backend compares it again when committing and saves the backup and replacement settings atomically. Concurrent edits reject with `THEME_CONFLICT`. Inspect the saved state and reconcile before retrying. Restore also rejects if the selected backup changed during preparation.
+
+Set `apply: false, saveToLibrary: true` to save without applying. `saveToLibrary: true` with an applied edit also saves the result in My Themes. Failed preparation removes the assets it created. Successful operations publish the ordinary settings-update event so connected clients synchronize.
+
+The authoring boundary validates CSS syntax and removes external imports and remote resource URLs. Browser support and selector matches still require visual inspection. It accepts CSS overrides only. Imports omit TSX, and restore cannot enable changed or previously disabled TSX without native-editor review.
+
+Saved theme state excludes device-local presentation controls and transient extension overlays. Those can change the rendered appearance without changing the saved-theme revision. The backend does not infer a browser's resolved system mode or claim to have visually verified a result.

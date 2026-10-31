@@ -1,6 +1,6 @@
 # Theme Authoring
 
-`ctx.theme` is the persistent/native theme-authoring counterpart to the backend `spindle.theme` presentation API. Use `spindle.theme` for extension-scoped live variable overrides; use `ctx.theme` for native assets, `.lumitheme` packs, catalog inspection, and navigation into Lumiverse's Theme Editor.
+`ctx.theme` provides browser-side native assets, `.lumitheme` packs, catalog inspection, and navigation into Lumiverse's Theme Editor. Backend extensions can use `spindle.theme.authoring` for saved-theme edits and archives without a browser. The existing `spindle.theme.apply` API provides transient extension-scoped presentation overrides.
 
 Each subtree is independently versioned. Feature-detect the host capability before using it:
 

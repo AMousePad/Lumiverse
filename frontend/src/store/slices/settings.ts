@@ -1204,7 +1204,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     // Layer 2: Global CSS
     const customCSS = {
       css: pack.globalCSS || '',
-      enabled: !!pack.globalCSS.trim(),
+      enabled: pack.globalCSSEnabled ?? !!pack.globalCSS.trim(),
       revision: Date.now(),
       bundleId: pack.bundleId || generateUUID(),
     }
@@ -1279,17 +1279,18 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     const savedThemes = get().savedThemes.filter((e) => e.id !== id)
     set({ savedThemes })
     persistKey('savedThemes', savedThemes)
-    // Clean up bundle assets for pack entries, unless the bundle is still the
-    // active customCSS bundle (i.e. the user is currently using it).
+    // Backups can share a bundle with other saved themes.
     if (entry.kind === 'pack') {
-      const activeBundleId = get().customCSS.bundleId
       const packBundleId = entry.pack.bundleId
-      if (packBundleId && packBundleId !== activeBundleId) {
+      const isReferenced = () => get().customCSS.bundleId === packBundleId
+        || get().savedThemes.some((saved) => saved.kind === 'pack' && saved.pack.bundleId === packBundleId)
+      if (packBundleId && !isReferenced()) {
         try {
           const assets = await themeAssetsApi.list(packBundleId)
+          if (isReferenced()) return
           await Promise.all(assets.map((a) => themeAssetsApi.delete(a.id).catch(() => {})))
         } catch {
-          // Swallow — orphaned assets are non-fatal; the user can prune manually.
+          // Failed cleanup must not prevent removal from the library.
         }
       }
     }
@@ -1309,9 +1310,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     } else {
       get().applyThemePack({
         ...entry.pack,
+        globalCSSEnabled: entry.authoringSnapshot?.globalEnabled ?? entry.pack.globalCSSEnabled,
         name: entry.name,
         theme: entry.pack.theme ? { ...entry.pack.theme, name: entry.name } : null,
       })
+      if (entry.authoringSnapshot?.themeWasNull) get().setTheme(null)
     }
   },
 
@@ -1338,11 +1341,15 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       )
       return {
         ...entry,
+        ...(entry.authoringSnapshot ? {
+          authoringSnapshot: { version: 1 as const, globalEnabled: state.customCSS.enabled, themeWasNull: state.theme === null },
+        } : {}),
         pack: {
           ...entry.pack,
           name: entry.name,
           theme: { ...currentTheme, name: entry.name },
           globalCSS: state.customCSS.css || '',
+          globalCSSEnabled: state.customCSS.enabled,
           components,
         },
       } as typeof entry

@@ -1,3 +1,4 @@
+import { createThemeAuthoringRuntime } from './theme-authoring-runtime';
 import { createOrganizationRuntime } from './connection-organization-runtime';
 import type { OrganizationWorkerMessage, OrganizationHostMessage, BackendOrganizationAPI } from './connection-organization-contract';
 /**
@@ -2683,6 +2684,7 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   theme: {
+    authoring: createThemeAuthoringRuntime(request, assertMutationAllowed),
     async apply(overrides: { variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } }, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.theme.apply()");
       const requestId = crypto.randomUUID();
