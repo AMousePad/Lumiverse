@@ -1421,6 +1421,7 @@ export function useWebSocket() {
         if (!shouldSyncExtensionsAfterConnected(payload)) {
           // Local onopen: hold provider_changed until the snapshot resync.
           providers?.beginReconnectResync()
+          return
         } else {
           // Replace stale registrations missed while disconnected, including removals.
           if (Array.isArray(payload.extensionCommands)) store.setState({ extensionCommands: payload.extensionCommands })

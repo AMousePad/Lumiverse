@@ -2094,7 +2094,7 @@ function getMsgStmts() {
   }
   if (!_stmtMsgAll) _stmtMsgAll = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC");
   if (!_stmtMsgCount) _stmtMsgCount = db.query("SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ?");
-  if (!_stmtMsgTail) _stmtMsgTail = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC LIMIT ?");
+  if (!_stmtMsgTail) _stmtMsgTail = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC, m.id DESC LIMIT ?");
   if (!_stmtMsgById) _stmtMsgById = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.id = ? AND c.user_id = ?");
   if (!_stmtMsgRolesBefore) _stmtMsgRolesBefore = db.query("SELECT m.id, m.index_in_chat, m.is_user, m.extra FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? AND m.index_in_chat < ? ORDER BY m.index_in_chat DESC LIMIT ?");
   return { all: _stmtMsgAll, count: _stmtMsgCount, tail: _stmtMsgTail, byId: _stmtMsgById, rolesBefore: _stmtMsgRolesBefore };
@@ -2115,6 +2115,18 @@ export function messagesHaveRevisionColumn(): boolean {
 export function getMessages(userId: string, chatId: string, opts?: { light?: boolean }): Message[] {
   const rows = getMsgStmts().all.all(chatId, userId) as any[];
   return rows.map(opts?.light ? rowToMessageLight : rowToMessage);
+}
+
+/** Bounded, owner- and chat-scoped source lookup for one display batch. */
+export async function getMessagesByIds(userId: string, chatId: string, ids: string[]): Promise<Map<string, Message>> {
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return new Map();
+  const rows = await executeDatabaseOperation<any[]>({ kind: "read", statement: {
+    sql: `SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id
+     WHERE c.user_id = ? AND m.chat_id = ? AND m.id IN (${uniqueIds.map(() => "?").join(",")})`,
+    bindings: [userId, chatId, ...uniqueIds], mode: "all",
+  } });
+  return new Map(rows.map((row) => [row.id, rowToMessage(row)]));
 }
 
 /**
@@ -2187,6 +2199,26 @@ export function listMessagesTail(userId: string, chatId: string, limit: number, 
     limit,
     offset,
   };
+}
+
+/** Keyset history paging stays stable when messages after the boundary are added or deleted. */
+export async function listMessagesBefore(
+  userId: string, chatId: string, before: { index: number; id: string }, limit: number,
+  opts?: { light?: boolean },
+) {
+  const rows = await executeDatabaseOperation<any[]>({
+    kind: "read", statement: {
+      sql: `SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id
+        WHERE m.chat_id = ? AND c.user_id = ? AND m.index_in_chat <= ?
+          AND (m.index_in_chat < ? OR m.id < ?)
+        ORDER BY m.index_in_chat DESC, m.id DESC LIMIT ?`,
+      bindings: [chatId, userId, before.index, before.index, before.id, limit + 1], mode: "all",
+    },
+  });
+  const has_more = rows.length > limit;
+  if (has_more) rows.length = limit;
+  rows.reverse();
+  return { data: rows.map(opts?.light ? rowToMessageLight : rowToMessage), has_more, limit };
 }
 
 const CHAT_FIND_MAX_RESULTS = 10_000;

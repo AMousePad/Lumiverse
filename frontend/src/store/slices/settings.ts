@@ -648,6 +648,10 @@ export function consumeOwnSettingsUpdate(payload: unknown): boolean {
 
 /** Whether a SETTINGS_UPDATED event requires a settings reload in this tab. */
 export function shouldReloadSettingsAfterUpdate(payload: unknown): boolean {
+  // This navigation bookmark is not hydrated by loadSettings. Other clients
+  // still receive its event; it never justifies reloading all settings/presets.
+  const keys = settingsUpdateKeys(payload)
+  if (keys.length > 0 && keys.every((key) => key === 'activeChatId')) return false
   if (organizationWriter?.pending) deferredOrganizationReload = true
   const unsaved = hasUnsavedSettings()
   const ownUpdate = consumeOwnSettingsUpdate(payload)

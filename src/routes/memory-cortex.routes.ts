@@ -2142,26 +2142,39 @@ app.put("/chats/:chatId/settings", async (c) => {
   });
 });
 
+function getChatIngestionSnapshot(chatId: string) {
+  const status = memoryCortex.getIngestionStatus(chatId);
+  const scheduler = getChatPipelineStatus(chatId);
+  return status ? { ...status, scheduler } : {
+    status: "idle", phase: "complete", chatId, chunkId: null,
+    startedAt: null, updatedAt: Date.now(), pendingJobs: 0, timings: null, scheduler,
+  };
+}
+
+function getChatRebuildSnapshot(chatId: string) {
+  return { ...(memoryCortex.getRebuildStatus(chatId) ?? { status: "idle" }), scheduler: getChatPipelineStatus(chatId) };
+}
+
+/** Passive snapshots only. A failed optional section must not hide the others. */
+app.get("/chats/:chatId/status", (c) => {
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
+  const read = <T>(get: () => T): T | null => {
+    try { return get(); } catch { return null; }
+  };
+  return c.json({
+    activity: read(() => getCortexActivity(chatId)),
+    ingestion: read(() => getChatIngestionSnapshot(chatId)),
+    rebuild: read(() => getChatRebuildSnapshot(chatId)),
+  });
+});
+
 app.get("/chats/:chatId/ingestion-status", (c) => {
   const chatId = c.req.param("chatId");
   const owned = ensureChatOwnership(c, chatId);
   if (!owned.ok) return owned.response;
-  const status = memoryCortex.getIngestionStatus(chatId);
-  const scheduler = getChatPipelineStatus(chatId);
-  if (!status) {
-    return c.json({
-      status: "idle",
-      phase: "complete",
-      chatId,
-      chunkId: null,
-      startedAt: null,
-      updatedAt: Date.now(),
-      pendingJobs: 0,
-      timings: null,
-      scheduler,
-    });
-  }
-  return c.json({ ...status, scheduler });
+  return c.json(getChatIngestionSnapshot(chatId));
 });
 
 app.get("/chats/:chatId/activity", (c) => {
@@ -2178,10 +2191,7 @@ app.get("/chats/:chatId/rebuild-status", (c) => {
   const chatId = c.req.param("chatId");
   const owned = ensureChatOwnership(c, chatId);
   if (!owned.ok) return owned.response;
-  const status = memoryCortex.getRebuildStatus(chatId);
-  const scheduler = getChatPipelineStatus(chatId);
-  if (!status) return c.json({ status: "idle", scheduler });
-  return c.json({ ...status, scheduler });
+  return c.json(getChatRebuildSnapshot(chatId));
 });
 
 /** POST /chats/:chatId/rebuild — Rebuild cortex from canonical chunks.

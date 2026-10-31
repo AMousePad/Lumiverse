@@ -770,6 +770,11 @@ export const memoryCortexApi = {
   // Rebuild
   rebuild: requestCortexRebuild,
   getActivity: (chatId: string) => get<CortexActivitySnapshot>(`${BASE}/chats/${chatId}/activity`),
+  getChatStatus: (chatId: string) => get<{
+    activity: CortexActivitySnapshot | null;
+    ingestion: CortexIngestionStatus | null;
+    rebuild: { status: string; current?: number; total?: number; percent?: number; result?: any; error?: string } | null;
+  }>(`${BASE}/chats/${chatId}/status`),
   getRebuildStatus: (chatId: string) =>
     get<{ status: string; current?: number; total?: number; percent?: number; result?: any; error?: string }>(`${BASE}/chats/${chatId}/rebuild-status`),
   getIngestionStatus: (chatId: string) =>

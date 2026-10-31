@@ -858,6 +858,14 @@ export function getCharactersByIds(userId: string, ids: string[]): Map<string, C
   return result;
 }
 
+export async function getCharactersByIdsAsync(userId: string, ids: string[]): Promise<Map<string, Character>> {
+  if (ids.length === 0) return new Map();
+  const rows = await readDatabaseRows<any>(
+    `SELECT * FROM characters WHERE id IN (${ids.map(() => "?").join(",")}) AND user_id = ?`, [...ids, userId],
+  );
+  return new Map(rows.map((row) => [row.id, rowToCharacter(row)]));
+}
+
 export interface CreateCharacterOptions {
   /** Bulk workflows publish one library invalidation after committing. */
   emitEvent?: boolean;

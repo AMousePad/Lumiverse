@@ -6108,14 +6108,13 @@ export async function collectVectorActivatedWorldInfo(
  * bridge) and the full `activatedEntries` models (with content + outlet_name),
  * which `resolveWorldInfoOutlets` needs to populate `{{outlet::name}}`.
  */
-async function computeActivatedWorldInfoForChat(
+async function prepareWorldInfoActivationForChat(
   userId: string,
   chatId: string,
-): Promise<MergedWorldInfoEntriesResult> {
+): Promise<() => Promise<MergedWorldInfoEntriesResult>> {
   const chat = await chatsSvc.getChatAsync(userId, chatId);
   if (!chat) throw new Error("Chat not found");
 
-  const messages = chatsSvc.getMessages(userId, chatId);
   const character = chat.character_id
     ? (await charactersSvc.getCharacterAsync(userId, chat.character_id))
     : makeAssistantCharacter();
@@ -6145,15 +6144,13 @@ async function computeActivatedWorldInfoForChat(
       | Partial<WorldInfoSettings>
       | undefined) ?? {};
 
-  const wiResult = activateWorldInfo({
-    entries: wiSources.entries,
-    messages,
-    chatTurn: messages.length,
-    wiState,
-    settings: worldInfoSettings,
-  });
-
-  const [vectorActivated, embeddingConfig] = await Promise.all([
+  // Empty sources cannot activate anything. Avoid hydrating all stored swipes
+  // and history, and avoid querying embedding providers, for ordinary chats.
+  if (!wiSources.entries.some((entry) => !entry.disabled)) {
+    return async () => mergeActivatedWorldInfoEntries([], [], worldInfoSettings);
+  }
+  const messages = chatsSvc.getMessages(userId, chatId);
+  const loadVectorInputs = () => Promise.all([
     collectVectorActivatedWorldInfo(
       userId,
       chatId,
@@ -6165,16 +6162,42 @@ async function computeActivatedWorldInfoForChat(
     ),
     embeddingsSvc.getEmbeddingConfig(userId),
   ]);
-  return mergeActivatedWorldInfoEntries(
-    wiResult.activatedEntries,
-    vectorActivated,
-    worldInfoSettings,
-    wiSources.bookSourceMap,
-    wiSources.bookNameMap,
-    undefined,
-    undefined,
-    { hybridWeightMode: embeddingConfig.hybrid_weight_mode },
-  );
+  let vectorInputs: ReturnType<typeof loadVectorInputs> | undefined;
+  return async () => {
+    // Keep chance/group selection and mutable activation state per message.
+    // Only the immutable database and vector inputs are shared by a batch.
+    const wiResult = activateWorldInfo({
+      entries: wiSources.entries,
+      messages,
+      chatTurn: messages.length,
+      wiState: structuredClone(wiState),
+      settings: worldInfoSettings,
+    });
+    const [vectorActivated, embeddingConfig] = await (vectorInputs ??= loadVectorInputs());
+    return mergeActivatedWorldInfoEntries(
+      wiResult.activatedEntries,
+      vectorActivated,
+      worldInfoSettings,
+      wiSources.bookSourceMap,
+      wiSources.bookNameMap,
+      undefined,
+      undefined,
+      { hybridWeightMode: embeddingConfig.hybrid_weight_mode },
+    );
+  };
+}
+
+/** Shares read inputs only within one request; never caches activation results. */
+export function createWorldInfoEntriesLoaderForChat(userId: string, chatId: string) {
+  let prepared: ReturnType<typeof prepareWorldInfoActivationForChat> | undefined;
+  return async () => {
+    prepared ??= prepareWorldInfoActivationForChat(userId, chatId);
+    return (await (await prepared)()).activatedEntries;
+  };
+}
+
+async function computeActivatedWorldInfoForChat(userId: string, chatId: string) {
+  return (await prepareWorldInfoActivationForChat(userId, chatId))();
 }
 
 /**

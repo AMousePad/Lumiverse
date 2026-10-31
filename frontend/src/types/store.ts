@@ -20,6 +20,8 @@ export interface ChatSlice {
    * write).
    */
   activeChatMetadata: Record<string, any> | null
+  /** null while opening; IDs whose character data was refreshed for this chat. */
+  activeChatLoadedCharacterIds: string[] | null
   activeChatDisplayOwner: string | null
   /** The chat row's `name` for the currently-open chat (group chats display it as the group name) */
   activeChatName: string | null
@@ -73,6 +75,7 @@ export interface ChatSlice {
   setActiveChatWallpaper: (wallpaper: WallpaperRef | null) => void
   setActiveChatAvatarId: (imageId: string | null) => void
   setActiveChatMetadata: (metadata: Record<string, any> | null) => void
+  setActiveChatLoadedCharacterIds: (ids: string[]) => void
   setActiveChatDisplayOwner: (owner: string | null) => void
   setActiveChatName: (name: string | null) => void
   setMessages: (messages: Message[], total?: number) => void

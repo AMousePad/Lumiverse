@@ -62,8 +62,8 @@ export const charactersApi = {
     return get<TagCount[]>('/characters/tags')
   },
 
-  get(id: string) {
-    return get<Character>(`/characters/${id}`)
+  get(id: string, options?: RequestOptions) {
+    return get<Character>(`/characters/${id}`, undefined, options)
   },
 
   create(input: CreateCharacterInput) {
