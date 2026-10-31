@@ -40,6 +40,8 @@ COPY frontend/ ./
 # relative paths in this isolated stage (the backend source is not copied here).
 COPY src/shared/ /app/src/shared/
 COPY src/image-gen/image-input.ts /app/src/image-gen/
+COPY user-docs/docs/ /app/user-docs/docs/
+COPY developer-docs/docs/ /app/developer-docs/docs/
 COPY src/utils/regex-action-signature.ts /app/src/utils/
 COPY src/utils/theme-config.ts /app/src/utils/
 COPY src/utils/theme-pack.ts /app/src/utils/

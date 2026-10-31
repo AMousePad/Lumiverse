@@ -450,3 +450,19 @@ Set `apply: false, saveToLibrary: true` to save without applying. `saveToLibrary
 The authoring boundary validates CSS syntax and removes external imports and remote resource URLs. Browser support and selector matches still require visual inspection. It accepts CSS overrides only. Imports omit TSX, and restore cannot enable changed or previously disabled TSX without native-editor review.
 
 Saved theme state excludes device-local presentation controls and transient extension overlays. Those can change the rendered appearance without changing the saved-theme revision. The backend does not infer a browser's resolved system mode or claim to have visually verified a result.
+
+## Build references
+
+Feature-detect `spindle.theme.references?.version === 1` before calling `references.request({ operation, args })`. This read-only API is independent of persistent authoring and exposes public build data without a user scope. It requires generated frontend reference artifacts.
+
+| Operation | Arguments | Result |
+|---|---|---|
+| `components` | Optional `query`, `offset`, `limit` | Component IDs, categories and known root selectors |
+| `component` | `id` | Build-specific class selectors, parts, source keys, template and props |
+| `variables` | Optional `query` | Variable names and defaults |
+| `search` | `query`; optional `kind: 'source' \| 'doc'`, `offset`, `limit` | Matching bundled lines and build identity |
+| `read` | `kind`, `path`; optional `startLine`, `lineCount` | Numbered lines from a bundled source or guide and build identity |
+
+Paths are keys in the generated bundle. They do not grant filesystem access. Search and component pages contain at most 100 items; reads contain at most 300 lines. References are public frontend source and guides, never user data or backend source. They describe the packaged build, not mounted elements or extension-provided runtime components.
+
+The frontend build generates a content-addressed JSON asset and reconciles CSS module selectors with emitted stylesheets. No source catalogue is imported into the application's JavaScript. The backend loads the reference asset on demand and verifies its hash. Packaging currently adds approximately 9 MiB of uncompressed public reference data. Rebuild the frontend when sources or guides change, and use `bun run check:theme-reference` to check the generated input artifacts.

@@ -1,4 +1,5 @@
 import { ThemeAuthoringHost } from './theme-authoring-host';
+import { handleThemeReferences } from './theme-references-host';
 import { ConnectionOrganizationHost } from './connection-organization-host';
 import type { OrganizationWorkerMessage, OrganizationHostMessage } from './connection-organization-contract';
 import { CONNECTION_ORGANIZATION_CAPABILITIES } from '../shared/connection-organization';
@@ -2823,6 +2824,9 @@ export class WorkerHost {
       // ─── Theme (gated: "app_manipulation") ──────────────────────────────
       case "theme_authoring":
         void this.themeAuthoringApi.handle(msg);
+        break;
+      case "theme_references":
+        void handleThemeReferences(msg, message => this.postToWorker(message));
         break;
       case "theme_apply":
         this.presentationApi.handleThemeApply(msg.requestId, msg.overrides, msg.userId);
